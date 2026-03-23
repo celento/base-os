@@ -1,9 +1,9 @@
 # BaseOS Makefile
 
 AS = nasm
-CC = /opt/homebrew/opt/x86_64-elf-gcc/bin/x86_64-elf-gcc
-LD = /opt/homebrew/opt/x86_64-elf-binutils/bin/x86_64-elf-ld
-OBJCOPY = /opt/homebrew/opt/x86_64-elf-binutils/bin/x86_64-elf-objcopy
+CC = x86_64-elf-gcc
+LD = x86_64-elf-ld
+OBJCOPY = x86_64-elf-objcopy
 
 CFLAGS = -std=gnu99 -ffreestanding -O0 -g -Wall -Wextra -m32 -nostdlib -I.
 ASFLAGS = -f elf
@@ -33,7 +33,7 @@ baseos.img: boot.bin kernel.bin
 	rm baseos.img.tmp
 
 run: baseos.img
-	qemu-system-i386 -drive file=baseos.img,format=raw,index=0,if=floppy -serial file:serial.out -no-reboot -display cocoa -d int,cpu_reset,guest_errors -D qemu_log.txt
+	qemu-system-i386 -drive file=baseos.img,format=raw,index=0,if=floppy -serial file:serial.out -no-reboot -d int,cpu_reset,guest_errors -D qemu_log.txt
 
 clean:
 	rm -f boot.bin kernel.o kernel_entry.o kernel.elf kernel.bin baseos.img baseos.img.tmp *.o serial.out qemu_log.txt
