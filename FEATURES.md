@@ -1,6 +1,6 @@
 # Desktop features
 
-All ten additions are implemented. BaseOS still runs as a small, single-CPU hobby OS. Built-in applications run cooperatively in the kernel; externally loaded native programs run at ring 3 with page protection.
+BaseOS is a small, single-CPU hobby OS. Built-in applications run cooperatively in the kernel; externally loaded native programs run at ring 3 with page protection.
 
 ## 1. Window sizing
 
