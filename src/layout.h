@@ -1,0 +1,41 @@
+#ifndef LAYOUT_H
+#define LAYOUT_H
+/* Shared by C, the preprocessed linker script, assembler and image tools.
+ * Keep these values integer literals so tools/layout.py can read them. */
+#define KERNEL_LOAD_ADDR 0x10000
+#define KERNEL_SECTORS 383
+#define STACK_BOTTOM 0x80000
+#define STACK_TOP 0x90000
+#define BOOTINFO_ADDR 0x7E00
+#define BOOTINFO_MAGIC 0x72072072
+#define E820_BASE 0x5000
+#define E820_MAX 128
+#define FB_BASE 0x200000
+#define FB_CAPACITY 0x100000
+#define FS_BASE 0x300000
+#define FS_CAPACITY 0x200000
+#define PAINT_MEM 0x500000
+#define PAINT_CAPACITY 0x10000
+#define DMA_BASE 0x700000
+#define DMA_CAPACITY 0x10000
+#define FS_IMG_BASE 0x800000
+#define FS_IMG_CAPACITY 0x200000
+#define DESK_CACHE 0xA00000
+#define DESK_CAPACITY 0x100000
+#define APPS_BASE 0xB00000
+#define APPS_CAPACITY 0x400000
+#define PAGING_BASE 0xF00000
+#define PAGING_CAPACITY 0x2000
+#define USER_BASE 0x1000000
+#define USER_CAPACITY 0x10000
+#define DRAG_CACHE 0x1400000
+#define DRAG_CAPACITY 0x100000
+#define PRESENT_BASE 0x1500000
+#define PRESENT_CAPACITY 0x100000
+#define RAM_REQUIRED_END 0x1600000
+#define FS_DISK_LBA 384
+#define FS_DISK_SECTORS 2400
+#define FS_SECOND_LBA 2784
+#define DISK_SECTORS 5760
+#define SECTOR_SIZE 512
+#endif
