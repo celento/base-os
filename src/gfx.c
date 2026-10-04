@@ -16,7 +16,16 @@ static uint8_t pal_shade1[256];
 static uint8_t pal_shade2[256];
 static void (*flip_hook)(void);
 static void dac_load(void);
-static struct { uint32_t key; uint8_t index; } rgb_cache[8192];
+typedef struct { uint32_t key; uint8_t index; } RgbCacheEntry;
+#ifdef GFX_HOST_TEST
+static RgbCacheEntry rgb_cache[8192];
+#else
+#ifndef GFX_CACHE_BASE
+#define GFX_CACHE_BASE (APPS_BASE + 0x2F0000)
+#endif
+static RgbCacheEntry *const rgb_cache = (RgbCacheEntry *)GFX_CACHE_BASE;
+#endif
+_Static_assert(sizeof(RgbCacheEntry) * 8192 == 65536, "graphics cache layout changed");
 static int presented_valid;
 static void palette_changed(void) {
     for(unsigned i=0;i<8192;i++)rgb_cache[i].key=0;
