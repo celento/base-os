@@ -24,7 +24,7 @@ IDE file-data capacity is `(16383 - 1) * 512 - 40 * max(64, used_nodes)`. It rem
 
 Tree depth is separately capped at **63 non-root components**, preserving every previously valid 64-node tree. Each name is at most 23 bytes, so the longest supported canonical path is 1,512 bytes and fits the 1,536-byte path buffer including its NUL. Create, rename, move and recursive copy check the affected paths before mutation; both kernel and host snapshot imports check the same depth and path-length bounds. Recursive copy/delete remain bounded by 63 levels rather than the wider node count. The path-building stack uses that depth bound. Node-indexed GUI/list/validation buffers still use the 256-node maximum, while capacity displays must use the backend's runtime node limit. Automatic new-file, folder, copy and collision names support three-digit suffixes.
 
-The RAM node table uses 13,312 bytes (256 × 52) of its existing 2 MiB reservation and holds offsets into an 8 MiB compacting byte arena, rather than reserving 2 MiB for every node. Nonempty files also have a convenience NUL byte outside their reported size. Writes check all limits before changing metadata or bytes. Removal/resizing compacts the arena; equal-length overwrites stay in place. Source aliases from `fs_data()` are staged first, so self-overwrites and file copies survive moves. `fs_data()` returns a borrowed pointer valid only until the next filesystem mutation. Consumers needing long-lived data must copy it. Editor is independently bounded to 65,535 bytes; BASIC/scripts/native images keep their 16,383-byte limits. General files use `fs_file_limit()`.
+The RAM node table uses 13,312 bytes (256 × 52) of a 64 KiB metadata reservation and holds offsets into an 8 MiB compacting byte arena, rather than reserving 2 MiB for every node. Nonempty files also have a convenience NUL byte outside their reported size. Writes check all limits before changing metadata or bytes. Removal/resizing compacts the arena; equal-length overwrites stay in place. Source aliases from `fs_data()` are staged first, so self-overwrites and file copies survive moves. `fs_data()` returns a borrowed pointer valid only until the next filesystem mutation. Consumers needing long-lived data must copy it. Editor is independently bounded to 65,535 bytes; BASIC/scripts/native images keep their 16,383-byte limits. General files use `fs_file_limit()`.
 
 Mount prefers a valid data volume. When both marked data slots are wholly blank, it first mounts the boot floppy, then stages those files for the first data-disk save. It never writes the floppy during migration, and never migrates from an incompletely readable source. Legacy 1.44 MB source geometry is supported read-only. A missing IDE disk selects ordinary floppy storage. An unknown/corrupt/unreadable IDE volume exposes boot files as a protected recovery view; it does not silently format either disk. A valid surviving snapshot can recover a damaged peer using the existing alternating-snapshot protocol.
 
@@ -53,6 +53,7 @@ make test
 make
 python3 tools/smoke_test.py build --keep
 python3 tools/extent_test.py build
+python3 tools/kernel_space_test.py build
 python3 tools/data_volume_test.py build --keep
 python3 tools/process_test.py build
 python3 tools/ui_test.py build
@@ -77,10 +78,12 @@ The QEMU suite creates disposable images and checks fresh boot, reboot, timer pr
 | Range      | Use                         |
 |------------|-----------------------------|
 | `0x005000` | BIOS E820 memory map        |
-| `0x010000` | kernel, checked below stack |
-| `0x080000`–`0x090000` | reserved kernel stack |
+| `0x010000`–`0x087E00` | temporary BIOS kernel staging (959 sectors) |
+| `0x100000`–`0x1F0000` | relocated kernel/code/data/BSS, bounded by linker |
+| `0x1F0000`–`0x200000` | reserved 64 KiB kernel stack |
 | `0x200000` | 8-bit backbuffer            |
-| `0x300000` | filesystem node table       |
+| `0x300000`–`0x310000` | filesystem node table (64 KiB) |
+| `0x310000`–`0x500000` | reserved rich-document workspace |
 | `0x500000` | Paint canvas / viewer arena |
 | `0x700000` | disk DMA bounce buffer      |
 | `0x710000`–`0x720000` | SB16 ISA DMA ring          |
@@ -103,7 +106,15 @@ The QEMU suite creates disposable images and checks fresh boot, reboot, timer pr
 | `0x3100000`–`0x3600000` | Editor documents/undo/clipboard |
 | `0x3600000`–`0x3F00000` | video stream/decoder/frame workspace |
 
-Disk LBA 0 contains the loader. The kernel uses LBAs 1–383 and the previously unused tail at LBAs 5184–5695, for 895 sectors total. The loader joins those extents in memory. Snapshot slots remain at LBAs 384 and 2784, each reserving 2400 sectors; their existing on-disk data is never relocated. The linker independently limits the complete kernel and BSS below the stack. All physical addresses, disk boundaries, and the kernel sector budget are defined in `src/layout.h` and checked by the linker, C assertions, and image builder.
+Disk LBA 0 contains the loader. The kernel uses LBAs 1–383 and the unused tail at LBAs 5184–5759, for **959 sectors / 491,008 initialized bytes** total. This includes the final 64 formerly unused sectors; snapshot slots remain at LBAs 384 and 2784, each reserving 2400 sectors. No existing filesystem data is moved or reduced. Old 1.44 MB images still upgrade through the byte-preserving image updater and retain their original-image backup.
+
+The BIOS loader joins both extents at `0x10000`, checks conventional RAM with INT 12h before reading, and stays below a `0x90000` staging ceiling. The image is linked at **1 MiB**. Its first 64 KiB contains the complete real-mode bootstrap; BIOS calls and boot-info/E820 buffers remain below the stage. After the last BIOS call, it enables A20 with the fast-reset bit cleared and verifies it using two restored probe bytes. A20 failure halts in the BIOS bootstrap, before any high-memory copy or C call.
+
+The first protected-mode far jump targets the staged bootstrap and its staged GDT. With flat segments and interrupts disabled, it copies exactly `__load_end - KERNEL_LOAD_ADDR` initialized bytes to 1 MiB. It reloads GDTR with the relocated GDT address before jumping to the linked protected entry, setting the 64 KiB stack at `0x1F0000`–`0x200000`, zeroing BSS and entering C. The kernel and BSS have **960 KiB** below that stack; the initialized disk-image limit remains separate. E820 validation checks the linked kernel range, high stack and all application arenas. Native ring-3 mappings and their independent syscall/TSS stack at `0x30E0000`–`0x30F0000` are unchanged.
+
+Linker assertions independently bound initialized bytes, the real-mode bootstrap, staging, full kernel/BSS, stack and disk extents. C assertions and `tools/layout.py` additionally validate the shared ranges from `src/layout.h`. The image builder continues to zero and replace only code extents while preserving both filesystem snapshots.
+
+`python3 tools/kernel_space_test.py build` performs five ordinary serialized QEMU boots on fresh disposable disks: fresh startup, persisted reboot, a valid upgraded 1.44 MB image, and fresh/reboot runs with the full 491,008-byte initialized reservation plus 384 KiB of additional BSS. QMP verifies the actual instruction pointer and stack addresses, immutable code bytes, relocated GDTR, active task TSS stack, boot-info handoff and zero-initialized extra BSS. The full-reservation fixture checks the marker in the final disk sector and both staged/relocated copies. `--quick` runs just fresh/reboot checks. No saved build images, injected CPU faults or malformed inputs are used. The runner retains evidence in its printed temporary directory. `python3 -m unittest discover -s tests -p 'test_kernel_layout.py'` checks unchanged arenas, all code sectors, both snapshot extents and legacy upgrade preservation without QEMU.
 
 ## Palette
 

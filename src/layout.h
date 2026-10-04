@@ -2,12 +2,15 @@
 #define LAYOUT_H
 /* Shared by C, the preprocessed linker script, assembler and image tools.
  * Keep these values integer literals so tools/layout.py can read them. */
-#define KERNEL_LOAD_ADDR 0x10000
-#define KERNEL_SECTORS 895
+/* BIOS reads below conventional RAM; the protected kernel runs above 1 MiB. */
+#define KERNEL_STAGE_ADDR 0x10000
+#define KERNEL_STAGE_LIMIT 0x90000
+#define KERNEL_LOAD_ADDR 0x100000
+#define KERNEL_SECTORS 959
 #define KERNEL_PRIMARY_SECTORS 383
 #define KERNEL_EXT_LBA 5184
-#define STACK_BOTTOM 0x80000
-#define STACK_TOP 0x90000
+#define STACK_BOTTOM 0x1F0000
+#define STACK_TOP 0x200000
 #define BOOTINFO_ADDR 0x7E00
 #define BOOTINFO_MAGIC 0x72072072
 #define E820_BASE 0x5000

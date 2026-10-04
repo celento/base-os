@@ -21,6 +21,18 @@ SECTIONS {
     } :data
     __kernel_end = .;
     ASSERT(_start == KERNEL_LOAD_ADDR, "entry must be first in image")
+    ASSERT(__bootstrap_end - _start <= 0x10000,
+           "real-mode bootstrap exceeds its code segment")
+    ASSERT(KERNEL_STAGE_ADDR % 16 == 0 && KERNEL_LOAD_ADDR % 16 == 0,
+           "kernel addresses must be paragraph aligned")
+    ASSERT(KERNEL_STAGE_ADDR + KERNEL_SECTORS * SECTOR_SIZE <= KERNEL_STAGE_LIMIT,
+           "kernel exceeds conventional staging reservation")
+    ASSERT(KERNEL_STAGE_LIMIT <= 0xA0000 && KERNEL_STAGE_LIMIT <= KERNEL_LOAD_ADDR,
+           "kernel staging overlaps firmware or relocated kernel")
+    ASSERT(KERNEL_LOAD_ADDR >= 0x100000,
+           "relocated kernel must use extended RAM")
+    ASSERT(STACK_TOP - STACK_BOTTOM == 0x10000 && STACK_TOP <= FB_BASE,
+           "kernel stack must fit below framebuffer")
     ASSERT(__load_end - KERNEL_LOAD_ADDR <= KERNEL_SECTORS * SECTOR_SIZE,
            "kernel exceeds boot loader reservation")
     ASSERT(__kernel_end <= STACK_BOTTOM, "kernel overlaps reserved stack")
