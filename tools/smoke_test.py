@@ -17,7 +17,7 @@ from update_image import install_kernel, kernel_offset
 C = constants()
 
 
-def run(image, directory, label, expected, memory='32M', vga='std', seconds=15, ticks_address=None):
+def run(image, directory, label, expected, memory='64M', vga='std', seconds=15, ticks_address=None):
     log = directory / (label + '.log')
     log.write_text('')
     errors = directory / (label + '.stderr')

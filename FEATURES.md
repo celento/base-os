@@ -37,13 +37,16 @@ exec /Programs/hello.bex
 Shut down QEMU before using the host-side exchange tool. It refuses a locked image, preserves the other filesystem snapshot, and creates a backup before changing the disk.
 
 ```sh
-python3 tools/volume.py build/baseos.img ls /
-python3 tools/volume.py build/baseos.img mkdir /Projects
-python3 tools/volume.py build/baseos.img import notes.txt /Projects/notes.txt
-python3 tools/volume.py build/baseos.img export /Projects/notes.txt recovered.txt
+python3 tools/volume.py build/baseos-data.img info
+python3 tools/volume.py build/baseos-data.img ls /
+python3 tools/volume.py build/baseos-data.img mkdir /Projects
+python3 tools/volume.py build/baseos-data.img import notes.txt /Projects/notes.txt
+python3 tools/volume.py build/baseos-data.img export /Projects/notes.txt recovered.txt
 ```
 
-Add `--replace` to explicitly replace an existing data file or export destination. Parent folders must already exist. File contents can be binary; names are ASCII, at most 23 characters, and cannot contain `/`. Files are limited to 16,383 bytes. Boot a fresh image once before importing into it.
+Add `--replace` to explicitly replace an existing data file or export destination. Parent folders must already exist. File contents can be binary; names are ASCII, at most 23 characters, and cannot contain `/`. On the data disk, files can contain up to 2,097,152 bytes (2 MiB). Editor documents, command scripts, BASIC sources, and native BEX programs retain their separate 16,383-byte application limits. Large media files are not editable as text. Boot a fresh data image once before importing into it.
+
+The same tool still reads and updates old `build/baseos.img` floppy snapshots, which keep their 16,383-byte per-file limit. Once the data disk has mounted successfully, import new files into `baseos-data.img`; changing the old floppy does not replace the newer data volume.
 
 ## 6. Session restoration
 
@@ -57,7 +60,9 @@ Session files consume normal filesystem slots and space. A status warning appear
 
 Select an item in Files and use File > Properties or Ctrl+I. The pane shows type, bytes, modification time in UTC, used volume bytes, available file/folder slots, and synchronization status. Terminal `stat PATH` and `df` provide the same underlying information.
 
-The volume has 64 total nodes, including root and folders. Its maximum payload is 63 × 16,383 bytes when every non-root node is a full data file; directories, apps, and session files reduce usable capacity. Modified times are stored by filesystem format v3. Existing v1/v2 images remain readable, and older files show an unknown modification time until changed.
+The data volume has 64 total nodes, including root, folders, application shortcuts, and session files. It holds at most 8,385,024 file-data bytes (just under 8 MiB), independently of its 2 MiB per-file limit. Metadata and a second complete snapshot occupy the rest of the 16 MiB disk. Empty files and folders need nodes but no payload allocation. A write that exceeds either capacity fails without truncating or changing the original file; copying rolls back if the destination cannot fit.
+
+Without a data disk, the floppy retains a maximum of 63 × 16,383 data bytes when every non-root node is a full data file; directories, apps, and session files reduce usable capacity. Data disks use filesystem format v4. Floppy v1/v2/v3 snapshots remain readable, and floppy writes remain v3. Modification timestamps survive migration; older files show an unknown time until changed.
 
 ## 8. Keyboard navigation
 
@@ -141,10 +146,10 @@ complete C build/run/persistence path with `python3 tools/sdk_test.py build`.
 
 ```sh
 nasm -f bin examples/hello.asm -o build/custom.bex
-python3 tools/volume.py build/baseos.img import build/custom.bex /Programs/custom.bex
+python3 tools/volume.py build/baseos-data.img import build/custom.bex /Programs/custom.bex
 ```
 
-Native execution requires a Pentium-or-newer CPU with 4 MB page support. The normal QEMU configuration supplies this. BaseOS validates its reserved RAM through 22 MB; `make run` uses 32 MB.
+Native execution requires a Pentium-or-newer CPU with 4 MB page support. The normal QEMU configuration supplies this. BaseOS validates its reserved RAM through 49 MiB; `make run` uses 64 MiB.
 
 ## Verification
 
@@ -155,6 +160,7 @@ python3 tools/smoke_test.py build --keep
 python3 tools/process_test.py build
 python3 tools/ui_test.py build
 python3 tools/input_test.py build
+python3 tools/data_volume_test.py build --keep
 ```
 
 Host tests use AddressSanitizer/UndefinedBehaviorSanitizer for C code and exercise filesystem migrations, undo/redo, BASIC parsing and execution limits, independent terminal state, paths, completion, scripts, and host exchange/locking. QEMU tests cover foundational boot/storage behavior, native faults and privileged operations, syscall bounds, watchdog recovery, independent app instances, BASIC/native execution, Paint history, and a complete session reboot. A further QEMU test types through the emulated PS/2 keyboard, opens Terminal through the launcher, and verifies BASIC INKEY during execution. Disk waits collect input without running app actions. Each QEMU test uses disposable images.

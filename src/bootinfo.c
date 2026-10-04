@@ -79,8 +79,7 @@ _Static_assert(FS_BASE + FS_CAPACITY <= PAINT_MEM, "FS overlaps paint");
 _Static_assert(PAINT_MEM + PAINT_CAPACITY <= DMA_BASE, "paint overlaps DMA");
 _Static_assert(DMA_BASE % 65536 == 0 && DMA_CAPACITY <= 65536 &&
                DMA_BASE + DMA_CAPACITY <= 0x1000000, "invalid ISA DMA arena");
-_Static_assert(DMA_BASE + DMA_CAPACITY <= FS_IMG_BASE, "DMA overlaps image");
-_Static_assert(FS_IMG_BASE + FS_IMG_CAPACITY <= DESK_CACHE, "image overlaps cache");
+_Static_assert(DMA_BASE + DMA_CAPACITY <= DESK_CACHE, "DMA overlaps cache");
 _Static_assert(DESK_CACHE + DESK_CAPACITY <= APPS_BASE, "cache overlaps apps");
 _Static_assert(APPS_BASE+APPS_CAPACITY<=PAGING_BASE,"apps overlap paging");
 _Static_assert(PAGING_BASE+PAGING_CAPACITY<=USER_BASE,"paging overlaps user");
@@ -97,7 +96,13 @@ _Static_assert(DMA_BASE + DMA_CAPACITY <= AUDIO_DMA_BASE, "disk DMA overlaps aud
 _Static_assert(AUDIO_DMA_BASE % 65536 == 0 && AUDIO_DMA_CAPACITY == 65536 &&
                AUDIO_DMA_BASE + AUDIO_DMA_CAPACITY <= AUDIO_WORK_BASE &&
                AUDIO_DMA_BASE + AUDIO_DMA_CAPACITY <= 0x1000000, "invalid audio DMA arena");
-_Static_assert(AUDIO_WORK_BASE + AUDIO_WORK_CAPACITY <= FS_IMG_BASE, "audio overlaps disk image");
+_Static_assert(BROWSER_BASE + BROWSER_CAPACITY <= AUDIO_WORK_BASE, "browser overlaps audio");
+_Static_assert(AUDIO_WORK_BASE + AUDIO_WORK_CAPACITY <= IMAGE_BASE, "audio overlaps images");
+_Static_assert(IMAGE_BASE + IMAGE_CAPACITY <= FS_POOL_BASE, "images overlap file pool");
+_Static_assert(FS_POOL_BASE + FS_POOL_CAPACITY <= FS_IMG_BASE, "file pool overlaps staging");
+_Static_assert(FS_IMG_BASE + FS_IMG_CAPACITY <= TASK_BASE, "staging overlaps native task saves");
+_Static_assert(TASK_BASE + TASK_CAPACITY <= RAM_REQUIRED_END, "native task saves exceed RAM");
+_Static_assert(GFX_CACHE_BASE >= APPS_BASE && GFX_CACHE_BASE + GFX_CACHE_CAPACITY <= APPS_BASE + APPS_CAPACITY, "graphics cache outside app arena");
 _Static_assert(PRESENT_BASE + PRESENT_CAPACITY <= NET_BASE, "presenter overlaps network");
 _Static_assert(NET_BASE + NET_CAPACITY <= BROWSER_BASE, "network overlaps browser");
 _Static_assert(BROWSER_BASE + BROWSER_CAPACITY <= RAM_REQUIRED_END, "browser exceeds RAM");

@@ -2,7 +2,7 @@
 
 A small hobby operating system written from scratch in C and x86 assembly. It boots directly into a graphical desktop with movable windows, persistent files, a text editor, Paint, a terminal, and games.
 
-BaseOS runs in QEMU with 32 MB of RAM. The desktop is rendered entirely in software at 1280 × 720, using a 256-color backbuffer and antialiased bitmap fonts.
+BaseOS runs in QEMU with 64 MiB of RAM. The desktop is rendered entirely in software at 1280 × 720, using a 256-color backbuffer and antialiased bitmap fonts.
 
 ![Files and Editor running side by side in BaseOS](screenshots/gallery/desktop.png)
 
@@ -10,7 +10,7 @@ BaseOS runs in QEMU with 32 MB of RAM. The desktop is rendered entirely in softw
 
 - Open up to eight windows. Move, resize, maximize, minimize, or snap them; keep separate documents, folders, and terminals open.
 - Write and save documents in Editor. Use clipboard shortcuts and undo/redo, or draw with Paint's brushes, shapes, fill, and text tools.
-- Browse files, rename and duplicate them, inspect their properties, and move them to Trash. Files persist on the boot disk.
+- Browse files, rename and duplicate them, inspect their properties, and move them to Trash. Files persist on a separate data disk; existing boot-disk files migrate automatically.
 - Search apps and files from the Apps button or `Ctrl+Space`. Choose from eight desktop themes.
 - Explore the terminal with `help` and `man COMMAND`, run command scripts, write Tiny BASIC programs, or load small native x86 programs.
 - Play Snake, Wordle, Mines, 2048, and Breakout. Calculator, Todo, Clock, Calendar, Image Viewer, and System Monitor are also built in.
@@ -72,9 +72,11 @@ sudo apt install build-essential gcc-multilib nasm qemu-system-x86 python3 clang
 make run
 ```
 
-`make run` builds `build/baseos.img`, a 2.88 MB floppy image, and starts QEMU with 32 MB RAM. Use `make headless` for a serial-console run without a graphical window.
+`make run` builds `build/baseos.img`, a 2.88 MB boot floppy, and creates `build/baseos-data.img`, a separate 16 MiB IDE data disk, only if it does not already exist. QEMU starts with 64 MiB RAM. Use `make headless` for a serial-console run without a graphical window. The data volume holds up to 8,385,024 file bytes, with 2 MiB per file and 64 total file/folder/app nodes.
 
-Normal rebuilds preserve the filesystem area and back up an existing image before changing it. `make clean` keeps disk images and backups. Shut QEMU down before rebuilding its disk or using the host file exchange tool. Use **System → Shutdown** to flush pending saves before closing the emulator.
+At the first boot with a newly marked data disk, BaseOS reads the existing floppy files and saves a copy to the data disk. Both old floppy snapshots remain untouched. Later boots use the data disk. Without the optional IDE disk, the old floppy filesystem remains usable with its original limits. An unknown or unreadable IDE disk is never formatted automatically; BaseOS exposes the boot files read-only for recovery.
+
+Normal rebuilds preserve the filesystem area and back up an existing image before changing it. `make clean` keeps both disk images and backups. Shut QEMU down before rebuilding its disk or using the host file exchange tool. Use **System → Shutdown** to flush pending saves before closing the emulator.
 
 The normal build uses checked-in font data. Regenerating it with `python3 tools/gen_font.py` additionally requires Pillow.
 
@@ -108,6 +110,7 @@ make
 make test
 python3 tools/ui_test.py build
 python3 tools/input_test.py build
+python3 tools/data_volume_test.py build --keep
 python3 tools/render_test.py build --optimized
 ```
 

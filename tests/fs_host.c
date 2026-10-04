@@ -5,12 +5,34 @@
 #include "platform.h"
 static unsigned char node_arena[FS_CAPACITY];
 static unsigned char image_arena[FS_IMG_CAPACITY];
+static unsigned char pool_arena[FS_POOL_CAPACITY];
 #undef FS_BASE
 #undef FS_IMG_BASE
+#undef FS_POOL_BASE
 #define FS_BASE ((uintptr_t)node_arena)
 #define FS_IMG_BASE ((uintptr_t)image_arena)
+#define FS_POOL_BASE ((uintptr_t)pool_arena)
 #include "../src/fs.c"
 
+static unsigned char data_disk[DATA_DISK_SECTORS * SECTOR_SIZE];
+static int data_present, data_read_error, data_write_error, data_flush_error, data_writes;
+static int data_flush_count, data_fail_flush_at;
+int ata_probe(void) { return data_present; }
+unsigned ata_sector_count(void) { return DATA_DISK_SECTORS; }
+int ata_read(unsigned lba, void *buf, int sectors) {
+    if (data_read_error || sectors < 0 || lba > DATA_DISK_SECTORS || (unsigned)sectors > DATA_DISK_SECTORS - lba) return -1;
+    memcpy(buf, data_disk + lba * SECTOR_SIZE, sectors * SECTOR_SIZE); return 0;
+}
+int ata_write(unsigned lba, const void *buf, int sectors) {
+    assert(lba && lba + sectors <= DATA_DISK_SECTORS);
+    data_writes++;
+    if (data_write_error) return -1;
+    memcpy(data_disk + lba * SECTOR_SIZE, buf, sectors * SECTOR_SIZE); return 0;
+}
+int ata_flush(void) {
+    ++data_flush_count;
+    return data_flush_error || data_flush_count == data_fail_flush_at ? -1 : 0;
+}
 static unsigned char disk[DISK_SECTORS * SECTOR_SIZE];
 static unsigned char saved[sizeof(disk)];
 static unsigned now, capacity = DISK_SECTORS;
@@ -41,6 +63,8 @@ int disk_write(unsigned lba, const void *buf, int sectors) {
 }
 static void reset(void) {
     memset(disk, 0, sizeof(disk));
+    data_present = data_read_error = data_write_error = data_flush_error = data_writes = 0;
+    data_flush_count = data_fail_flush_at = 0;
     now = 0; write_calls = 0; capacity = DISK_SECTORS;
     write_budget = read_fail_slot = -1;
     fs_init();

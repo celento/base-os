@@ -3,7 +3,8 @@
 
 #define FS_MAX_NODES 64
 #define FS_NAME_LEN  24
-#define FS_MAX_SIZE  16384
+#define FS_MAX_SIZE  16384 /* Existing Editor, scripts and BEX buffer limit. */
+#define FS_FILE_MAX  2097152 /* Data-volume file limit, inclusive. */
 #define FS_PATH_LEN  1536
 
 int kstrlen(const char *s);
@@ -16,6 +17,8 @@ unsigned fs_clock(void);
 unsigned fs_modified(int id);
 unsigned fs_identity(int id);
 unsigned fs_capacity(void);
+unsigned fs_file_limit(void);
+const char *fs_storage_name(void);
 unsigned fs_used_bytes(void);
 int fs_resolve(int cwd, const char *path);
 int fs_destination(int cwd, const char *path, char *name);
@@ -28,12 +31,14 @@ int fs_node_count(void);
 int fs_parent(int id);
 int fs_size(int id);
 const char *fs_name(int id);
+/* Borrowed bytes, followed by a convenience NUL; any mutation can move them. */
 const char *fs_data(int id);
 
 int fs_find_child(int parent, const char *name);
 int fs_mkdir(int parent, const char *name);
 int fs_create(int parent, const char *name);
 int fs_create_app(int parent, const char *name);
+/* Atomic: writes all bytes, or returns -1 without changing the file. */
 int fs_write(int id, const char *data, int len);
 int fs_read(int id, char *out, int max);
 int fs_list(int parent, int *ids, int max);

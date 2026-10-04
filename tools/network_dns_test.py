@@ -132,7 +132,7 @@ def main():
         port = listener.getsockname()[1]
         log = directory / 'serial.log'
         with (directory / 'stderr.log').open('w') as stderr:
-            process = subprocess.Popen(['qemu-system-i386', '-m', '32M', '-vga', 'std', '-drive',
+            process = subprocess.Popen(['qemu-system-i386', '-m', '64M', '-vga', 'std', '-drive',
                                         f'file={image},format=raw,index=0,if=floppy',
                                         '-netdev', f'socket,id=net0,connect=127.0.0.1:{port}',
                                         '-device', 'rtl8139,netdev=net0', '-object',
