@@ -20,13 +20,15 @@ int audio_init(void);
 int audio_play(const void *data, uint32_t bytes);
 int audio_play_wav(const void *data, uint32_t bytes);
 /* Run from main loop and platform_poll. Never call from an interrupt handler.
- * Every call converts at most 4096 PCM samples. Poll every <= 70 ms while
+ * Every call converts at most 4096 PCM samples or decodes one MP3 frame. Poll every <= 70 ms while
  * playing; the 64 KiB ring also tolerates ordinary framebuffer/disk work. */
 void audio_poll(void);
 void audio_pause(int paused);
 void audio_stop(void);
 void audio_set_volume(unsigned percent);
 const AudioStatus *audio_status(void);
+uint32_t audio_capacity_bytes(void);
+void audio_clear_error(void);
 uint32_t audio_position_ms(void);
 uint32_t audio_duration_ms(void);
 #endif

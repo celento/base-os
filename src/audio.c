@@ -1,6 +1,7 @@
 /* Original BaseOS SB16 driver, based on Creative's Sound Blaster Series
  * Hardware Programming Guide. See docs/MEDIA.md for hardware contract. */
 #include "audio.h"
+#include "media_mp3.h"
 #include "platform.h"
 
 /* Kept here as fallbacks for branches integrating the shared memory map.
@@ -42,8 +43,9 @@ extern uint8_t audio_test_dma[RING_BYTES], audio_test_source[AUDIO_WORK_CAPACITY
 
 static AudioStatus status;
 static MediaWave wave;
+static MediaMp3 mp3;
 static unsigned initialized, hardware_running, ready_mask, fill_half, fill_bytes;
-static uint32_t dma_position, last_poll, submitted_frames, dma_frames;
+static uint32_t dma_position, last_poll, last_progress, submitted_frames, dma_frames;
 static int eof;
 
 static int dsp_write(uint8_t value) {
@@ -126,7 +128,7 @@ static int hardware_start(void) {
     unsigned count = HALF_BYTES / 2 - 1;
     if (!dsp_write(0xb6) || !dsp_write(status.channels == 2 ? 0x30 : 0x10) ||
         !dsp_write(count & 255) || !dsp_write(count >> 8)) return 0;
-    dma_position = 0; last_poll = timer_ticks();
+    dma_position = 0; last_poll = last_progress = timer_ticks();
     return 1;
 }
 void audio_stop(void) {
@@ -152,16 +154,41 @@ int audio_play_wav(const void *data, uint32_t bytes) {
     ready_mask = fill_half = fill_bytes = submitted_frames = dma_frames = 0; eof = 0;
     return MEDIA_OK;
 }
-int audio_play(const void *data, uint32_t bytes) { return audio_play_wav(data, bytes); }
+int audio_play(const void *data, uint32_t bytes) {
+    const uint8_t *p = data;
+    if (p && bytes >= 4 && p[0] == 'R' && p[1] == 'I' && p[2] == 'F' && p[3] == 'F')
+        return audio_play_wav(data, bytes);
+    if (!status.available) { status.error = MEDIA_NO_DEVICE; return MEDIA_NO_DEVICE; }
+    if (bytes > AUDIO_WORK_CAPACITY) { status.error = MEDIA_TOO_LARGE; return MEDIA_TOO_LARGE; }
+    int error = media_mp3_open(&mp3, data, bytes);
+    if (error) { status.error = error; return error; }
+    hardware_stop();
+    for (uint32_t i = 0; i < bytes; ++i) SOURCE_BUFFER[i] = p[i];
+    mp3.data = SOURCE_BUFFER;
+    status.state = AUDIO_LOADING; status.error = MEDIA_OK;
+    status.format = AUDIO_FORMAT_MP3; status.sample_rate = mp3.sample_rate;
+    status.channels = mp3.channels; status.bits_per_sample = 16;
+    status.total_frames = mp3.frames; status.played_frames = 0; status.underruns = 0;
+    ready_mask = fill_half = fill_bytes = submitted_frames = dma_frames = 0; eof = 0;
+    return MEDIA_OK;
+}
 static void fill_step(void) {
     if (ready_mask == 3) return;
     unsigned remaining_samples = (HALF_BYTES - fill_bytes) / 2;
     unsigned budget = remaining_samples < PCM_SAMPLES_PER_POLL ? remaining_samples : PCM_SAMPLES_PER_POLL;
     int16_t *output = (int16_t *)(DMA_BUFFER + fill_half * HALF_BYTES + fill_bytes);
-    unsigned frames = media_wave_read(&wave, output, budget / status.channels);
-    submitted_frames += frames;
-    unsigned samples = frames * status.channels;
-    if (wave.frame_cursor == wave.frames) eof = 1;
+    int frames;
+    if (status.format == AUDIO_FORMAT_MP3) {
+        frames = media_mp3_read(&mp3, output, budget / status.channels);
+        if (frames < 0) { fail(frames); return; }
+        eof = media_mp3_finished(&mp3);
+    } else {
+        frames = (int)media_wave_read(&wave, output, budget / status.channels);
+        eof = wave.frame_cursor == wave.frames;
+    }
+    submitted_frames += (unsigned)frames;
+    if (eof) status.total_frames = submitted_frames;
+    unsigned samples = (unsigned)frames * status.channels;
     if (eof) for (; samples < budget; ++samples) output[samples] = 0;
     fill_bytes += samples * 2;
     if (fill_bytes == HALF_BYTES) {
@@ -172,6 +199,7 @@ static void fill_step(void) {
 void audio_poll(void) {
     if (status.state == AUDIO_LOADING) {
         fill_step();
+        if (status.state == AUDIO_ERROR) return;
         if (ready_mask == 3) {
             if (!hardware_start()) { fail(MEDIA_DEVICE_ERROR); return; }
             status.state = AUDIO_PLAYING;
@@ -189,6 +217,8 @@ void audio_poll(void) {
     last_poll = now;
     uint32_t position = hardware_position();
     uint32_t delta = (position - dma_position) & (RING_BYTES - 1);
+    if (delta) last_progress = now;
+    else if (now - last_progress > TIMER_HZ) { fail(MEDIA_DEVICE_ERROR); return; }
     dma_frames += delta / (status.channels * 2);
     status.played_frames = eof && dma_frames > submitted_frames ? submitted_frames : dma_frames;
     /* Let the device/backend drain its final PCM before disabling the voice.
@@ -217,12 +247,17 @@ void audio_pause(int paused) {
         status.state = AUDIO_PAUSED;
     } else if (!paused && status.state == AUDIO_PAUSED) {
         if (!dsp_write(0xd6)) { fail(MEDIA_DEVICE_ERROR); return; }
-        last_poll = timer_ticks(); status.state = AUDIO_PLAYING;
+        last_poll = last_progress = timer_ticks(); status.state = AUDIO_PLAYING;
     }
 }
 void audio_set_volume(unsigned percent) {
     status.volume = percent > 100 ? 100 : percent;
     if (status.available) hardware_volume();
+}
+uint32_t audio_capacity_bytes(void) { return AUDIO_WORK_CAPACITY; }
+void audio_clear_error(void) {
+    if (status.state == AUDIO_ERROR) audio_stop();
+    else status.error = MEDIA_OK;
 }
 const AudioStatus *audio_status(void) { return &status; }
 uint32_t audio_position_ms(void) {
