@@ -32,6 +32,7 @@ def install(build, boot_image, data_image, epoch):
     examples = [('harbor.mp3', media, (ROOT / 'assets/examples/harbor.mp3').read_bytes()),
                 ('harbor.mpg', media, (ROOT / 'assets/examples/harbor.mpg').read_bytes()),
                 ('Media guide.txt', docs, b'''HARBOR MEDIA EXAMPLES\n\nPress Ctrl+Space and type harbor.mp3 or harbor.mpg to open a file.\nThe Media Player also lists both files alongside the short chime.\n\nHarbor MP3: 18 seconds of original synthesized music, stereo 44.1 kHz.\nHarbor MPEG: a 9-second sunset sailboat scene with the same soundtrack.\nUse Space to pause/resume; S stops. Volume uses the on-screen buttons.\nMinimize to continue playback in the background; closing stops playback.\n\nThese sounds and pictures were generated for BaseOS, with no downloaded\nrecordings or artwork. MIT license. Complete generator, provenance and\nlicense are in source/assets/examples/README.md in the source package.\n\nImport your own compatible files only while QEMU is stopped. See\nsource/docs/MEDIA.md, VIDEO.md and IMAGE_FORMATS.md for exact limits.\n''')]
+    examples.append(('Writer guide.bwr', docs, (ROOT / 'assets/examples/writer-guide.bwr').read_bytes()))
     for name, parent, content in examples:
         if any(node['parent'] == parent and node['name'] == name for node in nodes.values()):
             raise ValueError('Fresh demo destination unexpectedly exists: ' + name)
