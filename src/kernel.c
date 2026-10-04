@@ -1722,6 +1722,7 @@ static int win_open(int kind) {
     if (kind == WK_TERM) term_reset();
     if (kind == WK_BROWSER) browser_init();
     if (kind == WK_PLAYER) player_init();
+    if (kind == WK_SYSMON) sysmon_reset();
     wins[slot].kind = kind;
     wins[slot].open = 1;
     wins[slot].min = 0;
@@ -5556,7 +5557,10 @@ static void saver_frame(void) {
 
 static void sysinfo_fill(SysInfo *si) {
     si->uptime_sec = (unsigned)(frame_count / 70);
-    si->frames = (unsigned)frame_count;
+    si->frames = redraw_count;
+    si->task_n = 0;
+    for(int i=0;i<MAX_WIN&&si->task_n<SYSMON_MAX_TASKS;i++)
+        if(wins[i].open&&wins[i].kind==WK_TERM&&term_task_info(i,&si->tasks[si->task_n]))si->task_n++;
     si->win_n = 0;
     int order[MAX_WIN];
     int n = 0;
@@ -5867,9 +5871,17 @@ static void handle_click(void) {
         } else if (w->kind == WK_SYSMON) {
             SysInfo si;
             sysinfo_fill(&si);
-            int id = sysmon_click(w->x, w->y + TITLE_H + 1, w->w, mouse_x, mouse_y, &si);
-            if (id >= 0)
-                win_close(id);
+            SysmonAction action=sysmon_click(w->x,w->y+TITLE_H+1,w->w,w->h-TITLE_H-1,mouse_x,mouse_y,&si);
+            if(action.kind==SYSMON_ACTION_REDRAW)dirty=1;
+            else if(action.kind==SYSMON_ACTION_CLOSE_WINDOW)win_close(action.owner);
+            else if(action.kind==SYSMON_ACTION_SHOW_TERMINAL||action.kind==SYSMON_ACTION_STOP_TASK){
+                int owner=action.owner;TermTaskInfo live;
+                if(owner>=0&&owner<MAX_WIN&&wins[owner].open&&wins[owner].kind==WK_TERM&&
+                   term_task_info(owner,&live)&&live.instance==action.task_instance){
+                    if(action.kind==SYSMON_ACTION_SHOW_TERMINAL)win_focus(owner);
+                    else {term_task_stop(owner);dirty=1;}
+                }
+            }
         }
         return;
     }
