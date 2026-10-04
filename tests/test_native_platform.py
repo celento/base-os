@@ -32,6 +32,7 @@ class NativePlatformTests(unittest.TestCase):
                             '-I', str(ROOT / 'src'), '-I', str(directory),
                             str(ROOT / 'tests/native_platform_dispatch_host.c'),
                             str(ROOT / 'src/physmem.c'), str(ROOT / 'src/bootinfo.c'),
+                str(ROOT / 'src/executable.c'),
                             '-o', str(executable)], check=True)
             subprocess.run([str(executable)], check=True, env=dict(os.environ,
                 ASAN_OPTIONS='detect_leaks=0', UBSAN_OPTIONS='halt_on_error=1'))
