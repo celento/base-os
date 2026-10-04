@@ -1,0 +1,122 @@
+[
+  {
+    "name": "animated.gif",
+    "width": 96,
+    "height": 54,
+    "format": 5,
+    "sha256": "c6d57dac55e89c9fc4d806e3d708826a9b562341bcc9eb7436f355959b471a25",
+    "reference": "animated.gif.rgba.zlib"
+  },
+  {
+    "name": "gray16.png",
+    "width": 53,
+    "height": 29,
+    "format": 3,
+    "sha256": "30f40867b104e19b2a91fa56ee09c0bdb225e720c6fc52f2a1133d949f80f20b",
+    "reference": "gray16.png.rgba.zlib"
+  },
+  {
+    "name": "gray_alpha.png",
+    "width": 160,
+    "height": 112,
+    "format": 3,
+    "sha256": "0c398a4b35c9b5f22e5802ebe6b012028fb6f72617baea658ece7932d3bfcd30",
+    "reference": "gray_alpha.png.rgba.zlib"
+  },
+  {
+    "name": "grayscale.jpg",
+    "width": 128,
+    "height": 72,
+    "format": 2,
+    "sha256": "87275245b90661c9625a149adda79af017d7fe5696c5fe991b98c698ee2d9214",
+    "reference": "grayscale.jpg.rgba.zlib"
+  },
+  {
+    "name": "interlaced.png",
+    "width": 71,
+    "height": 43,
+    "format": 3,
+    "sha256": "610534057bc00cda8412e7c9ab6b1323e8ee04c591791ce2bec8bffefe8ac72c",
+    "reference": "interlaced.png.rgba.zlib"
+  },
+  {
+    "name": "landscape.jpg",
+    "width": 640,
+    "height": 360,
+    "format": 2,
+    "sha256": "5890793bd2e757fe28a05f584e725ad2d78e80b6eea87f452a5e4b854aca7d08",
+    "reference": "landscape.jpg.rgba.zlib"
+  },
+  {
+    "name": "landscape.png",
+    "width": 640,
+    "height": 360,
+    "format": 3,
+    "sha256": "5b341773d03a6937d83e5bef849de76b30b645a0f48b4f0c8b99d59ad4f1278a",
+    "reference": "landscape.png.rgba.zlib"
+  },
+  {
+    "name": "monochrome.png",
+    "width": 31,
+    "height": 23,
+    "format": 3,
+    "sha256": "1ef13597ecb0c0110a6a3b2050b4a16e9aaf42d9d8c3fd49dd87a99ff70e822d",
+    "reference": "monochrome.png.rgba.zlib"
+  },
+  {
+    "name": "paint.pbm",
+    "width": 48,
+    "height": 32,
+    "format": 1,
+    "sha256": "5b41e7276890b92e5689704e4602cecbe6ccc02729bcd424628b6bdf3bebf3d7",
+    "reference": "paint.pbm.rgba.zlib"
+  },
+  {
+    "name": "palette.bmp",
+    "width": 96,
+    "height": 54,
+    "format": 4,
+    "sha256": "6e537df536ae9c8bbcedf059afffe52d00cce1c8077ad002f8e8200f41dff36b",
+    "reference": "palette.bmp.rgba.zlib"
+  },
+  {
+    "name": "palette.png",
+    "width": 96,
+    "height": 54,
+    "format": 3,
+    "sha256": "746388bfd3a43835fc28a2c4b47b0e9fc79571f791b8e5e4c9a372415b0499ca",
+    "reference": "palette.png.rgba.zlib"
+  },
+  {
+    "name": "progressive.jpg",
+    "width": 192,
+    "height": 108,
+    "format": 2,
+    "sha256": "9955131521a914ddbf511d64ba93619bfb59d17deb5bdb33fc854a135e162e7e",
+    "reference": "progressive.jpg.rgba.zlib"
+  },
+  {
+    "name": "rgb.bmp",
+    "width": 96,
+    "height": 54,
+    "format": 4,
+    "sha256": "bd4a06d820a4e61f30ccebb9276a5f3bbabc6724f9ad058621749d974870ee9c",
+    "reference": "rgb.bmp.rgba.zlib"
+  },
+  {
+    "name": "transparent.gif",
+    "width": 160,
+    "height": 112,
+    "format": 5,
+    "sha256": "d322496ea3d5d9c64100df6245414a30f5d9faf422f996010313c20cb5378bb4",
+    "reference": "transparent.gif.rgba.zlib"
+  },
+  {
+    "name": "transparent.png",
+    "width": 160,
+    "height": 112,
+    "format": 3,
+    "sha256": "32e41e9b98ded95de40a64521ec09fc8247099d7a405b2eab137556e411154c1",
+    "reference": "transparent.png.rgba.zlib"
+  }
+]
