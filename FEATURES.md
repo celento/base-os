@@ -16,6 +16,26 @@ Each Editor, Files, and Terminal window owns its document, folder selection, or 
 
 Editor and Paint keep eight undo steps. Use Ctrl+Z to undo and Ctrl+Y or Ctrl+Shift+Z to redo. An editor step is an edit operation; a Paint step is a stroke, shape, fill, text edit, or clear. Editing after undo discards the redo branch. History is held in RAM and resets on restart.
 
+### Editor search and larger documents
+
+Editor holds up to 65,535 bytes in each of its eight independent document buffers,
+with eight undo/redo steps. Its clipboard is shared across Editor windows. Files
+larger than the document limit are shown in Properties and never silently truncated.
+The optional data disk is required to persist documents over 16,383 bytes; a floppy
+write that cannot fit fails without replacing the original.
+
+Ctrl+F opens Find; Ctrl+H opens Replace. Enter/F3 find the next match, Shift+Enter/
+Shift+F3 find the previous match, and searches wrap. `Aa` toggles case-sensitive
+matching. Replace changes the selected match; All replaces non-overlapping matches
+as one undoable operation. Ctrl+Enter replaces one and Ctrl+Shift+Enter replaces all.
+Tab moves between Find and With fields. Escape dismisses the bar while leaving the
+document open. Find fields support insertion, selection, copy/paste and deletion.
+
+Shift+arrows/Home/End extend the selection. Home/End move within the line;
+Ctrl+Home/End go to the document boundaries. Page Up/Page Down navigate a screenful,
+and Delete removes the selection or next character. Ctrl+S remains available while
+the search bar has focus.
+
 ## 4. Terminal
 
 Up/Down recalls the last 16 commands for that terminal. Page Up/Page Down scrolls output, which wraps to the window width. `help` lists every command; `man NAME` shows syntax, behavior, limits, and an example. Tab completes a unique command or path; ambiguous matches ask for more characters. Absolute and relative paths support `.` and `..`. Quote paths containing spaces when running commands. Completion handles unquoted paths.
@@ -44,7 +64,7 @@ python3 tools/volume.py build/baseos-data.img import notes.txt /Projects/notes.t
 python3 tools/volume.py build/baseos-data.img export /Projects/notes.txt recovered.txt
 ```
 
-Add `--replace` to explicitly replace an existing data file or export destination. Parent folders must already exist. File contents can be binary; names are ASCII, at most 23 characters, and cannot contain `/`. On the data disk, files can contain up to 2,097,152 bytes (2 MiB). Editor documents, command scripts, BASIC sources, and native BEX programs retain their separate 16,383-byte application limits. Large media files are not editable as text. Boot a fresh data image once before importing into it.
+Add `--replace` to explicitly replace an existing data file or export destination. Parent folders must already exist. File contents can be binary; names are ASCII, at most 23 characters, and cannot contain `/`. On the data disk, files can contain up to 2,097,152 bytes (2 MiB). Editor supports 65,535-byte documents; command scripts, BASIC sources, and native BEX images retain their separate 16,383-byte application limits. Large media files are not editable as text. Boot a fresh data image once before importing into it.
 
 The same tool still reads and updates old `build/baseos.img` floppy snapshots, which keep their 16,383-byte per-file limit. Once the data disk has mounted successfully, import new files into `baseos-data.img`; changing the old floppy does not replace the newer data volume.
 

@@ -5,6 +5,7 @@
 
 #include "gfx.h"
 #include "decimal.h"
+#include "text_search.h"
 #include "display.h"
 #include "audio.h"
 #include "net.h"
@@ -69,7 +70,7 @@
 #define KEY_Q          0x10
 #define SAVER_DELAY    (70 * 90)
 
-#define EDIT_BUF_SIZE  FS_MAX_SIZE
+#define EDIT_BUF_SIZE  65536
 
 typedef struct {
     const char *name;
@@ -861,11 +862,11 @@ static int bar_w[MENU_N];
 
 static const char *m_baseos[] = {"About BaseOS", "Search...", "Settings", "Help"};
 static const char *m_file[] = {"New", "New Folder", "Open", "Close", "Save", "Duplicate", "Properties"};
-static const char *m_edit[] = {"Cut", "Copy", "Paste"};
+static const char *m_edit[] = {"Cut", "Copy", "Paste", "Find...", "Replace..."};
 static const char *m_special[] = {"Empty Trash", "Show Desktop", "Screen Saver", "-", "Shutdown"};
 
 static const char **menu_items[MENU_N] = {m_baseos, m_file, m_edit, m_special};
-static const int menu_count[MENU_N] = {4, 7, 3, 5};
+static const int menu_count[MENU_N] = {4, 7, 5, 5};
 
 static int menu_item_enabled(int m, int item);
 static int front_kind(void);
@@ -1388,6 +1389,10 @@ typedef struct {
     int dragging;
 } Document;
 typedef struct {
+    int open,replace_mode,focus,field,exact,position[2],selected[2];
+    char text[2][64],message[64];
+} EditorSearch;
+typedef struct {
     int cwd;
     int selected;
     int first;
@@ -1396,12 +1401,13 @@ typedef struct {
     uint32_t last_click_frame;
     int last_click_item;
     Document doc, undo[8];
+    EditorSearch search;
     History history;
 } WindowState;
-static WindowState *window_state = (WindowState *)APPS_BASE;
+static WindowState *window_state = (WindowState *)EDITOR_BASE;
 static int context_slot;
 static void context_set(int slot) { if (slot >= 0 && slot < MAX_WIN) { context_slot = slot; term_select(slot); } }
-_Static_assert(sizeof(WindowState) * MAX_WIN + 8 * 16000 < 0x2F0000, "window arena overflow");
+_Static_assert(sizeof(WindowState) * MAX_WIN < EDITOR_CAPACITY - 2 * EDIT_BUF_SIZE, "window arena overflow");
 #define fm_cwd (window_state[context_slot].cwd)
 #define fm_selected (window_state[context_slot].selected)
 #define fm_first (window_state[context_slot].first)
@@ -1409,6 +1415,7 @@ _Static_assert(sizeof(WindowState) * MAX_WIN + 8 * 16000 < 0x2F0000, "window are
 #define fm_count (window_state[context_slot].count)
 #define fm_last_click_frame (window_state[context_slot].last_click_frame)
 #define fm_last_click_item (window_state[context_slot].last_click_item)
+#define edit_search (window_state[context_slot].search)
 #define edit_buf (window_state[context_slot].doc.buf)
 #define edit_len (window_state[context_slot].doc.len)
 #define edit_caret (window_state[context_slot].doc.caret)
@@ -1432,7 +1439,8 @@ static int resizing_win = -1, resize_start_w, resize_start_h, resize_edges;
 static uint32_t title_click_time;
 static int title_click_window = -1;
 
-static char clip_buf[EDIT_BUF_SIZE];
+static char *const clip_buf=(char *)(EDITOR_BASE+EDITOR_CAPACITY-EDIT_BUF_SIZE);
+static char *const edit_scratch=(char *)(EDITOR_BASE+EDITOR_CAPACITY-2*EDIT_BUF_SIZE);
 static int clip_len = 0;
 
 #define TERM_WIN_W   640
@@ -1712,6 +1720,7 @@ static int win_geom_kind(int kind, int *x, int *y, int *w, int *h) {
 
 static int menu_item_enabled(int m, int item) {
     if (m == MENU_EDITM) {
+        if(item>=3)return !open_dlg&&front_kind()==WK_EDIT;
         /* Files keeps Cut/Copy/Paste dim. Calc: Cut dim, Copy/Paste as below. */
         if (open_dlg)
             return 0;
@@ -1937,6 +1946,112 @@ static void edit_backspace(void) {
     edit_len--;
     edit_sel_collapse();
     edit_saved_ok = 0;
+}
+
+static int edit_search_height(void){return !edit_search.open?0:edit_search.replace_mode?100:68;}
+static void edit_search_open(int replacing){
+    EditorSearch *q=&edit_search;q->open=1;q->replace_mode=replacing;q->focus=1;q->field=0;
+    int lo=edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b,hi=edit_sel_a>edit_sel_b?edit_sel_a:edit_sel_b;
+    if(hi>lo&&hi-lo<64){int okay=1;for(int i=lo;i<hi;i++)if(edit_buf[i]=='\n')okay=0;
+        if(okay){kmemcpy(q->text[0],edit_buf+lo,hi-lo);q->text[0][hi-lo]=0;}}
+    q->position[0]=kstrlen(q->text[0]);q->selected[0]=1;q->message[0]=0;dirty=1;
+}
+static int edit_find_next(int direction){
+    EditorSearch *q=&edit_search;int size=kstrlen(q->text[0]);
+    if(!size){kstrcpy(q->message,"Enter text to find.");dirty=1;return 0;}
+    int start=direction<0?(edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b)-1:edit_caret;
+    int found=text_find(edit_buf,edit_len,q->text[0],start,direction,q->exact);
+    if(found<0){kstrcpy(q->message,"Text not found.");dirty=1;return 0;}
+    edit_sel_a=found;edit_sel_b=found+size;edit_caret=edit_sel_b;
+    kstrcpy(q->message,"Match selected.");dirty=1;return 1;
+}
+static void edit_replace_one(void){
+    EditorSearch *q=&edit_search;int lo=edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b;
+    int hi=edit_sel_a>edit_sel_b?edit_sel_a:edit_sel_b;
+    int n=kstrlen(q->text[0]),r=kstrlen(q->text[1]);
+    if(!n||hi-lo!=n||!text_match(edit_buf,edit_len,lo,q->text[0],q->exact)){
+        if(!edit_find_next(1))return;
+        lo=edit_sel_a;hi=edit_sel_b;
+    }
+    if(edit_len-(hi-lo)+r>=EDIT_BUF_SIZE){kstrcpy(q->message,"Replacement exceeds the document limit.");dirty=1;return;}
+    edit_record();edit_delete_sel();
+    for(int i=edit_len;i>=lo;i--)edit_buf[i+r]=edit_buf[i];
+    kmemcpy(edit_buf+lo,q->text[1],r);edit_len+=r;edit_caret=lo+r;edit_sel_collapse();edit_saved_ok=0;
+    edit_find_next(1);dirty=1;
+}
+static void edit_replace_everywhere(void){
+    EditorSearch *q=&edit_search;int count=0;
+    int length=text_replace_all(edit_scratch,EDIT_BUF_SIZE,edit_buf,edit_len,q->text[0],q->text[1],q->exact,&count);
+    if(length<0){kstrcpy(q->message,"Empty search or replacement exceeds limit.");dirty=1;return;}
+    if(count){edit_record();kmemcpy(edit_buf,edit_scratch,length+1);edit_len=length;edit_caret=0;edit_sel_collapse();edit_saved_ok=0;}
+    fmt_uint(q->message,count);kstrcpy(q->message+kstrlen(q->message)," replacements.");dirty=1;
+}
+static void edit_search_key(void){
+    EditorSearch *q=&edit_search;int f=q->field;char *text=q->text[f];int length=kstrlen(text),pos=q->position[f];
+    if(key_sc==KEY_ESC){q->open=q->focus=0;dirty=1;return;}
+    if(key_sc==KEY_TAB){q->field=q->replace_mode?1-f:0;q->position[q->field]=kstrlen(q->text[q->field]);q->selected[q->field]=1;dirty=1;return;}
+    if(key_sc==KEY_ENTER){if(ctrl_down&&q->replace_mode){if(shift_down)edit_replace_everywhere();else edit_replace_one();}else edit_find_next(shift_down?-1:1);return;}
+    if(ctrl_down&&key_sc==0x1e){q->selected[f]=1;dirty=1;return;}
+    if(ctrl_down&&(key_sc==0x2e||key_sc==0x2d)&&q->selected[f]){
+        clip_len=length;kmemcpy(clip_buf,text,length+1);
+        if(key_sc==0x2d){text[0]=0;q->position[f]=0;q->selected[f]=0;}dirty=1;return;
+    }
+    if(ctrl_down&&key_sc==0x2f){
+        if(q->selected[f]){text[0]=0;length=pos=0;q->selected[f]=0;}
+        for(int j=0;j<clip_len&&length<63;j++)if(clip_buf[j]>=32&&clip_buf[j]<=126){
+            for(int i=length;i>=pos;i--)text[i+1]=text[i];
+            text[pos++]=clip_buf[j];length++;}
+        q->position[f]=pos;dirty=1;return;
+    }
+    if(key_sc==KEY_LEFT){if(pos>0)pos--;q->selected[f]=0;}
+    else if(key_sc==KEY_RIGHT){if(pos<length)pos++;q->selected[f]=0;}
+    else if(key_sc==0x47){pos=0;q->selected[f]=0;}
+    else if(key_sc==0x4f){pos=length;q->selected[f]=0;}
+    else if(key_sc==KEY_BACKSPACE||key_sc==0x53){
+        if(q->selected[f]){text[0]=0;pos=0;q->selected[f]=0;}
+        else {int at=key_sc==KEY_BACKSPACE?pos-1:pos;if(at>=0&&at<length){for(int i=at;i<length;i++)text[i]=text[i+1];if(key_sc==KEY_BACKSPACE)pos--;}}
+    }else if(key_char>=32&&key_char<=126&&!ctrl_down&&!alt_down){
+        if(q->selected[f]){text[0]=0;length=pos=0;q->selected[f]=0;}
+        if(length<63){for(int i=length;i>=pos;i--)text[i+1]=text[i];text[pos++]=key_char;}
+    }
+    q->position[f]=pos;q->message[0]=0;dirty=1;
+}
+static void draw_edit_search(int wx,int wy,int ww,int wh){
+    if(!edit_search.open)return;
+    EditorSearch *q=&edit_search;
+    int y=wy+wh-SB-edit_search_height();draw_rect(wx+1,y,ww-2,edit_search_height(),ui_chrome);
+    draw_hline(wx+1,y,ww-2,ui_chrome_dk);
+    for(int f=0;f<(q->replace_mode?2:1);f++){
+        int fy=y+6+f*32;draw_string(f?"With":"Find",wx+12,fy+5,ui_text);
+        draw_round_rect(wx+66,fy,ww-82,26,4,q->focus&&q->field==f?ui_accent:ui_border);
+        draw_round_rect(wx+67,fy+1,ww-84,24,3,COLOR_WHITE);
+        int selected=q->focus&&q->field==f&&q->selected[f];
+        if(selected)draw_rect(wx+72,fy+4,ww-96,18,ui_accent);
+        draw_string_clip(q->text[f],wx+72,fy+5,selected?COLOR_WHITE:ui_text,wx+ww-22);
+        if(q->focus&&q->field==f&&!selected){char prefix[64];kmemcpy(prefix,q->text[f],q->position[f]);prefix[q->position[f]]=0;
+            int x=wx+72+ui_string_w(prefix);if(x<wx+ww-22)draw_rect(x,fy+4,1,18,ui_text);}
+    }
+    int by=y+(q->replace_mode?70:38);
+    draw_button(wx+12,by,56,24,"Next");draw_button(wx+74,by,56,24,"Prev");
+    if(q->replace_mode){draw_button(wx+136,by,74,24,"Replace");draw_button(wx+216,by,44,24,"All");}
+    draw_button_styled(wx+(q->replace_mode?266:136),by,34,24,"Aa",q->exact);
+    draw_button(wx+ww-46,by,32,24,"X");
+}
+static int edit_search_click(int wx,int wy,int ww,int wh){
+    if(!edit_search.open)return 0;
+    EditorSearch *q=&edit_search;int y=wy+wh-SB-edit_search_height();
+    if(!hit(mouse_x,mouse_y,wx,y,ww,edit_search_height()))return 0;
+    q->focus=1;
+    for(int f=0;f<(q->replace_mode?2:1);f++)if(hit(mouse_x,mouse_y,wx+66,y+6+f*32,ww-82,26)){
+        q->field=f;q->position[f]=kstrlen(q->text[f]);q->selected[f]=1;dirty=1;return 1;}
+    int by=y+(q->replace_mode?70:38);
+    if(hit(mouse_x,mouse_y,wx+12,by,56,24))edit_find_next(1);
+    else if(hit(mouse_x,mouse_y,wx+74,by,56,24))edit_find_next(-1);
+    else if(q->replace_mode&&hit(mouse_x,mouse_y,wx+136,by,74,24))edit_replace_one();
+    else if(q->replace_mode&&hit(mouse_x,mouse_y,wx+216,by,44,24))edit_replace_everywhere();
+    else if(hit(mouse_x,mouse_y,wx+(q->replace_mode?266:136),by,34,24))q->exact=!q->exact;
+    else if(hit(mouse_x,mouse_y,wx+ww-46,by,32,24))q->open=q->focus=0;
+    dirty=1;return 1;
 }
 
 static void namedlg_open(int target, const char *initial);
@@ -3584,7 +3699,7 @@ static void open_fs_file(int id) {
         return;
     if (fs_size(id) >= EDIT_BUF_SIZE) {
         properties_id=id;
-        properties_reason="Too large for Editor (maximum 16383 bytes).";
+        properties_reason="Too large for Editor (maximum 65535 bytes).";
         win_open(WK_PROPERTIES);dirty=1;return;
     }
     if (win_open(WK_EDIT) < 0) return;
@@ -3739,7 +3854,8 @@ static void edit_area(int wx, int wy, int ww, int wh,
     *ax = wx + 18;
     *ay = wy + top + 14;
     *aw = ww - 36 - SB;
-    *ah = wh - top - 24 - SB;
+    *ah = wh - top - 24 - SB - edit_search_height();
+    if(*ah<EDIT_LINE_H)*ah=EDIT_LINE_H;
 }
 
 static void edit_caret_cell(int cols, int *row, int *col) {
@@ -4357,7 +4473,7 @@ static void draw_open_dialog(void) {
 
 static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
     char title[40];
-    char info[32];
+    char info[112];
     if (edit_file >= 0) {
         const char *nm = fs_name(edit_file);
         int t = 0;
@@ -4392,6 +4508,7 @@ static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
         info[i++] = '*';
     }
     info[i] = 0;
+    if(edit_search.open&&edit_search.message[0]){kstrcpy(info+i," | ");kstrcpy(info+i+3,edit_search.message);}
 
     gui_draw_window(wx, wy, ww, wh, title, info,
                     WIN_INFO | WIN_SCROLL | (inactive ? WIN_INACTIVE : 0));
@@ -4445,6 +4562,7 @@ static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
             c = 0;
         }
     }
+    draw_edit_search(wx,wy,ww,wh);
 }
 
 static void draw_string_in_win(const char *str, int wx, int ww, int y, uint8_t color) {
@@ -4683,7 +4801,7 @@ static void draw_window_contents(Win *w, int inactive) {
         if(properties_reason[0])PROP(properties_reason);
         PROP(fs_storage_name());
         fmt_uint(number,fs_file_limit());kstrcpy(row,"Maximum file bytes: ");kstrcpy(row+kstrlen(row),number);PROP(row);
-        PROP("Editor maximum: 16383 bytes");
+        PROP("Editor maximum: 65535 bytes");
         PROP(fs_storage_status()?fs_storage_status():"Disk is synchronized");
         #undef PROP
     } else if (w->kind == WK_HELLO) {
@@ -5053,6 +5171,8 @@ static int edit_index_at(int wx, int wy, int ww, int wh, int mx, int my) {
 }
 
 static void handle_edit_click(int wx, int wy, int ww, int wh) {
+    if(edit_search_click(wx,wy,ww,wh))return;
+    edit_search.focus=0;
     int ax, ay, aw, ah;
     edit_area(wx, wy, ww, wh, &ax, &ay, &aw, &ah);
     if (hit(mouse_x, mouse_y, ax, ay, aw, ah)) {
@@ -5196,6 +5316,7 @@ static void menu_activate(int m, int item) {
             edit_copy();
         else if (item == 2)
             edit_paste();
+        else if(item==3||item==4)edit_search_open(item==4);
         dirty = 1;
         return;
     }
@@ -5795,6 +5916,13 @@ static void handle_key(void) {
         return;
     }
     context_set(win_front());
+    if(front_kind()==WK_EDIT&&!name_dlg&&!open_dlg&&!launcher_on&&open_menu<0){
+        if(ctrl_down&&(key_sc==0x21||key_sc==0x23)){edit_search_open(key_sc==0x23);return;}
+        if(key_sc==0x3d){if(!edit_search.open)edit_search_open(0);edit_find_next(shift_down?-1:1);return;}
+        int app_shortcut=ctrl_down&&(key_sc==KEY_S||key_sc==KEY_W||key_sc==KEY_M||key_sc==KEY_N||
+                        key_sc==KEY_SPACE||key_sc==KEY_TAB||key_sc==0x18||key_sc==0x2c||key_sc==0x15);
+        if(edit_search.open&&(edit_search.focus||key_sc==KEY_ESC)&&!app_shortcut){edit_search_key();return;}
+    }
     if(front_kind()==WK_BROWSER&&!name_dlg&&!open_dlg&&!launcher_on&&open_menu<0&&
        ((ctrl_down&&(key_sc==0x26||key_sc==0x13||key_sc==0x1e))||
         (alt_down&&(key_sc==KEY_LEFT||key_sc==KEY_RIGHT)))){
@@ -5950,6 +6078,14 @@ static void handle_key(void) {
     }
 
     if (fk == WK_EDIT) {
+        if(key_sc==0x53){edit_record();if(edit_sel_a!=edit_sel_b)edit_delete_sel();else if(edit_caret<edit_len){edit_sel_a=edit_caret;edit_sel_b=edit_caret+1;edit_delete_sel();}dirty=1;return;}
+        if(key_sc==0x47||key_sc==0x4f){
+            int old=edit_caret;
+            if(ctrl_down)edit_caret=key_sc==0x47?0:edit_len;
+            else if(key_sc==0x47){while(edit_caret>0&&edit_buf[edit_caret-1]!='\n')edit_caret--;}
+            else {while(edit_caret<edit_len&&edit_buf[edit_caret]!='\n')edit_caret++;}
+            if(shift_down){if(edit_sel_a==edit_sel_b)edit_sel_a=old;edit_sel_b=edit_caret;}else edit_sel_collapse();dirty=1;return;
+        }
         if (key_sc == KEY_ESC) {
             close_front();
             return;
@@ -5971,26 +6107,29 @@ static void handle_key(void) {
             return;
         }
         if (key_sc == KEY_LEFT) {
-            if (edit_sel_a != edit_sel_b) {
+            int old=edit_caret;
+            if (!shift_down && edit_sel_a != edit_sel_b) {
                 edit_caret = edit_sel_a < edit_sel_b ? edit_sel_a : edit_sel_b;
             } else if (edit_caret > 0) {
                 edit_caret--;
             }
-            edit_sel_collapse();
+            if(shift_down){if(edit_sel_a==edit_sel_b)edit_sel_a=old;edit_sel_b=edit_caret;}else edit_sel_collapse();
             dirty = 1;
             return;
         }
         if (key_sc == KEY_RIGHT) {
-            if (edit_sel_a != edit_sel_b) {
+            int old=edit_caret;
+            if (!shift_down && edit_sel_a != edit_sel_b) {
                 edit_caret = edit_sel_a > edit_sel_b ? edit_sel_a : edit_sel_b;
             } else if (edit_caret < edit_len) {
                 edit_caret++;
             }
-            edit_sel_collapse();
+            if(shift_down){if(edit_sel_a==edit_sel_b)edit_sel_a=old;edit_sel_b=edit_caret;}else edit_sel_collapse();
             dirty = 1;
             return;
         }
-        if (key_sc == KEY_UP || key_sc == KEY_DOWN) {
+        if (key_sc == KEY_UP || key_sc == KEY_DOWN || key_sc==0x49 || key_sc==0x51) {
+            int old=edit_caret;
             int wx, wy, ww, wh, ax, ay, aw, ah;
             if (!win_geom_kind(WK_EDIT, &wx, &wy, &ww, &wh))
                 return;
@@ -6000,14 +6139,13 @@ static void handle_key(void) {
                 cols = 1;
             int r, c;
             edit_caret_cell(cols, &r, &c);
-            if (key_sc == KEY_UP)
-                r--;
-            else
-                r++;
+            if (key_sc == KEY_UP) r--;
+            else if(key_sc==KEY_DOWN)r++;
+            else {int page=ah/EDIT_LINE_H;if(page<1)page=1;r+=key_sc==0x49?-page:page;}
             if (r < 0)
                 r = 0;
             edit_caret = edit_cell_to_index(cols, r, c);
-            edit_sel_collapse();
+            if(shift_down){if(edit_sel_a==edit_sel_b)edit_sel_a=old;edit_sel_b=edit_caret;}else edit_sel_collapse();
             dirty = 1;
             return;
         }
