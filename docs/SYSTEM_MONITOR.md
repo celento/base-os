@@ -6,10 +6,12 @@ Monitor separates information into three tabs:
   actual compositor redraws, and filesystem node/payload usage.
 - **Windows** lists open applications and minimized state, with the existing
   Close control. Closing a Terminal also ends its native task.
-- **Tasks** lists live terminal-owned native programs. Each row shows the copied
-  executable basename, Running or Sleeping, owning Terminal slot (1–8), and
-  elapsed wall-clock lifetime. Show terminal restores/focuses that terminal;
-  Stop task ends only its native task and leaves the terminal open for commands.
+- **Tasks** lists live hosted and owned native programs. Each row shows copied
+  executable/document labels, Running or Sleeping, display/view slot (1–8),
+  and elapsed wall-clock lifetime. Show restores/focuses the exact owning window.
+  Stop ends that task; a hosted Terminal keeps its command prompt, while an owned
+  window retains inert Output/frame diagnostics. Those results appear under
+  Windows, not live Tasks; Close dismisses them. See [native windows](NATIVE_WINDOWS.md).
 
 All eight rows fit at the standard 520 × 439 client size (the default 440-pixel
 content allocation loses one pixel to the title boundary). The same calculated
@@ -21,15 +23,16 @@ per-task CPU utilization. Task lifetime includes sleep and time waiting for a
 slice; it is not CPU time.
 
 Native task state and elapsed lifetime update on the desktop's periodic redraw.
-Executable names are copied when Terminal accepts `start FILE`, so renaming,
+Executable names are copied when the desktop accepts a native launch, so renaming,
 deleting or reusing the source filesystem node cannot change a running task's
 label. A rejected start leaves the existing task's metadata unchanged. Task
-metadata disappears on completion, Stop, terminal close, or terminal reset. Live
+metadata disappears on completion, Stop or owner cleanup. Retained owned-result
+labels are separate from live task metadata. Live
 task execution state is not persisted across reboot.
 
-## Terminal query API
+## Common-view query API
 
-`int term_task_info(int owner, TermTaskInfo *out)` accepts a zero-based terminal
+`int term_task_info(int owner, TermTaskInfo *out)` accepts a zero-based display/view
 slot and copies a snapshot without calling `term_select` or changing terminal
 input/output/selection. It returns 1 only for `PROCESS_TASK_READY` or
 `PROCESS_TASK_SLEEPING`; otherwise it returns 0 and clears the supplied output.
@@ -46,19 +49,20 @@ input/output/selection. It returns 1 only for `PROCESS_TASK_READY` or
 
 The unsigned tick subtraction handles a PIT rollover for lifetimes shorter than
 one complete 32-bit tick cycle. Low-level process creation is independent of
-Terminal and does not appear in this display snapshot without a Terminal
-attachment. Ordinary user-started tasks always use the tracked Terminal
-lifecycle and copied filename/start metadata.
+Terminal and does not appear in this display snapshot without a common-view
+attachment. Ordinary hosted and owned launches use copied binding/name metadata;
+the compatibility query delegates to `app_view_info`.
 
 ## Desktop integration contract
 
 `SysInfo` adds `task_n` and `tasks[SYSMON_MAX_TASKS]`. Build each snapshot from
-currently open Terminal slots, preserving the slots as owners:
+currently open hosted or owned slots, preserving the display slot and copied
+process instance for later identity-checked actions:
 
 ```c
 si->task_n = 0;
 for (int i = 0; i < MAX_WIN && si->task_n < SYSMON_MAX_TASKS; i++) {
-    if (wins[i].open && wins[i].kind == WK_TERM &&
+    if (wins[i].open && (wins[i].kind == WK_TERM || wins[i].kind == WK_NATIVE) &&
         term_task_info(i, &si->tasks[si->task_n]))
         si->task_n++;
 }

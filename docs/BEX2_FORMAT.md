@@ -18,7 +18,7 @@ The first 64 bytes contain sixteen little-endian unsigned 32-bit words:
 | 0 | magic | `0x32584542` (`BEX2`) |
 | 4 | header_bytes | 64 |
 | 8 | format_version | 1 |
-| 12 | flags | 0 |
+| 12 | flags | 0 for hosted; bit 0 requires one owned native window |
 | 16 | file_bytes | Exact actual file length, inclusive cap 262,144 bytes |
 | 20 | entry_offset | Inside actual text bytes |
 | 24 | text_bytes | Nonzero text plus read-only data, excluding rounded tail |
@@ -34,7 +34,10 @@ The first 64 bytes contain sixteen little-endian unsigned 32-bit words:
 
 Shared definitions are in `sdk/baseos_executable.h`. Definitions alone do not
 establish kernel support. The opt-in producer currently requests ABI 1.1 by
-default, independently of the current BEX1 SDK ABI declarations.
+default for unflagged hosted output, independently of current SDK declarations.
+`--window native-v1` sets required flag 1 and requires ABI minor at least 2;
+unknown required bits or unavailable launch backends are refused, never silently
+downgraded. See [native windows](NATIVE_WINDOWS.md).
 
 `file_bytes == data_offset + data_file_bytes`; the header length must equal the
 available input file length. Text starts at both file and virtual offset 4096.
@@ -119,7 +122,9 @@ python3 tools/build_app.py examples/c/workspace_index.c build/workspace-index.be
 nm -n build/workspace-array.elf
 ```
 
-Defaults are 1 MiB workspace, 64 KiB stack and required ABI minor 1.
+Unflagged defaults are 1 MiB workspace, 64 KiB stack and required ABI minor 1.
+Add `--window native-v1` only with BEX2 to select the owned-window contract; its
+default required ABI minor is 2 and a lower explicit minor is rejected.
 `--workspace-bytes 0` permits no workspace. Optional `--required-abi-minor` sets
 a more specific build requirement. The builder checks generated header/ELF
 agreement before publishing the BEX2 file; rejected capacity or unsupported
@@ -138,7 +143,7 @@ They read the startup document (or `/Documents/stats-sample.txt`) through an
 owned versioned handle, one 4 KiB chunk per call, and save a small conditional
 report followed by an owned async synchronization operation. They check and
 release handles. Reports are `/Documents/workspace-array-N.txt` and
-`/Documents/workspace-index-N.txt`, where N is the legacy Terminal task ID.
+`/Documents/workspace-index-N.txt`, where N is the legacy display/view slot (a Terminal for these hosted examples).
 
 - `workspace_array.c` fills/checks every workspace word using a document-derived
   seed and records its unsigned checksum.

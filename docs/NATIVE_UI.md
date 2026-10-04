@@ -1,16 +1,17 @@
-# Hosted native pointer service
+# Native pointer service, UI 1.1
 
-Candidate scope note: this page records the qualified hosted UI 1.0 contract and
-its history. The isolated [independent-window candidate](NATIVE_WINDOWS.md)
-adds UI 1.1 WINDOW_ADOPT=6, owned kind 2 and capability bits 8/9 while retaining
-the same event engine and wire sizes. The candidate's hosted contexts keep
-HOST_OPEN and hosted capabilities; owned contexts use ADOPT and owned
-capabilities. The independent-window path is not covered by the hosted or
-app-view extraction qualification below.
+The qualified [independent-window increment](NATIVE_WINDOWS.md) adds
+WINDOW_ADOPT=6, owned kind 2 and capability bits 8/9 while retaining the same
+event engine and wire sizes. Hosted contexts keep HOST_OPEN and hosted
+capabilities; owned contexts use ADOPT and owned capabilities. See the separate
+[native-window qualification](NATIVE_WINDOWS_QUALIFICATION.md). The hosted
+contract and staged evidence below remain compatible and keep their historical
+identities; they do not substitute for the newer owned-window gates.
 
 The current qualified hosted-pointer contract provides one kernel-owned endpoint
-for an existing native Terminal canvas. The general [platform ABI is 1.1](NATIVE_PLATFORM_ABI.md);
-UI **1.0** is negotiated independently through gateway **29**. Hosted-UI feature
+for an existing native Terminal canvas. The general [platform ABI is 1.2](NATIVE_PLATFORM_ABI.md);
+UI **1.1** is negotiated independently through gateway **29**. UI1.0
+hosted clients retain their unchanged operations and records. Hosted-UI feature
 bit **6** is advertised only for bound desktop tasks when trusted production
 input hooks are available. Synchronous `exec` and BASIC do not offer this service.
 See [isolated qualification](NATIVE_UI_QUALIFICATION.md) and its linked integration
@@ -22,7 +23,8 @@ Memory-info retains call 28 and feature bit 4; current-context BEX2 retains bit 
 The general ABI query remains 96 bytes. UI targets use a private allocation
 domain (`0x40000000`); applications treat handles as opaque. This service creates
 no windows or surfaces and adds no keyboard-event or graceful-close protocol.
-Independent app views/windows remain separate, unmerged work.
+Independent primary windows are a separate qualified launch contract;
+ADOPT attaches to one already created by that loader transaction.
 
 ## Current client quickstart
 

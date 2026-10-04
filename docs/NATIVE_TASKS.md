@@ -5,25 +5,33 @@
 BEX1 remains the default 64 KiB contract. The same hosted desktop route also
 supports the qualified opt-in [BEX2 format](BEX2_FORMAT.md), whose sparse 4 MiB
 offset extent contains only launch-declared text/data/workspace/stack regions.
-Synchronous `exec` still accepts BEX1 only; no heap or independent native-window
-service is implied.
+Synchronous `exec` still accepts BEX1 only. A BEX2 explicitly built with
+`--window native-v1` uses the qualified [owned native window](NATIVE_WINDOWS.md)
+backend instead of a Terminal. Neither format supplies a heap.
 
 Open `.bex` programs from Files, the ordinary Open dialog, or Ctrl+Space filename
-search. Each activation gets a fresh Terminal owner and the same protected
+search. Each activation gets a fresh hosted or owned view and the same protected
 runtime as `start`; no Terminal command is required. A full eight-window desktop
-asks for a window to be closed. Unsupported binaries produce a visible Terminal
-error and are never opened as text or modified. Files/Open/search reject a stale
+asks for a window to be closed. Owned launch is transactional and never consumes
+the calling Terminal on failure; errors are visible without a hidden hosted
+fallback. Unsupported binaries are never opened as text or modified. Files/Open/search reject a stale
 node incarnation before activation; the loader copies the current program.
 
 ## Controls and persistence
 
-- `start FILE [DOCUMENT]` starts one task owned by this Terminal. Quote paths with
+- `start FILE [DOCUMENT]` hosts an unflagged app in this Terminal, or launches a
+  GUI-flagged BEX2 in its own window while keeping the calling shell. Quote paths with
   spaces; the optional ordinary-file path is resolved to an absolute path of at
   most 128 printable ASCII bytes. Starting over a live task is rejected.
 - Printable keys, Enter, Backspace, and Escape are queued for the focused task. Ctrl+C is reserved for stopping it through the desktop.
-- `tasks` lists the terminal slots with runnable or sleeping tasks. `stop` stops the current terminal's task (also usable in a command script).
+- `tasks` lists the display/view slots with runnable or sleeping tasks. `stop` stops the current terminal's task (also usable in a command script).
 - Minimizing or switching away leaves a task running. Closing or resetting its Terminal cancels it. A reused window slot starts clean.
-- A native exit or fault ends only that task. A canceled task does not receive another slice or perform another syscall.
+- A native exit or fault ends only that task. Stop prevents another slice. An
+  already-active slice keeps its established output/publication and APP-exit
+  precedence until return; see [lifetime ordering](PROCESS_LIFETIME.md).
+- Owned APP exit zero closes its window. Stop/error/nonzero exit retain an inert
+  result with Output and the last published frame. Current Close is forced;
+  native private buffers and result windows are not saved into session-v1.
 - The desktop session does not save live executable state. Apps explicitly save documents through the file API. Counter uses `/Documents/counter-N.txt`, where N is its terminal slot; S writes and explicitly synchronizes the disk; a later start in that slot loads the saved number. A failed sync says RAM only instead of Saved. Notebook follows the same explicit-sync rule.
 - The legacy task-id API still identifies a reusable display slot. The additive
   [platform query](NATIVE_PLATFORM_ABI.md) provides a separate nonreused process
@@ -36,7 +44,7 @@ plan and owned-page references, a complete ring-3 interrupt frame, x87 state,
 copied contextual output callbacks, a 32-byte key queue, and wait/deadline state.
 BEX1 owns sixteen backing frames for its 64 KiB image; BEX2 owns its declared
 regions and private page-directory/table frames. Record indices are neither
-process handles nor Terminal slots. Each Terminal retains an exact opaque
+process handles nor display slots. Each common app view retains an exact opaque
 process handle and nonwrapping binding generation. The supervisor-only records
 at `TASK_BASE` (48 MiB) fit in the reserved 1 MiB arena; owned frames come from
 the separately validated page pool.
@@ -52,7 +60,7 @@ return earlier. Saved EIP is after the completed syscall, so filesystem
 operations are not replayed. On return, both restore the kernel root/descriptors,
 then FPU context, before clearing active state and copying or releasing backing.
 An exiting BEX1 skips the final scatter. Both formats retain identity and result
-until Terminal consumes completion and reaps the record.
+until the common app-view consumer consumes completion and reaps the record.
 
 Only ring-3 execution is preempted. A syscall completes atomically on the kernel's bounded exception stack. Syscall buffer checks, transfer limits, canvas clipping, and `/Documents` write restrictions are shared with legacy `exec`. No kernel task, filesystem operation, or GUI handler is interrupted by another native task. A task can be delayed by rendering, disk access, BASIC, synchronous `exec`, or other cooperative work. This provides responsive bounded native slices, not real-time guarantees or a general-purpose kernel scheduler.
 
@@ -76,7 +84,7 @@ region limits are defined in [BEX2_FORMAT.md](BEX2_FORMAT.md).
 | 5 | `bos_present()` | In task mode, publishes the complete canvas then yields. In `exec`, calls the legacy presenter. |
 | 10 | `bos_yield()` | Publish pending canvas and resume on a later desktop turn; returns 0. `exec` returns -1. |
 | 11 | `bos_sleep(ms)` | Publish pending canvas, then wait at least the requested 0–60,000 ms, rounded up to PIT ticks. Zero yields. Invalid values and `exec` return -1. |
-| 12 | `bos_task_id()` | Owning terminal slot 1–8; `exec` returns 0. |
+| 12 | `bos_task_id()` | Owning display/view slot 1–8 (Terminal for hosted apps); `exec` returns 0. |
 | 13 | `bos_read_file_at(path,out,capacity,offset)` | Up to 4096 bytes from any file offset; returns 0 at/beyond EOF. |
 | 14 | `bos_canvas_size(width,height)` | Select and clear exactly 160×100 or 320×200; new apps default to 160×100. |
 | 15 | `bos_replace_file(path,data,bytes)` | Atomic RAM replacement up to 32,768 bytes, confined to `/Documents`. |
