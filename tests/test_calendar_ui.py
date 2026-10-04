@@ -1,5 +1,6 @@
 """Ordinary Calendar UI workflows with the real model and software renderer."""
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -9,6 +10,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class CalendarUITests(unittest.TestCase):
+    def test_smallest_production_display_fits(self):
+        kernel = (ROOT / 'src/kernel.c').read_text()
+        header = (ROOT / 'src/calendar.h').read_text()
+        def constant(source, name):
+            return int(re.search(r'^#define\s+' + name + r'\s+(\d+)', source, re.M)[1])
+        available = 600 - constant(kernel, 'MENUBAR_H') - constant(kernel, 'TASKBAR_H') - 8
+        self.assertLessEqual(constant(header, 'CAL_H') + constant(kernel, 'TITLE_H'), available)
+
     def test_calendar_mouse_keyboard_recovery_and_rendering(self):
         with tempfile.TemporaryDirectory(prefix='baseos-calendar-ui-') as temporary:
             binary = Path(temporary) / 'calendar-ui'

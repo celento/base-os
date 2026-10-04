@@ -7,7 +7,8 @@ arrows move by month. Today or Home returns to the RTC date.
 
 The selected day's appointments are sorted with all-day entries first, then
 24-hour time, then stable insertion ID. Click a row or use Up/Down to select an
-appointment. The agenda arrows page through seven rows at a time.
+appointment. The agenda arrows page through six rows at a time. The complete 620 x 474 client fits the
+800 x 600 desktop with its menu bar, taskbar and window title.
 
 - New, N, Ctrl+N, or File > New starts an entry for the selected day.
 - Enter or Edit edits the selected appointment. The original stays unchanged
