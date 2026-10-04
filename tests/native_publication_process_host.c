@@ -9,6 +9,7 @@
 #include "platform.h"
 #include "fs.h"
 #include "native_platform_service_stubs.h"
+#include "process_backing_host.h"
 #include "native_publication_process_types.inc"
 
 static unsigned char user_memory[USER_CAPACITY];
@@ -30,7 +31,7 @@ static unsigned event_count;
 static unsigned rectangles,rectangle_arguments[5];
 static int checking_rectangle;
 
-void kmemcpy(void *to,const void *from,int bytes){memcpy(to,from,(size_t)bytes);}
+void kmemcpy(void *to,const void *from,int bytes){host_physmem_copy(to,from,(unsigned)bytes);}
 void kmemset(void *to,int value,int bytes){memset(to,value,(size_t)bytes);}
 uint32_t timer_ticks(void){return now;}
 int fs_sync(void){assert(!"Publication tests must not execute the fs_sync shim");return -1;}
@@ -75,11 +76,14 @@ static void native_rectangle(const ProcessBinding *binding,int x,int y,int w,int
 }
 static ProgramIO legacy_io={print_line,pixel,0,publish,0,0};
 static void prepare(uint32_t frame[FRAME_WORDS],unsigned call,unsigned argument){
+    active=0;task_reset_all();current_task=0;
     memset(task_memory,0,sizeof task_memory);
     memset(events,0,sizeof events);event_count=publications=leaves=plots=rectangles=0;
     checking_rectangle=0;
     current_task=tasks+3;tasks_ready=active=1;process_result=17;
-    current_task->state=PROCESS_TASK_READY;current_task->owner_id=BOS_HANDLE_TYPE_PROCESS|4;
+    current_task->state=PROCESS_TASK_READY;current_task->owner_id=allocate_owner();
+    assert(physmem_alloc(current_task->owner_id,PHYS_BEX1_BACKING,
+                        TASK_BACKING_PAGES,current_task->backing)==PHYS_OK);
     current_task->resources_live=1;current_task->bound=1;current_task->legacy_task_id=4;
     current_task->io=(ProcessIO){{current_task->owner_id,3,1},native_line,native_pixel,native_publish,0,0};
     output=&legacy_io;legacy_io.rect=0;
@@ -215,9 +219,12 @@ static void rectangle_dispatch(void){
     checking_rectangle=0;
 }
 int main(void){
+    host_physmem_init(64);
     suspension(5,0,100);suspension(10,0,100);suspension(11,0,100);
     suspension(11,1,100);suspension(11,1000,100);suspension(11,60000,100);
     suspension(11,1000,UINT32_MAX-10u);
     nonpublishing_paths();completion_and_compatibility();rectangle_dispatch();
+    active=0;task_reset_all();assert(!host_physmem_stats().allocated);
+    host_physmem_destroy();
     puts("Native publication process: exact dispatcher present/yield/sleep/explicit-exit boundaries, publication-before-suspend, timer/stop/generic-error isolation, rectangle dispatch/fallback and legacy exec passed.");
 }

@@ -19,9 +19,11 @@ class ProcessLifetimeTests(unittest.TestCase):
             subprocess.run([shutil.which('clang') or 'cc', '-std=gnu11', '-O1', '-g',
                 '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                 '-fsanitize=address,undefined', '-I', str(ROOT / 'src'), '-I', str(directory),
-                str(ROOT / 'tests/process_lifetime_host.c'), '-o', str(executable)], check=True)
-            subprocess.run([str(executable)], check=True, env=dict(os.environ,
-                ASAN_OPTIONS='detect_leaks=0', UBSAN_OPTIONS='halt_on_error=1'))
+                str(ROOT / 'tests/process_lifetime_host.c'),
+                str(ROOT / 'src/physmem.c'), str(ROOT / 'src/bootinfo.c'), '-o', str(executable)], check=True)
+            for ram in (64, 128):
+                subprocess.run([str(executable), str(ram)], check=True, env=dict(os.environ,
+                    ASAN_OPTIONS='detect_leaks=0', UBSAN_OPTIONS='halt_on_error=1'))
 
 
 if __name__ == '__main__':

@@ -2,9 +2,11 @@
 
 This internal foundation leaves BEX1, syscalls 0–27, the fixed 64 KiB image,
 49,152-byte image cap, 16 KiB linker stack reservation, initial ESP 65,520,
-eight desktop task contexts and synchronous exec unchanged. It does not add
-pages, a heap, larger programs, detached execution, reassignment, more windows,
-or a new application identity namespace.
+eight desktop task contexts and synchronous exec unchanged. C1 introduced no
+page allocation. The subsequent [C2b backing change](PROCESS_BACKING.md) replaces
+its inline image with sixteen owned frames, without adding a heap, larger
+programs, detached execution, reassignment, more windows or a new application
+identity namespace.
 
 ## Ownership and state
 

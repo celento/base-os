@@ -23,6 +23,7 @@ static unsigned saved_counter(int owner){
     while(*text>='0'&&*text<='9')n=n*10+(unsigned)(*text++-'0');return n;
 }
 void feature_test(void){
+    const PhysmemStats backing_before=guest_process_memory();
     check(net_status()->available,"task media needs RTL8139");
     check(audio_status()->available,"task media needs SB16");
     int programs=fs_find_child(fs_root(),"Programs"),id=fs_find_child(programs,"counter.bex");
@@ -69,6 +70,7 @@ void feature_test(void){
     check(process_status(media_handles[0])==PROCESS_TASK_DONE&&guest_process_result(media_handles[0],PROCESS_EXIT_APP,0)&&process_status(media_handles[1])==PROCESS_TASK_DONE&&guest_process_result(media_handles[1],PROCESS_EXIT_APP,0),"FPU tasks failed during MP3");
     check(guest_process_release(&media_handles[0]),"media record release");check(guest_process_release(&media_handles[1]),"media record release");
     check(!fs_sync(),"counter persistence flush");
+    guest_process_memory_restored(&backing_before);
     draw_test();platform_log("TASK-MEDIA-HTTP-PASS\n");
     for(;;)__asm__ volatile("hlt");
 }

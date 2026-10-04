@@ -1,9 +1,9 @@
 # Bounded owned physical pages: C2a
 
 This is a kernel foundation, not an application heap or BEX2 support. The boot
-path initializes page metadata and prints its initial counts. Desktop processes
-still use their existing fixed 64 KiB saved images; no process allocates frames
-from this subsystem yet. Process backing integration is a separate C2b change.
+path initializes page metadata and prints its initial counts. C2b now backs each
+desktop process's fixed 64 KiB saved image with sixteen owned frames; see
+[PROCESS_BACKING.md](PROCESS_BACKING.md) for its lifecycle and remaining gates.
 There is no new syscall, app-visible physical address, page handle, disk format,
 SDK ABI, image size, or change to the compatibility page tables.
 
@@ -138,8 +138,8 @@ layout test and late-init source-order test complement the functional core.
 
 Also retain existing boot-info, optional-memory and kernel-layout tests. This
 increment does not claim a guest allocation/release lifecycle, performance gain,
-or larger native application capacity. C2b must add the real 16-frame BEX1 client,
-then record launch/exit/close/reset counts and unchanged BEX1 behavior in both
+or larger native application capacity. The C2b client must pass separate
+launch/exit/close/reset count gates and unchanged BEX1 behavior in both
 normal guest profiles before calling process backing integrated.
 
 Initial C2a validation (2026-10-04): all 10 selected allocator/boot-info/layout

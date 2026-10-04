@@ -23,6 +23,7 @@ typedef struct {
 static FixtureProcess fixture_processes[PROCESS_TASKS];
 static ProcessHandle next_handle=0x100;
 static unsigned schedule_cursor;
+static int create_result;
 static FixtureProcess *fixture_process(ProcessHandle handle){
     for(unsigned i=0;i<PROCESS_TASKS;i++)
         if(handle&&fixture_processes[i].handle==handle)return &fixture_processes[i];
@@ -38,6 +39,7 @@ void program_present(void){}
 int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;return 0;}
 int process_create(const void *file,unsigned bytes,const char *argument,unsigned length,ProcessHandle *out){
     assert(file&&bytes>=16&&out);
+    if(create_result)return create_result;
     assert(length<=PROCESS_ARGUMENT_MAX&&(!length||(argument&&argument[0]=='/')));
     for(unsigned i=0;i<PROCESS_TASKS;i++)if(!fixture_processes[i].handle){
         FixtureProcess *p=&fixture_processes[i];memset(p,0,sizeof *p);
@@ -147,6 +149,13 @@ static int executable(const char *name){
 #ifndef TERM_TASK_FIXTURE_ONLY
 int main(void){
     reset();int first=executable("counter.bex");executable("another.bex");
+    term_select(0);term_reset();canvas_resize(320,200);plot(17,23,9);
+    unsigned generation=terms[0].binding_generation;
+    create_result=PROCESS_CREATE_MEMORY;command("start /counter.bex");
+    assert(!term_task_running(0)&&!terms[0].process&&terms[0].binding_generation==generation);
+    assert(term_canvas_width()==320&&term_canvas_height()==200&&term_canvas()[23*320+17]==9);
+    assert(!strcmp(term_get(term_count()-2),"Cannot start: native backing memory is unavailable."));
+    create_result=0;
     term_select(0);term_reset();now=70;command("start /counter.bex");
     TermTaskInfo info,copy;assert(term_task_info(0,&info));copy=info;
     assert(!strcmp(info.name,"counter.bex")&&info.owner==0&&info.state==PROCESS_TASK_READY);

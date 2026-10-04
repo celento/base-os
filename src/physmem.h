@@ -64,7 +64,7 @@ unsigned physmem_core_owner_pages(const PhysmemCore *core, BosHandle owner);
 
 /* Late boot wrapper: only after platform_validate_memory and video_init. A
  * successful zero-capacity initialization is possible and is not a boot fault.
- * C2a initializes metadata only; no process backing client is wired yet. */
+ * Desktop BEX1 creation claims 16 zeroed backing frames; legacy exec does not. */
 int physmem_init(void);
 int physmem_alloc(BosHandle owner, enum PhysPageKind kind, unsigned count, uint32_t *frames);
 int physmem_release(BosHandle owner, enum PhysPageKind kind, const uint32_t *frames, unsigned count);

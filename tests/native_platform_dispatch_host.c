@@ -7,6 +7,7 @@
 #include "platform.h"
 #include "fs.h"
 #include "native_platform_service_stubs.h"
+#include "process_backing_host.h"
 #include "native_platform_types.inc"
 static unsigned char user_memory[USER_CAPACITY];
 #undef USER_BASE
@@ -21,7 +22,7 @@ static int tasks_ready,active,process_result;
 static uint32_t began,now;
 static unsigned publications,legacy_syncs;
 static jmp_buf leave_target;
-void kmemcpy(void *to,const void *from,int bytes){memcpy(to,from,(size_t)bytes);}
+void kmemcpy(void *to,const void *from,int bytes){host_physmem_copy(to,from,(unsigned)bytes);}
 void kmemset(void *to,int value,int bytes){memset(to,value,(size_t)bytes);}
 uint32_t timer_ticks(void){return now;}
 int fs_sync(void){legacy_syncs++;return 0;}
@@ -176,4 +177,7 @@ static void lifetimes(void){
     assert(current_task->state==PROCESS_TASK_DONE&&current_task->owner_id==old);
     puts("Native platform dispatcher: negotiation, bounded copy, wait/timeout, context support and deferred owner cleanup passed.");
 }
-int main(void){query();file_dispatch();waits();lifetimes();return 0;}
+int main(void){
+    host_physmem_init(64);query();file_dispatch();waits();lifetimes();
+    active=0;task_reset_all();assert(!host_physmem_stats().allocated);
+    host_physmem_destroy();return 0;}

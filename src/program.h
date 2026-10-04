@@ -56,7 +56,10 @@ typedef struct {
 typedef struct {
     unsigned records, created, live, exiting, done, owned;
 } ProcessCounts;
-/* Creation is not runnable. Failure leaves out_process untouched. */
+/* Private creation result: backing capacity/readiness unavailable. The public
+ * BEX1 syscall ABI is unchanged. Creation failure leaves out_process untouched. */
+#define PROCESS_CREATE_MEMORY (-3)
+/* Creation is not runnable. Successful desktop creation owns 16 zeroed pages. */
 int process_create(const void *file,unsigned bytes,const char *argument,
                    unsigned argument_length,ProcessHandle *out_process);
 int process_bind(ProcessHandle process,const ProcessIO *io);

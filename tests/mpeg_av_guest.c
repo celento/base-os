@@ -3,6 +3,7 @@
  * FFmpeg probing of an original generated fixture. */
 #define FEATURE_TEST
 #include "../src/kernel.c"
+#include "process_guest_fixture.h"
 #include "../src/video.h"
 #include "mpeg_av_metadata.h"
 #ifndef MPEG_NATIVE_TASKS
@@ -10,7 +11,6 @@
 #endif
 #if MPEG_NATIVE_TASKS
 #include "mpeg_native_examples.h"
-#include "process_guest_fixture.h"
 static ProcessHandle mpeg_handles[2];
 static int native_first,native_second,native_saved;
 #endif
@@ -84,6 +84,7 @@ static unsigned hash_frame(void){
 }
 static void await_av_state(int state){unsigned began=timer_ticks();while(video_status()->state!=state){av_poll();__asm__ volatile("hlt");require_av(timer_ticks()-began<TIMER_HZ*5,"MPEG keyboard timeout");}}
 void feature_test(void){
+    const PhysmemStats backing_before=guest_process_memory();
     int id=fs_resolve(fs_root(),"/Video/frame-study.mpg");require_av(id>=0,"MPEG fixture missing");
     require_av(audio_status()->available,"MPEG requires SB16");audio_set_volume(100);
     open_term();int terminal=win_front();wins[terminal].x=28;wins[terminal].y=138;wins[terminal].w=450;wins[terminal].h=380;
@@ -156,5 +157,6 @@ void feature_test(void){
     platform_log("MPEG-MAX-POLL-TICKS ");kprint_uint(max_poll_ticks);serial_write('\n');
     platform_log("MPEG-PRESENTATION-SKIPS ");kprint_uint(video_status()->presentation_skips);serial_write('\n');
     platform_log("MPEG-SOURCE-FRAMES ");kprint_uint(audio_status()->played_frames);serial_write('\n');
+    guest_process_memory_restored(&backing_before);
     platform_log("MPEG-AV-PASS\n");
 }
