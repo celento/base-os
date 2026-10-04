@@ -180,6 +180,8 @@ static void test_download_names(void){
     const char *unsupported[]={"https://example.com/secret", "ftp://example.com/file", "file:///sample.html", "javascript:alert(1)", "http://user:password@example.com/a"};
     for(unsigned i=0;i<sizeof unsupported/sizeof unsupported[0];i++){start_address_download(unsupported[i]);assert(starts_count==count&&!busy);assert(B.download_notice[0]);}
     assert(!strstr(B.download_text,"password"));
+    browser_draw(40,30,360,200);assert(!B.focus);browser_key(0x4f,0,0);
+    assert(B.download_scroll==B.download_line_count-B.rows&&B.download_scroll>0);
 }
 static void test_browser_binary_download(void){
     reset_browser_data_volume();browser_open("http://example.com/article");complete(example_html,"text/html");
