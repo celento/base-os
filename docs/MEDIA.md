@@ -175,7 +175,16 @@ minimized or closed. `player_tick()` services bounded video playback and reports
 `PLAYER_H` (640×614), with a minimum client area 420×414. MPEG-1 video with supported MP2 audio uses the same SB16 driver; missing or
 unsupported audio is visibly labeled video-only. The optional
 `PLAYER_VIDEO_FRAME`/`player_draw_playback` compositor path repaints only its
-viewport and progress. See [VIDEO.md](VIDEO.md).
+viewport and progress. Stable audio position changes similarly report
+`PLAYER_AUDIO_PROGRESS`; `player_draw_audio_progress` restores and repaints only
+the opaque progress/time strip, avoiding accumulated antialiasing or stale text.
+Both paths require a frontmost, unobscured, stationary client with no ordinary
+desktop dirty work or overlays. Audio state, error, volume, title, metadata,
+library/selection changes and the regular library refresh keep full redraws;
+exposed background clients also keep full composition. Host tests compare
+repeated partial updates with full rendering pixel-for-pixel, including progress
+shrink/reset, small/large durations, different geometries and card themes.
+See [VIDEO.md](VIDEO.md).
 
 `python3 tools/player_test.py build` exercises real QEMU playback, keyboard
 pause/resume, volume, playlist selection and stopping. It also captures the

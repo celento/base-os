@@ -10,7 +10,7 @@ typedef struct {
     char history[16][TERM_COLS+1], draft[TERM_COLS+1];
     int head,count,len,cwd,hcount,hpos,canvas_on,scroll,rows,view_count;
     unsigned cwd_identity;
-    int task_dirty;
+    unsigned task_dirty;
     char task_name[TERM_TASK_NAME_LEN];
     char task_document[TERM_TASK_NAME_LEN];
     unsigned task_started, task_instance;
@@ -27,8 +27,9 @@ _Static_assert(TERM_TASK_NAME_LEN >= FS_NAME_LEN,"task filename buffer too small
 _Static_assert(sizeof(Terminal)*8<=0xC0000,"terminal arena overflow");
 #define T (terms[selected])
 void term_select(int slot){if(slot>=0&&slot<8)selected=slot;}
-static void push(const char *s){T.task_dirty=1;int slot=(T.head+T.count)%TERM_LINES;if(T.count<TERM_LINES)T.count++;else T.head=(T.head+1)%TERM_LINES;int i=0;while(s[i]&&i<TERM_COLS){T.lines[slot][i]=s[i];i++;}T.lines[slot][i]=0;}
+static void push(const char *s){T.task_dirty|=TERM_TASK_TEXT;int slot=(T.head+T.count)%TERM_LINES;if(T.count<TERM_LINES)T.count++;else T.head=(T.head+1)%TERM_LINES;int i=0;while(s[i]&&i<TERM_COLS){T.lines[slot][i]=s[i];i++;}T.lines[slot][i]=0;}
 static void canvas_reset(void){
+    T.task_dirty|=TERM_TASK_LAYOUT;
     kmemset(T.canvas,0,sizeof T.canvas);T.canvas_on=0;
     T.canvas_width=PROGRAM_CANVAS_DEFAULT_WIDTH;T.canvas_height=PROGRAM_CANVAS_DEFAULT_HEIGHT;
 }
@@ -150,14 +151,16 @@ static int download_command(int cwd,const char *url,const char *remaining,int qu
 static void cat(int id){char row[81];int n=0;for(int i=0;i<fs_size(id);i++){char c=fs_data(id)[i];if(c=='\r')continue;if(c=='\n'){row[n]=0;push(row);n=0;continue;}row[n++]=c>=32&&c<=126?c:'.';if(n==80){row[n]=0;push(row);n=0;}}if(n){row[n]=0;push(row);}}
 static void plot(int x,int y,int color){
     if(x>=0&&x<T.canvas_width&&y>=0&&y<T.canvas_height){
-        T.task_dirty=1;T.canvas_on=1;T.canvas[y*T.canvas_width+x]=(unsigned char)color;
+        T.task_dirty|=TERM_TASK_CANVAS;
+        if(!T.canvas_on)T.task_dirty|=TERM_TASK_LAYOUT;
+        T.canvas_on=1;T.canvas[y*T.canvas_width+x]=(unsigned char)color;
     }
 }
 static int canvas_resize(int width,int height){
     if(!((width==(int)PROGRAM_CANVAS_DEFAULT_WIDTH&&height==(int)PROGRAM_CANVAS_DEFAULT_HEIGHT)||
          (width==(int)PROGRAM_CANVAS_MAX_WIDTH&&height==(int)PROGRAM_CANVAS_MAX_HEIGHT)))return -1;
     kmemset(T.canvas,0,sizeof T.canvas);
-    T.canvas_width=width;T.canvas_height=height;T.canvas_on=1;T.task_dirty=1;
+    T.canvas_width=width;T.canvas_height=height;T.canvas_on=1;T.task_dirty|=TERM_TASK_LAYOUT;
     return 0;
 }
 int term_task_running(int slot){
@@ -194,6 +197,7 @@ int term_task_start_file_with_arg(int slot,int file,unsigned identity,
             T.task_document[n]=0;
             if(!++next_task_instance)++next_task_instance;
             T.task_instance=next_task_instance;
+            T.task_dirty|=TERM_TASK_LIFECYCLE;
             canvas_reset();T.scroll=0;
             push(T.task_name);
             push("Native task started. Ctrl+C stops; close ends it.");
@@ -227,6 +231,7 @@ int term_task_title(int slot,char *out,int capacity){
 }
 static void task_metadata_clear(int slot){
     if(slot<0||slot>=PROCESS_TASKS)return;
+    if(terms[slot].task_instance)terms[slot].task_dirty|=TERM_TASK_LIFECYCLE;
     kmemset(terms[slot].task_name,0,sizeof terms[slot].task_name);
     kmemset(terms[slot].task_document,0,sizeof terms[slot].task_document);
     terms[slot].task_started=terms[slot].task_instance=0;
@@ -238,13 +243,14 @@ void term_task_stop(int slot){
     int previous=selected;term_select(slot);process_task_stop(slot);
     push("Native task stopped.");term_task_close(slot);selected=previous;
 }
-int term_task_poll(void){
+TermTaskUpdate term_task_poll_update(void){
     static unsigned next;
-    int previous=selected,changed=0;
+    int previous=selected;
+    TermTaskUpdate update={-1,0};
     for(unsigned i=0;i<PROCESS_TASKS;i++){
         int slot=(int)((next+i)%PROCESS_TASKS);
         if(!term_task_running(slot))continue;
-        selected=slot;T.task_dirty=0;
+        selected=slot;
         if(!process_task_step(slot))continue;
         next=(unsigned)(slot+1)%PROCESS_TASKS;
         if(process_task_status(slot)==PROCESS_TASK_DONE){
@@ -254,12 +260,13 @@ int term_task_poll(void){
             else push("Native task ended with an error or fault.");
             term_task_close(slot);
         }
-        changed=T.task_dirty;
+        update.slot=slot;update.flags=T.task_dirty;T.task_dirty=0;
         break;
     }
     selected=previous;
-    return changed;
+    return update;
 }
+int term_task_poll(void){return term_task_poll_update().flags!=0;}
 static int execute(const char *,int,int *);
 static int start_command(int file,const char *remaining,int quoted){
     if(quoted)remaining++;

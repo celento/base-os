@@ -28,7 +28,13 @@ int process_task_step(int owner){
     if(states[owner]!=PROCESS_TASK_READY)return 0;
     steps[owner]++;
     if(exit_next[owner]){exit_next[owner]=0;states[owner]=PROCESS_TASK_DONE;}
-    else callbacks[owner].print("Task progress.");
+    else {
+#ifdef TERM_TASK_STEP_HOOK
+        TERM_TASK_STEP_HOOK(owner);
+#else
+        callbacks[owner].print("Task progress.");
+#endif
+    }
     return 1;
 }
 int process_task_status(int owner){return owner>=0&&owner<8?states[owner]:PROCESS_TASK_EMPTY;}

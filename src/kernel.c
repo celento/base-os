@@ -3920,33 +3920,45 @@ static int term_text(const char *s, int x, int y, int col, int cols) {
     return col;
 }
 
+/* Both full composition and stable native-task updates use this exact layout.
+ * A zero-height result retains the original eight-pixel canvas gap. */
+static int term_canvas_geometry(int ww,int wh,int source_w,int source_h,
+                                int *target_w,int *target_h) {
+    *target_w=*target_h=0;
+    int height=source_w>160&&wh>550?400:wh>360?200:100;
+    int available_h=wh-TITLE_H-2-TERM_PAD*2-EDIT_LINE_H*2-8;
+    int available_w=ww-2-TERM_PAD*2;
+    if(height>available_h)height=available_h;
+    if(height<=0||available_w<=0||source_w<=0||source_h<=0)return 0;
+    int width=source_w*height/source_h;
+    if(width>available_w){width=available_w;height=source_h*width/source_w;}
+    *target_w=width;*target_h=height;
+    return height+8;
+}
+static int draw_term_canvas(int wx,int wy,int ww,int wh) {
+    const unsigned char *canvas=term_canvas();
+    if(!canvas)return 0;
+    int source_w=term_canvas_width(),source_h=term_canvas_height();
+    int target_w,target_h;
+    int occupied=term_canvas_geometry(ww,wh,source_w,source_h,&target_w,&target_h);
+    int ax=wx+1+TERM_PAD,ay=wy+TITLE_H+1+TERM_PAD;
+    for(int y=0;y<target_h;y++){
+        int source_row=(y*source_h/target_h)*source_w;
+        for(int x=0;x<target_w;x++)
+            put_pixel(ax+x,ay+y,canvas[source_row+x*source_w/target_w]);
+        if(!(y&31))platform_poll();
+    }
+    return occupied;
+}
+
 static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
     char title[TERM_TASK_TITLE_LEN];
     gui_draw_window(wx, wy, ww, wh, win_display_title(context_slot, title), 0, inactive ? WIN_INACTIVE : 0);
     draw_rect(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1, gfx_gray(0x20));
 
     int ax = wx + 1 + TERM_PAD;
-    int ay = wy + TITLE_H + 1 + TERM_PAD;
-    int canvas_height=0;
-    const unsigned char *canvas=term_canvas();
-    if(canvas){
-        int source_w=term_canvas_width(),source_h=term_canvas_height();
-        int target_h=source_w>160&&wh>550?400:wh>360?200:100;
-        int available_h=wh-TITLE_H-2-TERM_PAD*2-EDIT_LINE_H*2-8;
-        int available_w=ww-2-TERM_PAD*2;
-        if(target_h>available_h)target_h=available_h;
-        if(target_h>0&&available_w>0&&source_w>0&&source_h>0){
-            int target_w=source_w*target_h/source_h;
-            if(target_w>available_w){target_w=available_w;target_h=source_h*target_w/source_w;}
-            for(int y=0;y<target_h;y++){
-                int source_row=(y*source_h/target_h)*source_w;
-                for(int x=0;x<target_w;x++)
-                    put_pixel(ax+x,ay+y,canvas[source_row+x*source_w/target_w]);
-                if(!(y&31))platform_poll();
-            }
-            canvas_height=target_h+8;ay+=canvas_height;
-        }
-    }
+    int canvas_height=draw_term_canvas(wx,wy,ww,wh);
+    int ay = wy + TITLE_H + 1 + TERM_PAD + canvas_height;
     int cols = (ww - 2 - TERM_PAD * 2) / EDIT_CHAR_W;
     int rows = (wh - TITLE_H - 2 - TERM_PAD * 2 - canvas_height) / EDIT_LINE_H;
     if (cols < 1 || rows < 1)
@@ -8030,6 +8042,42 @@ static enum FsSyncProgress storage_poll(void) {
     return progress;
 }
 
+/* Only an unchanged front client can be repainted without rebuilding the
+ * scene. Keep video, audio progress and native canvas guards in one place. */
+static int partial_client_ready(int slot) {
+    return slot>=0&&slot<MAX_WIN&&wins[slot].open&&!wins[slot].min&&
+        slot==win_front()&&!dirty&&!name_dlg&&!edit_close_dlg&&!open_dlg&&
+        !launcher_on&&open_menu<0&&!display_pending&&!saver_on&&
+        dragging_win<0&&resizing_win<0&&drag_cached<0&&!fm_dragging&&!fm_drag_active&&!fm_renaming&&
+        !edit_dragging&&!paint_dragging&&!paint_shape_drag&&!mouse_left;
+}
+/* Suppress buffer updates only when the whole terminal, including its border,
+ * fits in a higher window's opaque client interior. The eight-pixel inset
+ * excludes every rounded corner; outer-window containment alone is unsafe. */
+static int window_content_hidden(int slot) {
+    const Win *w=&wins[slot];
+    if(!w->open||w->min)return 1;
+    for(int i=0;i<MAX_WIN;i++){
+        const Win *cover=&wins[i];
+        if(!cover->open||cover->min||cover->z<=w->z)continue;
+        if(w->x-1>=cover->x+8&&w->y-1>=cover->y+TITLE_H+1&&
+           w->x+w->w+1<=cover->x+cover->w-8&&
+           w->y+w->h+1<=cover->y+cover->h-8)return 1;
+    }
+    return 0;
+}
+enum { TERM_RENDER_NONE, TERM_RENDER_FULL, TERM_RENDER_CANVAS };
+static int term_task_render_action(TermTaskUpdate update) {
+    int slot=update.slot;
+    if(!update.flags||slot<0||slot>=MAX_WIN||!wins[slot].open||wins[slot].kind!=WK_TERM)
+        return TERM_RENDER_NONE;
+    /* A hidden task can still change its visible taskbar label on exit. */
+    if(update.flags&TERM_TASK_LIFECYCLE)return TERM_RENDER_FULL;
+    if(window_content_hidden(slot))return TERM_RENDER_NONE;
+    if(update.flags==TERM_TASK_CANVAS&&partial_client_ready(slot))return TERM_RENDER_CANVAS;
+    return TERM_RENDER_FULL;
+}
+
 void kmain(void) {
     kprint_debug("Kernel started\nBuild " BASEOS_BUILD_LABEL "\n");
     platform_validate_memory();
@@ -8104,7 +8152,7 @@ void kmain(void) {
         int player_update=player_tick();
         int player_slot=find_open_kind(WK_PLAYER);
         if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
-        if(term_task_poll())dirty=1;
+        TermTaskUpdate term_update=term_task_poll_update();
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();
@@ -8287,24 +8335,29 @@ void kmain(void) {
         if(mouse_moved&&dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
         int moved = mouse_moved;
         mouse_moved = 0;
-        /* A frame update may touch only the unobscured player client. Menus,
-         * dialogs, moving windows and ordinary dirty state take the full path. */
-        int playback_only=player_update==PLAYER_VIDEO_FRAME&&player_slot>=0&&
-            !wins[player_slot].min&&player_slot==win_front()&&!name_dlg&&!edit_close_dlg&&!open_dlg&&
-            !launcher_on&&open_menu<0&&!display_pending&&!saver_on&&
-            dragging_win<0&&resizing_win<0&&!fm_dragging;
-        if(player_update==PLAYER_VIDEO_FRAME&&player_slot>=0&&!wins[player_slot].min&&!playback_only)dirty=1;
-        if (dirty || playback_only || moved || !cursor_on) {
+        int term_action=term_task_render_action(term_update);
+        if(term_action==TERM_RENDER_FULL)dirty=1;
+        int playback_update=player_update==PLAYER_VIDEO_FRAME||player_update==PLAYER_AUDIO_PROGRESS;
+        int playback_only=playback_update&&partial_client_ready(player_slot);
+        if(playback_update&&player_slot>=0&&!wins[player_slot].min&&!playback_only)dirty=1;
+        int canvas_only=term_action==TERM_RENDER_CANVAS&&!dirty;
+        if (dirty || playback_only || canvas_only || moved || !cursor_on) {
             int ox = cursor_sx, oy = cursor_sy, oon = cursor_on;
             cursor_restore();
-            if (dirty || playback_only) {
+            if (dirty || playback_only || canvas_only) {
                 if(dirty){
                     render_desktop_frame();
                     draw_display_confirmation();
+                }else if(canvas_only){
+                    Win *w=&wins[term_update.slot];
+                    context_set(term_update.slot);
+                    draw_term_canvas(w->x,w->y,w->w,w->h);
                 }else{
                     Win *w=&wins[player_slot];
                     context_set(player_slot);
-                    player_draw_playback(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
+                    if(player_update==PLAYER_AUDIO_PROGRESS)
+                        player_draw_audio_progress(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
+                    else player_draw_playback(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
                 }
                 redraw_count++;
                 dirty = 0;
