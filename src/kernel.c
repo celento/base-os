@@ -8188,6 +8188,9 @@ static void desktop_pointer_sample(const InputSample *sample) {
     if((buttons&INPUT_RIGHT) && !(prior&INPUT_RIGHT))handle_rclick();
     if((buttons&INPUT_LEFT) && !(prior&INPUT_LEFT))handle_click();
     if(sample->epoch!=device_input.epoch)return;
+    /* Existing Paint stamps its selected brush once on DOWN, even with no
+     * motion; the old per-turn drag tick supplied this initial application. */
+    if((buttons&INPUT_LEFT) && !(prior&INPUT_LEFT) && mouse_left)desktop_pointer_motion();
     if((prior&INPUT_LEFT) && !(buttons&INPUT_LEFT))desktop_pointer_release();
     if(sample->wheel)handle_wheel(sample->wheel);
     /* A dismissal click is already consumed; held gestures cannot click through
