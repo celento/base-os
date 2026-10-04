@@ -95,3 +95,8 @@ source/build hashes. No production code changed after that build.
 ![Complete frame during snapshot keyboard input](../screenshots/native-publication-snapshot-echo.png)
 ![Last complete frame retained after Ctrl+C](../screenshots/native-publication-stopped.png)
 ![Published 320×200 canvas on the large profile](../screenshots/native-publication-large-resized.png)
+
+The later [conservative canvas occlusion](NATIVE_CANVAS_OCCLUSION.md) optimization
+uses this same published-frame contract to suppress fully hidden canvas-only
+repaints. Its host evidence and remaining production-verification limits are
+documented separately.
