@@ -109,11 +109,11 @@ def normalized(text):
 
 
 class WhiteUiText:
-    """Exact solid-white production UI glyph cores in screenshot pixels only.
+    """Exact solid-color production UI glyph cores in screenshot pixels only.
 
     Proportional glyph advances and all 18 rows, including zero pixels, must
-    match. This is reserved for the selected white-on-blue Cancel button that
-    OCR commonly omits; it never reads the guest model or window state.
+    match. Used for the selected white-on-blue Cancel button and strict name
+    fields; it never reads the guest model or window state.
     """
     def __init__(self, font_path):
         raw = pathlib.Path(font_path).read_bytes()
@@ -141,8 +141,8 @@ class WhiteUiText:
             position += self.advances[index]
         return template
 
-    def find(self, pixels, text):
-        mask = np.all(np.asarray(pixels)[:, :, :3] == (255, 255, 255), axis=2)
+    def find(self, pixels, text, foreground=(255, 255, 255)):
+        mask = np.all(np.asarray(pixels)[:, :, :3] == foreground, axis=2)
         template = self.template(text)
         height, width = mask.shape
         tw = template.shape[1]
@@ -163,6 +163,16 @@ class WhiteUiText:
             if np.array_equal(mask[y:y + 18, x:x + tw], template):
                 found.append([int(x), int(y)])
         return found
+
+
+def name_field_bounds(width, height):
+    """Union of ordinary/PDF fields from the unchanged namedlg geometry."""
+    source = (ROOT / 'src/kernel.c').read_text()
+    menubar = int(re.search(r'^#define MENUBAR_H\s+(\d+)\s*$', source, re.M)[1])
+    left = (width - 420) // 2 + 22
+    bounds = (left, menubar + 140 + 64, left + 420 - 44, menubar + 140 + 108 + 34)
+    assert 0 <= bounds[0] < bounds[2] <= width and 0 <= bounds[1] < bounds[3] <= height
+    return bounds
 
 
 def native_writer(data):
@@ -474,9 +484,10 @@ class Session(DesktopSession):
                 return
 
     def has_text(self, event, text):
-        if normalized(text) in normalized(event['ocr']):
+        filename = re.fullmatch(r'[A-Za-z0-9_-]+\.(?:bwr|bsh|rtf|pdf|csv)', text) is not None
+        if not filename and normalized(text) in normalized(event['ocr']):
             return True
-        if text != 'Cancel':
+        if not filename and text != 'Cancel':
             return False
         matches = event.setdefault('glyph_matches', [])
         existing = next((item for item in matches if item['text'] == text), None)
@@ -485,10 +496,19 @@ class Session(DesktopSession):
                 self.white_ui_text = WhiteUiText(ROOT / 'src/font.h')
             path = self.directory / pathlib.Path(event['screenshot']).name
             with Image.open(path) as image:
-                positions = self.white_ui_text.find(image.convert('RGB'), text)
+                foreground = (32, 32, 32) if filename else (255, 255, 255)
+                bounds = name_field_bounds(image.width, image.height) if filename else (0, 0, image.width, image.height)
+                positions = self.white_ui_text.find(image.crop(bounds).convert('RGB'), text, foreground)
+                positions = [[x + bounds[0], y + bounds[1]] for x, y in positions]
+                if filename:
+                    # Name strings start at field+12, at ordinary or PDF y+8.
+                    # This also rejects a suffix token in a longer field value.
+                    positions = [[x, y] for x, y in positions if x == bounds[0] + 12 and
+                                 y in (bounds[1] + 8, bounds[1] + 44 + 8)]
             existing = dict(text=text, positions=positions,
                             font_sha256=self.white_ui_text.font_sha256,
-                            method='exact UI alpha-15 cores against RGB(255,255,255), all zeros included',
+                            foreground_rgb=list(foreground), bounds=list(bounds),
+                            method='exact UI alpha-15 cores at foreground RGB, all zeros and 16px end margin included',
                             template_size=[self.white_ui_text.template(text).shape[1], 18])
             matches.append(existing)
         return bool(existing['positions'])
@@ -651,27 +671,36 @@ class Session(DesktopSession):
             prior = {j['generation'] for j in snapshot_jobs(self.serial())}
             started = self.key('ret')
             self.serial()  # Timestamp first observed begin before OCR processing.
-            event = self.frame('name-submit-' + filename)
-            content = normalized(event['ocr'])
-            if normalized(title) not in content:
-                # Sparse OCR can omit a complete dialog. Check its region from
-                # the SAME capture before concluding that submission hid it.
-                self.crop_ocr(event, 'modal')
+            while True:
+                assert time.monotonic() < deadline, 'Name submission outcome was not observed'
+                event = self.frame('name-submit-' + filename)
                 content = normalized(event['ocr'])
-            if normalized(title) not in content:
-                self.last_accepted_name_frame = event
-                if not self.asynchronous:
-                    return None
-                generation = self.new_job(prior)
-                self.record_admission(generation, started)
-                return generation
-            self.events.append(dict(kind='name-not-accepted', filename=filename, frame=event))
-            assert 'DISKISSAVING' in content or 'RETRY' in content, (
-                'Name dialog was not accepted; no blind Enter retry', event)
-            assert time.monotonic() < deadline, 'Name submission remained busy'
-            self.idle()
-            # Never retry Enter after an accepted dialog has hidden itself.
-            self.visible('same-dialog-before-retry', title, filename)
+                if normalized(title) not in content:
+                    # Sparse OCR can omit a complete dialog. Check its region
+                    # from the SAME capture before concluding it is hidden.
+                    self.crop_ocr(event, 'modal')
+                    content = normalized(event['ocr'])
+                if normalized(title) not in content:
+                    self.last_accepted_name_frame = event
+                    if not self.asynchronous:
+                        return None
+                    generation = self.new_job(prior)
+                    self.record_admission(generation, started)
+                    return generation
+                self.events.append(dict(kind='name-not-yet-accepted', filename=filename, frame=event))
+                if 'DISKISSAVING' in content or 'DISKSAVING' in content:
+                    self.events.append(dict(kind='name-rejected-busy', filename=filename, frame=event))
+                    self.idle()
+                    # Only an explicit busy rejection permits another Enter,
+                    # and the same dialog must still be visibly open afterward.
+                    self.visible('same-dialog-before-retry', title, filename)
+                    break
+                assert not any(word in content for word in ('SAVEFAILED', 'EXPORTFAILED', 'NAMEALREADYEXISTS',
+                    'CHOOSEANEWNAME', 'INVALIDNAME', 'STORAGEISFULL', 'RAM-ONLY')), (
+                        'Name submission showed an explicit non-busy error', event)
+                # A queued input or blocking floppy sync may still display its
+                # old normal dialog. Observe the transition; never press again.
+                time.sleep(.08)
 
     def recovery_boundary(self, after_generation):
         # The desktop writes a later recovery snapshot once idle. No disk read

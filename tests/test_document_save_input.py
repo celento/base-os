@@ -14,7 +14,8 @@ import numpy as np
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 from document_save_input_test import (ENTRY_BYTES, MANIFEST_LIMIT, MANIFEST_MAGIC,
-    Session, StoppedDisk, WhiteUiText, expected_outputs, fixture, fnv, manifest_bytes, native_sheet, native_writer,
+    Session, StoppedDisk, WhiteUiText, expected_outputs, fixture, fnv, manifest_bytes, name_field_bounds,
+    native_sheet, native_writer,
     pending_generations, snapshot_jobs, verify_payloads)
 from init_data import initialize
 from volume import data_layout, encode_snapshot, load, resolve
@@ -190,6 +191,34 @@ class DocumentCollectorTest(unittest.TestCase):
             self.assertEqual(event['glyph_matches'][0]['font_sha256'], matcher.font_sha256)
             self.assertFalse(session.has_text(event, 'Discard'))
 
+    def test_filename_glyph_positive_and_one_core_pixel_rejection(self):
+        matcher = WhiteUiText(ROOT / 'src/font.h')
+        template = matcher.template('document.rtf')
+        pixels = np.full((80, 376, 3), 246, dtype=np.uint8)
+        x, y = 12, 8
+        pixels[y:y + 18, x:x + template.shape[1]][template] = (32, 32, 32)
+        self.assertEqual(matcher.find(pixels, 'document.rtf', (32, 32, 32)), [[x, y]])
+        row, column = np.argwhere(template)[0]
+        pixels[y + row, x + column] = 246
+        self.assertEqual(matcher.find(pixels, 'document.rtf', (32, 32, 32)), [])
+
+    def test_filename_match_is_field_bounded_and_rejects_suffix_despite_ocr(self):
+        self.assertEqual(name_field_bounds(1280, 720), (452, 240, 828, 318))
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Session.__new__(Session); session.directory = pathlib.Path(temporary)
+            matcher = WhiteUiText(ROOT / 'src/font.h')
+            for word, x, expected in (('document.rtf', 464, True), ('document.rtfX', 464, False),
+                                      ('document.rtf', 40, False), ('Xdocument.rtf', 464, False)):
+                pixels = np.full((720, 1280, 3), 246, dtype=np.uint8)
+                template = matcher.template(word)
+                pixels[248:266, x:x + template.shape[1]][template] = (32, 32, 32)
+                path = session.directory / 'filename.png'; Image.fromarray(pixels).save(path)
+                event = dict(ocr='document.rtf', screenshot=str(path), dumped=12.125, pending_generations=[])
+                self.assertEqual(session.has_text(event, 'document.rtf'), expected)
+                self.assertEqual(event['ocr'], 'document.rtf')
+                self.assertEqual(event['glyph_matches'][0]['foreground_rgb'], [32, 32, 32])
+                self.assertEqual(event['glyph_matches'][0]['bounds'], [452, 240, 828, 318])
+
     def test_floppy_does_not_wait_for_async_markers(self):
         session = Session.__new__(Session)
         session.asynchronous = False
@@ -257,6 +286,24 @@ class DocumentCollectorTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'nonpending model baseline'):
             session.bound_native_save('writer', before=dict(ocr='Saving | New edits stay private.'))
         self.assertEqual(session.keys, [])
+
+    def test_name_dialog_waits_for_queued_or_sync_transition_without_enter_retry(self):
+        session = Session.__new__(Session)
+        session.timeout, session.asynchronous, session.events = 10, False, []
+        session.idle = lambda: None
+        session.serial = lambda: ''
+        keys = []
+        session.key = lambda key: keys.append(key) or 1.0
+        session.text = lambda text: None
+        session.visible = lambda *args: None
+        session.crop_ocr = lambda *args: None
+        frames = iter([dict(ocr='Save document as\nasync.bwr'),
+                       dict(ocr='Save document as\nasync.bwr'),
+                       dict(ocr='Saved to disk. ALPHA')])
+        session.frame = lambda name: next(frames)
+        self.assertIsNone(session.name_dialog('ctrl-shift-s', 'Save document as', 'async.bwr'))
+        self.assertEqual(keys.count('ret'), 1)
+        self.assertEqual(sum(e['kind'] == 'name-not-yet-accepted' for e in session.events), 2)
 
     def test_keep_awake_finishes_shift_release_before_next_action(self):
         session = Session.__new__(Session)
