@@ -173,7 +173,7 @@ static int row_visible(const MonitorLayout *l,int i,int height){
     return l->w>=240&&y>=l->client.y&&y+height<=l->footer_y-4;
 }
 static void windows_draw(const MonitorLayout *l,const SysInfo *si){
-    char heading[32];fmt_uint(heading,(unsigned)si->win_n);append(heading," open windows");
+    char heading[32];fmt_uint(heading,(unsigned)si->win_n);append(heading,si->win_n==1?" open window":" open windows");
     text(l,heading,l->x,l->heading_y,l->w,1,app_text);
     int count=smaller(si->win_n,SYSMON_MAX_WIN);
     for(int i=0;i<count&&row_visible(l,i,WINDOW_ROW_H);i++){
@@ -192,7 +192,7 @@ static void windows_draw(const MonitorLayout *l,const SysInfo *si){
     text(l,footer,l->x,l->footer_y,l->w,0,app_text_dim);
 }
 static void tasks_draw(const MonitorLayout *l,const SysInfo *si){
-    char heading[40];fmt_uint(heading,(unsigned)si->task_n);append(heading," active native tasks");
+    char heading[40];fmt_uint(heading,(unsigned)si->task_n);append(heading,si->task_n==1?" active native task":" active native tasks");
     text(l,heading,l->x,l->heading_y,l->w,1,app_text);
     int count=smaller(si->task_n,SYSMON_MAX_TASKS);
     for(int i=0;i<count&&row_visible(l,i,TASK_ROW_H);i++){
