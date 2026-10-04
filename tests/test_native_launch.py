@@ -29,7 +29,7 @@ class NativeLaunchTests(unittest.TestCase):
             start = source.index('typedef struct {\n    char name[FS_NAME_LEN]; /* A result owns')
             end = source.index('static LaunchItem launch_items', start)
             (directory / 'native_launch_types.inc').write_text(source[start:end])
-            names = ('fm_vis_count', 'fm_row_id', 'fm_refresh', 'file_extension',
+            names = ('win_close', 'fm_vis_count', 'fm_row_id', 'fm_refresh', 'file_extension',
                      'open_native_file', 'open_fs_file', 'fm_open_selected',
                      'od_row_enabled', 'od_next_enabled', 'od_refresh', 'od_open_selected',
                      'str_has', 'launcher_refresh', 'launcher_close', 'launcher_run')

@@ -54,7 +54,8 @@ void feature_test(void){
     for(int i=0;i<MAX_WIN;i++)launch_check(term_task_running(i),"eight native owners");
     term_task_info(0,&a);open_fs_file(counter);term_task_info(0,&b);
     launch_check(a.instance==b.instance&&native_launch_status[0],"full desktop preserves task");
-    for(int i=0;i<MAX_WIN;i++)win_close(i);
+    win_close(0);launch_check(!native_launch_status[0],"closing frees capacity warning");
+    for(int i=1;i<MAX_WIN;i++)win_close(i);
     /* A copied program remains independent when its ordinary source is removed. */
     int copy=fs_create(programs,"copy with spaces.BEX");
     launch_check(copy>=0&&fs_write(copy,(const char *)sdk_counter,sizeof sdk_counter)==sizeof sdk_counter,"install named program");
