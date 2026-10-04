@@ -94,10 +94,21 @@ static void verify(void){
 }
 int main(void){
     BosAbiInfo abi;result=bos_abi_query(&abi,sizeof abi);
+#ifdef BOS_APP_NATIVE_WINDOW_V1
     unsigned required=BOS_FEATURE_OWNED_NATIVE_WINDOW|BOS_FEATURE_OWNED_SYNC|BOS_FEATURE_MEMORY_INFO;
+#else
+    /* Ordinary hosted build used only as an old-kernel public page observer. */
+    unsigned required=BOS_FEATURE_HOSTED_UI|BOS_FEATURE_OWNED_SYNC|BOS_FEATURE_MEMORY_INFO;
+#endif
     if(result!=BOS_OK||(abi.features&required)!=required){bos_print("WINDOW DOC unsupported ABI\n");return 7;}
+#ifdef BOS_APP_NATIVE_WINDOW_V1
     result=bos_ui_window_adopt(BOS_UI_SUB_POINTER,&target);
-    if(result!=BOS_OK||target.kind!=BOS_UI_KIND_OWNED_WINDOW){bos_print("WINDOW DOC adopt failed\n");return 7;}
+    unsigned expected_kind=BOS_UI_KIND_OWNED_WINDOW;
+#else
+    result=bos_ui_host_open(BOS_UI_SUB_POINTER,&target);
+    unsigned expected_kind=BOS_UI_KIND_HOSTED_CANVAS;
+#endif
+    if(result!=BOS_OK||target.kind!=expected_kind){bos_print("WINDOW DOC endpoint failed\n");return 7;}
     for(unsigned i=0;i<sizeof document;i++)document[i]=i%80==79?'\n':(unsigned char)(32+(i*17+31)%95);
     memory_refresh();report("READY");draw();
     for(;;){
