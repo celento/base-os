@@ -139,7 +139,7 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"mkdir")||!kstrcmp(cmd,"touch")){char name[FS_NAME_LEN];int parent=fs_destination(cwd,arg,name);if(parent<0)return -1;if((!kstrcmp(cmd,"mkdir")?fs_mkdir(parent,name):fs_create(parent,name))<0)return -1;}
     else if(!kstrcmp(cmd,"rm")){if(!arg[0]||fs_delete(id)<0)return -1;}
     else if(!kstrcmp(cmd,"stat")){if(!fs_valid(id))return -1;push(fs_name(id));push(fs_is_dir(id)?"Directory":"File");print_number("Bytes: ",fs_size(id));print_number("Modified (UTC seconds since 2000; 0=unknown): ",fs_modified(id));}
-    else if(!kstrcmp(cmd,"df")){print_number("Bytes used: ",fs_used_bytes());print_number("Payload capacity: ",fs_capacity());print_number("Free node slots: ",FS_MAX_NODES-fs_node_count());push("Each file: at most 16383 bytes. Folders also use slots.");push(fs_storage_status()?fs_storage_status():"Disk is synchronized.");}
+    else if(!kstrcmp(cmd,"df")){print_number("Bytes used: ",fs_used_bytes());print_number("Payload capacity: ",fs_capacity());print_number("Free node slots: ",FS_MAX_NODES-fs_node_count());print_number("Maximum file bytes: ",fs_file_limit());push(fs_storage_name());push("Folders also consume file slots.");push(fs_storage_status()?fs_storage_status():"Disk is synchronized.");}
     else if(!kstrcmp(cmd,"run"))return script(id,depth,budget);
     else if(!kstrcmp(cmd,"basic")||!kstrcmp(cmd,"exec")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;

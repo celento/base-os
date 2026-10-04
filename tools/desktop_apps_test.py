@@ -19,7 +19,7 @@ image=work/'disk.img';image.write_bytes(data);log=work/'serial.log'
 symbols={parts[2]:int(parts[0],16) for line in subprocess.check_output(['nm','-n',str(build/'kernel.elf')],text=True).splitlines() if len(parts:=line.split())==3}
 server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Fixture)
 threading.Thread(target=server.serve_forever,daemon=True).start()
-p=subprocess.Popen(['qemu-system-i386','-m','32M','-vga','std','-drive',f'file={image},format=raw,index=0,if=floppy',
+p=subprocess.Popen(['qemu-system-i386','-m','64M','-vga','std','-drive',f'file={image},format=raw,index=0,if=floppy',
     '-nic','user,model=rtl8139','-audiodev',f'wav,id=out,path={work}/desktop-audio.wav','-device','sb16,audiodev=out',
     '-display','none','-serial',f'file:{log}','-qmp','stdio','-no-reboot'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 def qmp(name,args=None):

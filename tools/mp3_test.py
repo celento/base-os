@@ -60,7 +60,7 @@ def guest_capture(build,directory,fixture="mp3_guest.c",expected="AUDIO-MP3-PASS
     image=directory/'disk.img';image.write_bytes(disk)
     log=directory/'serial.log';log.write_text('');capture=directory/'capture.wav'
     with (directory/'qemu.stderr').open('w') as errors:
-        proc=subprocess.Popen(['qemu-system-i386','-m','32M','-vga','std',
+        proc=subprocess.Popen(['qemu-system-i386','-m','64M','-vga','std',
             '-drive',f'file={image},format=raw,index=0,if=floppy',
             '-serial',f'file:{log}','-display','none','-monitor','none','-no-reboot',
             '-audiodev',f'wav,id=test,path={capture},out.frequency=44100,out.channels=2,out.format=s16',
