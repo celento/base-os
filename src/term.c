@@ -6,6 +6,7 @@ typedef struct {
     char lines[TERM_LINES][TERM_COLS+1], input[TERM_COLS+1];
     char history[16][TERM_COLS+1], draft[TERM_COLS+1];
     int head,count,len,cwd,hcount,hpos,canvas_on,scroll,rows,view_count;
+    unsigned cwd_identity;
     unsigned char canvas[160*100];
 } Terminal;
 #ifndef TERM_MEMORY
@@ -17,12 +18,12 @@ _Static_assert(sizeof(Terminal)*8<=0xC0000,"terminal arena overflow");
 #define T (terms[selected])
 void term_select(int slot){if(slot>=0&&slot<8)selected=slot;}
 static void push(const char *s){int slot=(T.head+T.count)%TERM_LINES;if(T.count<TERM_LINES)T.count++;else T.head=(T.head+1)%TERM_LINES;int i=0;while(s[i]&&i<TERM_COLS){T.lines[slot][i]=s[i];i++;}T.lines[slot][i]=0;}
-void term_reset(void){kmemset(&T,0,sizeof T);T.cwd=fs_root();push("Type help for commands; man NAME for examples.");push("Page Up / Page Down scroll through output.");}
+void term_reset(void){kmemset(&T,0,sizeof T);T.cwd=fs_root();T.cwd_identity=fs_identity(T.cwd);push("Type help for commands; man NAME for examples.");push("Page Up / Page Down scroll through output.");}
 int term_count(void){return T.count;}
 const char *term_get(int i){return i>=0&&i<T.count?T.lines[(T.head+i)%TERM_LINES]:"";}
 const char *term_input(void){return T.input;}
-int term_cwd(void){if(!fs_is_dir(T.cwd))T.cwd=fs_root();return T.cwd;}
-void term_set_cwd(int id){if(fs_is_dir(id))T.cwd=id;}
+int term_cwd(void){if(!fs_is_dir(T.cwd)||fs_identity(T.cwd)!=T.cwd_identity){T.cwd=fs_root();T.cwd_identity=fs_identity(T.cwd);}return T.cwd;}
+void term_set_cwd(int id){if(fs_is_dir(id)){T.cwd=id;T.cwd_identity=fs_identity(id);}}
 const unsigned char *term_canvas(void){return T.canvas_on?T.canvas:0;}
 void term_prompt(char *out,int max){char path[FS_PATH_LEN];fs_path(term_cwd(),path,sizeof path);int p=0;for(int i=0;path[i]&&p<max-3;i++)out[p++]=path[i];if(max>2){out[p++]='>';out[p++]=' ';out[p]=0;}}
 void term_char(char c){T.scroll=0;if(c>=32&&c<=126&&T.len<TERM_COLS){T.input[T.len++]=c;T.input[T.len]=0;}}
@@ -101,7 +102,7 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"echo"))push(s);
     else if(!kstrcmp(cmd,"clear")){T.head=T.count=T.canvas_on=0;}
     else if(!kstrcmp(cmd,"pwd")){char path[64];fs_path(cwd,path,sizeof path);push(path);}
-    else if(!kstrcmp(cmd,"cd")){if(!fs_is_dir(id))return -1;T.cwd=id;}
+    else if(!kstrcmp(cmd,"cd")){if(!fs_is_dir(id))return -1;term_set_cwd(id);}
     else if(!kstrcmp(cmd,"ls")){if(!fs_is_dir(id))return -1;int ids[64],count=fs_list(id,ids,64);for(int i=0;i<count;i++){char row[26];kstrcpy(row,fs_name(ids[i]));if(fs_is_dir(ids[i]))kstrcpy(row+kstrlen(row),"/");push(row);}}
     else if(!kstrcmp(cmd,"cat")){if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;cat(id);}
     else if(!kstrcmp(cmd,"mkdir")||!kstrcmp(cmd,"touch")){char name[FS_NAME_LEN];int parent=fs_destination(cwd,arg,name);if(parent<0)return -1;if((!kstrcmp(cmd,"mkdir")?fs_mkdir(parent,name):fs_create(parent,name))<0)return -1;}

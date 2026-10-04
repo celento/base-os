@@ -17,6 +17,13 @@ void feature_test(void){
         check_ui(paint_pix[0]==17,"restore paint draft");
         platform_log("SESSION-RESTORE-PASS\n");return;
     }
+    platform_log("UI calculator arithmetic\n");
+    calc_reset();kstrcpy(calc_entry,"1000000");calc_set_op('/');
+    kstrcpy(calc_entry,"2000000");calc_equals();check_ui(!kstrcmp(calc_entry,"0.5"),"large divide");
+    calc_reset();kstrcpy(calc_entry,"0.999");calc_set_op('*');
+    kstrcpy(calc_entry,"2000000");calc_equals();check_ui(!kstrcmp(calc_entry,"1998000"),"large multiply");
+    calc_reset();kstrcpy(calc_entry,"2147484");calc_set_op('+');
+    check_ui(calc_error&&!kstrcmp(calc_entry,"Error"),"out of range input");calc_reset();
     platform_log("UI documents\n");
     open_edit();check_ui(win_front()==0,"first editor");type_ui("alpha");check_ui(edit_write_named("alpha.txt"),"save first doc");type_ui("!");
     ctrl_down=1;key_sc=KEY_N;key_char=0;handle_key();ctrl_down=0;
@@ -47,6 +54,10 @@ void feature_test(void){
     open_term();command_ui("echo second terminal");term_select(4);check_ui(term_cwd()==fs_find_child(0,"Programs"),"independent terminal cwd");context_set(win_front());
     platform_log("UI paint\n");
     open_paint();paint_init();history_record(&paint_history,paint_pix);paint_pix[0]=17;paint_undo(0);check_ui(paint_pix[0]!=17,"paint undo");paint_undo(1);check_ui(paint_pix[0]==17,"paint redo");
+    int pictures=fs_find_child(fs_root(),"Pictures");
+    int collision=fs_mkdir(pictures,"paint-collision");check_ui(collision>=0,"paint collision folder");
+    check_ui(!paint_write_named("paint-collision")&&fs_is_dir(collision),"paint rejects directory destination");
+    check_ui(paint_write_named("regression.pbm"),"paint saves real file");
     int extra=win_open(WK_CLOCK);taskbar_layout();check_ui(tb_n==MAX_WIN,"all taskbar slots");
     for(int t=0;t<tb_n;t++){
         check_ui(tb_x[t]>=112&&tb_x[t]+tb_w[t]<=fb_w-8,"taskbar remains inside screen");

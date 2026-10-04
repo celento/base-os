@@ -52,5 +52,10 @@ int main(void){
     command("man not-a-command");assert(strstr(term_get(term_count()-1),"Error:"));
     int old=fs_create(0,"identity-test");unsigned identity=fs_identity(old);assert(!fs_delete(old));int newer=fs_create(0,"replacement");assert(newer==old&&fs_identity(newer)!=identity);
     int deep=0;for(int i=0;i<12;i++){deep=fs_mkdir(deep,"nested-folder");assert(deep>=0);}char path[FS_PATH_LEN];fs_path(deep,path,sizeof path);assert(strlen(path)>64&&fs_resolve(0,path)==deep);
+    int original = fs_mkdir(0,"original");
+    term_set_cwd(original);assert(term_cwd()==original);
+    assert(fs_delete(original)==0);
+    int replacement = fs_mkdir(0,"replacement-dir");assert(replacement==original);
+    assert(term_cwd()==fs_root());
     puts("features: bounded undo/redo, BASIC syntax/loops/truncation, paths, terminal isolation/history/completion/scripts passed");
 }
