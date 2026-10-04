@@ -26,6 +26,10 @@ class KernelLayoutTests(unittest.TestCase):
         self.assertEqual((c['TASK_INTERRUPT_STACK_BASE'], c['TASK_INTERRUPT_STACK_CAPACITY']),
                          (0x30E0000, 65536))
         self.assertEqual(c['RAM_REQUIRED_END'], 0x3F00000)
+        self.assertEqual((c['SHEET_BASE'], c['SHEET_CAPACITY']), (0x720000, 0x2E0000))
+        self.assertEqual(c['AUDIO_DMA_BASE'] + c['AUDIO_DMA_CAPACITY'], c['SHEET_BASE'])
+        self.assertEqual(c['SHEET_BASE'] + c['SHEET_CAPACITY'], c['DESK_CACHE'])
+        self.assertLessEqual(2824636, c['SHEET_CAPACITY'])
 
     def test_full_tail_reservation_preserves_both_snapshots(self):
         c = constants()

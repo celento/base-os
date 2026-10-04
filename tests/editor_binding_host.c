@@ -6,6 +6,7 @@
 #include "platform.h"
 #include "history.h"
 #include "writer.h"
+#include "sheet.h"
 static unsigned char node_arena[FS_CAPACITY], image_arena[FS_IMG_CAPACITY], pool_arena[FS_POOL_CAPACITY];
 #undef FS_BASE
 #undef FS_IMG_BASE
@@ -51,7 +52,7 @@ static const char *name_failure_message, *edit_conflict_message="Source changed.
 static const char *session_status="";
 static int paint_ready;
 static unsigned char paint_pix[PAINT_W*PAINT_H];
-enum { WK_NONE=-1, WK_FILES=4, WK_EDIT=5, WK_TERM=11, WK_PROPERTIES=19, WK_WRITER=22 };
+enum { WK_NONE=-1, WK_FILES=4, WK_EDIT=5, WK_TERM=11, WK_PROPERTIES=19, WK_WRITER=22, WK_SPREADSHEET=23 };
 typedef struct { int open,kind,x,y,w,h,min,z; } Win;
 static Win wins[MAX_WIN];
 static int wm_z;
@@ -65,7 +66,11 @@ static int win_open(int kind) {
     for(int i=0;i<MAX_WIN;i++)if(!wins[i].open){
         memset(&states[i],0,sizeof states[i]);context_set(i);fm_set_cwd(fs_root());
         states[i].history=(History){0,0,8,sizeof(Document),(unsigned char *)states[i].undo};
-        edit_clear();wins[i]=(Win){.open=1,.kind=kind,.w=600,.h=400,.z=i};return i;
+        edit_clear();
+#ifdef SPREADSHEET_RECOVERY_TEST
+        if(kind==WK_SPREADSHEET)spreadsheet_init();
+#endif
+        wins[i]=(Win){.open=1,.kind=kind,.w=600,.h=400,.z=i};return i;
     }return -1;
 }
 static void win_clamp(Win *win) { (void)win; }
@@ -83,6 +88,20 @@ int writer_restore(const unsigned char *data,unsigned size,int file,unsigned ide
                    unsigned caret,unsigned anchor) {
     (void)data;(void)size;(void)file;(void)identity;(void)dirty;(void)caret;(void)anchor;return 0;
 }
+#ifndef SPREADSHEET_RECOVERY_TEST
+int spreadsheet_file(void) { return -1; }
+unsigned spreadsheet_file_identity(void) { return 0; }
+unsigned spreadsheet_caret(void) { return 0; }
+unsigned spreadsheet_anchor(void) { return 0; }
+const unsigned char *spreadsheet_snapshot(unsigned *size) { (void)size;return 0; }
+int spreadsheet_binding(SpreadsheetBinding *binding) { (void)binding;return 0; }
+int spreadsheet_binding_matches(int file,const SpreadsheetBinding *binding) { (void)file;(void)binding;return 0; }
+int spreadsheet_open_file(int file) { (void)file;return 0; }
+int spreadsheet_restore(const unsigned char *data,unsigned size,int file,unsigned identity,int dirty,
+                   unsigned caret,unsigned anchor) {
+    (void)data;(void)size;(void)file;(void)identity;(void)dirty;(void)caret;(void)anchor;return 0;
+}
+#endif
 #include "editor_kernel_session.inc"
 static void desktop_reset(void) {
     memset(states,0,sizeof states);memset(wins,0,sizeof wins);context_slot=wm_z=0;
