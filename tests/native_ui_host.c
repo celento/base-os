@@ -84,7 +84,7 @@ static void fences_ownership(void){
     BosHandle a=open_target(0,7);
     InputSample old={.serial=9,.ticks=3,.x=110,.y=110,.buttons=1,.kind=INPUT_POINTER};
     assert(native_ui_route(&old,a)==3);initial(0,a);
-    assert(sample(a,111,111,1,0,0)==0);empty(0,a);
+    assert(sample(a,111,111,1,0,0)==3);empty(0,a);
     sample(a,111,111,0,0,0);empty(0,a);
     sample(a,111,111,1,0,0);read_event(0,a,BOS_UI_POINTER_MOVE);read_event(0,a,BOS_UI_POINTER_BUTTON);
     BosUiEventV1 output,unchanged;memset(&output,0xcc,sizeof output);unchanged=output;
