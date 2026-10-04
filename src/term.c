@@ -8,6 +8,7 @@ typedef struct {
     char history[16][TERM_COLS+1], draft[TERM_COLS+1];
     int head,count,len,cwd,hcount,hpos,canvas_on,scroll,rows,view_count;
     unsigned cwd_identity;
+    int task_dirty;
     unsigned char canvas[160*100];
 } Terminal;
 #ifndef TERM_MEMORY
@@ -18,8 +19,8 @@ static int selected;
 _Static_assert(sizeof(Terminal)*8<=0xC0000,"terminal arena overflow");
 #define T (terms[selected])
 void term_select(int slot){if(slot>=0&&slot<8)selected=slot;}
-static void push(const char *s){int slot=(T.head+T.count)%TERM_LINES;if(T.count<TERM_LINES)T.count++;else T.head=(T.head+1)%TERM_LINES;int i=0;while(s[i]&&i<TERM_COLS){T.lines[slot][i]=s[i];i++;}T.lines[slot][i]=0;}
-void term_reset(void){kmemset(&T,0,sizeof T);T.cwd=fs_root();T.cwd_identity=fs_identity(T.cwd);push("Type help for commands; man NAME for examples.");push("Page Up / Page Down scroll through output.");}
+static void push(const char *s){T.task_dirty=1;int slot=(T.head+T.count)%TERM_LINES;if(T.count<TERM_LINES)T.count++;else T.head=(T.head+1)%TERM_LINES;int i=0;while(s[i]&&i<TERM_COLS){T.lines[slot][i]=s[i];i++;}T.lines[slot][i]=0;}
+void term_reset(void){process_task_clear(selected);kmemset(&T,0,sizeof T);T.cwd=fs_root();T.cwd_identity=fs_identity(T.cwd);push("Type help for commands; man NAME for examples.");push("Page Up / Page Down scroll through output.");}
 int term_count(void){return T.count;}
 const char *term_get(int i){return i>=0&&i<T.count?T.lines[(T.head+i)%TERM_LINES]:"";}
 const char *term_input(void){return T.input;}
@@ -51,6 +52,9 @@ static const Manual commands[]={
     {"ping","ping HOST","Send an ICMP echo and report round-trip time.","ping 10.0.2.2","One bounded request. Some hosts do not answer ICMP."},
     {"nslookup","nslookup HOST","Resolve an IPv4 A record through QEMU DNS.","nslookup example.com","Uses 10.0.2.3; upstream DNS must be reachable on the host."},
     {"fetch","fetch HTTP_URL","Fetch and print up to 4095 bytes of an HTTP response.","fetch http://10.0.2.2:8000/","HTTP only, no TLS. No files are saved. Network waits are bounded."},
+    {"start","start FILE","Start a protected BEX1 app alongside the desktop.","start /Programs/counter.bex","One task per terminal. Ctrl+C stops; closing this window stops it."},
+    {"stop","stop","Stop this terminal's native task.","stop","Ctrl+C also stops a task without waiting for the program."},
+    {"tasks","tasks","List the running native task slots.","tasks","Sleeping and minimized tasks remain alive; closing a terminal stops it."},
     {"exec","exec FILE","Run a BEX1 native x86 program in protected memory.","exec /Programs/hello.bex","64 KB memory; two-second limit. Faults return to the terminal."}
 };
 static int manual(const char *name){
@@ -103,7 +107,40 @@ static void print_http_body(const char *text,unsigned size){
     }if(n){row[n]=0;push(row);}
 }
 static void cat(int id){char row[81];int n=0;for(int i=0;i<fs_size(id);i++){char c=fs_data(id)[i];if(c=='\r')continue;if(c=='\n'){row[n]=0;push(row);n=0;continue;}row[n++]=c>=32&&c<=126?c:'.';if(n==80){row[n]=0;push(row);n=0;}}if(n){row[n]=0;push(row);}}
-static void plot(int x,int y,int color){if(x>=0&&x<160&&y>=0&&y<100){T.canvas_on=1;T.canvas[y*160+x]=(unsigned char)color;}}
+static void plot(int x,int y,int color){if(x>=0&&x<160&&y>=0&&y<100){T.task_dirty=1;T.canvas_on=1;T.canvas[y*160+x]=(unsigned char)color;}}
+int term_task_running(int slot){
+    int state=process_task_status(slot);
+    return state==PROCESS_TASK_READY||state==PROCESS_TASK_SLEEPING;
+}
+int term_task_key(int slot,int key){return process_task_key(slot,key);}
+void term_task_close(int slot){process_task_clear(slot);}
+void term_task_stop(int slot){
+    if(!term_task_running(slot))return;
+    int previous=selected;term_select(slot);process_task_stop(slot);
+    push("Native task stopped.");process_task_clear(slot);selected=previous;
+}
+int term_task_poll(void){
+    static unsigned next;
+    int previous=selected,changed=0;
+    for(unsigned i=0;i<PROCESS_TASKS;i++){
+        int slot=(int)((next+i)%PROCESS_TASKS);
+        if(!term_task_running(slot))continue;
+        selected=slot;T.task_dirty=0;
+        if(!process_task_step(slot))continue;
+        next=(unsigned)(slot+1)%PROCESS_TASKS;
+        if(process_task_status(slot)==PROCESS_TASK_DONE){
+            int result=process_task_result(slot);
+            if(!result)push("Native task finished.");
+            else if(result==PROCESS_TASK_STOPPED)push("Native task stopped.");
+            else push("Native task ended with an error or fault.");
+            process_task_clear(slot);
+        }
+        changed=T.task_dirty;
+        break;
+    }
+    selected=previous;
+    return changed;
+}
 static int execute(const char *,int,int *);
 static int script(int id,int depth,int *budget){
     if(depth>=4||!fs_valid(id)||fs_is_dir(id))return -1;
@@ -141,8 +178,26 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"stat")){if(!fs_valid(id))return -1;push(fs_name(id));push(fs_is_dir(id)?"Directory":"File");print_number("Bytes: ",fs_size(id));print_number("Modified (UTC seconds since 2000; 0=unknown): ",fs_modified(id));}
     else if(!kstrcmp(cmd,"df")){print_number("Bytes used: ",fs_used_bytes());print_number("Payload capacity: ",fs_capacity());print_number("Free node slots: ",FS_MAX_NODES-fs_node_count());print_number("Maximum file bytes: ",fs_file_limit());push(fs_storage_name());push("Folders also consume file slots.");push(fs_storage_status()?fs_storage_status():"Disk is synchronized.");}
     else if(!kstrcmp(cmd,"run"))return script(id,depth,budget);
+    else if(!kstrcmp(cmd,"tasks")){
+        int found=0;
+        for(int slot=0;slot<PROCESS_TASKS;slot++)if(term_task_running(slot)){
+            print_number(process_task_status(slot)==PROCESS_TASK_SLEEPING?"Sleeping, terminal slot ":"Running, terminal slot ",(unsigned)slot+1);found=1;
+        }
+        if(!found)push("No native tasks are running.");
+    }
+    else if(!kstrcmp(cmd,"stop")){if(!term_task_running(selected))push("No native task in this terminal.");else term_task_stop(selected);}
+    else if(!kstrcmp(cmd,"start")){
+        if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
+        ProgramIO io={push,plot,0,0};
+        if(process_task_start(selected,fs_data(id),fs_size(id),&io)){
+            push("Cannot start: this terminal is busy or the BEX1 file is invalid.");return -1;
+        }
+        kmemset(T.canvas,0,sizeof T.canvas);T.canvas_on=0;
+        push("Native task started. Ctrl+C stops; close ends it.");
+    }
     else if(!kstrcmp(cmd,"basic")||!kstrcmp(cmd,"exec")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
+        if(term_task_running(selected)){push("Stop this terminal's native task first.");return -1;}
         ProgramIO io={push,plot,program_key,program_present};kmemset(T.canvas,0,sizeof T.canvas);T.canvas_on=0;
         int rc=!kstrcmp(cmd,"basic")?basic_run(fs_data(id),fs_size(id),&io):process_run(fs_data(id),fs_size(id),&io);
         if(rc){push("Program stopped (error, fault, or execution limit).");return -1;}push("Program finished.");

@@ -72,9 +72,13 @@ $(OUT)/hello-c.bex: examples/c/hello.c sdk/baseos.h sdk/start.c sdk/app.ld tools
 $(OUT)/notebook.bex: examples/c/notebook.c sdk/baseos.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
 	$(PYTHON) tools/build_app.py $< $@
 
-$(OUT)/sdk_examples.h: $(OUT)/hello-c.bex $(OUT)/notebook.bex tools/bin2c.py
+$(OUT)/counter.bex: examples/c/counter.c sdk/baseos.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
+	$(PYTHON) tools/build_app.py $< $@
+
+$(OUT)/sdk_examples.h: $(OUT)/hello-c.bex $(OUT)/notebook.bex $(OUT)/counter.bex tools/bin2c.py
 	$(PYTHON) tools/bin2c.py $(OUT)/hello-c.bex sdk_hello > $@
 	$(PYTHON) tools/bin2c.py $(OUT)/notebook.bex sdk_notebook >> $@
+	$(PYTHON) tools/bin2c.py $(OUT)/counter.bex sdk_counter >> $@
 
 $(OUT)/chime.wav: tools/make_audio_example.py | $(OUT)
 	$(PYTHON) tools/make_audio_example.py $@

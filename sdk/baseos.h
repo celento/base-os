@@ -29,4 +29,11 @@ static inline int bos_file_size(const char *path) {
 static inline void bos_rect(int x,int y,unsigned w,unsigned h,unsigned color) {
     bos_call(9,(unsigned)x,(unsigned)y,w,h,color);
 }
+/* Desktop task mode (start): present and yield return control to the desktop.
+ * Sleep uses milliseconds, 0..60000. Legacy synchronous exec returns -1. */
+static inline int bos_yield(void) { return bos_call(10,0,0,0,0,0); }
+static inline int bos_sleep(unsigned milliseconds) { return bos_call(11,milliseconds,0,0,0,0); }
+/* One-based terminal slot for a task; 0 for synchronous exec. */
+static inline unsigned bos_task_id(void) { return (unsigned)bos_call(12,0,0,0,0,0); }
+#define BOS_TICKS_PER_SECOND 70u
 #endif

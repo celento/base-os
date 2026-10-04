@@ -28,4 +28,11 @@ void term_char(char c);
 void term_backspace(void);
 void term_enter(void);
 
+/* Desktop-owned task integration. Poll once per desktop turn, never in IRQs. */
+int term_task_poll(void);
+int term_task_running(int slot);
+int term_task_key(int slot, int key);
+void term_task_stop(int slot);
+void term_task_close(int slot);
+
 #endif
