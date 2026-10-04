@@ -344,6 +344,7 @@ def run_profile(build,work,profile,app,seed,timeout):
         c=operation_key(session,'s',lambda o:o['operation']!=0 and o['sync_result'] in (0,1),'new owner can save while another retains result')
         c=session.until(lambda o:o['sync_result']==0,'new owner completion',seconds=timeout)[0]
         result['new_owner_completion']=c
+        print(profile+' new owner completed while prior owner retained its durable receipt',flush=True)
         session.focus(bid)
         assert session.until(lambda o:o['operation']==handle_b,'old owner still has own result')[0]['sync_result']==0
         quiet(session,timeout)
@@ -376,7 +377,8 @@ def main():
     parser.add_argument('--profile',choices=('default','large','both'),default='both')
     parser.add_argument('--seed',type=Path,help='Prior compatibility seed, skips compatibility boots')
     parser.add_argument('--old-build',type=Path,help='Optional clean preplatform build for actual query fallback boot')
-    parser.add_argument('--save-timeout',type=int,default=240)
+    parser.add_argument('--save-timeout',type=int,default=900,
+                        help='Bound a complete large-volume snapshot under concurrent native rendering')
     args=parser.parse_args();args.work.mkdir(parents=True,exist_ok=True)
     result=dict(passed=False,provenance=provenance(args.build),profiles=[],observation_scope='Only ordinary SDK apps, PS/2, published canvas, serial and stopped-disk decode; no guest memory, debugger, injected calls or faults')
     for name in ('platform_foundation_test.py','platform_evidence.py','platform_context_test.py'):

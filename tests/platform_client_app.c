@@ -44,8 +44,10 @@ static void draw(void){
     bos_rect(0,0,320,200,0);
     bos_rect(0,0,8,8,10);bos_rect(8,0,8,8,4);
     bos_rect(16,0,8,8,6);bos_rect(24,0,8,8,8);
+    /* The full clear already supplied every zero bit. Avoid hundreds of
+     * redundant black rectangles while publishing exactly the same evidence. */
     for(unsigned row=0;row<WORDS;row++)for(unsigned bit=0;bit<32;bit++)
-        bos_rect((int)(bit*5),(int)(12+row*10),4,5,(rows[row]&(1u<<bit))?15:0);
+        if(rows[row]&(1u<<bit))bos_rect((int)(bit*5),(int)(12+row*10),4,5,15);
     bos_rect(168,12,144,8,errors?4:sync_result==BOS_PENDING?6:7);
     if(entering)bos_rect(168,28,digits*12+4,8,8);
     bos_present();
