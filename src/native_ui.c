@@ -277,7 +277,9 @@ unsigned native_ui_route(const InputSample *sample,BosHandle hit_target){
         unsigned down=physical&~previous&~hit->suppressed;
         if(down){
             hooks.focus(&hit->binding);native_ui_refresh(sample->ticks,physical);
-            if(!eligible(hit)||!(hit->host.state&BOS_UI_STATE_FOCUSED))return CONSUMED;
+            if(!eligible(hit)||!(hit->host.state&BOS_UI_STATE_FOCUSED)){
+                hit->suppressed|=physical;swallowed|=physical;return CONSUMED;
+            }
             t=hit;t->suppressed|=previous;capture=t->target;
         }
     }
@@ -291,7 +293,7 @@ unsigned native_ui_route(const InputSample *sample,BosHandle hit_target){
     }
     if(!t&&was_swallowed){swallowed|=physical;return CONSUMED;}
     if(!t&&hit&&(hit->reset_pending||sample->serial<=hit->fence)){
-        hit->suppressed|=physical;return CONSUMED;
+        hit->suppressed|=physical;swallowed|=physical;return CONSUMED;
     }
     if(!t&&hit&&(!eligible(hit)||!canvas_view_contains(&hit->host.view,sample->x,sample->y)))hit=0;
     if(t){

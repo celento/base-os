@@ -94,6 +94,25 @@ int main(void){
     /* Lost decoded input emits a mandatory native reset through the adapter. */
     input_device_loss(&device_input,13);desktop_input_turn();
     e=event(1,b,BOS_UI_STATE_RESET);assert(e.reason==BOS_UI_REASON_INPUT_LOSS&&!e.buttons);
+    /* An unarmed endpoint owns the remainder of a rejected gesture too. It
+     * must never become a synthetic shell click when the pointer leaves. */
+    fixture();a=ui_open(0);move(90,150,1,0,20);assert(!records);
+    event(0,a,BOS_UI_STATE_RESET);
+    move(95,155,1,0,21);move(760,540,1,0,22);assert(!records);
+    move(760,540,0,0,23);assert(!records);
+    move(760,540,1,0,24);assert(records==1);move(760,540,0,0,25);
+    /* Acquired DOWN before subscription is fenced, including outside motion
+     * after the initial reset has been read. */
+    fixture();pointer(10,-10,1,0,30);a=ui_open(0);event(0,a,BOS_UI_STATE_RESET);
+    desktop_input_turn();assert(!records);move(760,540,1,0,31);assert(!records);
+    move(760,540,0,0,32);assert(!records);
+    /* A focus notification filling the queue rejects DOWN before capture;
+     * its held tail must still be globally consumed. */
+    fixture();b=ui_open(1);event(1,b,BOS_UI_STATE_RESET);
+    for(unsigned i=0;i<64;i++){wins[1].x+=(i&1)?-1:1;native_ui_refresh(40+i,0);}
+    move(440,150,1,0,110);assert(!records);
+    e=event(1,b,BOS_UI_STATE_RESET);assert(e.reason==BOS_UI_REASON_QUEUE_LOSS&&e.dropped==65);
+    move(760,540,1,0,111);assert(!records);move(760,540,0,0,112);assert(!records);
     puts("Native UI desktop adapter: real point ownership, focus/capture, overlays, publication geometry, legacy exclusion and input-loss recovery passed.");
     return 0;
 }
