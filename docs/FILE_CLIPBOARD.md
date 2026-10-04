@@ -13,10 +13,11 @@ copy, move and dual-snapshot synchronization paths.
   the source keeps the selection valid; deleting and reusing its node slot does
   not. Copy uses the source's current contents when Paste runs, rather than a
   snapshot of the contents at the time of Copy.
-- Copy uses `fs_copy`, including its bounded unique `name copy`, `name copy 2`,
-  and later names. Names fit the filesystem's 23-character limit. Existing files
-  are never overwritten. Recursive copies retain child names and data while
-  allocating new identities.
+- Copy keeps the original name when it is unused in the destination. For a
+  collision, including a same-folder copy, it uses `fs_copy`'s bounded unique
+  `name copy`, `name copy 2`, and later names. Names fit the filesystem's
+  23-character limit. Existing files are never overwritten. Recursive copies
+  retain child names and data while allocating new identities.
 - Cut makes no immediate filesystem change. Paste moves the existing object
   with its original identity. Unlike the general `fs_move` auto-renaming path,
   this clipboard rejects a name collision before calling `fs_move`. The source
@@ -37,7 +38,7 @@ copy, move and dual-snapshot synchronization paths.
 
 | Result | Meaning |
 | --- | --- |
-| `FILE_CLIPBOARD_ERROR` | No new filesystem mutation; check the status message. |
+| `FILE_CLIPBOARD_ERROR` | No new file or move retained; check the status message. |
 | `FILE_CLIPBOARD_NOOP` | Same-folder Cut was consumed without changing files. |
 | `FILE_CLIPBOARD_SYNCED` | The operation, or a prior completed paste's retry, has a confirmed disk sync. |
 | `FILE_CLIPBOARD_RAM_ONLY` | The filesystem operation completed in RAM, but synchronization failed. |
@@ -83,6 +84,20 @@ dirty state.
 This clipboard is RAM-only and is not restored across reboot. It does not
 implement multi-selection, links, clipboard file content snapshots or file
 operation undo.
+
+### Original-name preservation
+
+The wrapper lets the existing atomic `fs_copy` create its generated name, then
+renames that new copy to the unused original name before the single `fs_sync`.
+It does not change the global Duplicate behavior or synchronize an intermediate
+name. This rename is guaranteed under the current valid-volume contracts: the
+source name is valid, the successful copy already validated subtree depth, all
+legal-depth paths fit in `FS_PATH_LEN`, and filesystem background servicing
+cannot mutate the tree during the operation. A compile-time assertion records
+the path-size invariant. If a future contract change nevertheless makes the
+rename fail, the wrapper deletes only its new copy before returning an error.
+That defensive fallback can conservatively leave the filesystem dirty, but
+retains no extra copy and never deletes or overwrites an original file.
 
 ## Verification
 

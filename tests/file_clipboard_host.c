@@ -151,24 +151,28 @@ static void copy_files(void) {
     assert(!file_clipboard_can_paste(original));
     assert(!strcmp(status_before, file_clipboard_status()));
     int copy = -1;
+    int writes_before = writes;
     assert(file_clipboard_paste(folder, &copy) == FILE_CLIPBOARD_SYNCED);
-    assert(copy == fs_find_child(folder, "notes.bin copy"));
+    assert(copy == fs_find_child(folder, "notes.bin"));
+    assert(fs_find_child(folder, "notes.bin copy") < 0);
+    assert(writes == writes_before + 2); /* One payload/header snapshot only. */
     assert(fs_identity(copy) != identity && fs_identity(original) == identity);
     expect_bytes(copy, "A\0B\377C", 5);
     assert(file_clipboard_mode() == FILE_CLIPBOARD_COPY && !fs_needs_sync());
     assert(file_clipboard_paste(folder, &copy) == FILE_CLIPBOARD_SYNCED);
-    assert(copy == fs_find_child(folder, "notes.bin copy 2"));
+    assert(copy == fs_find_child(folder, "notes.bin copy"));
     expect_bytes(copy, "A\0B\377C", 5);
     assert(file_clipboard_paste(0, &copy) == FILE_CLIPBOARD_SYNCED);
     assert(copy == fs_find_child(0, "notes.bin copy"));
     int empty = make_file(0, "empty", "", 0);
     assert(file_clipboard_set(empty, FILE_CLIPBOARD_COPY) == 0);
     assert(file_clipboard_paste(folder, 0) == FILE_CLIPBOARD_SYNCED);
-    expect_bytes(fs_find_child(folder, "empty copy"), "", 0);
+    expect_bytes(fs_find_child(folder, "empty"), "", 0);
     remount_volume();
     folder = fs_resolve(0, "/destination");
-    expect_bytes(fs_resolve(0, "/destination/notes.bin copy 2"), "A\0B\377C", 5);
-    expect_bytes(fs_find_child(folder, "empty copy"), "", 0);
+    expect_bytes(fs_resolve(0, "/destination/notes.bin"), "A\0B\377C", 5);
+    expect_bytes(fs_resolve(0, "/destination/notes.bin copy"), "A\0B\377C", 5);
+    expect_bytes(fs_find_child(folder, "empty"), "", 0);
     expect_bytes(fs_resolve(0, "/notes.bin"), "A\0B\377C", 5);
     puts("file clipboard: binary/empty/repeated copies and persisted output passed");
 }
@@ -201,8 +205,32 @@ static void copy_names_and_folders(void) {
     assert(fs_identity(copy) != folder_identity && fs_identity(copied_child) != child_identity);
     assert(fs_identity(folder) == folder_identity && fs_identity(child) == child_identity);
     assert(fs_parent(empty) == folder);
+    int destination = fs_mkdir(0, "destination");
+    assert(file_clipboard_paste(destination, &copy) == FILE_CLIPBOARD_SYNCED);
+    assert(copy == fs_find_child(destination, "project"));
+    assert(fs_find_child(destination, "project copy") < 0);
+    expect_bytes(fs_resolve(copy, "nested/data.bin"), "nested\0bytes", 12);
+    assert(file_clipboard_paste(destination, &copy) == FILE_CLIPBOARD_SYNCED);
+    assert(copy == fs_find_child(destination, "project copy"));
+    expect_bytes(fs_resolve(copy, "nested/data.bin"), "nested\0bytes", 12);
+    /* Generated names can already exist while the original name is free. */
+    int unrelated = make_file(destination, "abcdefghijklmnopqr copy", "keep one", 8);
+    int unrelated2 = make_file(destination, "abcdefghijklmnop copy 2", "keep two", 8);
+    assert(file_clipboard_set(original, FILE_CLIPBOARD_COPY) == 0);
+    assert(file_clipboard_paste(destination, &copy) == FILE_CLIPBOARD_SYNCED);
+    assert(!strcmp(fs_name(copy), "abcdefghijklmnopqrstuvw"));
+    expect_bytes(copy, "long", 4);
+    expect_bytes(unrelated, "keep one", 8);
+    expect_bytes(unrelated2, "keep two", 8);
+    assert(file_clipboard_paste(destination, &copy) == FILE_CLIPBOARD_SYNCED);
+    assert(!strcmp(fs_name(copy), "abcdefghijklmnop copy 3"));
+    expect_bytes(unrelated, "keep one", 8);
+    expect_bytes(unrelated2, "keep two", 8);
     remount_volume();
     expect_bytes(fs_resolve(0, "/project copy/nested/data.bin"), "nested\0bytes", 12);
+    expect_bytes(fs_resolve(0, "/destination/project/nested/data.bin"), "nested\0bytes", 12);
+    expect_bytes(fs_resolve(0, "/destination/abcdefghijklmnopqrstuvw"), "long", 4);
+    expect_bytes(fs_resolve(0, "/destination/abcdefghijklmnop copy 3"), "long", 4);
     puts("file clipboard: long collision-safe names and recursive folder copy passed");
 }
 
@@ -249,7 +277,7 @@ static void rename_delete_and_text(void) {
     assert(!strcmp(file_clipboard_name(), "renamed"));
     int result;
     assert(file_clipboard_paste(destination, &result) == FILE_CLIPBOARD_SYNCED);
-    assert(result == fs_find_child(destination, "renamed copy"));
+    assert(result == fs_find_child(destination, "renamed"));
     expect_bytes(result, "latest", 6);
     assert(file_clipboard_set(source_node, FILE_CLIPBOARD_CUT) == 0);
     assert(fs_rename(source_node, "latest name") == 0);
@@ -358,7 +386,7 @@ static void full_nodes_and_depth(void) {
         assert(deepest > 0);
     }
     int folder = fs_mkdir(0, "source");
-    make_file(folder, "child", "keep", 4);
+    make_file(folder, "abcdefghijklmnopqrstuvw", "keep", 4);
     assert(fs_sync() == 0);
     for (int operation = FILE_CLIPBOARD_COPY; operation <= FILE_CLIPBOARD_CUT; ++operation) {
         assert(file_clipboard_set(folder, operation) == 0);
@@ -369,6 +397,20 @@ static void full_nodes_and_depth(void) {
         expect_unchanged(&before);
         assert(file_clipboard_mode() == operation && file_clipboard_source() == folder);
     }
+    /* Original-name restoration also fits the longest legal directory path.
+     * Use a distinct 23-character name beside the destination's existing child. */
+    assert(fs_rename(folder, "bcdefghijklmnopqrstuvwx") == 0);
+    assert(file_clipboard_set(folder, FILE_CLIPBOARD_COPY) == 0);
+    int copy;
+    assert(file_clipboard_paste(fs_parent(penultimate), &copy) == FILE_CLIPBOARD_SYNCED);
+    assert(!strcmp(fs_name(copy), "bcdefghijklmnopqrstuvwx"));
+    int copied_child = fs_find_child(copy, "abcdefghijklmnopqrstuvw");
+    char path[FS_PATH_LEN];
+    fs_path(copied_child, path, sizeof(path));
+    assert(strlen(path) == 1512);
+    expect_bytes(copied_child, "keep", 4);
+    remount_volume();
+    expect_bytes(fs_resolve(0, path), "keep", 4);
     puts("file clipboard: full 64/256-node capacity, partial-copy rollback and path depth passed");
 }
 
@@ -407,18 +449,18 @@ static void sync_retry_guard(void) {
     device_unavailable = 1;
     int copy;
     assert(file_clipboard_paste(destination, &copy) == FILE_CLIPBOARD_RAM_ONLY);
-    assert(copy == fs_find_child(destination, "original copy") && file_clipboard_pending_sync());
+    assert(copy == fs_find_child(destination, "original") && file_clipboard_pending_sync());
     assert(fs_needs_sync() && file_clipboard_mode() == FILE_CLIPBOARD_COPY);
     int count = fs_node_count(), repeated;
     assert(file_clipboard_paste(destination, &repeated) == FILE_CLIPBOARD_RAM_ONLY);
     assert(repeated == copy && fs_node_count() == count);
-    assert(fs_find_child(destination, "original copy 2") < 0);
+    assert(fs_find_child(destination, "original copy") < 0);
     device_unavailable = 0;
     assert(file_clipboard_paste(destination, &repeated) == FILE_CLIPBOARD_SYNCED);
     assert(repeated == copy && fs_node_count() == count && !file_clipboard_pending_sync());
     assert(!fs_needs_sync());
     assert(file_clipboard_paste(destination, &repeated) == FILE_CLIPBOARD_SYNCED);
-    assert(repeated == fs_find_child(destination, "original copy 2"));
+    assert(repeated == fs_find_child(destination, "original copy"));
     /* Autosync success still cannot make the first retry duplicate the copy. */
     device_unavailable = 1;
     assert(file_clipboard_paste(destination, &copy) == FILE_CLIPBOARD_RAM_ONLY);
@@ -440,6 +482,7 @@ static void sync_retry_guard(void) {
     assert(fs_sync() == 0);
     /* Cut is consumed on RAM completion. A failed disk save is never retried
      * by moving the source again, even to another folder. */
+    assert(fs_rename(original, "move original") == 0);
     unsigned identity = fs_identity(original);
     assert(file_clipboard_set(original, FILE_CLIPBOARD_CUT) == 0);
     device_unavailable = 1;
@@ -452,8 +495,9 @@ static void sync_retry_guard(void) {
     device_unavailable = 0;
     assert(fs_sync() == 0);
     remount_volume();
+    expect_bytes(fs_resolve(0, "/destination/move original"), "content", 7);
     expect_bytes(fs_resolve(0, "/destination/original"), "content", 7);
-    expect_bytes(fs_resolve(0, "/destination/original copy 4"), "content", 7);
+    expect_bytes(fs_resolve(0, "/destination/original copy 3"), "content", 7);
     puts("file clipboard: completed RAM operations, save retries, autosync and consumed cuts passed");
 }
 
