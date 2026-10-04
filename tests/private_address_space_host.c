@@ -277,7 +277,7 @@ int main(int argc,char **argv){
     /* Pending owned-save wait cleanup is inactive and does not cancel service
      * state. Other-client durable behavior belongs to native_sync's real suite. */
     a=launch(image,bytes,0);b=launch(image,bytes,1);
-    task_lookup(a)->state=PROCESS_TASK_SLEEPING;task_lookup(a)->wait_operation=BOS_HANDLE_TYPE_OPERATION|7;
+    task_lookup(a)->state=PROCESS_TASK_SLEEPING;task_lookup(a)->wait_operation=BOS_HANDLE_TYPE_OPERATION|7;task_lookup(a)->wait_kind=TASK_WAIT_SYNC;
     task_lookup(a)->wake=1000;stub_poll=BOS_PENDING;stop(a);assert(task_lookup(b)->resources_live);stop(b);
     assert(!host_physmem_stats().allocated&&enters==restores&&fpu_entries==fpu_returns);
     assert(!root_is_user);host_physmem_destroy();free(image);free(large);free(three);

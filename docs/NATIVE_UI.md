@@ -98,3 +98,38 @@ must not publish, retain a user pointer, or satisfy a separate sync wait.
 
 No fuzzing, deliberate memory faults, debugger routes or guest callbacks are
 part of these deterministic host checks.
+
+## Stage 2: process boundary and SDK
+
+Gateway 29 is now dispatched only for a bound desktop task when fixed UI hooks
+are configured. Synchronous `exec`/BASIC remain unsupported. The ABI feature bit
+is conditional on that same service availability. The ordinary kernel does not
+configure hooks until the production-routing stage, so this stage alone does not
+advertise a usable service.
+
+The SDK provides `bos_ui_query`, `bos_ui_host_open`, `bos_ui_info`, `bos_ui_read`,
+`bos_ui_wait`, and `bos_ui_release`. The complete declared output span is checked
+before any service effect. A query supports a 16-byte prefix; info/read/open copy
+exactly 96 bytes and preserve tails. PENDING/errors leave output untouched.
+
+Process wait kinds are explicitly NONE, TIMER, SYNC and UI. UI waits store only
+a target, readiness flags and rounded-up wrap-safe deadline. Readiness wins a
+same-tick deadline. QUEUE is mandatory; optional LEGACY_KEY observes without
+consuming the existing byte queue. UI events never wake a separate sync wait.
+UI WAIT never publishes, including immediate-ready and timeout paths. Explicit
+present/yield/sleep/exit retain their pre-existing publication behavior.
+
+Process binding checks now reject a stopping owner immediately; Stop/exit revoke
+UI eligibility before deferred backing cleanup. The existing owner-release path
+cleans endpoints exactly once after returning to kernel context. No process can
+resume a revoked UI wait as ready, even when an old byte key remains.
+
+`test_native_ui.py` additionally links the real core to the production extracted
+syscall dispatcher and scheduler. Executed checks cover prefix/tail/no-write
+rules, full declared-span rejection before OPEN/READ, major/flag negotiation,
+WAIT 0/1/60000, wrap/tie/timeout/retry, byte-key readiness, independent sync wait,
+no implicit publication, wrong-owner calls and immediate/deferred Stop/exit.
+Existing native-platform, publication-process, process-lifetime and private
+address-space host gates also pass. A freestanding kernel build passes. None of
+these host results substitute for the still-pending ordinary production guest
+routing and unchanged BEX1 compatibility gates.

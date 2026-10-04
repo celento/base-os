@@ -4,6 +4,7 @@
 #include "fs.h"
 #include "native_files.h"
 #include "native_sync.h"
+#include "native_ui.h"
 #include "physmem.h"
 #include "../sdk/baseos_abi.h"
 extern unsigned char gdt_user_code[],gdt_user_data[],gdt_tss[];
@@ -23,6 +24,7 @@ static unsigned canvas_width,canvas_height;
 _Static_assert(TASK_BACKING_PAGES==16&&USER_CAPACITY%PHYS_PAGE_BYTES==0,"BEX1 backing must remain exactly 16 pages");
 #define FRAME_WORDS 19
 #define TASK_MAX_SLEEP_MS 60000u
+enum { TASK_WAIT_NONE, TASK_WAIT_TIMER, TASK_WAIT_SYNC, TASK_WAIT_UI };
 typedef struct { unsigned char bytes[108]; } FpuState;
 typedef struct {
     uint32_t backing[TASK_BACKING_PAGES];
@@ -33,7 +35,8 @@ typedef struct {
     FpuState fpu;
     ProcessIO io;
     uint32_t wake;
-    BosHandle owner_id, wait_operation;
+    BosHandle owner_id, wait_operation, wait_ui;
+    unsigned wait_kind,wait_flags;
     unsigned canvas_width,canvas_height;
     int state, result, fpu_ready;
     unsigned exit_reason, legacy_task_id;
@@ -103,6 +106,7 @@ static void release_owner(BosHandle owner) {
     if(!owner)return;
     native_files_release_owner(owner);
     native_sync_owner_release(owner);
+    native_ui_release_owner(owner);
 }
 /* A completion retains its identity/result until the display consumes it.
  * Resource release is legal only after the active process has returned. */
@@ -116,11 +120,12 @@ static void task_release(NativeTask *task) {
         kmemset(task->backing,0,sizeof task->backing);
         release_owner(task->owner_id);task->resources_live=0;
     }
-    task->wait_operation=0;
+    task->wait_operation=task->wait_ui=task->wait_flags=0;task->wait_kind=TASK_WAIT_NONE;
     task->key_head=task->key_count=0;
 }
 static void task_mark_exit(NativeTask *task,int result,unsigned reason) {
     if(task->state==PROCESS_TASK_DONE||task->state==PROCESS_TASK_EXITING)return;
+    native_ui_revoke_owner(task->owner_id);
     task->result=result;task->exit_reason=reason;task->state=PROCESS_TASK_EXITING;
 }
 static void task_finalize(NativeTask *task) {
@@ -375,6 +380,14 @@ int process_start(ProcessHandle process) {
 int process_status(ProcessHandle process) {
     NativeTask *task=task_lookup(process);return task?task->state:PROCESS_TASK_EMPTY;
 }
+int process_binding_live(const ProcessBinding *binding) {
+    if(!binding)return 0;
+    NativeTask *task=task_lookup(binding->process);
+    return task&&task->bound&&!task->stop_requested&&
+        (task->state==PROCESS_TASK_READY||task->state==PROCESS_TASK_SLEEPING)&&
+        task->io.binding.process==binding->process&&task->io.binding.slot==binding->slot&&
+        task->io.binding.generation==binding->generation;
+}
 int process_get_result(ProcessHandle process,ProcessResult *out) {
     NativeTask *task=task_lookup(process);
     if(!out||!task||task->state!=PROCESS_TASK_DONE)return 0;
@@ -398,15 +411,19 @@ void process_counts(ProcessCounts *out) {
  * waiter stores no borrowed pointer or live kernel stack between slices. */
 static int task_wake(NativeTask *task) {
     if(task->state!=PROCESS_TASK_SLEEPING)return task->state==PROCESS_TASK_READY;
-    if(task->wait_operation){
-        int result=native_sync_poll(task->owner_id,task->wait_operation);
+    if(task->wait_kind==TASK_WAIT_SYNC||task->wait_kind==TASK_WAIT_UI){
+        int result=task->wait_kind==TASK_WAIT_SYNC?
+            native_sync_poll(task->owner_id,task->wait_operation):
+            native_ui_ready(&task->io.binding,task->wait_ui);
+        if(task->wait_kind==TASK_WAIT_UI&&result==BOS_PENDING&&
+           (task->wait_flags&BOS_UI_WAIT_LEGACY_KEY)&&task->key_count)result=BOS_OK;
         if(result==BOS_PENDING){
             if((int32_t)(timer_ticks()-task->wake)<0)return 0;
             result=BOS_E_TIMEOUT;
         }
         task->frame[7]=(unsigned)result;
-        task->wait_operation=0;
     }else if((int32_t)(timer_ticks()-task->wake)<0)return 0;
+    task->wait_operation=task->wait_ui=task->wait_flags=0;task->wait_kind=TASK_WAIT_NONE;
     task->state=PROCESS_TASK_READY;
     return 1;
 }
@@ -457,7 +474,7 @@ int process_key(ProcessHandle process,int key) {
 int process_request_stop(ProcessHandle process) {
     NativeTask *task=task_lookup(process);
     if(!task)return 1;
-    if(active){task->stop_requested=1;return 0;}
+    if(active){native_ui_revoke_owner(task->owner_id);task->stop_requested=1;return 0;}
     task_mark_exit(task,PROCESS_TASK_STOPPED,PROCESS_EXIT_STOP);
     task_finalize(task);return 1;
 }
@@ -586,6 +603,7 @@ static int abi_query(unsigned buffer,unsigned capacity,unsigned major,unsigned r
     info.file_bytes=fs_file_limit();
     info.files_per_process=NATIVE_FILE_PER_OWNER;info.files_total=NATIVE_FILE_CAPACITY;
     info.ticks_per_second=TIMER_HZ;info.processes_total=PROCESS_TASKS+1;
+    if(current_task&&current_task->bound&&native_ui_available())info.features|=BOS_FEATURE_HOSTED_UI;
     if(current_task&&native_sync_available()){
         info.features|=BOS_FEATURE_OWNED_SYNC|BOS_FEATURE_OPERATION_WAIT;
         info.operations_per_process=native_sync_per_owner_limit();
@@ -662,6 +680,54 @@ static int native_file_call(unsigned call,unsigned a,unsigned b,unsigned c,unsig
     if(b||c||d||e)return BOS_E_INVALID;
     return native_file_close(owner,a);
 }
+/* UI output spans are checked before allocation or consumption. WAIT stores
+ * only owned identity, flags and deadline; it deliberately never publishes. */
+static int native_ui_call(uint32_t *r,unsigned operation,unsigned a,unsigned b,unsigned c,unsigned d) {
+    if(!current_task||!current_task->bound||!native_ui_available())return BOS_E_UNSUPPORTED;
+    const ProcessBinding *binding=&current_task->io.binding;
+    if(operation==BOS_UI_QUERY){
+        if(a!=BOS_UI_MAJOR)return BOS_E_UNSUPPORTED;
+        if(d||c<BOS_UI_QUERY_MIN_SIZE||!user_span(b,c,USER_WRITE))return BOS_E_INVALID;
+        BosUiInfoV1 info;native_ui_query(&info,TIMER_HZ);
+        kmemcpy((void *)(USER_BASE+b),&info,c<sizeof info?c:sizeof info);return BOS_OK;
+    }
+    if(operation==BOS_UI_HOST_OPEN){
+        if(a!=BOS_UI_MAJOR)return BOS_E_UNSUPPORTED;
+        if(c<sizeof(BosUiTargetInfoV1)||!user_span(b,c,USER_WRITE))return BOS_E_INVALID;
+        BosUiTargetInfoV1 info;int result=native_ui_open(binding,d,&info);
+        if(result==BOS_OK)kmemcpy((void *)(USER_BASE+b),&info,sizeof info);
+        return result;
+    }
+    if(operation==BOS_UI_INFO||operation==BOS_UI_READ){
+        if(d||c<sizeof(BosUiEventV1)||!user_span(b,c,USER_WRITE))return BOS_E_INVALID;
+        if(operation==BOS_UI_INFO){
+            BosUiTargetInfoV1 info;int result=native_ui_info(binding,a,&info);
+            if(result==BOS_OK)kmemcpy((void *)(USER_BASE+b),&info,sizeof info);
+            return result;
+        }
+        BosUiEventV1 event;int result=native_ui_read(binding,a,&event);
+        if(result==BOS_OK)kmemcpy((void *)(USER_BASE+b),&event,sizeof event);
+        return result;
+    }
+    if(operation==BOS_UI_RELEASE){
+        if(b||c||d)return BOS_E_INVALID;
+        return native_ui_release(binding,a);
+    }
+    if(operation==BOS_UI_WAIT){
+        if(d||c>BOS_UI_WAIT_MAX_MS||!(b&BOS_UI_WAIT_QUEUE)||
+           (b&~(BOS_UI_WAIT_QUEUE|BOS_UI_WAIT_LEGACY_KEY)))return BOS_E_INVALID;
+        int result=native_ui_ready(binding,a);
+        if(result==BOS_PENDING&&(b&BOS_UI_WAIT_LEGACY_KEY)&&current_task->key_count)result=BOS_OK;
+        if(result==BOS_PENDING&&c){
+            current_task->wait_kind=TASK_WAIT_UI;current_task->wait_operation=0;
+            current_task->wait_ui=a;current_task->wait_flags=b;
+            current_task->wake=timer_ticks()+(c*TIMER_HZ+999u)/1000u;
+            r[7]=(unsigned)BOS_PENDING;task_suspend(r,PROCESS_TASK_SLEEPING);
+        }
+        return result;
+    }
+    return BOS_E_UNSUPPORTED;
+}
 /* Offsets match InterruptFrame: 8 registers, four segment slots, vector/error,
  * then EIP, CS, EFLAGS and the user SS/ESP on a privilege transition. */
 int process_interrupt(uint32_t *r){
@@ -717,8 +783,10 @@ int process_interrupt(uint32_t *r){
         if(!current_task||(call==BOS_CALL_SLEEP&&a>TASK_MAX_SLEEP_MS)){r[7]=(unsigned)-1;return 1;}
         r[7]=0;
         output_present();
-        current_task->wait_operation=0;
+        current_task->wait_operation=current_task->wait_ui=current_task->wait_flags=0;
+        current_task->wait_kind=TASK_WAIT_NONE;
         if(call==BOS_CALL_SLEEP&&a){
+            current_task->wait_kind=TASK_WAIT_TIMER;
             current_task->wake=timer_ticks()+(a*TIMER_HZ+999u)/1000u;
             task_suspend(r,PROCESS_TASK_SLEEPING);
         }
@@ -759,6 +827,7 @@ int process_interrupt(uint32_t *r){
     }
     else if(call==BOS_CALL_ABI_QUERY)r[7]=(unsigned)abi_query(a,b,c,d,e);
     else if(call==BOS_CALL_MEMORY_INFO)r[7]=(unsigned)memory_info(a,b,c,d,e);
+    else if(call==BOS_CALL_UI)r[7]=(unsigned)native_ui_call(r,a,b,c,d,e);
     else if(call>=BOS_CALL_SYNC_BEGIN&&call<=BOS_CALL_SYNC_RELEASE){
         if(!current_task){r[7]=(unsigned)BOS_E_UNSUPPORTED;return 1;}
         if(c||d||e||(call!=BOS_CALL_SYNC_WAIT&&b)){
@@ -776,7 +845,8 @@ int process_interrupt(uint32_t *r){
             int result=native_sync_poll(current_owner(),a);
             r[7]=(unsigned)result;
             if(call==BOS_CALL_SYNC_WAIT&&b&&result==BOS_PENDING){
-                current_task->wait_operation=a;
+                current_task->wait_operation=a;current_task->wait_kind=TASK_WAIT_SYNC;
+                current_task->wait_ui=current_task->wait_flags=0;
                 current_task->wake=timer_ticks()+(b*TIMER_HZ+999u)/1000u;
                 output_present();
                 task_suspend(r,PROCESS_TASK_SLEEPING);
