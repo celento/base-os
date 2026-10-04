@@ -1,6 +1,7 @@
 #include "baseos.h"
-/* /Programs/pointer.bex: the hosted canvas is the view, not the input model.
- * No files, callbacks, or window ownership assumptions. Both BEX formats work. */
+#include "pointer_backend.h"
+/* /Programs/pointer.bex remains the hosted example in either BEX format.
+ * pointer-window.bex selects only the backend adapter at compile time. */
 #define WIDTH 320u
 #define HEIGHT 200u
 #define INK_BYTES (WIDTH*HEIGHT/8u)
@@ -60,7 +61,7 @@ static void commit_stroke(PointerModel *m) {
     for(unsigned c=0;c<2;c++)for(unsigned i=0;i<INK_BYTES;i++)ink[c][i]|=preview[c][i];
     ++m->strokes;abort_stroke(m);
 }
-/* Adapter boundary: a future window endpoint can feed the same model. Ignore
+/* Adapter boundary: hosted and owned-window endpoints feed this model. Ignore
  * unknown kinds/bits; do not infer DOWN from a MOVE or from a state snapshot. */
 static void accept_event(PointerModel *m,const BosUiEventV1 *e) {
     if(e->size<sizeof *e||e->major!=BOS_UI_MAJOR||e->target!=target)return;
@@ -175,10 +176,10 @@ static void render(const PointerModel *m) {
 }
 static int open_target(void) {
     BosUiTargetInfoV1 info;
-    int result=bos_ui_host_open(subscriptions,&info);
+    int result=pointer_backend_open(subscriptions,&info);
     if(result!=BOS_OK)return result;
     target=info.target;
-    if(info.size<sizeof info||info.major!=BOS_UI_MAJOR||info.kind!=BOS_UI_KIND_HOSTED_CANVAS){
+    if(info.size<sizeof info||info.major!=BOS_UI_MAJOR||!pointer_backend_target_valid(&info)){
         bos_ui_release(target);target=BOS_HANDLE_INVALID;return BOS_E_UNSUPPORTED;
     }
     abort_stroke(&model);model.armed=0;model.buttons=0;
@@ -198,13 +199,12 @@ static void error(const char *operation,int result) {
     p=signed_number(text(p," result="),result);text(p,"\n");bos_print(line);
 }
 int main(void) {
-    BosUiInfoV1 info;int result=bos_ui_query(&info,sizeof info);
-    const unsigned required=BOS_UI_CAP_HOSTED_CANVAS|BOS_UI_CAP_POINTER|
-        BOS_UI_CAP_IMPLICIT_CAPTURE|BOS_UI_CAP_BOUNDED_WAIT|BOS_UI_CAP_LEGACY_KEY_READINESS;
+    BosUiInfoV1 info;int result=pointer_backend_query(&info,sizeof info);
+    const unsigned required=POINTER_REQUIRED_CAPABILITIES;
     if(result!=BOS_OK||info.size<sizeof info||info.major!=BOS_UI_MAJOR||
        (info.capabilities&required)!=required||!(info.subscriptions_supported&BOS_UI_SUB_POINTER)||
        info.event_bytes<sizeof(BosUiEventV1)||!info.wait_max_ms){
-        bos_print("POINTER UNSUPPORTED: use start /Programs/pointer.bex on a hosted-UI kernel.\n");
+        bos_print(POINTER_BACKEND_UNSUPPORTED);
         return 0;
     }
     subscriptions=info.subscriptions_supported&(BOS_UI_SUB_POINTER|BOS_UI_SUB_HOVER|BOS_UI_SUB_WHEEL);

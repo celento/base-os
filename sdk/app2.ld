@@ -5,10 +5,11 @@ PHDRS { text PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6); }
 __workspace_bytes = DEFINED(__bex2_workspace_bytes) ? __bex2_workspace_bytes : 1048576;
 __stack_bytes = DEFINED(__bex2_stack_bytes) ? __bex2_stack_bytes : 65536;
 __required_abi_minor = DEFINED(__bex2_required_abi_minor) ? __bex2_required_abi_minor : 1;
+__required_flags = DEFINED(__bex2_flags) ? __bex2_flags : 0;
 SECTIONS {
     . = 0;
     .header : {
-        LONG(0x32584542) LONG(64) LONG(1) LONG(0)
+        LONG(0x32584542) LONG(64) LONG(1) LONG(__required_flags)
         LONG(__file_end) LONG(_start) LONG(__text_end - __text_start) LONG(__data_start)
         LONG(__data_file_end - __data_start) LONG(__data_memory_end - __data_start)
         LONG(__workspace_bytes) LONG(__stack_bytes) LONG(1) LONG(__required_abi_minor)
@@ -41,6 +42,9 @@ SECTIONS {
         *(.preinit_array .preinit_array.* .ctors .ctors.* .dtors .dtors.*)
     } :data
     ASSERT(SIZEOF(.header) == 64, "BEX2 header must be 64 bytes")
+    ASSERT((__required_flags & ~1) == 0, "BEX2 has unsupported required flags")
+    ASSERT((__required_flags & 1) == 0 || __required_abi_minor >= 2,
+           "BEX2 native-v1 windows require ABI minor 2 or newer")
     ASSERT(__text_end > __text_start, "BEX2 requires nonempty text")
     ASSERT(_start >= __text_start && _start < __text_end, "BEX2 entry must be in text")
     ASSERT(__file_end <= 262144, "BEX2 executable exceeds 256 KiB file limit")
