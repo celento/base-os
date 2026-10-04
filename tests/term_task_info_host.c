@@ -54,6 +54,13 @@ int process_create(const void *file,unsigned bytes,const char *argument,unsigned
     }
     return -1;
 }
+/* This legacy fixture only admits its hosted BEX1/BEX2 inputs. Real owned
+ * mode validation and pages are covered by process/owned-view fixtures. */
+int process_create_mode(const void *file,unsigned bytes,const char *argument,unsigned length,
+                        unsigned mode,ProcessHandle *out){
+    if(mode!=PROCESS_LAUNCH_HOSTED)return PROCESS_CREATE_UNSUPPORTED;
+    return process_create(file,bytes,argument,length,out);
+}
 int process_bind(ProcessHandle handle,const ProcessIO *io){
     FixtureProcess *p=fixture_process(handle);
     if(!p||fixture_state(p)!=PROCESS_TASK_CREATED||p->slot>=0||!io||!io->print||!io->plot||
