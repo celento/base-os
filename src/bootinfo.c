@@ -74,6 +74,12 @@ int video_info_valid(const BootInfo *b) {
            b->blue_size == 8 && b->blue_pos == 0;
 }
 
+_Static_assert(KERNEL_STAGE_ADDR + KERNEL_SECTORS * SECTOR_SIZE <= KERNEL_STAGE_LIMIT &&
+               KERNEL_STAGE_LIMIT <= 0xA0000, "invalid BIOS kernel staging area");
+_Static_assert(KERNEL_LOAD_ADDR >= 0x100000 && KERNEL_LOAD_ADDR < STACK_BOTTOM,
+               "invalid relocated kernel range");
+_Static_assert(STACK_TOP - STACK_BOTTOM == 0x10000 && STACK_TOP <= FB_BASE,
+               "kernel stack overlaps framebuffer or has changed size");
 _Static_assert(FB_BASE + FB_CAPACITY <= FS_BASE, "backbuffer overlaps FS");
 _Static_assert(FS_BASE + FS_CAPACITY <= WRITER_BASE, "FS metadata overlaps Writer");
 _Static_assert(WRITER_BASE + WRITER_CAPACITY <= PAINT_MEM, "Writer overlaps Paint");

@@ -1,13 +1,16 @@
 ; kernel_entry.asm
-; Linked at 0x10000. Bootloader far-jumps here in 16-bit real mode.
-; Set VBE 1280x720 (or HD-ish fallback), stash boot-info at 0x7E00, enter PM.
+; Linked at KERNEL_LOAD_ADDR (1 MiB), initially staged at KERNEL_STAGE_ADDR.
+; The BIOS far-jumps to the staged copy in 16-bit real mode. Relative calls
+; within this bootstrap work in either copy; absolute code/GDT addresses must
+; explicitly use the staged address until the protected-mode copy completes.
+; Collect low-memory boot info, enter PM, relocate, then run the linked kernel.
 
 section .text.entry
 [bits 16]
 global _start
 extern kmain
-extern __bss_start, __bss_end
-extern platform_init, panic
+extern __load_end, __bss_start, __bss_end
+extern platform_init
 
 BOOTINFO        equ BOOTINFO_ADDR
 VBE_INFO        equ 0x8000
@@ -45,12 +48,6 @@ _start:
     mov [BOOTINFO + 18], dl
     mov [BOOTINFO + 19], dh
 
-    ; Fast A20 so we can use extended RAM (backbuffer at 2MB)
-    in al, 0x92
-    and al, 0xFE               ; never assert the fast reset bit
-    or al, 2
-    out 0x92, al
-
     sti
 
     call collect_memory_map
@@ -58,15 +55,52 @@ _start:
 .have_mode:
     cli
 
-    ; Build GDTR at 0x7E40 with a 32-bit linear GDT address
+    ; Enable and verify A20 after the final BIOS mode call, before any copy,
+    ; stack access or instruction fetch in extended RAM. Both bytes are restored.
+    in al, 0x92
+    and al, 0xFE               ; never assert the fast reset bit
+    or al, 2
+    out 0x92, al
+    mov ax, 0xFFFF
+    mov fs, ax
+    mov al, [0x500]
+    mov ah, [fs:0x510]         ; FFFF:0510 = physical 0x100500
+    mov byte [0x500], 0
+    mov byte [fs:0x510], 0xFF
+    cmp byte [0x500], 0
+    mov [fs:0x510], ah
+    mov [0x500], al
+    jne a20_failed
+    xor ax, ax
+    mov fs, ax
+
+    ; The initial GDTR points into the staged, not yet relocated, image.
     mov word [0x7E40], gdt_end - gdt_start - 1
-    mov dword [0x7E42], gdt_start
+    mov dword [0x7E42], gdt_start - KERNEL_LOAD_ADDR + KERNEL_STAGE_ADDR
     lgdt [0x7E40]
 
     mov eax, cr0
     or eax, 1
     mov cr0, eax
-    jmp dword CODE_SEG:pm_start
+    jmp dword CODE_SEG:(pm_relocate - KERNEL_LOAD_ADDR + KERNEL_STAGE_ADDR)
+
+a20_failed:
+    ; C and its serial/panic routines are not available until relocation.
+    mov si, a20_error - _start
+.print:
+    cs lodsb
+    test al, al
+    jz .halt
+    mov ah, 0x0E
+    mov bx, 7
+    int 0x10
+    cld
+    jmp .print
+.halt:
+    cli
+    hlt
+    jmp .halt
+a20_error db "A20 unavailable", 0
 
 ; ---------- VBE: find 1280x720 (prefer 32bpp), else 1280x800, else 1024x768 ----------
 ; CF=1 on success
@@ -305,26 +339,30 @@ collect_memory_map:
     ret
 
 [bits 32]
-pm_start:
+pm_relocate:
     mov ax, DATA_SEG
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov esp, STACK_TOP
+    ; No stack or external call until the initialized kernel image is copied.
     cld
-    ; Verify A20 before accessing extended RAM. Restore both probe bytes.
-    mov esi, 0x500
-    mov edi, 0x100500
-    mov al, [esi]
-    mov ah, [edi]
-    mov byte [esi], 0
-    mov byte [edi], 0xFF
-    cmp byte [esi], 0
-    mov [edi], ah
-    mov [esi], al
-    setne bl
+    mov esi, KERNEL_STAGE_ADDR
+    mov edi, KERNEL_LOAD_ADDR
+    mov ecx, __load_end
+    sub ecx, edi
+    rep movsb
+    ; process_init will edit the relocated user/TSS descriptors. Reload GDTR
+    ; before entering C so LTR and later ring-3 returns see those same bytes.
+    mov dword [0x7E42], gdt_start
+    lgdt [0x7E40]
+    jmp CODE_SEG:pm_start
+
+pm_start:
+    mov esp, STACK_TOP
+    xor ebp, ebp
+    cld
 %ifdef TEST_DIRTY_BSS
     mov edi, __bss_start
     mov ecx, __bss_end
@@ -338,12 +376,6 @@ pm_start:
     xor eax, eax
     rep stosb
     call platform_init
-    test bl, bl
-    jz .a20_ok
-    sub esp, 12
-    push dword a20_error
-    call panic
-.a20_ok:
     call kmain
 .hang:
     hlt
@@ -371,11 +403,10 @@ gdt_user_code: dq 0
 gdt_user_data: dq 0
 gdt_tss: dq 0
 gdt_end:
+global __bootstrap_end
+__bootstrap_end:
 
 CODE_SEG equ gdt_code - gdt_start
 DATA_SEG equ gdt_data - gdt_start
-
-section .rodata
-a20_error db "A20 is unavailable", 0
 
 section .note.GNU-stack noalloc noexec nowrite progbits

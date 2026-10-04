@@ -4,6 +4,9 @@ bits 16
 %if KERNEL_PRIMARY_SECTORS + 1 > FS_DISK_LBA
 %error "kernel overlaps filesystem"
 %endif
+%if KERNEL_STAGE_ADDR + KERNEL_SECTORS * SECTOR_SIZE > KERNEL_STAGE_LIMIT
+%error "kernel staging exceeds conventional RAM reservation"
+%endif
 start:
     cli
     cld
@@ -28,7 +31,13 @@ start:
     jne disk_error
 .geometry:
     mov [spt], cl
-    mov ax, KERNEL_LOAD_ADDR >> 4
+    ; Refuse to stage over the BIOS/EBDA if conventional RAM is smaller.
+    int 0x12
+    movzx eax, ax
+    shl eax, 10
+    cmp eax, KERNEL_STAGE_ADDR + KERNEL_SECTORS * SECTOR_SIZE
+    jb disk_error
+    mov ax, KERNEL_STAGE_ADDR >> 4
     mov es, ax
     xor bx, bx
     mov cx, 2
@@ -91,7 +100,7 @@ kernel_loaded:
     cli
     mov dl, [boot_drive]
     mov dh, [spt]
-    jmp (KERNEL_LOAD_ADDR >> 4):0
+    jmp (KERNEL_STAGE_ADDR >> 4):0
 
 disk_error:
     mov ax, 0x0e45             ; BIOS teletype: E, then halt.
