@@ -18,6 +18,14 @@ enum {
 
 #define FILE_CLIPBOARD_STATUS_LEN 128
 
+/* Copy an ordinary file/folder in RAM with a collision-safe, extension-aware
+ * name. Keeps an unused original name; otherwise makes "report copy.bwr",
+ * "report copy 2.bwr", etc. Folders retain fs_unique_copy naming.
+ * Returns the new node or -1 with no copy retained. Never syncs and leaves ALL
+ * clipboard selection, status and retry state unchanged. Callers own sync.
+ * Same-folder use implements Duplicate while preserving file associations. */
+int file_copy_named(int source, int directory);
+
 /* One desktop-wide file clipboard. A Copy is a reference to the live source,
  * not a frozen snapshot. Its node ID AND fs_identity must still match. */
 void file_clipboard_clear(void);
@@ -36,7 +44,7 @@ int file_clipboard_can_paste(int directory);
  * result in this directory, including RAM_ONLY, or -1 if none is selectable.
  * Cut is consumed after its RAM move, even when sync fails. Copy stays live.
  * Copy keeps the source name if unused in the destination; otherwise it uses
- * fs_copy's collision-safe name. Same-folder Copy keeps Duplicate naming.
+ * file_copy_named's extension-aware collision-safe name.
  * After Copy returns RAM_ONLY, the next Paste only retries that completed
  * operation's sync, even if autosync succeeded meanwhile. No duplicate copy is
  * made. A fresh Copy/Cut or clear explicitly ends this retry guard.

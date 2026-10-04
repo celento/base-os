@@ -154,16 +154,16 @@ static void copy_files(void) {
     int writes_before = writes;
     assert(file_clipboard_paste(folder, &copy) == FILE_CLIPBOARD_SYNCED);
     assert(copy == fs_find_child(folder, "notes.bin"));
-    assert(fs_find_child(folder, "notes.bin copy") < 0);
+    assert(fs_find_child(folder, "notes copy.bin") < 0);
     assert(writes == writes_before + 2); /* One payload/header snapshot only. */
     assert(fs_identity(copy) != identity && fs_identity(original) == identity);
     expect_bytes(copy, "A\0B\377C", 5);
     assert(file_clipboard_mode() == FILE_CLIPBOARD_COPY && !fs_needs_sync());
     assert(file_clipboard_paste(folder, &copy) == FILE_CLIPBOARD_SYNCED);
-    assert(copy == fs_find_child(folder, "notes.bin copy"));
+    assert(copy == fs_find_child(folder, "notes copy.bin"));
     expect_bytes(copy, "A\0B\377C", 5);
     assert(file_clipboard_paste(0, &copy) == FILE_CLIPBOARD_SYNCED);
-    assert(copy == fs_find_child(0, "notes.bin copy"));
+    assert(copy == fs_find_child(0, "notes copy.bin"));
     int empty = make_file(0, "empty", "", 0);
     assert(file_clipboard_set(empty, FILE_CLIPBOARD_COPY) == 0);
     assert(file_clipboard_paste(folder, 0) == FILE_CLIPBOARD_SYNCED);
@@ -171,7 +171,7 @@ static void copy_files(void) {
     remount_volume();
     folder = fs_resolve(0, "/destination");
     expect_bytes(fs_resolve(0, "/destination/notes.bin"), "A\0B\377C", 5);
-    expect_bytes(fs_resolve(0, "/destination/notes.bin copy"), "A\0B\377C", 5);
+    expect_bytes(fs_resolve(0, "/destination/notes copy.bin"), "A\0B\377C", 5);
     expect_bytes(fs_find_child(folder, "empty"), "", 0);
     expect_bytes(fs_resolve(0, "/notes.bin"), "A\0B\377C", 5);
     puts("file clipboard: binary/empty/repeated copies and persisted output passed");
@@ -232,6 +232,100 @@ static void copy_names_and_folders(void) {
     expect_bytes(fs_resolve(0, "/destination/abcdefghijklmnopqrstuvw"), "long", 4);
     expect_bytes(fs_resolve(0, "/destination/abcdefghijklmnop copy 3"), "long", 4);
     puts("file clipboard: long collision-safe names and recursive folder copy passed");
+}
+
+static void extension_names_and_helper(void) {
+    reset_volume(1);
+    int destination = fs_mkdir(0, "destination");
+    int report = make_file(0, "report.bwr", "writer bytes", 12);
+    int song = make_file(0, "song.mp3", "audio bytes", 11);
+    int page = make_file(0, "page.html", "<p>page</p>", 11);
+    int mixed = make_file(0, "Track.Mp3", "mixed", 5);
+    int archive = fs_mkdir(0, "Archive.html");
+    make_file(archive, "child.bwr", "child", 5);
+    assert(fs_sync() == 0 && file_clipboard_set(page, FILE_CLIPBOARD_CUT) == 0);
+    char saved_status[FILE_CLIPBOARD_STATUS_LEN];
+    strcpy(saved_status, file_clipboard_status());
+    unsigned selected_identity = file_clipboard_identity();
+    int writes_before = writes;
+    int copy = file_copy_named(report, 0);
+    assert(copy == fs_find_child(0, "report copy.bwr"));
+    assert(fs_find_child(0, "report.bwr copy") < 0);
+    assert(fs_needs_sync() && writes == writes_before);
+    assert(file_clipboard_source() == page && file_clipboard_mode() == FILE_CLIPBOARD_CUT);
+    assert(file_clipboard_identity() == selected_identity && !file_clipboard_pending_sync());
+    assert(!strcmp(saved_status, file_clipboard_status()));
+    expect_bytes(copy, "writer bytes", 12);
+    copy = file_copy_named(song, 0);
+    assert(copy == fs_find_child(0, "song copy.mp3"));
+    copy = file_copy_named(song, 0);
+    assert(copy == fs_find_child(0, "song copy 2.mp3"));
+    copy = file_copy_named(mixed, 0);
+    assert(copy == fs_find_child(0, "Track copy.Mp3"));
+    copy = file_copy_named(archive, 0);
+    assert(copy == fs_find_child(0, "Archive.html copy"));
+    expect_bytes(fs_find_child(copy, "child.bwr"), "child", 5);
+    copy = file_copy_named(report, destination);
+    assert(copy == fs_find_child(destination, "report.bwr"));
+    int clash1 = make_file(destination, "report copy.bwr", "keep one", 8);
+    int clash2 = make_file(destination, "report copy 2.bwr", "keep two", 8);
+    int legacy_clash = make_file(destination, "report.bwr copy", "keep old", 8);
+    copy = file_copy_named(report, destination);
+    assert(copy == fs_find_child(destination, "report copy 3.bwr"));
+    expect_bytes(copy, "writer bytes", 12);
+    expect_bytes(clash1, "keep one", 8);
+    expect_bytes(clash2, "keep two", 8);
+    expect_bytes(legacy_clash, "keep old", 8);
+    assert(writes == writes_before && !strcmp(saved_status, file_clipboard_status()));
+    /* The actual Paste path uses this helper and only syncs the final name. */
+    assert(file_clipboard_set(page, FILE_CLIPBOARD_COPY) == 0);
+    assert(file_clipboard_paste(destination, &copy) == FILE_CLIPBOARD_SYNCED);
+    assert(copy == fs_find_child(destination, "page.html"));
+    writes_before = writes;
+    assert(file_clipboard_paste(destination, &copy) == FILE_CLIPBOARD_SYNCED);
+    assert(copy == fs_find_child(destination, "page copy.html") && writes == writes_before + 2);
+    assert(file_clipboard_paste(destination, &copy) == FILE_CLIPBOARD_SYNCED);
+    assert(copy == fs_find_child(destination, "page copy 2.html"));
+    expect_bytes(copy, "<p>page</p>", 11);
+    int dotted = make_file(0, "read.me.html", "multi", 5);
+    copy = file_copy_named(dotted, 0);
+    assert(copy == fs_find_child(0, "read.me copy.html"));
+    int hidden = make_file(0, ".profile", "hidden", 6);
+    copy = file_copy_named(hidden, 0);
+    assert(copy == fs_find_child(0, ".profile copy"));
+    int trailing = make_file(0, "trailing.", "trailing", 8);
+    copy = file_copy_named(trailing, 0);
+    assert(copy == fs_find_child(0, "trailing. copy"));
+    int long_name = make_file(0, "abcdefghijklmnopqr.HTML", "long", 4);
+    int copies[110];
+    for (int i = 0; i < 110; ++i) {
+        copies[i] = file_copy_named(long_name, 0);
+        assert(copies[i] > 0 && strlen(fs_name(copies[i])) == 23);
+        assert(!strcmp(fs_name(copies[i]) + 18, ".HTML"));
+        expect_bytes(copies[i], "long", 4);
+        for (int j = 0; j < i; ++j) assert(strcmp(fs_name(copies[i]), fs_name(copies[j])));
+    }
+    assert(!strcmp(fs_name(copies[0]), "abcdefghijklm copy.HTML"));
+    assert(!strcmp(fs_name(copies[109]), "abcdefghi copy 110.HTML"));
+    assert(fs_sync() == 0);
+    /* Never truncate a recognized extension merely to force a copy label. */
+    int oversized_extension = make_file(0, "a.abcdefghijklmnopq", "keep", 4);
+    assert(fs_sync() == 0);
+    Snapshot before;
+    snapshot(&before);
+    assert(file_copy_named(oversized_extension, 0) < 0);
+    assert(file_copy_named(0, destination) < 0);
+    assert(file_copy_named(archive, archive) < 0);
+    expect_unchanged(&before);
+    assert(file_clipboard_source() == page && file_clipboard_mode() == FILE_CLIPBOARD_COPY);
+    remount_volume();
+    expect_bytes(fs_resolve(0, "/report copy.bwr"), "writer bytes", 12);
+    expect_bytes(fs_resolve(0, "/song copy 2.mp3"), "audio bytes", 11);
+    expect_bytes(fs_resolve(0, "/Track copy.Mp3"), "mixed", 5);
+    expect_bytes(fs_resolve(0, "/destination/report copy 3.bwr"), "writer bytes", 12);
+    expect_bytes(fs_resolve(0, "/destination/page copy 2.html"), "<p>page</p>", 11);
+    expect_bytes(fs_resolve(0, "/abcdefghi copy 110.HTML"), "long", 4);
+    puts("file clipboard: reusable RAM helper, extension/case preservation and long collision names passed");
 }
 
 static void move_and_noop(void) {
@@ -451,6 +545,13 @@ static void sync_retry_guard(void) {
     assert(file_clipboard_paste(destination, &copy) == FILE_CLIPBOARD_RAM_ONLY);
     assert(copy == fs_find_child(destination, "original") && file_clipboard_pending_sync());
     assert(fs_needs_sync() && file_clipboard_mode() == FILE_CLIPBOARD_COPY);
+    char saved_status[FILE_CLIPBOARD_STATUS_LEN];
+    strcpy(saved_status, file_clipboard_status());
+    int writes_before = writes;
+    int independent_copy = file_copy_named(original, 0);
+    assert(independent_copy == fs_find_child(0, "original copy") && writes == writes_before);
+    assert(file_clipboard_pending_sync() && file_clipboard_source() == original);
+    assert(!strcmp(saved_status, file_clipboard_status()));
     int count = fs_node_count(), repeated;
     assert(file_clipboard_paste(destination, &repeated) == FILE_CLIPBOARD_RAM_ONLY);
     assert(repeated == copy && fs_node_count() == count);
@@ -530,6 +631,7 @@ int main(void) {
     for (unsigned i = 0; i < sizeof(content); ++i) content[i] = (char)(i * 37 + i / 65536);
     copy_files();
     copy_names_and_folders();
+    extension_names_and_helper();
     move_and_noop();
     rename_delete_and_text();
     rejected_destinations();
