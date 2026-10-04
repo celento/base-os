@@ -134,7 +134,9 @@ undefined-behavior checks remain enabled.
 
 These host tests and object builds do not establish actual guest scheduling,
 process-fault cleanup, UI latency or disk persistence across a QEMU reboot.
-Those require the separately integrated process/ABI tests and ordinary guest
-workload. Built-in GUI save flows and legacy native saves still block; this is
-an implemented native durability service, not general kernel preemption or a
-claim that every save caller has been converted.
+Those require separately integrated process/ABI tests and ordinary guest
+workloads. Writer/Spreadsheet native Save/Save As and RTF/PDF/CSV exports now use
+the private [document adapter](RESPONSIVE_DOCUMENT_SAVES.md); their own guest
+acceptance is independently gated. Other built-in GUI save flows and legacy
+native saves still block. This is not general kernel preemption or a claim that
+every save caller has been converted.
