@@ -425,8 +425,12 @@ def main():
     print('Evidence: ' + str(work), flush=True)
     (work / 'runner-at-launch.py').write_bytes(pathlib.Path(__file__).read_bytes())
     (work / 'app-at-launch.c').write_bytes((ROOT / 'tests/snapshot_responsive_app.c').read_bytes())
+    (work / 'source-at-launch.patch').write_bytes(subprocess.check_output(['git', 'diff', '--binary', 'HEAD'], cwd=ROOT))
+    (work / 'source-status.txt').write_text(subprocess.check_output(['git', 'status', '--short'], cwd=ROOT, text=True))
     result = dict(passed=False, source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                   build=str(args.build.resolve()), results=[], save_timeout=args.save_timeout,
+                  kernel_sha256=sha((args.build / 'kernel.bin').read_bytes()),
+                  boot_sha256=sha((args.build / 'boot.bin').read_bytes()),
                   runner_sha256=sha((work / 'runner-at-launch.py').read_bytes()),
                   app_source_sha256=sha((work / 'app-at-launch.c').read_bytes()))
     try:
