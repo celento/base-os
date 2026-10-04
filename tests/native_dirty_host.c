@@ -17,7 +17,7 @@ static TermTaskUpdate update(int op,int owner,unsigned flags) {
     int previous=selected;
     TermTaskUpdate result=term_task_poll_update();
     assert(selected==previous&&result.slot==owner&&result.flags==flags);
-    if(owner>=0)assert(!terms[owner].task_dirty);
+    if(owner>=0)assert(!views[owner].task_dirty);
     return result;
 }
 int main(void) {
@@ -29,7 +29,7 @@ int main(void) {
     update(PIXELS,2,TERM_TASK_CANVAS);
     update(BOTH,2,TERM_TASK_CANVAS|TERM_TASK_TEXT);
     update(RESIZE,2,TERM_TASK_LAYOUT);
-    assert(terms[2].canvas_width==320&&terms[2].canvas_height==200);
+    assert(views[2].canvas.width==320&&views[2].canvas.height==200);
     update(PIXELS,2,TERM_TASK_CANVAS);
     update(OUTSIDE,2,0);
     update(QUIET,2,0);
@@ -43,11 +43,11 @@ int main(void) {
     update(PIXELS,6,TERM_TASK_CANVAS);
     exit_next[2]=1;
     update(QUIET,2,TERM_TASK_TEXT|TERM_TASK_LIFECYCLE);
-    assert(!term_task_running(2)&&!terms[2].process);
+    assert(!term_task_running(2)&&!views[2].binding.process);
     operation=TEXT;assert(term_task_poll());
     operation=QUIET;assert(!term_task_poll());
     term_task_stop(6);
-    assert(terms[6].task_dirty==(TERM_TASK_TEXT|TERM_TASK_LIFECYCLE));
+    assert(views[6].task_dirty==(TERM_TASK_TEXT|TERM_TASK_LIFECYCLE));
     update(QUIET,-1,0);
     term_select(2);command("start /canvas.bex");term_select(7);
     update(PIXELS,2,TERM_TASK_TEXT|TERM_TASK_LAYOUT|TERM_TASK_LIFECYCLE);
