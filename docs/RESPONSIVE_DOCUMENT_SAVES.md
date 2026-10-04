@@ -109,3 +109,8 @@ submitted native bytes from recovered newer drafts. The final expanded host suit
 passed 264 tests. See [qualification and selected screenshots](session-2026-10-04/responsive-documents/README.md)
 for exact profile workloads, hashes, measured upper bounds, retained incomplete
 attempts and the requirement to qualify later combined integrations separately.
+
+The later hosted-pointer/save union at `ca930a6` independently passed all 287 host
+tests and the same default/large/floppy document acceptance, plus both Pointer
+and frame-publication profiles. See the [combined qualification](session-2026-10-04/combined-responsive-documents/README.md).
+This does not qualify the separate subsequent native app-view extraction.
