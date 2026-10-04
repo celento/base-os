@@ -10,7 +10,7 @@
 #define TIMER_HZ 70
 #define KEY_ESC 1
 #define MENU_NONE -1
-enum { WK_NONE=-1, WK_FILES, WK_EDIT, WK_PAINT, WK_WRITER, WK_SPREADSHEET };
+enum { WK_NONE=-1, WK_FILES, WK_EDIT, WK_PAINT, WK_WRITER, WK_SPREADSHEET, WK_TERM };
 typedef struct { int kind,x,y,w,h,z,open,seq,min,maximized,old_x,old_y,old_w,old_h; } Win;
 static Win wins[MAX_WIN];
 static struct { struct {int dragging;} doc; int last_click_item; } window_state[MAX_WIN];
@@ -57,6 +57,8 @@ static int spreadsheet_drag(int x,int y,int w,int h,int mx,int my){return writer
 static int menu_item_at(int menu,int x,int y){(void)menu;(void)x;return y/30;}
 static int taskbar_hover_at(void){return mouse_x/100;}
 static void saver_stop(void){saver_on=0;last_input_frame=frame_count;dirty=1;}
+static unsigned terminal_losses;
+static void term_input_lost(int slot){(void)slot;++terminal_losses;}
 static void drain_8042(void){}
 static unsigned acquire_tail;
 static unsigned input_acquire(unsigned budget){unsigned n=acquire_tail<budget?acquire_tail:budget;acquire_tail-=n;return n;}
@@ -94,7 +96,7 @@ static void fresh(void){
     open_menu=-1;open_dlg=name_dlg=edit_close_dlg=launcher_on=saver_on=display_pending=0;
     input_suppressed=input_saver_buttons=input_unknown_buttons=0;input_wake_serial=0;input_cursor_moved=input_routing=input_tail_pending=0;acquire_tail=0;
     dragging_win=resizing_win=-1;drag_active=fm_dragging=fm_drag_active=0;paint_shape_drag=paint_dragging=0;
-    records=0;releases=drops=arranged=paint_commits=writer_active=writer_moves=double_clicks=0;mode=CLICK_ONLY;
+    records=0;terminal_losses=0;releases=drops=arranged=paint_commits=writer_active=writer_moves=double_clicks=0;mode=CLICK_ONLY;
     pick_last_click_item=title_click_window=icon_last=-1;pick_last_click_frame=0;
     frame_count=1000;desktop_input_remember_scene();
 }
@@ -140,9 +142,10 @@ int main(void){
     fresh();for(unsigned i=0;i<65;++i)key(0x1e,i);
     assert(desktop_input_turn()==64 && records==64 && input_pending(&device_input));
     assert(desktop_input_turn()==1 && records==65 && !input_pending(&device_input));
-    fresh();mode=PAINT_SHAPE;pointer(0,0,1,0,1);desktop_input_turn();assert(paint_shape_drag);
+    fresh();wins[1].open=1;wins[1].kind=WK_TERM;desktop_input_remember_scene();
+    mode=PAINT_SHAPE;pointer(0,0,1,0,1);desktop_input_turn();assert(paint_shape_drag);
     for(unsigned i=0;i<INPUT_CAPACITY;++i)key(0x1e,2+i);
-    pointer(0,0,1,0,300);desktop_input_turn();assert(!paint_shape_drag && !paint_commits && records==1 && !mouse_left);
+    pointer(0,0,1,0,300);desktop_input_turn();assert(!paint_shape_drag && !paint_commits && records==1 && !mouse_left && terminal_losses==1);
     pointer(2,0,1,0,301);desktop_input_turn();assert(records==1);
     pointer(0,0,0,0,302);pointer(0,0,1,0,303);pointer(0,0,0,0,304);desktop_input_turn();assert(records==2 && paint_commits==1);
     /* Begin at the conservative unknown-button recovery state, then use only

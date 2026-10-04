@@ -9,6 +9,7 @@ typedef struct {
     char lines[TERM_LINES][TERM_COLS+1], input[TERM_COLS+1];
     char history[16][TERM_COLS+1], draft[TERM_COLS+1];
     int head,count,len,cwd,hcount,hpos,canvas_on,scroll,rows,view_count,input_overflow;
+    int input_invalid,draft_invalid;
     unsigned cwd_identity;
     unsigned task_dirty;
     char task_name[TERM_TASK_NAME_LEN];
@@ -75,8 +76,13 @@ int term_canvas_size(int slot,int *width,int *height){
 }
 void term_prompt(char *out,int max){char path[FS_PATH_LEN];fs_path(term_cwd(),path,sizeof path);int p=0;for(int i=0;path[i]&&p<max-3;i++)out[p++]=path[i];if(max>2){out[p++]='>';out[p++]=' ';out[p]=0;}}
 void term_char(char c){T.scroll=0;if(c>=32&&c<=126){if(T.len<TERM_COLS){T.input[T.len++]=c;T.input[T.len]=0;}else T.input_overflow=1;}}
-void term_backspace(void){T.scroll=0;if(T.len)T.input[--T.len]=0;if(!T.len)T.input_overflow=0;}
-void term_history(int direction){T.scroll=0;if(!T.hcount)return;if(T.hpos==T.hcount){if(T.input_overflow)T.draft[0]=0;else kstrcpy(T.draft,T.input);}int p=T.hpos+direction;if(p<0)p=0;if(p>T.hcount)p=T.hcount;T.hpos=p;kstrcpy(T.input,p==T.hcount?T.draft:T.history[p]);T.len=kstrlen(T.input);T.input_overflow=0;}
+void term_backspace(void){T.scroll=0;if(T.len)T.input[--T.len]=0;if(!T.len)T.input_overflow=T.input_invalid=0;}
+void term_input_lost(int slot){
+    if(slot<0||slot>=PROCESS_TASKS)return;
+    Terminal *t=&terms[slot];t->input_invalid=1;
+    push_at(t,"Input was lost. Clear the line with Backspace before running it.");
+}
+void term_history(int direction){T.scroll=0;if(!T.hcount)return;if(T.hpos==T.hcount){if(T.input_overflow)T.draft[0]=0;else kstrcpy(T.draft,T.input);T.draft_invalid=T.input_invalid;}int p=T.hpos+direction;if(p<0)p=0;if(p>T.hcount)p=T.hcount;T.hpos=p;kstrcpy(T.input,p==T.hcount?T.draft:T.history[p]);T.len=kstrlen(T.input);T.input_overflow=0;T.input_invalid=p==T.hcount?T.draft_invalid:0;}
 typedef struct { const char *name,*usage,*description,*example,*note; } Manual;
 static const Manual commands[]={
     {"help","help [COMMAND]","List commands, or show a command's manual.","help mkdir","Use Page Up / Page Down to read earlier output."},
@@ -567,6 +573,7 @@ static int execute(const char *s,int depth,int *budget){
 }
 void term_enter(void){
     T.scroll=0;
+    if(T.input_invalid){push("Input was lost; command not run. Clear the line with Backspace.");return;}
     char line[81];kstrcpy(line,T.input);push(line);
     int overflow=T.input_overflow;T.input_overflow=0;
     if(T.len&&!overflow){if(T.hcount==16){for(int i=1;i<16;i++)kstrcpy(T.history[i-1],T.history[i]);T.hcount--;}kstrcpy(T.history[T.hcount++],line);}

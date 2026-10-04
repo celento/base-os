@@ -35,7 +35,14 @@ Queue overflow discards the incomplete stream and latches one reset outside the
 ring. Acquisition keeps maintaining the latest state; normal delivery resumes
 only after the desktop consumes that reset. Reset cancels dragging, resizing,
 file drops, selection and uncommitted Paint shapes without committing a release.
-Held buttons are suppressed until individually released. Device loss additionally
+Held buttons are suppressed until individually released. Every open Terminal
+also marks its command draft incomplete: Enter refuses execution and retains the
+line and history. Clearing the entire line with Backspace, or explicitly choosing
+a complete history entry, restores execution; returning to the incomplete draft
+restores its guard. Loss cannot silently run a partially entered shell command.
+Other app/document/modal text remains best-effort after lost keyboard samples;
+this increment does not add a generic text transaction/reset protocol or change
+the existing native byte-key ABI. Device loss additionally
 keeps an unknown-button suppression latch across scene transitions until valid
 pointer samples observe releases. Lost modifier bytes reset the physical latches
 rather than retaining an unknowable pressed shortcut modifier.

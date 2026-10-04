@@ -8199,7 +8199,14 @@ static void desktop_pointer_sample(const InputSample *sample) {
     if(desktop_input_blocked())desktop_input_cancel(sample->buttons);
     if(mouse_moved && dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
 }
+static void desktop_keyboard_loss(void) {
+    /* Lost focus shortcuts make the intended Terminal owner unknowable. Keep
+     * every open Terminal draft, but require a complete line before execution. */
+    for(int i=0;i<MAX_WIN;++i)if(wins[i].open&&wins[i].kind==WK_TERM)term_input_lost(i);
+    dirty=1;
+}
 static void desktop_input_reset(const InputSample *sample) {
+    if(sample->kind==INPUT_RESET)desktop_keyboard_loss();
     if(sample->reason&INPUT_LOSS_DEVICE)input_unknown_buttons=INPUT_LEFT|INPUT_RIGHT;
     desktop_input_cancel(sample->buttons);
     desktop_input_clear_clicks();
@@ -8212,6 +8219,7 @@ static unsigned desktop_input_turn(void) {
         /* An unusually full controller may need more than the exclusive end
          * budget. Finish draining across ordinary turns, never replay its tail. */
         input_tail_pending=input_acquire(32)==32;
+        if(device_input.loss)desktop_keyboard_loss();
         if(device_input.loss&INPUT_LOSS_DEVICE)input_unknown_buttons=INPUT_LEFT|INPUT_RIGHT;
         input_discard(&device_input);desktop_input_fence();
         desktop_input_modifiers(device_input.modifiers);
