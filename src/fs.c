@@ -263,6 +263,7 @@ int fs_write(int id, const char *data, int len) {
 }
 
 int fs_read(int id, char *out, int max) {
+    if (!out || max <= 0) return 0;
     if (!fs_valid(id) || nodes[id].is_dir || nodes[id].is_app)
         return -1;
     int n = nodes[id].size;

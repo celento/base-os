@@ -99,6 +99,7 @@ class NativeTests(unittest.TestCase):
                             str(ROOT / 'tests' / f'{name}.c'), *map(str, extra), '-o', str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
 
+    def test_decimal(self): self.run_native("decimal_host")
     def test_graphics(self): self.run_native("gfx_host")
     def test_features(self): self.run_native("features_host")
     def test_floppy(self): self.run_native("persist_host")

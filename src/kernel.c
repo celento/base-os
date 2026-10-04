@@ -4,6 +4,7 @@
  */
 
 #include "gfx.h"
+#include "decimal.h"
 #include "platform.h"
 #include "history.h"
 #include "program.h"
@@ -2001,69 +2002,21 @@ static int calc_digit_count(void) {
     return n;
 }
 
-static int calc_parse(const char *s) {
-    int neg = 0;
-    int i = 0;
-    if (s[0] == '-') {
-        neg = 1;
-        i = 1;
-    }
-    int ip = 0;
-    while (s[i] >= '0' && s[i] <= '9') {
-        if (ip > 200000000)
-            return neg ? -2000000000 : 2000000000;
-        ip = ip * 10 + (s[i] - '0');
-        i++;
-    }
-    int frac = 0;
-    int fd = 0;
-    if (s[i] == '.') {
-        i++;
-        while (s[i] >= '0' && s[i] <= '9') {
-            if (fd < 3)
-                frac = frac * 10 + (s[i] - '0');
-            fd++;
-            i++;
-        }
-    }
-    if (fd > 3)
-        fd = 3;
-    while (fd < 3) {
-        frac *= 10;
-        fd++;
-    }
-    int v = ip * CALC_SCALE + frac;
-    return neg ? -v : v;
-}
-
-static int calc_mul(int a, int b) {
-    /* (a * b) / 1000 in 32-bit, a and b are milles. */
-    int neg = 0;
-    if (a < 0) { a = -a; neg = !neg; }
-    if (b < 0) { b = -b; neg = !neg; }
-    int ai = a / CALC_SCALE;
-    int af = a % CALC_SCALE;
-    int r = ai * b + (af * b) / CALC_SCALE;
-    return neg ? -r : r;
-}
-
-static int calc_div(int a, int b) {
-    /* (a * 1000) / b without a 64-bit divide. */
-    int neg = 0;
-    if (a < 0) { a = -a; neg = !neg; }
-    if (b < 0) { b = -b; neg = !neg; }
-    int r = (a / b) * CALC_SCALE + ((a % b) * CALC_SCALE) / b;
-    return neg ? -r : r;
+static void calc_fail(void) {
+    calc_error = 1;
+    kstrcpy(calc_entry, "Error");
+    calc_entry_len = 5;
+    calc_has_dot = 0;
+    calc_fresh = 1;
+    calc_op = 0;
 }
 
 static void calc_format(int v, char *out) {
     int neg = 0;
-    if (v < 0) {
-        neg = 1;
-        v = -v;
-    }
-    int ip = v / CALC_SCALE;
-    int frac = v % CALC_SCALE;
+    uint32_t magnitude = v < 0 ? (uint32_t)(-(int64_t)v) : (uint32_t)v;
+    neg = v < 0;
+    int ip = (int)(magnitude / CALC_SCALE);
+    int frac = (int)(magnitude % CALC_SCALE);
     char tmp[20];
     int n = 0;
     if (ip == 0) {
@@ -2120,30 +2073,14 @@ static void calc_set_entry_from_acc(int v) {
 }
 
 static int calc_compute(void) {
-    int right = calc_parse(calc_entry);
-    int r = 0;
-    if (calc_op == '/') {
-        if (right == 0) {
-            calc_error = 1;
-            kstrcpy(calc_entry, "Error");
-            calc_entry_len = 5;
-            calc_has_dot = 0;
-            calc_fresh = 1;
-            calc_op = 0;
-            return 0;
-        }
-        r = calc_div(calc_acc, right);
-    } else if (calc_op == '*') {
-        r = calc_mul(calc_acc, right);
-    } else if (calc_op == '+') {
-        r = calc_acc + right;
-    } else if (calc_op == '-') {
-        r = calc_acc - right;
-    } else {
-        return 1;
+    int32_t right, result;
+    if (!decimal_parse(calc_entry, &right) ||
+        !decimal_calculate(calc_acc, right, (char)calc_op, &result)) {
+        calc_fail();
+        return 0;
     }
-    calc_acc = r;
-    calc_set_entry_from_acc(r);
+    calc_acc = result;
+    calc_set_entry_from_acc(result);
     return !calc_error;
 }
 
@@ -2198,7 +2135,7 @@ static void calc_set_op(int op) {
         if (!calc_compute())
             return;
     }
-    calc_acc = calc_parse(calc_entry);
+    if (!decimal_parse(calc_entry, &calc_acc)) { calc_fail(); return; }
     calc_op = op;
     calc_fresh = 1;
 }
@@ -2874,7 +2811,8 @@ static int paint_write_named(const char *name) {
     buf[6] = (char)(PAINT_H & 0xFF);
     buf[7] = (char)((PAINT_H >> 8) & 0xFF);
     kmemcpy(buf + 8, paint_pix, PAINT_W * PAINT_H);
-    fs_write(id, buf, nbytes);
+    if (fs_write(id, buf, nbytes) != nbytes)
+        return 0;
     if (find_open_kind(WK_FILES) >= 0)
         fm_refresh();
     dirty = 1;
@@ -2916,9 +2854,9 @@ static int view_load(int id) {
     const unsigned char *d = (const unsigned char *)fs_data(id);
     int w = d[4] | (d[5] << 8);
     int h = d[6] | (d[7] << 8);
-    int need = 8 + w * h;
     if (w < 1 || h < 1 || w > 400 || h > 400)
         return 0;
+    int need = 8 + w * h;
     if (need > fs_size(id) || w * h > 16376)
         return 0;
     kmemcpy(view_pix, d + 8, w * h);
