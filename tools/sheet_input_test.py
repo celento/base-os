@@ -157,6 +157,13 @@ def run(build):
         check.jump('A1'); session.key('shift-right'); session.key('ctrl-c'); check.jump('A3'); session.key('ctrl-v')
         check.expect(52, '12.50', 2); check.expect(53, '=A1*2', 3, 25000)
         session.key('ctrl-z'); check.expect(52, b'', 0); session.key('ctrl-y'); check.expect(53, '=A1*2', 3)
+        # Editor publishes identical display bytes under a new generation. Paste
+        # must import that external text rather than reusing an old formula copy.
+        check.jump('B1'); session.key('ctrl-c'); session.launch('editor'); session.text('25')
+        session.key('ctrl-a'); session.key('ctrl-c'); session.key('ctrl-w')
+        session.wait(lambda: check.o.integer('edit_close_dlg') == 1, 'Editor clipboard fixture guard')
+        check.choose('discard'); session.launch('spreadsheet'); check.jump('D1'); session.key('ctrl-v')
+        check.expect(3, '25', 2, 25000); session.key('ctrl-z'); check.expect(3, b'', 0)
         # Find/Replace are disabled and cannot type their shortcut letter into a cell.
         before = check.cell(53); session.key('ctrl-f'); session.key('ctrl-h'); assert check.cell(53) == before and check.state()['mode'] == 0
         check.save_as('range.bsh'); expected = decode(contents(disk, '/Documents/range.bsh'))
