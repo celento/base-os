@@ -290,6 +290,8 @@ static void test_deadline_progress_and_wrap(void) {
     ticks += 2 * TIMER_HZ - 1;
     assert(poll_bounded(0) == ATA_PROGRESS_MORE);
     ++ticks;
+    assert(poll_bounded(0) == ATA_PROGRESS_MORE);
+    status = ATA_BUSY;
     assert(poll_bounded(0) == ATA_PROGRESS_ERROR);
     expect_protected();
     mount_disk();
@@ -299,6 +301,51 @@ static void test_deadline_progress_and_wrap(void) {
     assert(poll_bounded(1) == ATA_PROGRESS_WAIT);
     ++ticks;
     assert(poll_bounded(1) == ATA_PROGRESS_ERROR);
+    expect_protected();
+}
+static void test_late_ready_polls(void) {
+    mount_disk();
+    assert(ata_request_read(0, output, 1) == 0);
+    ticks += 3 * TIMER_HZ;
+    /* An unissued request may still find the device idle after a long gap. */
+    assert(poll_bounded(0) == ATA_PROGRESS_MORE && command_count == 1 && !data_words);
+    ticks += 3 * TIMER_HZ;
+    assert(poll_bounded(0) == ATA_PROGRESS_MORE && command_count == 1 && !data_words);
+    ticks += 3 * TIMER_HZ;
+    assert(poll_bounded(1) == ATA_PROGRESS_DONE && data_words == 256 && ata_ready());
+    assert(!memcmp(output, bytes, 512));
+
+    /* A previously waiting data phase can become ready while the caller is
+     * away. The ready observation must win over the old phase deadline. */
+    hold_issue = 1;
+    assert(ata_request_read(1, output, 1) == 0 && poll_bounded(1) == ATA_PROGRESS_WAIT);
+    ticks += 3 * TIMER_HZ; status = ATA_READY | ATA_DRQ;
+    assert(poll_bounded(0) == ATA_PROGRESS_MORE);
+    assert(poll_bounded(1) == ATA_PROGRESS_DONE && ata_ready());
+    assert(!memcmp(output, bytes + 512, 512));
+
+    hold_issue = 0; hold_completion = 1;
+    assert(ata_request_write(2, output, 1) == 0 && poll_bounded(1) == ATA_PROGRESS_WAIT);
+    unsigned words = data_words;
+    ticks += 3 * TIMER_HZ; status = ATA_READY;
+    assert(poll_bounded(0) == ATA_PROGRESS_DONE && words == data_words && ata_ready());
+    assert(!memcmp(bytes + 512, bytes + 1024, 512));
+
+    hold_flush = 1;
+    assert(ata_request_flush() == 0 && poll_bounded(0) == ATA_PROGRESS_WAIT);
+    ticks += 3 * TIMER_HZ; status = ATA_READY;
+    assert(poll_bounded(0) == ATA_PROGRESS_DONE && flush_count == 1 && ata_ready());
+    hold_flush = 0;
+    assert(ata_request_flush() == 0);
+    ticks += 3 * TIMER_HZ;
+    assert(poll_bounded(0) == ATA_PROGRESS_DONE && flush_count == 2 && ata_ready());
+
+    /* A true timeout remains terminal even if hardware later reports ready. */
+    hold_issue = 1;
+    assert(ata_request_read(0, output, 1) == 0 && poll_bounded(1) == ATA_PROGRESS_WAIT);
+    ticks += 3 * TIMER_HZ;
+    assert(poll_bounded(0) == ATA_PROGRESS_ERROR);
+    status = ATA_READY | ATA_DRQ;
     expect_protected();
 }
 static void test_transport_errors(void) {
@@ -373,6 +420,7 @@ int main(void) {
     test_waits_and_flush_barriers();
     test_phase_timeouts();
     test_deadline_progress_and_wrap();
+    test_late_ready_polls();
     test_transport_errors();
     test_probe_and_lba28();
     test_sync_wait_completion();

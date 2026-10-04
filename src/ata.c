@@ -152,6 +152,12 @@ static enum AtaProgress request_failed(void) {
     request.phase = REQUEST_ERROR;
     return ATA_PROGRESS_ERROR;
 }
+static enum AtaProgress request_waiting(void) {
+    /* Count time across polls only when the observed hardware still requires
+     * a wait. Ready hardware is not a timeout after a caller scheduling gap. */
+    return (unsigned)(timer_ticks() - request.started) >= 2 * TIMER_HZ ?
+           request_failed() : ATA_PROGRESS_WAIT;
+}
 enum AtaProgress ata_poll(unsigned sector_budget) {
     if (!ata_request_active()) {
         return request.phase == REQUEST_DONE ? ATA_PROGRESS_DONE :
@@ -162,14 +168,12 @@ enum AtaProgress ata_poll(unsigned sector_budget) {
         /* A loop iteration must advance a protocol phase, transfer one sector,
          * or return. Never repeat an observation to wait for hardware. */
         unsigned char status = inb(ATA_CONTROL);
-        if (!status || status == 0xFF ||
-            (unsigned)(timer_ticks() - request.started) >= 2 * TIMER_HZ)
-            return request_failed();
-        if (status & ATA_BUSY) return ATA_PROGRESS_WAIT;
+        if (!status || status == 0xFF) return request_failed();
+        if (status & ATA_BUSY) return request_waiting();
         if (status & (ATA_ERROR | ATA_FAULT)) return request_failed();
 
         if (request.phase == REQUEST_WAIT_IDLE) {
-            if (status & ATA_DRQ) return ATA_PROGRESS_WAIT;
+            if (status & ATA_DRQ) return request_waiting();
             if (request.flushing) {
                 outb(ATA_STATUS, ATA_FLUSH); settle();
                 request.phase = REQUEST_FINISH;
@@ -185,7 +189,7 @@ enum AtaProgress ata_poll(unsigned sector_budget) {
             }
             request.started = timer_ticks();
         } else if (request.phase == REQUEST_DATA) {
-            if (!(status & ATA_DRQ)) return ATA_PROGRESS_WAIT;
+            if (!(status & ATA_DRQ)) return request_waiting();
             if (transferred == sector_budget) return ATA_PROGRESS_MORE;
             for (int word = 0; word < 256; ++word) {
                 if (request.writing)
@@ -201,7 +205,7 @@ enum AtaProgress ata_poll(unsigned sector_budget) {
             settle();
             request.started = timer_ticks();
         } else { /* REQUEST_FINISH: command/flush completion, not just data. */
-            if (status & ATA_DRQ) return ATA_PROGRESS_WAIT;
+            if (status & ATA_DRQ) return request_waiting();
             if (request.flushing || !request.left) {
                 request.buffer = 0;
                 request.phase = REQUEST_DONE;

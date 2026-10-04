@@ -32,6 +32,8 @@ int ata_request_active(void);
  * WAIT needs hardware progress or deadline expiry; MORE can run immediately
  * (or needs a nonzero budget). Call regularly, even while waiting: two-second
  * protocol-phase deadlines survive yields and use the interrupt-driven clock.
+ * Only an observed hardware wait can time out; ready data/completion remains
+ * valid after a caller scheduling gap. Zero-budget polls do not reset deadlines.
  * No platform_poll, application dispatch, IRQ changes, allocation or sleep.
  * DONE/ERROR persist until another accepted request or an idle explicit probe.
  * All APIs have one cooperative caller; they are not interrupt/reentrant APIs. */
