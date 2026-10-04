@@ -173,3 +173,11 @@ existing version-1 session window/path/caret record. Restored drafts are marked
 unsaved conservatively. Storage preflight includes the complete rich snapshot
 before changing any draft; shrinking rich/plain drafts are written first. A
 failed save or failed Save As leaves the owning document and pending action open.
+
+
+`python3 tools/writer_lifecycle_test.py build` additionally verifies real Save As
+extension/collision errors, Open cancellation, clean orphan recovery after a node
+ID is reused, identical plain bytes replacing rich clipboard ownership, and
+Save-before-Open/New. Its supported read-only recovery-mode test keeps Writer's
+failed-save draft open and confirms every byte of the unrecognized disposable
+disk remains unchanged. This is an ordinary UI/storage test, not fault injection.
