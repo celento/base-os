@@ -17,7 +17,7 @@ static int desktop_input_blocked(void);
 #include "desktop_input_host.c"
 #undef main
 static ProcessBinding native_bindings[8];
-static int native_live[8],published_w[8],published_h[8],output_visible[8];
+static int native_live[8],published_w[8],published_h[8],output_visible[8],pixels_available[8];
 static uint32_t timer_ticks(void){return frame_count;}
 static void win_focus(int slot){wins[slot].z=wins[win_front()].z+1;context_slot=slot;}
 static int hit(int x,int y,int ax,int ay,int w,int h){return x>=ax&&y>=ay&&x-ax<w&&y-ay<h;}
@@ -28,7 +28,7 @@ int process_binding_live(const ProcessBinding *binding){
 int app_view_binding_matches(const ProcessBinding *binding){return process_binding_live(binding);}
 int app_view_owned_binding(const ProcessBinding *binding){return binding&&binding->slot<8&&wins[binding->slot].kind==WK_NATIVE;}
 int app_view_output_visible(int slot){return output_visible[slot];}
-AppCanvasFrame app_view_frame(int slot){return (AppCanvasFrame){(const unsigned char *)1,published_w[slot],published_h[slot]};}
+AppCanvasFrame app_view_frame(int slot){return (AppCanvasFrame){pixels_available[slot]?(const unsigned char *)1:0,published_w[slot],published_h[slot]};}
 static BosHandle ui_open(int slot){
     BosUiTargetInfoV1 info;assert(native_ui_open(native_bindings+slot,7,&info)==BOS_OK);
     return info.target;
@@ -46,7 +46,7 @@ static void fixture(void){
     for(int i=0;i<2;i++){
         wins[i]=(Win){.open=1,.seq=i+1,.kind=WK_TERM,.x=50+i*360,.y=80,.w=320,.h=300,.z=2-i};
         native_bindings[i]=(ProcessBinding){BOS_HANDLE_TYPE_PROCESS|(unsigned)(i+1),(unsigned)i,1};
-        native_live[i]=1;published_w[i]=160;published_h[i]=100;
+        native_live[i]=1;pixels_available[i]=1;published_w[i]=160;published_h[i]=100;
     }
     mouse_x=80;mouse_y=140;input_init(&device_input,800,600,mouse_x,mouse_y);input_mouse_type(&device_input,3);
     const NativeUiHooks hooks={native_host_snapshot,native_host_acquired,native_host_focus};native_ui_init(&hooks);
@@ -135,6 +135,21 @@ int main(void){
     input_mouse_byte(&device_input,0,130);input_mouse_byte(&device_input,0,130);input_mouse_byte(&device_input,0,130);
     desktop_input_turn();assert(!records);move(760,540,1,0,131);assert(!records);
     move(760,540,0,0,132);assert(!records);
+    /* Working/default dimensions are not a published frame. Both backends
+     * remain unavailable until the first complete publication exists. */
+    for(int owned=0;owned<2;owned++){
+        fixture();if(owned)wins[0].kind=WK_NATIVE;desktop_input_remember_scene();
+        pixels_available[0]=0;
+        NativeUiHost pending;assert(native_host_snapshot(native_bindings,&pending));
+        assert(!pending.view.logical_w&&!pending.view.logical_h&&!pending.view.viewport_w&&
+               !(pending.state&BOS_UI_STATE_AVAILABLE));
+        BosUiTargetInfoV1 empty;
+        assert((owned?native_ui_adopt(native_bindings,7,&empty):native_ui_open(native_bindings,7,&empty))==BOS_OK);
+        assert(!empty.logical_w&&!empty.logical_h&&!(empty.state&BOS_UI_STATE_AVAILABLE));
+        event(0,empty.target,BOS_UI_STATE_RESET);
+        pixels_available[0]=1;native_ui_refresh(140,0);
+        event(0,empty.target,BOS_UI_FOCUS);event(0,empty.target,BOS_UI_AVAILABILITY);event(0,empty.target,BOS_UI_GEOMETRY);
+    }
     /* Owned and hosted backends use the exact same engine but their own
      * published transforms. Output blocks the surface and cancels capture. */
     fixture();wins[0].kind=WK_NATIVE;desktop_input_remember_scene();
