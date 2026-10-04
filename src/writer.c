@@ -803,11 +803,23 @@ static void glyph(Clip clip, unsigned char ch, int x, int y, unsigned style, uns
     if (!bits || ch == ' ' || ch == '\t') return;
     int dh = scale_value(h, paragraph), dw = scale_value(w, paragraph);
     for (int yy = 0; yy < dh; yy++) {
-        int sy = (paragraph & WRITER_PARAGRAPH_HEADING) ? yy * 2 / 3 : yy;
+        int heading = !!(paragraph & WRITER_PARAGRAPH_HEADING);
+        int sy = heading ? yy * 2 / 3 : yy;
+        int wy = heading && (yy * 2) % 3 == 2 ? 1 : 2;
         int slant = style & WRITER_STYLE_ITALIC ? (dh - 1 - yy) / 6 : 0;
         for (int xx = 0; xx < dw; xx++) {
-            int sx = (paragraph & WRITER_PARAGRAPH_HEADING) ? xx * 2 / 3 : xx;
+            int sx = heading ? xx * 2 / 3 : xx;
             int level = glyph_level(bits, bpr, sy, sx);
+            if (heading) {
+                /* Exact box coverage for 3:2 scaling: source cells span three
+                 * units, destination cells two. At most four source cells
+                 * contribute; integer weights total four, preserving edges. */
+                int wx = (xx * 2) % 3 == 2 ? 1 : 2;
+                int right = wx == 1 && sx + 1 < w ? glyph_level(bits, bpr, sy, sx + 1) : level;
+                int below = wy == 1 && sy + 1 < h ? glyph_level(bits, bpr, sy + 1, sx) : level;
+                int diagonal = wx == 1 && wy == 1 && sx + 1 < w && sy + 1 < h ? glyph_level(bits, bpr, sy + 1, sx + 1) : level;
+                level = (level * wx * wy + right * (2 - wx) * wy + below * wx * (2 - wy) + diagonal * (2 - wx) * (2 - wy) + 2) / 4;
+            }
             if (!level) continue;
             int px = x + xx + slant, py = y + yy;
             if (px >= clip.x && px < clip.x + clip.w && py >= clip.y && py < clip.y + clip.h) {

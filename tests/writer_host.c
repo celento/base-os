@@ -296,6 +296,27 @@ static void write_ppm(const char *path) {
     }
     fclose(f);
 }
+static void test_heading_coverage(void) {
+    load_fixture("A"); key(0x02, WRITER_MOD_CTRL); key(0x47, WRITER_MOD_CTRL);
+    writer_draw(0,0,420,260);
+    int bpr, h, w; const unsigned char *bits = ui_glyph('A', &bpr, &h, &w);
+    assert(h == 18 && w == 16);
+    /* Independent four-subpixel area reference for exactly 1.5x magnification.
+     * Skip x=0 because the ordinary insertion caret is painted there. */
+    unsigned mixed = 0;
+    for (int y = 0; y < 27; y++) for (int x = 1; x < 24; x++) {
+        int sum = 0;
+        for (int sy = 0; sy < 2; sy++) for (int sx = 0; sx < 2; sx++)
+            sum += glyph_level(bits,bpr,(4*y+2*sy+1)/6,(4*x+2*sx+1)/6);
+        int level = (sum + 2) / 4;
+        unsigned char expected = level >= 15 ? COLOR_DKGRAY : gfx_mix(COLOR_WHITE,COLOR_DKGRAY,(level*256+7)/15);
+        assert(back[(76+y)*800+22+x] == expected);
+        if (level != glyph_level(bits,bpr,y*2/3,x*2/3)) mixed++;
+    }
+    assert(mixed > 8);
+    int x; assert(writer_position(1,&x,NULL,NULL)); assert(x == (ui_advance('A')*3+1)/2);
+    puts("Writer headings: independent area-coverage pixels and unchanged 1.5x advances passed");
+}
 static void test_drawing(const char *path) {
     load_fixture("A real document\nA small Writer with proportional wrapping, bold emphasis and a real editing model.\n\nSelect text and choose a style. Paragraphs can be left aligned, centered or right aligned.\n\nNative .bwr preserves formatting. Export RTF for another word processor.\n");
     select_range(0, 15); key(0x02, WRITER_MOD_CTRL); key(0x30, WRITER_MOD_CTRL);
@@ -336,7 +357,7 @@ static void test_drawing(const char *path) {
 int main(int argc, char **argv) {
     files[0].valid = files[0].folder = 1; files[0].identity = 1;
     gfx_init(back, linear, 800, 600, 32, 3200);
-    test_editing(); test_history(); test_files(); test_layout(); test_search(); test_drawing(argc > 1 ? argv[1] : NULL);
+    test_editing(); test_history(); test_files(); test_layout(); test_search(); test_heading_coverage(); test_drawing(argc > 1 ? argv[1] : NULL);
     assert(polls > 100); assert(sync_count >= 4);
     for (int i = 1; i < 20; i++) if (files[i].valid) free(files[i].data);
     puts("All Writer host functional checks passed.");
