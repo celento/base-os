@@ -41,7 +41,7 @@ class EditorBindingTests(unittest.TestCase):
             operations = source[first:last]
             for name in ('fm_set_cwd', 'fm_checked_cwd', 'edit_record', 'edit_undo',
                          'edit_sel_collapse', 'edit_clear', 'edit_load', 'edit_source_unchanged',
-                         'edit_write_to', 'edit_write_named', 'edit_save'):
+                         'edit_storage_busy', 'edit_write_to', 'edit_write_named', 'edit_save'):
                 operations += function(source, name)
             (directory / 'editor_kernel_ops.inc').write_text(operations)
             first = source.index('typedef struct { int open,kind,x,y,w,h,min,z,caret;')

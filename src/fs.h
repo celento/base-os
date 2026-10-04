@@ -18,6 +18,11 @@ unsigned fs_clock(void);
 void fs_background_poll(void);
 unsigned fs_modified(int id);
 unsigned fs_identity(int id);
+/* Runtime content token, separate from identity and the wall-clock timestamp.
+ * Create/import and every successful write (even identical bytes) get a fresh
+ * token. Rename/move/sync leave it unchanged. Tokens never wrap or reset across
+ * remount/init; 0 means invalid/unknown after exhaustion, never a match. */
+unsigned fs_content_revision(int id);
 /* File-data allowance for the current node count; extra IDE nodes cost 40 bytes. */
 unsigned fs_capacity(void);
 /* Same allowance for a projected total node count, or 0 outside this backend. */

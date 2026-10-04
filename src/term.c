@@ -131,8 +131,9 @@ static void print_download(void){
     if(d->http_status)print_number("HTTP status: ",(unsigned)d->http_status);
     if(d->state==DOWNLOAD_ACTIVE)push(d->http_state==NET_HTTP_DONE?d->message:d->http_state==NET_HTTP_RESOLVING?"Looking up host...":d->http_state==NET_HTTP_CONNECTING?"Connecting...":"Receiving body...");
     else if(d->state==DOWNLOAD_DONE){
-        const char *storage=fs_storage_status();
-        push(storage?storage:fs_needs_sync()?"File complete in RAM; disk autosave pending.":"File saved; disk is synchronized.");
+        /* The service tracks the committed file version, unlike global dirty
+         * state. Wrap its full message so later-change diagnostics survive. */
+        print_http_body(d->message,(unsigned)kstrlen(d->message));
     }else push(d->message);
 }
 static int download_command(int cwd,const char *url,const char *remaining,int quoted){

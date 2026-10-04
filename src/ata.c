@@ -48,10 +48,29 @@ static unsigned short inw(unsigned short port) {
     __asm__ volatile("inw %1,%0" : "=a"(value) : "Nd"(port) : "memory");
     return value;
 }
-static void outw(unsigned short port, unsigned short value) {
-    __asm__ volatile("outw %0,%1" :: "a"(value), "Nd"(port) : "memory");
-}
 #endif
+
+/* Each DRQ sector remains the transfer/error-accounting boundary. */
+static void transfer_sector(unsigned char *buffer, int writing) {
+#ifdef ATA_HOST_TEST
+    for (unsigned word = 0; word < 256; ++word) {
+        if (writing) outw(ATA_DATA, buffer[0] | (unsigned)buffer[1] << 8);
+        else {
+            unsigned short value = inw(ATA_DATA);
+            buffer[0] = value; buffer[1] = value >> 8;
+        }
+        buffer += 2;
+    }
+#else
+    unsigned words = 256;
+    if (writing)
+        __asm__ volatile("cld; rep outsw" : "+S"(buffer), "+c"(words)
+                         : "d"((unsigned short)ATA_DATA) : "memory", "cc");
+    else
+        __asm__ volatile("cld; rep insw" : "+D"(buffer), "+c"(words)
+                         : "d"((unsigned short)ATA_DATA) : "memory", "cc");
+#endif
+}
 
 static unsigned capacity;
 static int ready;
@@ -191,15 +210,8 @@ enum AtaProgress ata_poll(unsigned sector_budget) {
         } else if (request.phase == REQUEST_DATA) {
             if (!(status & ATA_DRQ)) return request_waiting();
             if (transferred == sector_budget) return ATA_PROGRESS_MORE;
-            for (int word = 0; word < 256; ++word) {
-                if (request.writing)
-                    outw(ATA_DATA, request.buffer[0] | (unsigned)request.buffer[1] << 8);
-                else {
-                    unsigned short value = inw(ATA_DATA);
-                    request.buffer[0] = value; request.buffer[1] = value >> 8;
-                }
-                request.buffer += 2;
-            }
+            transfer_sector(request.buffer, request.writing);
+            request.buffer += 512;
             ++transferred; ++request.lba; --request.left;
             if (!--request.chunk_left) request.phase = REQUEST_FINISH;
             settle();

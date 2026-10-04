@@ -13,8 +13,8 @@
 
 typedef struct {
     DownloadStatus status;
-    int parent, body_complete;
-    unsigned parent_identity;
+    int parent, body_complete, disk_confirmed;
+    unsigned parent_identity, file_identity, file_revision;
     char name[FS_NAME_LEN], parent_path[FS_PATH_LEN], error[160];
     char body[NET_HTTP_TRANSFER_MAX];
 } Download;
@@ -57,7 +57,8 @@ int download_start(int cwd,const char *url,const char *path){
     copy(requested_url,sizeof requested_url,url);
     /* Rejected requests must leave the previous result intact. After the
      * service is accepted, retain its diagnostics even if the NIC is offline. */
-    kmemset(&D.status,0,sizeof D.status);D.status.file_id=-1;D.body_complete=0;
+    kmemset(&D.status,0,sizeof D.status);D.status.file_id=-1;D.body_complete=D.disk_confirmed=0;
+    D.file_identity=D.file_revision=0;
     D.parent=parent;D.parent_identity=fs_identity(parent);copy(D.name,sizeof D.name,name);
     copy(D.parent_path,sizeof D.parent_path,parent_path);copy(D.status.path,sizeof D.status.path,parent_path);
     if(parent!=fs_root())append(D.status.path,sizeof D.status.path,"/");
@@ -72,9 +73,29 @@ int download_start(int cwd,const char *url,const char *path){
 }
 static int sync_status(void){
     if(D.status.state!=DOWNLOAD_DONE)return 0;
-    char message[sizeof D.status.message];const char *storage=fs_storage_status();
-    copy(message,sizeof message,storage?"File complete in RAM; ":fs_needs_sync()?"Complete file saved in RAM; disk autosave is pending.":"Complete file saved; disk is synchronized.");
-    if(storage)append(message,sizeof message,storage);
+    char message[sizeof D.status.message];const char *change=0;
+    int file=D.status.file_id;
+    if(!fs_valid(file))change="destination is no longer present.";
+    else if(fs_identity(file)!=D.file_identity)change="original file can no longer be identified.";
+    else if(fs_resolve(fs_root(),D.status.path)!=file)change="destination moved or was renamed.";
+    else if(!D.file_revision||!fs_content_revision(file))change="file version can no longer be verified.";
+    else if(fs_content_revision(file)!=D.file_revision)change="file was written again after completion.";
+    /* A clean global snapshot proves this download durable only while the
+     * exact committed identity, path and content version still match. No file
+     * bytes are scanned in this per-desktop-turn status check. */
+    if(change){
+        copy(message,sizeof message,D.disk_confirmed?"Download completed; disk save was confirmed. Later, ":"Download completed in RAM; disk save was not confirmed. Now, ");
+        append(message,sizeof message,change);
+    }else{
+        const char *storage=fs_storage_status();
+        if(!storage&&!fs_needs_sync())D.disk_confirmed=1;
+        if(D.disk_confirmed)
+            copy(message,sizeof message,storage||fs_needs_sync()?"Download completed; this file's disk save was confirmed.":"Complete file saved; disk is synchronized.");
+        else{
+            copy(message,sizeof message,storage?"File complete in RAM; ":"Complete file saved in RAM; disk autosave is pending.");
+            if(storage)append(message,sizeof message,storage);
+        }
+    }
     if(!kstrcmp(message,D.status.message))return 0;
     copy(D.status.message,sizeof D.status.message,message);return 1;
 }
@@ -111,6 +132,7 @@ int download_tick(void){
         fs_delete(file);return finish(DOWNLOAD_ERROR,"Could not save the complete response. No destination file was left.");
     }
     D.status.file_id=file;
+    D.file_identity=fs_identity(file);D.file_revision=fs_content_revision(file);
     return finish(DOWNLOAD_DONE,"Complete file saved in RAM; normal disk autosave is pending.");
 }
 int download_cancel(void){

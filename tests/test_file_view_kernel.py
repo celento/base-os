@@ -29,7 +29,7 @@ class FileViewKernelTests(unittest.TestCase):
             first = source.index('static const int files_sort_width')
             last = source.index(';', first) + 1
             operations += source[first:last] + '\n'
-            for name in ('fm_set_cwd', 'fm_cwd_valid', 'fm_checked_cwd', 'fm_has_parent',
+            for name in ('files_storage_busy', 'fm_set_cwd', 'fm_cwd_valid', 'fm_checked_cwd', 'fm_has_parent',
                          'fm_vis_count', 'fm_row_id', 'fm_refresh', 'fm_rename_cancel',
                          'fm_filter_show', 'fm_filter_clear', 'fm_sort_by', 'fm_filter_key',
                          'fm_select_id', 'fm_new_file', 'fm_rename_begin', 'fm_rename_commit',

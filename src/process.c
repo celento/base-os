@@ -252,7 +252,7 @@ static int file_call(unsigned call,unsigned path_offset,unsigned path_length,
     if(!document_parent(parent)) return -1;
     int created=id<0;
     if(created)id=fs_create(parent,name);
-    if(id<0)return -1;
+    if(id<0)return id;
     int result=fs_write(id,(const char *)(USER_BASE+buffer),(int)length);
     if(result<0&&created)fs_delete(id);
     return result;

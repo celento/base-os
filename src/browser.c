@@ -451,6 +451,7 @@ int browser_can_save(void){return browser_ready&&!B.loading&&B.body_complete;}
 int browser_save_page(int cwd,const char *path){
     browser_init();
     if(!browser_can_save()){set_status("Only a completely loaded HTML or text page can be saved. Reload first.");return -1;}
+    if(fs_sync_busy()){set_status("Disk saving is in progress. The page is still available; retry Save shortly.");return FS_ERR_BUSY;}
     char name[FS_NAME_LEN];int parent=fs_destination(cwd,path,name);
     if(parent<0){set_status("Choose a new file name in an existing folder.");return -1;}
     if(fs_find_child(parent,name)>=0){set_status("That file already exists. Choose another name; nothing was replaced.");return -1;}
@@ -462,6 +463,7 @@ int browser_save_page(int cwd,const char *path){
 }
 static int save_page(void){
     if(!browser_can_save()){set_status("Wait for a complete page before saving. Truncated pages cannot be saved.");return 1;}
+    if(fs_sync_busy()){set_status("Disk saving is in progress. The page is still available; retry Save shortly.");return 1;}
     int parent=fs_find_child(fs_root(),"Downloads");
     if(parent<0)parent=fs_mkdir(fs_root(),"Downloads");
     if(!fs_is_dir(parent)){set_status("Cannot create /Downloads. Check that it is a folder and space is available.");return 1;}

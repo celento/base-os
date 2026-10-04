@@ -208,9 +208,147 @@ static void test_binary_and_async_terminal(void){
     assert(fs_size(notes)==22&&!memcmp(fs_data(notes),"Edited during download",22));
     term_select(0);assert(term_count()==owner_lines);term_reset();assert(!term_contains("complete"));
     command("downloads status");assert(term_contains("Download complete")&&term_contains("2097152"));
-    assert(fs_sync()==0);fs_init();assert(fs_load_disk()==0);file_id=fs_resolve(0,"/music.bin");
+    assert(fs_sync()==0);command("downloads");assert(term_contains("disk is synchronized"));
+    fs_init();assert(fs_load_disk()==0);file_id=fs_resolve(0,"/music.bin");
     assert(file_id>0&&fs_size(file_id)==FS_FILE_MAX&&!memcmp(fs_data(file_id),payload,FS_FILE_MAX));
-    command("downloads");assert(term_contains("disk is synchronized"));
+    /* A remount ends the live identity binding, even when the bytes match.
+     * Previously verified persistence is reported as a historical fact. */
+    assert(strstr(download_status()->message,"disk save was confirmed"));
+    assert(!strstr(download_status()->message,"disk is synchronized"));
+}
+
+static void test_completed_destination_versions(void){
+    /* Skip every intermediate download tick: even if the first status query
+     * follows a successful save, unrelated current data must not bless an old
+     * completion. Timestamps deliberately stay zero throughout this fixture. */
+    for(int confirmed=0;confirmed<2;confirmed++)for(int change=0;change<8;change++){
+        reset_download();int folder=fs_mkdir(0,"destination");assert(folder>0);
+        begin("/destination/file.bin");header(200,123);body(123);
+        DownloadStatus completed=*download_status();int id=completed.file_id;
+        unsigned identity=fs_identity(id),revision=fs_content_revision(id),stamp=fs_modified(id);
+        assert(completed.state==DOWNLOAD_DONE&&revision&&strstr(completed.message,"pending"));
+        if(confirmed){assert(fs_sync()==0);assert(strstr(download_status()->message,"disk is synchronized"));}
+        if(change==0)assert(fs_delete(id)==0);
+        else if(change==1){
+            assert(fs_delete(id)==0&&fs_create(folder,"file.bin")==id);
+            assert(fs_write(id,(char *)payload,123)==123&&fs_identity(id)!=identity);
+        }else if(change==2)assert(fs_rename(id,"renamed.bin")==0);
+        else if(change==3)assert(fs_move(id,0)==0);
+        else if(change==4)assert(fs_rename(folder,"renamed")==0);
+        else if(change==5){
+            char edited[123];memcpy(edited,payload,sizeof edited);edited[122]^=1;
+            assert(fs_write(id,edited,sizeof edited)==sizeof edited);
+            assert(fs_modified(id)==stamp&&fs_content_revision(id)!=revision);
+        }else if(change==6)assert(fs_write(id,"short",5)==5);
+        else {
+            /* Even an identical-byte rewrite is a new content version. */
+            assert(fs_write(id,(char *)payload,123)==123);
+            assert(fs_modified(id)==stamp&&fs_content_revision(id)!=revision);
+        }
+        assert(fs_sync()==0&&!fs_needs_sync()&&download_tick());
+        const DownloadStatus *d=download_status();
+        assert(d->state==DOWNLOAD_DONE&&!download_active());
+        assert(d->request_id==completed.request_id&&d->received==123&&d->http_status==200&&d->http_state==NET_HTTP_DONE);
+        assert(d->file_id==completed.file_id&&!strcmp(d->url,completed.url)&&!strcmp(d->path,completed.path));
+        const char *confirmation=confirmed?"disk save was confirmed":"disk save was not confirmed";
+        assert(strstr(d->message,confirmation)&&!strstr(d->message,"disk is synchronized"));
+        assert(strstr(d->message,change==0?"no longer present":change==1?"no longer be identified":change<5?"moved or was renamed":"written again after completion"));
+        assert(!download_tick());
+        term_reset();command("downloads");
+        assert(term_contains("Download complete")&&term_contains(confirmation));
+        assert(!term_contains("disk is synchronized"));
+        /* The full status is wrapped, rather than silently truncated at 80. */
+        char displayed[sizeof d->message]={0};int lines=(strlen(d->message)+TERM_COLS-1)/TERM_COLS;
+        for(int line=term_count()-lines;line<term_count();line++)strcat(displayed,term_get(line));
+        assert(!strcmp(displayed,d->message));
+    }
+    /* Deletion while dirty must already stop the current-RAM claim. */
+    reset_download();begin("/gone.bin");header(200,31);body(31);
+    assert(fs_delete(download_status()->file_id)==0&&download_tick());
+    assert(strstr(download_status()->message,"no longer present"));
+    assert(!strstr(download_status()->message,"File complete in RAM"));
+    /* A first query after remount cannot equate a new runtime identity to the
+     * original result, even when current bytes and path happen to match. */
+    reset_download();begin("/remounted.bin");header(200,31);body(31);
+    assert(fs_sync()==0);remount();
+    assert(strstr(download_status()->message,"disk save was not confirmed"));
+    assert(!strstr(download_status()->message,"disk is synchronized"));
+
+    for(int empty=0;empty<2;empty++){
+        reset_download();begin("/complete.bin");header(200,empty?0:123);
+        if(empty)assert(download_tick());else body(123);
+        int id=download_status()->file_id;unsigned revision=fs_content_revision(id);
+        FsSyncTicket ticket=start_snapshot();
+        assert(download_tick()&&strstr(download_status()->message,"Saving disk snapshot"));
+        assert(!strstr(download_status()->message,"disk is synchronized"));
+        drain_snapshot(ticket,0);assert(fs_sync_release(ticket)==0);
+        assert(download_tick()&&strstr(download_status()->message,"disk is synchronized"));
+        assert(fs_content_revision(id)==revision&&!download_tick());
+        /* Unrelated writes, then another save failure, do not erase the
+         * historical verified result of this still-unchanged file. */
+        assert(fs_create(0,"other")>0&&download_tick());
+        assert(strstr(download_status()->message,"this file's disk save was confirmed"));
+        assert(!strstr(download_status()->message,"disk is synchronized"));
+        data_write_error=1;assert(fs_sync()<0);
+        assert(strstr(download_status()->message,"this file's disk save was confirmed"));
+        data_write_error=0;assert(fs_sync()==0);
+        assert(download_tick()&&strstr(download_status()->message,"disk is synchronized"));
+        assert(fs_write(id,"changed",7)==7&&download_tick());
+        assert(strstr(download_status()->message,"disk save was confirmed"));
+        assert(strstr(download_status()->message,"written again after completion"));
+        assert(!strstr(download_status()->message,"disk is synchronized"));
+    }
+}
+
+static void test_content_revision_lifecycle(void){
+    reset_download();assert(fs_content_revision(0));
+    assert(!fs_content_revision(-1)&&!fs_content_revision(FS_MAX_NODES));
+    int id=fs_create(0,"version.bin");unsigned revision=fs_content_revision(id);
+    assert(id>0&&revision&&fs_content_revision(id)==revision);
+    assert(fs_write(id,"123",3)==3&&fs_content_revision(id)!=revision);
+    revision=fs_content_revision(id);unsigned stamp=fs_modified(id);
+    assert(fs_write(id,"456",3)==3&&fs_modified(id)==stamp&&fs_content_revision(id)!=revision);
+    revision=fs_content_revision(id);
+    assert(fs_write(id,"456",3)==3&&fs_content_revision(id)!=revision);
+    revision=fs_content_revision(id);
+    assert(fs_write(id,0,1)<0&&fs_content_revision(id)==revision);
+    char bytes[8];assert(fs_read(id,bytes,sizeof bytes)==3&&fs_content_revision(id)==revision);
+    int folder=fs_mkdir(0,"folder");assert(fs_rename(id,"renamed.bin")==0&&fs_move(id,folder)==0);
+    assert(fs_content_revision(id)==revision);
+    int copy_id=fs_copy(id,0);assert(copy_id>0&&fs_content_revision(copy_id)&&fs_content_revision(copy_id)!=revision);
+    assert(fs_content_revision(id)==revision&&!memcmp(fs_data(copy_id),"456",3));
+    int empty=fs_create(0,"empty"),empty_copy=fs_copy(empty,0);
+    assert(empty_copy>0&&fs_content_revision(empty)&&fs_content_revision(empty_copy)!=fs_content_revision(empty));
+    FsSyncTicket ticket=start_snapshot();
+    assert(fs_write(id,"new",3)==FS_ERR_BUSY&&fs_content_revision(id)==revision);
+    assert(fs_init()==FS_ERR_BUSY&&fs_content_revision(id)==revision);
+    drain_snapshot(ticket,0);assert(fs_sync_release(ticket)==0&&fs_content_revision(id)==revision);
+    assert(fs_write(id,"",0)==0&&fs_content_revision(id)!=revision);
+    revision=fs_content_revision(id);assert(fs_sync()==0&&fs_content_revision(id)==revision);
+    assert(fs_load_disk()==0&&fs_content_revision(id)&&fs_content_revision(id)!=revision);
+    revision=fs_content_revision(id);assert(fs_delete(id)==0&&!fs_content_revision(id));
+    assert(fs_create(folder,"replacement")==id&&fs_content_revision(id)&&fs_content_revision(id)!=revision);
+    revision=fs_content_revision(0);assert(fs_init()==0&&fs_content_revision(0)&&fs_content_revision(0)!=revision);
+}
+
+static void test_content_revision_exhaustion(void){
+    reset_download();begin("/version.bin");header(200,31);body(31);
+    int id=download_status()->file_id;unsigned revision=fs_content_revision(id);
+    /* Ordinary boundary fixture, as used for sync ticket exhaustion: the last
+     * token remains usable; later writes and creates succeed with unknown 0. */
+    next_content_revision=~0u-1;
+    assert(fs_write(id,"last",4)==4&&fs_content_revision(id)==~0u);
+    assert(fs_write(id,"unknown",7)==7&&!fs_content_revision(id)&&revision);
+    assert(fs_sync()==0&&download_tick());
+    assert(strstr(download_status()->message,"version can no longer be verified"));
+    assert(strstr(download_status()->message,"disk save was not confirmed"));
+    int other=fs_create(0,"unknown.bin");assert(other>0&&!fs_content_revision(other));
+    begin("/unknown-download.bin");header(204,0);assert(download_tick());
+    assert(fs_sync()==0&&download_status()->state==DOWNLOAD_DONE);
+    assert(strstr(download_status()->message,"disk save was not confirmed"));
+    assert(!strstr(download_status()->message,"disk is synchronized"));
+    assert(fs_init()==0&&!fs_content_revision(0));
+    assert(fs_load_disk()==0&&!fs_content_revision(fs_resolve(0,"/unknown-download.bin")));
 }
 static void test_no_overwrites_and_folder_identity(void){
     reset_download();int existing=fs_create(0,"keep.bin");assert(fs_write(existing,"untouched",9)==9);
@@ -258,8 +396,10 @@ int main(void){
     for(unsigned i=0;i<sizeof payload;i++)payload[i]=(unsigned char)(i*37+(i>>16)+91);
     test_binary_and_async_terminal();test_no_overwrites_and_folder_identity();test_cancel_limits_and_ownership();test_storage_limits();
     test_complete_body_waits_for_storage();test_waiting_cancellation_and_destination_changes();test_waiting_snapshot_failures();
+    test_completed_destination_versions();test_content_revision_lifecycle();
     reset_download();command("download http://10.0.2.2/a \"/quoted file.bin\"");assert(download_active());command("downloads cancel");assert(!download_active());
     command("download http://10.0.2.2/a /bad extra");assert(!download_active());
-    puts("downloads: asynchronous Terminal, exact 2 MiB binary/reboot, progress, cancellation, ownership, folder identity, no overwrite, size/storage limits and deferred snapshot-lease completion passed");
+    test_content_revision_exhaustion();
+    puts("downloads: asynchronous Terminal, exact 2 MiB binary/reboot, progress, cancellation, ownership, folder identity, no overwrite, size/storage limits, deferred snapshot-lease completion and version-bound durability passed");
     return 0;
 }

@@ -50,6 +50,13 @@ static FsNode *nodes;
 static int fs_touched = 0;
 static unsigned identities[FS_MAX_NODES], next_identity;
 unsigned fs_identity(int id){return fs_valid(id)?identities[id]:0;}
+static unsigned content_revisions[FS_MAX_NODES], next_content_revision;
+unsigned fs_content_revision(int id){return fs_valid(id)?content_revisions[id]:0;}
+static unsigned new_content_revision(void) {
+    /* This diagnostic token must neither alias an old version nor prevent an
+     * ordinary write. Once exhausted, new versions remain explicitly unknown. */
+    return next_content_revision == ~0u ? 0 : ++next_content_revision;
+}
 static int writable;
 static int active_slot = -1;
 static unsigned generation;
@@ -240,6 +247,7 @@ static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
             nodes[i].size = 0;
             nodes[i].used = 1;
             identities[i]=++next_identity;
+            content_revisions[i]=new_content_revision();
             nodes[i].modified = fs_clock();
             fs_touched = 1;
             return i;
@@ -261,8 +269,10 @@ int fs_init(void) {
     pool_capacity = FS_POOL_CAPACITY; image_capacity = FS_IMG_CAPACITY;
     nodes = (FsNode *)FS_BASE;
     kmemset(nodes, 0, (int)sizeof(FsNode) * FS_MAX_NODES);
+    kmemset(content_revisions, 0, sizeof(content_revisions));
 
     nodes[0].used = 1;
+    content_revisions[0]=new_content_revision();
     nodes[0].is_dir = 1;
     nodes[0].parent = -1;
     nodes[0].name[0] = 0;
@@ -394,6 +404,7 @@ int fs_write(int id, const char *data, int len) {
         /* Common autosaves and media overwrites need no arena movement. */
         copy_bytes((char *)pool_base + nodes[id].offset, data, len);
         nodes[id].modified = fs_clock();
+        content_revisions[id]=new_content_revision();
         fs_touched = 1;
         return len;
     }
@@ -407,6 +418,7 @@ int fs_write(int id, const char *data, int len) {
     }
     nodes[id].size = len;
     nodes[id].modified = fs_clock();
+    content_revisions[id]=new_content_revision();
     fs_touched = 1;
     return len;
 }
@@ -585,6 +597,7 @@ int fs_delete(int id) {
     }
     release_data(id);
     nodes[id].used = 0;
+    content_revisions[id]=0;
     fs_touched = 1;
     return 0;
 }
@@ -1010,6 +1023,7 @@ static void import_payload(const DiskHeader *h) {
     const unsigned char *img = (const unsigned char *)image_base;
     unsigned pos = FS_SECTOR_SIZE;
     kmemset(nodes, 0, sizeof(FsNode) * FS_MAX_NODES);
+    kmemset(content_revisions, 0, sizeof(content_revisions));
     pool_used = 0;
     for (unsigned n = 0; n < h->count; ++n) {
         DiskNode d;
@@ -1023,6 +1037,7 @@ static void import_payload(const DiskHeader *h) {
         nd->size = d.size;
         nd->used = 1;
         identities[d.id]=++next_identity;
+        content_revisions[d.id]=new_content_revision();
         nd->modified = d.modified;
         if (d.size) {
             nd->offset = pool_used;
@@ -1238,6 +1253,21 @@ static void sync_account(int result) {
         platform_log("FS save failed; keeping unsaved RAM data\n");
     } else sync_failures = 0;
 }
+static void sync_log_number(unsigned value) {
+    char text[9];
+    for (unsigned i = 0; i < 8; ++i)
+        text[i] = "0123456789ABCDEF"[(value >> (28 - 4 * i)) & 15];
+    text[8] = 0; platform_log(text);
+}
+/* Only generation/timing diagnostics; never names or file contents. */
+static void sync_log(const char *event, const char *result) {
+    unsigned ticks = timer_ticks();
+    platform_log("FS snapshot "); platform_log(event);
+    platform_log(" tick="); sync_log_number(ticks);
+    platform_log(" generation="); sync_log_number(sync_job.header.generation);
+    if (result) { platform_log(" result="); platform_log(result); }
+    platform_log("\n");
+}
 static enum FsSyncProgress sync_finish(int result) {
     if (result < 0 && sync_job.header_attempted) writable = 0;
     if (!result) {
@@ -1249,6 +1279,7 @@ static enum FsSyncProgress sync_finish(int result) {
         if (sync_job.subscribers & (1u << i)) sync_results[i].result = result;
     sync_job.phase = SYNC_IDLE;
     sync_account(result);
+    sync_log("end", result < 0 ? "error" : "durable");
     if (sync_autosave) { sync_results[0].occupied = 0; sync_autosave = 0; }
     return FS_SYNC_FINISHED;
 }
@@ -1264,6 +1295,7 @@ static void sync_start(unsigned slot) {
     sync_job.header.generation = generation + 1;
     sync_job.phase = data_backend ? SYNC_SERIALIZE_NODE : SYNC_FLOPPY;
     last_sync_attempt = timer_ticks();
+    sync_log("begin", 0);
 }
 int fs_sync_request(FsSyncTicket *ticket) {
     if (!ticket) return -1;
