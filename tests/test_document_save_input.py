@@ -8,6 +8,7 @@ import time
 import types
 import unittest
 from unittest import mock
+from PIL import Image
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
@@ -117,6 +118,7 @@ class DocumentCollectorTest(unittest.TestCase):
         session = Session.__new__(Session)
         session.last_accepted_name_frame = dict(ocr='ALPHA Saving | New edits stay private.',
                                                 pending_generations=[7], dumped=12.125)
+        session.complete_ocr = lambda event, texts: None
         session.frame = lambda *args: self.fail('Acceptance must reuse the already captured frame')
         event = session.accepted_name_frame('ALPHA', 'Saving', generation=7, absent=('Save document as',))
         self.assertEqual(event['dumped'], 12.125)
@@ -124,6 +126,37 @@ class DocumentCollectorTest(unittest.TestCase):
             session.accepted_name_frame('ALPHA', generation=8)
         with self.assertRaises(AssertionError):
             session.accepted_name_frame('ALPHAZ', generation=7)
+
+    def test_crop_fallback_uses_same_pixels_pending_generation_and_timestamp(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Session.__new__(Session)
+            session.directory = pathlib.Path(temporary)
+            screenshot = session.directory / 'guard.png'
+            Image.new('RGB', (1280, 720), 'white').save(screenshot)
+            event = dict(ocr='ALPHAZC', screenshot=str(screenshot), dumped=12.125,
+                         pending_generations=[7])
+            answer = types.SimpleNamespace(stdout='Saving changes...\nCancel keeps this document open.\n')
+            with mock.patch('document_save_input_test.subprocess.run', return_value=answer) as command:
+                session.complete_ocr(event, ('Saving changes', 'Cancel keeps'))
+            self.assertEqual(command.call_count, 1)
+            self.assertEqual(event['dumped'], 12.125)
+            self.assertEqual(event['pending_generations'], [7])
+            self.assertEqual(event['ocr_full_frame'], 'ALPHAZC')
+            self.assertEqual(event['ocr_crops'][0]['bounds'], [320, 120, 960, 500])
+            self.assertEqual(event['ocr_crops'][0]['psm'], 6)
+            session.complete_ocr(event, ('Saving changes', 'Cancel keeps'))
+            self.assertEqual(len(event['ocr_crops']), 1)
+
+    def test_missing_dirty_status_selects_footer_crop_first(self):
+        session = Session.__new__(Session)
+        event = dict(ocr='ALPHAZ')
+        regions = []
+        def crop(evidence, region):
+            regions.append(region)
+            evidence['ocr'] += '\nUnsaved | Recovered document draft.'
+        session.crop_ocr = crop
+        session.complete_ocr(event, ('ALPHAZ', 'Unsaved'))
+        self.assertEqual(regions, ['footer'])
 
     def test_floppy_does_not_wait_for_async_markers(self):
         session = Session.__new__(Session)

@@ -377,11 +377,50 @@ class Session(DesktopSession):
         self.events.append(event)
         return event
 
+    def crop_ocr(self, event, region):
+        """Read additional regions of THESE pixels, never a later guest frame."""
+        crops = event.setdefault('ocr_crops', [])
+        if any(crop['region'] == region for crop in crops):
+            return
+        path = self.directory / pathlib.Path(event['screenshot']).name
+        with Image.open(path) as image:
+            width, height = image.size
+            boxes = {
+                'modal': (width // 4, height // 6, 3 * width // 4, 25 * height // 36),
+                'footer': (0, 8 * height // 9, width, 169 * height // 180),
+            }
+            bounds = boxes[region]
+            crop = image.crop(bounds)
+            cropped_path = path.with_name(path.stem + '-ocr-' + region + '.png')
+            crop.resize((crop.width * 2, crop.height * 2), Image.Resampling.NEAREST).save(cropped_path)
+        text = subprocess.run(['tesseract', str(cropped_path), 'stdout', '--psm', '6'],
+                              check=True, capture_output=True, text=True, timeout=25).stdout
+        cropped_path.with_suffix('.txt').write_text(text)
+        event.setdefault('ocr_full_frame', event['ocr'])
+        crops.append(dict(region=region, bounds=list(bounds), scale=2, psm=6, ocr=text,
+                          screenshot=str(pathlib.Path(event['screenshot']).parent / cropped_path.name)))
+        event['ocr'] += '\n' + text
+        path.with_suffix('.txt').write_text(event['ocr'])
+
+    def complete_ocr(self, event, texts):
+        missing = [text for text in texts if normalized(text) not in normalized(event['ocr'])]
+        if not missing:
+            return
+        # Footer phrases are common omissions in sparse whole-screen OCR. All
+        # other missing text gets the central dialog region first.
+        footer_first = any(normalized(text).startswith(('UNSAVED', 'SAVEDTODISK', 'SAVEDNATIVE',
+                                                        'CSVVALUESEXPORTED')) for text in missing)
+        for region in (('footer', 'modal') if footer_first else ('modal', 'footer')):
+            self.crop_ocr(event, region)
+            if all(normalized(text) in normalized(event['ocr']) for text in texts):
+                return
+
     def visible(self, name, *texts, generation=None, since=None, absent=(), seconds=12):
         deadline = time.monotonic() + seconds
         while True:
             self.keep_awake()
             event = self.frame(name)
+            self.complete_ocr(event, texts)
             content = normalized(event['ocr'])
             okay = all(normalized(t) in content for t in texts)
             okay = okay and all(normalized(t) not in content for t in absent)
@@ -399,6 +438,7 @@ class Session(DesktopSession):
     def accepted_name_frame(self, *texts, generation=None, absent=()):
         """Reuse acceptance pixels so OCR does not consume another pending interval."""
         event = self.last_accepted_name_frame
+        self.complete_ocr(event, texts)
         content = normalized(event['ocr'])
         assert all(normalized(t) in content for t in texts), ('Accepted frame text missing', texts, event)
         assert all(normalized(t) not in content for t in absent), ('Accepted dialog remained visible', event)
@@ -469,6 +509,11 @@ class Session(DesktopSession):
             self.serial()  # Timestamp first observed begin before OCR processing.
             event = self.frame('name-submit-' + filename)
             content = normalized(event['ocr'])
+            if normalized(title) not in content:
+                # Sparse OCR can omit a complete dialog. Check its region from
+                # the SAME capture before concluding that submission hid it.
+                self.crop_ocr(event, 'modal')
+                content = normalized(event['ocr'])
             if normalized(title) not in content:
                 self.last_accepted_name_frame = event
                 if not self.asynchronous:
@@ -639,7 +684,9 @@ def writer_rest(session, asynchronous):
     session.visible('close-guard-cancel-default', 'Save changes before closing', 'Cancel')
     if asynchronous:
         session.key('tab'); generation = session.submit(lambda: session.key('ret'))
-        session.visible('close-saving-guard', 'Saving changes', 'Cancel keeps this document open',
+        # The normal pointer may obscure "this document" in the explanatory
+        # sentence. The title and unoccluded Cancel text identify this guard.
+        session.visible('close-saving-guard', 'Saving changes', 'Cancel keeps',
                         generation=generation)
         session.key('esc'); began = session.text('D')
         session.visible('close-cancel-private-edit', 'ALPHAZCD', generation=generation, since=began,
