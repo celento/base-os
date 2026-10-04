@@ -121,7 +121,7 @@ Host and reference-media tests additionally need Clang, FFmpeg and Pillow (`pyth
 | List terminal commands | `help` |
 | Read a command's manual | `man basic` |
 
-Open `Programs/counter.bex`, `notebook.bex` or `docstats.bex` from Files, or search
+Open `Programs/counter.bex`, `notebook.bex`, `docstats.bex` or `pointer.bex` from Files, or search
 for their filenames with `Ctrl+Space`. Counter and Notebook explicitly synchronize
 before showing Saved. Existing disks keep their installed example binaries; see
 the SDK guide before deliberately replacing an older example.

@@ -377,3 +377,29 @@ it required SB16 before taking its completed-run branch, although that reboot ha
 no audio device. Moving that check after the branch fixed the test. The already
 completed data, metrics, PCM and screenshot were retained; the rebuilt guest then
 passed the persistence-only reboot. No production scan code changed in that fix.
+
+## Opt-in hosted pointer events
+
+`examples/c/pointer.c` is a regular C client for the pointer service described in
+[NATIVE_UI.md](NATIVE_UI.md). Build it as the default BEX1 or with the existing
+`--format bex2` option. New volumes install `/Programs/pointer.bex` without
+replacing an existing copy. It needs a separately qualified hosted-UI kernel; on
+older kernels it prints an unsupported message and exits normally.
+
+Open one owned endpoint with `bos_ui_host_open(BOS_UI_SUB_POINTER |
+BOS_UI_SUB_HOVER | BOS_UI_SUB_WHEEL, &info)`. First consume its mandatory
+STATE_RESET. READ uses fixed96-byte historical events, including coordinates and
+geometry tokens from their original route. Treat RESET/CANCEL as aborting any
+local gesture; do not commit because their accepted buttons became zero. The
+example keeps each stroke as a preview until ordinary final UP.
+
+Drain `bos_ui_read` and the unchanged `bos_key` byte queue, explicitly present a
+complete frame, then call `bos_ui_wait(target, BOS_UI_WAIT_QUEUE |
+BOS_UI_WAIT_LEGACY_KEY, milliseconds)`. Wait0 is a poll;1–60000 suspends only the
+caller. UI wait never publishes a working frame. TIMEOUT retains the endpoint;
+STALE means it must no longer be used. Release/reopen creates a fresh identity
+and does not turn an already-held button into a new press.
+
+The endpoint owns no Terminal chrome and creates no window. Captured pointer
+coordinates can be negative or outside the logical canvas; clip drawing rather
+than rewriting the event coordinates. Host close still forcibly stops the app.
