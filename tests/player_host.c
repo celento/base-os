@@ -85,6 +85,11 @@ int main(void){
     strcpy(names[2],"Film.mpg");player_refresh();assert(player_open_file(2)==0);
     assert(video_mode&&fake_video.state==VIDEO_LOADING&&fake.state==AUDIO_STOPPED);
     draw_at(640,584);draw_at(420,390);draw_at(420,362);
+    fake_video.audio_enabled=1;fake_video.audio_sample_rate=44100;fake_video.audio_channels=2;
+    draw_at(640,584);draw_at(420,390);
+    unsigned volume_before=fake.volume;
+    assert(player_click(25,30,640,584,25+640-306,30+414));assert(fake.volume==volume_before-5);
+    assert(player_click(25,30,640,584,25+640-202,30+414));assert(fake.volume==volume_before);
     assert(player_key(KEY_SPACE,0));assert(fake_video.state==VIDEO_PAUSED);
     assert(player_key(KEY_SPACE,0));assert(fake_video.state==VIDEO_PLAYING);
     fake_video.displayed_frames=18;assert(player_tick());draw_at(640,584);

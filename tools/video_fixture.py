@@ -51,7 +51,7 @@ def source_frame(width, height, index):
 
 
 def make_fixture(directory, width=320, height=240, fps='25', frames=75,
-                 name='sample', bframes=2, gop=12, codec='mpeg1video', audio=False):
+                 name='sample', bframes=2, gop=12, codec='mpeg1video', audio=False, sar=None):
     """Create a MPEG-1 program stream and return its path (no external assets)."""
     directory = pathlib.Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -65,7 +65,7 @@ def make_fixture(directory, width=320, height=240, fps='25', frames=75,
     audio_output = (['-c:a', 'mp2', '-b:a', '64k', '-shortest'] if audio else ['-an'])
     run_ffmpeg(['-f', 'rawvideo', '-pixel_format', 'yuv420p', '-video_size',
                 f'{width}x{height}', '-framerate', fps, '-i', original,
-                *audio_input, '-frames:v', frames, *audio_output, '-c:v', codec, '-q:v', '3',
+                *audio_input, '-frames:v', frames, *audio_output, *(['-vf','setsar='+sar] if sar else []), '-c:v', codec, '-q:v', '3',
                 '-g', gop, '-bf', bframes, '-sc_threshold', '0', '-threads', '1',
                 '-flags', '+bitexact', '-fflags', '+bitexact', '-f', 'mpeg', encoded])
     return encoded
@@ -92,7 +92,7 @@ def probe_fixture(encoded):
         duration = frame.get('duration') or frame['pkt_duration']
         frame_rate = 1 / (int(duration) * Fraction(stream['time_base']))
     return {'codec': stream['codec_name'], 'width': stream['width'],
-            'height': stream['height'], 'fps': str(Fraction(frame_rate)),
+            'height': stream['height'], 'sample_aspect_ratio': stream['sample_aspect_ratio'], 'fps': str(Fraction(frame_rate)),
             'frames': len(metadata['frames']),
             'picture_types': [frame['pict_type'] for frame in metadata['frames']]}
 

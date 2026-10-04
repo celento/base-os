@@ -16,10 +16,12 @@ controller continues using its independent DMA2 channel.
 - Playback owns a copy, so changing or deleting the source file is safe
 
 Other codecs, free-format MP3, WAVE extensible, floating-point WAVE, recording,
-MIDI and MPEG audio are not implemented. MPEG-1 video-only playback is documented
+MIDI are not implemented. MPEG-1 video with optional Layer II audio is documented
 in [VIDEO.md](VIDEO.md). MP3 encoder delay/padding is retained;
 gapless trimming and seeking are not implemented. MP3 streams must keep the
-same sample rate and channel count throughout. The IDE data volume supports 2 MiB per file and roughly 8 MiB total payload.
+same sample rate and channel count throughout. Sources above QEMU SB16's
+45 kHz limit (including normal 48 kHz files) are linearly resampled to 44.1 kHz.
+Source-rate metadata/time stay separate from `AudioStatus.output_rate`. The IDE data volume supports 2 MiB per file and roughly 8 MiB total payload.
 The owned audio-input arena also accepts up to 2 MiB. The optional legacy
 floppy-only volume retains its original limits; larger-file support does not
 add streaming file I/O. Uncompressed CD-rate stereo therefore fits only short
@@ -39,10 +41,18 @@ Include `audio.h`, initialize after memory validation, call `audio_poll()` in th
 desktop loop and in the non-reentrant `platform_poll()` input collection hook.
 Use `audio_play(data, bytes)`, `audio_pause(1/0)`, `audio_stop()` and
 `audio_set_volume(0..100)`. `audio_status()` reports device availability, state,
-format, rate, channel count, source bit depth, played/total frames and errors.
+format, source/output rates, channel count, source bit depth, played/total
+source frames and errors.
 Position/duration helpers return milliseconds. Playback and volume are global.
 
-Each poll converts at most 4,096 PCM samples or decodes at most one MP3 frame;
+Each poll converts at most 4,096 PCM samples, decodes at most one MP3 frame, or
+calls an `AudioPcmReader` once. `audio_play_pcm_stream` validates a declared
+source-frame count and supplies bounded interleaved signed-16 PCM; short reads
+are allowed and explicit EOF must match that count. The caller owns the reader
+context until stop, replacement, error or completion. Callback code must not
+reenter the audio driver. A fixed 8 KiB staging buffer handles resampling.
+
+Every poll is bounded;
 playback does not wait in a busy loop. WAV needs eight polls to prefill the ring;
 MP3 takes additional bounded frame-decode polls. At 44.1 kHz stereo, each half holds
 about 186 ms. Callers should service audio every 70 ms or better. A missed refill
@@ -94,7 +104,8 @@ https://gitlab.com/qemu-project/qemu/-/blob/master/hw/audio/sb16.c
 
 The driver and WAV parser are original project code. minimp3 is pinned in
 `third_party/minimp3/` with its complete CC0 1.0 license and source attribution.
-It is compiled scalar/MP3-only in a separate x87 translation unit. Every frame
+It is compiled scalar in a separate x87 translation unit. The MP3 file adapter
+accepts Layer III; the MPEG-video adapter separately uses its Layer II decoder. Every frame
 saves/restores the complete x87 state and CR0 flags; other kernel code remains
 soft-float. This uses the existing Pentium-or-newer machine contract, without
 requiring SSE or a hosted C runtime.
@@ -125,8 +136,10 @@ the audio engine owns a separate input copy.
 The caller must keep servicing `audio_poll()` even if the player window is
 minimized or closed. `player_tick()` services bounded video playback and reports visual changes.
 `player_close()` stops both transports. Suggested outer size is `PLAYER_W` ×
-`PLAYER_H` (640×614), with a minimum client area 420×414. MPEG-1 video is visibly
-labeled video-only; MPEG audio is not played. See [VIDEO.md](VIDEO.md).
+`PLAYER_H` (640×614), with a minimum client area 420×414. MPEG-1 video with supported MP2 audio uses the same SB16 driver; missing or
+unsupported audio is visibly labeled video-only. The optional
+`PLAYER_VIDEO_FRAME`/`player_draw_playback` compositor path repaints only its
+viewport and progress. See [VIDEO.md](VIDEO.md).
 
 `python3 tools/player_test.py build` exercises real QEMU playback, keyboard
 pause/resume, volume, playlist selection and stopping. It also captures the

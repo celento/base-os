@@ -32,8 +32,10 @@ constructor/decode calls. No SSE, operating-system library or host media player
 is used by the guest. The MPEG-PS framing adapter, timing, palette conversion,
 window rendering and Media Player integration are original BaseOS code.
 
-The library includes an MP2 decoder, but this milestone uses video only. Audio
-packets are detected and skipped, and the player visibly says "no audio".
+The library includes an MP2 decoder, but BaseOS does not call it. Reference
+tests found reconstruction/normalization differences in that path. MPEG audio
+instead uses the already-pinned minimp3 scalar Layer II implementation, which
+matched FFmpeg within two signed-16 sample levels in normal reference fixtures.
 
 Verification: `tests/test_video.py` compares all Y/Cb/Cr planes in every output
 frame against independently decoded FFmpeg references. `tools/video_test.py`

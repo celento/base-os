@@ -97,7 +97,7 @@ $(OUT)/kernel.o: $(OUT)/build_info.h $(OUT)/native_example.h $(OUT)/sdk_examples
 # Rendering is the hot path; retain size optimization for the rest of the kernel.
 $(OUT)/gfx.o: CFLAGS := $(filter-out -Os,$(CFLAGS)) -O2
 
-# Only the scalar MP3 decoder uses x87; all other kernel code stays soft-float.
+# Scalar audio/video decoder units use guarded x87; the desktop stays soft-float.
 $(OUT)/media_mp3.o: CFLAGS := $(filter-out -msoft-float,$(CFLAGS)) -mhard-float -mfpmath=387 -Ithird_party/minimp3/compat
 $(OUT)/media_mp3.o: third_party/minimp3/minimp3.h
 

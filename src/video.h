@@ -12,7 +12,10 @@ typedef struct {
     unsigned width, height, fps_num, fps_den;
     unsigned aspect_num, aspect_den;
     unsigned total_frames, displayed_frames, audio_present;
-    unsigned arena_bytes, late_resyncs;
+    unsigned arena_bytes, late_resyncs, presentation_skips;
+    unsigned audio_enabled, audio_sample_rate, audio_channels, audio_total_frames;
+    unsigned audio_lead_frames, video_start_ms;
+    int audio_error;
 } VideoStatus;
 typedef struct {
     const uint8_t *y, *cb, *cr;
@@ -21,7 +24,9 @@ typedef struct {
 } VideoFrame;
 
 /* MPEG-1 program-stream video, <=640x480, <=30 fps, <=2 MiB input.
- * Video only: MPEG audio is detected but not played. Owns a source copy.
+ * Optional constant-format MPEG-1 Layer II audio through the SB16 stream.
+ * Unsupported/missing audio devices fall back to explicitly silent video.
+ * Owns a source copy.
  * There is no heap; all stream/decoder/image storage is in VIDEO_BASE. */
 int video_play(const void *data, uint32_t bytes);
 /* Cooperative load: one <=65535-byte PES packet or 32768-byte scan per call.

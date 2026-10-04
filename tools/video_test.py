@@ -30,8 +30,8 @@ def tool(name):
 def reference(source,directory):
     executable=directory/'video-host'
     subprocess.run([shutil.which('clang') or 'cc','-std=gnu11','-O1','-g','-Wall','-Wextra','-Werror',
-                    '-fsanitize=address,undefined','-DVIDEO_HOST_TEST','-I',str(ROOT/'src'),
-                    str(ROOT/'tests/video_host.c'),str(ROOT/'src/video.c'),'-lm','-o',str(executable)],check=True)
+                    '-fsanitize=address,undefined','-DVIDEO_HOST_TEST','-DMEDIA_MP3_HOST_TEST','-I',str(ROOT/'src'),
+                    str(ROOT/'tests/video_host.c'),str(ROOT/'src/video.c'),str(ROOT/'src/media_mp3.c'),'-lm','-o',str(executable)],check=True)
     output=directory/'reference.yuv';env=dict(os.environ);env['ASAN_OPTIONS']='detect_leaks=0'
     env['UBSAN_OPTIONS']='halt_on_error=1:print_stacktrace=1'
     subprocess.run([str(executable),str(source),str(output),'320','240','25','1','75','0'],env=env,check=True)
