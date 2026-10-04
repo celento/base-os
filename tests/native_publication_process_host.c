@@ -26,6 +26,8 @@ static unsigned publications,leaves,plots;
 static int checking_suspend;
 static char events[8];
 static unsigned event_count;
+static unsigned rectangles,rectangle_arguments[5];
+static int checking_rectangle;
 
 void kmemcpy(void *to,const void *from,int bytes){memcpy(to,from,(size_t)bytes);}
 void kmemset(void *to,int value,int bytes){memset(to,value,(size_t)bytes);}
@@ -42,7 +44,21 @@ static void process_leave(void){leaves++;event('L');longjmp(leave_target,1);}
 #include "native_publication_process_ops.inc"
 
 static void print_line(const char *line){(void)line;}
-static void pixel(int x,int y,int color){(void)x;(void)y;(void)color;plots++;}
+static void pixel(int x,int y,int color){
+    if(checking_rectangle){
+        assert(rectangle_arguments[2]);
+        assert((unsigned)x==rectangle_arguments[0]+plots%rectangle_arguments[2]);
+        assert((unsigned)y==rectangle_arguments[1]+plots/rectangle_arguments[2]);
+        assert((unsigned)color==rectangle_arguments[4]);
+    }
+    plots++;
+}
+static void rectangle(int x,int y,int width,int height,int color){
+    rectangles++;
+    assert((unsigned)x==rectangle_arguments[0]&&(unsigned)y==rectangle_arguments[1]);
+    assert((unsigned)width==rectangle_arguments[2]&&(unsigned)height==rectangle_arguments[3]);
+    assert((unsigned)color==rectangle_arguments[4]);
+}
 static void publish(void){
     publications++;event('P');
     if(checking_suspend){
@@ -52,10 +68,11 @@ static void publish(void){
 }
 static void prepare(uint32_t frame[FRAME_WORDS],unsigned call,unsigned argument){
     memset(task_memory,0,sizeof task_memory);
-    memset(events,0,sizeof events);event_count=publications=leaves=plots=0;
+    memset(events,0,sizeof events);event_count=publications=leaves=plots=rectangles=0;
+    checking_rectangle=0;
     current_task=tasks+3;tasks_ready=active=1;process_result=17;
     current_task->state=PROCESS_TASK_READY;
-    current_task->io=(ProgramIO){print_line,pixel,0,publish,0};output=&current_task->io;
+    current_task->io=(ProgramIO){print_line,pixel,0,publish,0,0};output=&current_task->io;
     for(unsigned i=0;i<FRAME_WORDS;i++){
         frame[i]=0x100u+i;current_task->frame[i]=0xa5a5a5a5u;
     }
@@ -151,10 +168,46 @@ static void completion_and_compatibility(void){
     prepare(frame,0,0);current_task=0;assert(interrupt(frame)==-1);
     assert(!publications&&leaves==1&&!process_result);
 }
+static void rectangle_dispatch(void){
+    for(unsigned mode=0;mode<2;mode++){
+        unsigned width=mode?320:160,height=mode?200:100;
+        const unsigned cases[][5]={
+            {0,0,width,height,255},{1,2,3,4,301},
+            {(unsigned)-2,(unsigned)-3,5,7,257},
+            {width-1,height-1,width,height,UINT32_MAX},
+            {width,height,width,height,3},
+            {0x7fffffffu,0x80000000u,width,height,4},
+            {0,0,0,height,5},{0,0,width,0,5},{0,0,0,0,5},
+            {0,0,width+1,height,6},{0,0,width,height+1,6},
+            {0,0,0,height+1,7},{0,0,width+1,0,7},
+            {0,0,UINT32_MAX,0,8},{0,0,0,UINT32_MAX,8}
+        };
+        for(unsigned i=0;i<sizeof cases/sizeof *cases;i++)
+            for(int bulk=0;bulk<2;bulk++)for(int legacy=0;legacy<2;legacy++){
+                uint32_t frame[FRAME_WORDS];prepare(frame,9,cases[i][0]);
+                canvas_width=width;canvas_height=height;
+                memcpy(rectangle_arguments,cases[i],sizeof rectangle_arguments);
+                checking_rectangle=1;
+                frame[6]=cases[i][1];frame[5]=cases[i][2];
+                frame[1]=cases[i][3];frame[0]=cases[i][4];
+                current_task->io.rect=bulk?rectangle:0;
+                if(legacy)current_task=0;
+                assert(interrupt(frame)==1&&!publications&&!leaves);
+                int valid=cases[i][2]<=width&&cases[i][3]<=height;
+                unsigned count=valid?cases[i][2]*cases[i][3]:0;
+                assert(frame[7]==(valid?0:UINT32_MAX));
+                assert(rectangles==(unsigned)(bulk&&count));
+                assert(plots==(bulk?0:count));
+                for(unsigned word=0;word<FRAME_WORDS;word++)
+                    assert(tasks[3].frame[word]==0xa5a5a5a5u);
+            }
+    }
+    checking_rectangle=0;
+}
 int main(void){
     suspension(5,0,100);suspension(10,0,100);suspension(11,0,100);
     suspension(11,1,100);suspension(11,1000,100);suspension(11,60000,100);
     suspension(11,1000,UINT32_MAX-10u);
-    nonpublishing_paths();completion_and_compatibility();
-    puts("Native publication process: exact dispatcher present/yield/sleep/explicit-exit boundaries, publication-before-suspend, timer/stop/generic-error isolation and legacy exec passed.");
+    nonpublishing_paths();completion_and_compatibility();rectangle_dispatch();
+    puts("Native publication process: exact dispatcher present/yield/sleep/explicit-exit boundaries, publication-before-suspend, timer/stop/generic-error isolation, rectangle dispatch/fallback and legacy exec passed.");
 }

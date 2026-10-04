@@ -181,6 +181,24 @@ static void plot(int x,int y,int color){
         T.canvas_on=1;T.canvas[y*T.canvas_width+x]=(unsigned char)color;
     }
 }
+/* Clip before adding coordinates: callers may supply any signed origin.
+ * Only working pixels change; publication still belongs to an explicit frame
+ * boundary. Empty/offscreen rectangles must not activate or dirty the canvas. */
+static void canvas_rect(int x,int y,int width,int height,int color){
+    if(width<=0||height<=0||x>=T.canvas_width||y>=T.canvas_height)return;
+    if(x<0){if(x<=-width)return;width+=x;x=0;}
+    if(y<0){if(y<=-height)return;height+=y;y=0;}
+    if(width>T.canvas_width-x)width=T.canvas_width-x;
+    if(height>T.canvas_height-y)height=T.canvas_height-y;
+    if(T.canvas_buffered)T.canvas_pending=1;
+    else {
+        T.task_dirty|=TERM_TASK_CANVAS;
+        if(!T.canvas_on)T.task_dirty|=TERM_TASK_LAYOUT;
+    }
+    T.canvas_on=1;
+    unsigned char *row=T.canvas+y*T.canvas_width+x;
+    for(int i=0;i<height;i++)kmemset(row+i*T.canvas_width,color,width);
+}
 static int canvas_resize(int width,int height){
     if(!((width==(int)PROGRAM_CANVAS_DEFAULT_WIDTH&&height==(int)PROGRAM_CANVAS_DEFAULT_HEIGHT)||
          (width==(int)PROGRAM_CANVAS_MAX_WIDTH&&height==(int)PROGRAM_CANVAS_MAX_HEIGHT)))return -1;
@@ -222,7 +240,7 @@ int term_task_start_file_with_arg(int slot,int file,unsigned identity,
             (argument_length&&(!argument||argument[0]!='/')))
         push("Cannot start: use an absolute document path of at most 128 bytes.");
     else {
-        ProgramIO io={push,plot,0,canvas_publish,canvas_resize};
+        ProgramIO io={push,plot,0,canvas_publish,canvas_resize,canvas_rect};
         /* No task runs between this identity check and the loader's owned copy. */
         if(process_task_start_with_arg(slot,fs_data(file),fs_size(file),&io,argument,argument_length))
             push("Cannot start: not a supported BEX1 program (maximum 49152 bytes).");
@@ -461,7 +479,7 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"basic")||!kstrcmp(cmd,"exec")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
         if(term_task_running(selected)){push("Stop this terminal's native task first.");return -1;}
-        ProgramIO io={push,plot,program_key,program_present,canvas_resize};T.canvas_buffered=0;canvas_reset();
+        ProgramIO io={push,plot,program_key,program_present,canvas_resize,canvas_rect};T.canvas_buffered=0;canvas_reset();
         int rc=!kstrcmp(cmd,"basic")?basic_run(fs_data(id),fs_size(id),&io):process_run(fs_data(id),fs_size(id),&io);
         if(rc){push("Program stopped (error, fault, or execution limit).");return -1;}push("Program finished.");
     }else return -1;return 0;

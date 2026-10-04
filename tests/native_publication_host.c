@@ -7,11 +7,19 @@ enum { IDLE, CLEAR, FOOTER, PUBLISH, SMALL, LARGE, CLEAR_TEXT };
 static int operation;
 static void task_test_step(int owner) {
     const ProgramIO *io=&callbacks[owner];
+#ifdef NATIVE_RECTANGLE_CALLBACK
+    assert(io->rect);
+    if(operation==CLEAR||operation==CLEAR_TEXT)
+        io->rect(0,0,terms[owner].canvas_width,terms[owner].canvas_height,0);
+    if(operation==FOOTER)
+        io->rect(0,terms[owner].canvas_height-1,terms[owner].canvas_width,1,42);
+#else
     if(operation==CLEAR||operation==CLEAR_TEXT)
         for(int y=0;y<terms[owner].canvas_height;y++)
             for(int x=0;x<terms[owner].canvas_width;x++)io->plot(x,y,0);
     if(operation==FOOTER)
         for(int x=0;x<terms[owner].canvas_width;x++)io->plot(x,terms[owner].canvas_height-1,42);
+#endif
     if(operation==SMALL)assert(!io->resize(160,100));
     if(operation==LARGE)assert(!io->resize(320,200));
     if(operation==CLEAR_TEXT)io->print("Ordinary text can force a full redraw.");

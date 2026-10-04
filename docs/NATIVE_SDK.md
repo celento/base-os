@@ -178,9 +178,10 @@ restore 160×100 with no visible canvas until drawing occurs. A rejected busy
 start leaves the live task's canvas alone.
 
 The filled-rectangle syscall (9) accepts widths/heights no greater than the
-active canvas, so its largest loop is 320×200 pixels. Pixels outside the canvas
-are clipped. Task geometry is saved independently across slices; changing one
-Terminal cannot resize another.
+active canvas, so its largest fill is 320×200 pixels. Pixels outside the canvas
+are clipped; empty or wholly offscreen fills do not activate or dirty it. Task
+geometry is saved independently across slices; changing one Terminal cannot
+resize another.
 
 In native task mode, drawing and resize affect a private working canvas. The
 complete frame and its dimensions become visible together at `bos_present`,
@@ -193,10 +194,16 @@ geometry is published only at that same boundary. Calling a boundary without
 pending drawing does not copy or redraw the canvas. BASIC and synchronous `exec`
 retain their direct drawing/presenter behavior.
 
-The kernel `ProgramIO` structure appends an optional `resize(width,height)`
-callback. A null callback causes the new resize call to return -1. Existing
-compiled BEX1 apps are unaffected. Kernel integrations must initialize the new
-field to zero or a callback. The renderer reads `term_canvas_width()` and
+The kernel-only `ProgramIO` structure has optional `resize(width,height)` and
+`rect(x,y,width,height,color)` callbacks, in that order after `present`. A null
+resize callback causes the resize call to return -1. A null rectangle callback
+retains the original per-pixel `plot` loop. Terminal's rectangle callback clips
+once and fills working-canvas rows with the existing byte-fill primitive; it
+never publishes, polls devices or switches tasks. Syscall 9 still checks both
+dimensions before accepting even an empty fill, returns the same result, and
+uses the same low byte of each color. Existing compiled BEX1 apps and SDK headers
+are unaffected. Kernel integrations must initialize optional fields to zero or
+a callback. The renderer reads `term_canvas_width()` and
 `term_canvas_height()`; native task pixels use the published width as a tightly
 packed stride. Native `ProgramIO.present` must be bounded and must not dispatch
 other applications; Terminal supplies a copy-only publication callback.
@@ -244,6 +251,28 @@ python3 tools/native_sdk_test.py build
 python3 tools/task_test.py build
 python3 tools/sdk_test.py build
 ```
+
+The rectangle backend additionally has finite host equivalence and lifecycle
+checks:
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p test_native_rectangle.py -v
+ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p 'test_native_publication*.py' -v
+```
+
+These compare the entire working Terminal state against the original scalar
+loop at both sizes, including edge clipping, empty/offscreen fills, signed
+coordinate limits, byte-color conversion and eight-owner isolation. Production
+dispatch checks exercise optional callback and fallback in task and synchronous
+contexts, preserving invalid-size results and publication boundaries. The real
+Terminal/renderer publication fixture runs with both scalar and bulk fills.
+This is host correctness coverage, not evidence of a guest performance gain.
+Unchanged-binary guest workload comparisons remain necessary before making any
+performance claim. On 2026-10-04, 23 focused host tests passed across rectangle,
+publication, rendering, SDK, arguments, launch, titles, platform/file/sync services,
+System Monitor and BASIC/Terminal features. A normal freestanding i386 build
+also passed without warnings, including the unchanged task/Terminal arena
+bounds. QEMU and matched-workload timing were not run for this isolated change.
 
 The focused host suite checks legacy C example builds, the 34,144-byte C fixture,
 the deterministic text fixture, all eight full-resolution canvases, exact arena

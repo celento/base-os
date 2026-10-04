@@ -34,7 +34,7 @@ static void process_leave(void){longjmp(leave_target,1);}
 static void print_line(const char *text){(void)text;}
 static void pixel(int x,int y,int color){(void)x;(void)y;(void)color;}
 static void publish(void){publications++;}
-static ProgramIO io={print_line,pixel,0,publish,0};
+static ProgramIO io={print_line,pixel,0,publish,0,0};
 static const unsigned char program[]={0x42,0x45,0x58,0x31,16,0,0,0,18,0,0,0,0,0,0,0,0xeb,0xfe};
 static void select_task(unsigned slot){
     current_task=tasks+slot;active=1;output=&current_task->io;

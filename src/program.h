@@ -17,6 +17,9 @@ typedef struct {
     void (*present)(void);
     /* Optional; a successful resize explicitly clears and activates the canvas. */
     int (*resize)(int width,int height);
+    /* Optional; same clipped pixels/dirty state as plot, without publication.
+     * Width/height are positive and bounded by the active canvas. */
+    void (*rect)(int x,int y,int width,int height,int color);
 } ProgramIO;
 int basic_run(const char *source, int length, const ProgramIO *io);
 void process_init(void);

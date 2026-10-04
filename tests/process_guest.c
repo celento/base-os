@@ -11,7 +11,7 @@ static unsigned char image[256];
 static void check(const unsigned char *code,int length,int expected){
     unsigned header[]={0x31584542,16,16+(unsigned)length,0};
     kmemcpy(image,header,16);kmemcpy(image+16,code,length);
-    ProgramIO io={say,pixel,key,show,0};
+    ProgramIO io={say,pixel,key,show,0,0};
     int rc=process_run(image,length+16,&io);
     test++;platform_log("test ");hex(test);platform_log(" result ");hex(rc);platform_log("\n");
     if(rc!=expected){platform_log("PROCESS-FAIL\n");panic("process result mismatch");}
