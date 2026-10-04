@@ -228,9 +228,11 @@ def enter_handle(session,handle,message):
                          o['keys']>=before['keys']+len(text)+1 and o['foreign_result']==STALE,message)[0]
 
 
-def run_profile(build,work,profile,app,seed,timeout):
+def run_profile(build,work,profile,app,seed,timeout,staged_default=False):
+    assert not staged_default or profile=="default"
     disk,original,details=fixture(work,profile,app,seed)
-    result=dict(profile=profile,ram_mib=128 if profile=='large' else 64,**details,checks=[],responses=[])
+    result=dict(profile=profile,ram_mib=128 if profile=='large' else 64,**details,checks=[],responses=[],
+                workload='staged-default-fresh-save' if staged_default else 'original-operation-sequence')
     with PlatformSession(build,'platform-'+profile,extra=qemu_args(disk,profile)) as session:
         result['directory']=str(session.directory)
         print(profile+' evidence: '+str(session.directory),flush=True)
@@ -295,6 +297,7 @@ def run_profile(build,work,profile,app,seed,timeout):
         result['reused_owner_result']=c
         result['checks'].append('owned receipts, release, close and reused-slot stale cleanup')
         print(profile+' owner-bound pending receipts, release, close and slot reuse passed',flush=True)
+        active_id,active_handle,active_start=bid,handle_b,b
         # The frozen Counter is a third, independently scheduled old binary.
         session.key('ctrl-n');session.text('start /Programs/counter.bex');session.key('ret');session.key('alt-ret')
         counter=None
@@ -302,6 +305,32 @@ def run_profile(build,work,profile,app,seed,timeout):
             nonlocal counter
             counter=counter_canvas(session.frame()[0]);return counter is not None
         session.wait(ready,'old independent counter visible during pending save')
+        if staged_default:
+            # The optimized default save may already be terminal. Preserve that
+            # historical receipt and create a fresh ordinary save in owner C,
+            # with the Counter now installed/running before input measurement.
+            session.focus(bid)
+            first_done=session.until(lambda o:o['operation']==handle_b and o['sync_result']==0,
+                                     'first owner durable before staged save',seconds=timeout)[0]
+            result['completion']=first_done
+            result['completed_client_limits']=session.page(2);session.page(0)
+            session.focus(cid)
+            c=operation_key(session,'o',lambda o:o['file_result']==4096,'new owner opens current B version')
+            assert c['read_hash']==fnv(b'B'*4096)
+            deadline=time.monotonic()+timeout
+            while True:
+                c=operation_key(session,'w',lambda o:o['file_result'] in (0,BUSY),'fresh same-content conditional write')
+                if c['file_result']==0:break
+                assert time.monotonic()<deadline,'fresh write lease never released';time.sleep(.3)
+            c=operation_key(session,'s',lambda o:o['sync_result']==1 and o['operation']!=0,
+                            'fresh owned save is genuinely pending')
+            active_id,active_handle,active_start=cid,c['operation'],c
+            result['fresh_pending']=c
+            for _ in range(9):
+                counter=counter_canvas(session.frame()[0])
+                if counter:break
+                session.key('ctrl-tab',delay=.5)
+            else:raise AssertionError('running Counter could not be focused for staged save')
         before=counter;sent=session.key('equal',delay=0);deadline=time.monotonic()+12
         while time.monotonic()<deadline:
             pixels,wall=session.frame();counter=counter_canvas(pixels)
@@ -310,10 +339,10 @@ def run_profile(build,work,profile,app,seed,timeout):
         else:raise AssertionError('counter did not respond to real PS/2 during save')
         assert any('end_tick' not in job for job in snapshot_jobs(session.log.read_text())), 'counter response was outside pending save'
         result['counter_response']=dict(before=before,after=counter,input_to_visible_ms=(wall-sent)*1000)
-        session.focus(bid)
+        session.focus(active_id)
         operation_key(session,'t',lambda o:o['sync_result']==1,'bounded wait returns to its pending owner')
         waited=session.page(3)
-        assert waited['wait_result']==-1010 and waited['wait_ticks']>=2 and waited['operation']==handle_b
+        assert waited['wait_result']==-1010 and waited['wait_ticks']>=2 and waited['operation']==active_handle
         assert waited['sync_result']==1
         result['bounded_wait']=waited;session.page(0)
         before_mouse,before_pixels,_=session.observe()
@@ -339,16 +368,20 @@ def run_profile(build,work,profile,app,seed,timeout):
             after,_,wall=session.until(lambda o:o['keys']>prior['keys'],'native input response during save',seconds=12)
             result['responses'].append(dict(before=prior,after=after,input_to_visible_ms=(wall-sent)*1000))
         assert result['responses'] and result['responses'][0]['after']['sync_result']==1
-        completed=session.until(lambda o:o['operation']==handle_b and o['sync_result']==0,'second owner receives durable completion',seconds=timeout,keep='durable')[0]
-        assert completed['pending']>b['pending'] and completed['loops']>b['loops']
-        result['completion']=completed
+        completed=session.until(lambda o:o['operation']==active_handle and o['sync_result']==0,
+            'active owner receives durable completion',seconds=timeout,keep='durable')[0]
+        assert completed['pending']>active_start['pending'] and completed['loops']>active_start['loops']
         print(profile+' measured responsive pending save completed durably',flush=True)
-        result['completed_client_limits']=session.page(2);session.page(0)
+        if staged_default:
+            result['new_owner_completion']=completed
+        else:
+            result['completion']=completed
+            result['completed_client_limits']=session.page(2);session.page(0)
+            session.focus(cid)
+            c=operation_key(session,'s',lambda o:o['operation']!=0 and o['sync_result'] in (0,1),'new owner can save while another retains result')
+            c=session.until(lambda o:o['sync_result']==0,'new owner completion',seconds=timeout)[0]
+            result['new_owner_completion']=c
         result['checks'].append('real pending save preserves counter and ordinary PS/2 progress')
-        session.focus(cid)
-        c=operation_key(session,'s',lambda o:o['operation']!=0 and o['sync_result'] in (0,1),'new owner can save while another retains result')
-        c=session.until(lambda o:o['sync_result']==0,'new owner completion',seconds=timeout)[0]
-        result['new_owner_completion']=c
         print(profile+' new owner completed while prior owner retained its durable receipt',flush=True)
         session.focus(bid)
         assert session.until(lambda o:o['operation']==handle_b,'old owner still has own result')[0]['sync_result']==0
@@ -383,6 +416,7 @@ def main():
     parser.add_argument('--seed',type=Path,help='Prior compatibility seed, skips compatibility boots')
     parser.add_argument('--compatibility-result',type=Path,
                         help='Explicitly reuse a passed compatibility result from this exact candidate; requires --seed')
+    parser.add_argument('--staged-default',action='store_true',help='Use a fresh same-content owned save after Counter setup on default only')
     parser.add_argument('--old-build',type=Path,help='Optional clean preplatform build for actual query fallback boot')
     parser.add_argument('--save-timeout',type=int,default=900,
                         help='Bound a complete large-volume snapshot under concurrent native rendering')
@@ -415,7 +449,7 @@ def main():
         result['contexts']=run_contexts(args.build,args.work/'contexts',app,args.old_build)
         profiles=('default','large') if args.profile=='both' else (args.profile,)
         for profile in profiles:
-            result['profiles'].append(run_profile(args.build,args.work/profile,profile,app,seed,args.save_timeout))
+            result['profiles'].append(run_profile(args.build,args.work/profile,profile,app,seed,args.save_timeout,args.staged_default and profile=='default'))
             (args.work/'result.json').write_text(json.dumps(result,indent=2)+'\n')
         result['passed']=True
     except BaseException as error:
