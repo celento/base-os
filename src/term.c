@@ -8,7 +8,7 @@
 typedef struct {
     char lines[TERM_LINES][TERM_COLS+1], input[TERM_COLS+1];
     char history[16][TERM_COLS+1], draft[TERM_COLS+1];
-    int head,count,len,cwd,hcount,hpos,canvas_on,scroll,rows,view_count;
+    int head,count,len,cwd,hcount,hpos,canvas_on,scroll,rows,view_count,input_overflow;
     unsigned cwd_identity;
     unsigned task_dirty;
     char task_name[TERM_TASK_NAME_LEN];
@@ -56,9 +56,9 @@ const unsigned char *term_canvas(void){return T.canvas_buffered?(T.published_on?
 int term_canvas_width(void){return T.canvas_buffered?T.published_width:T.canvas_width;}
 int term_canvas_height(void){return T.canvas_buffered?T.published_height:T.canvas_height;}
 void term_prompt(char *out,int max){char path[FS_PATH_LEN];fs_path(term_cwd(),path,sizeof path);int p=0;for(int i=0;path[i]&&p<max-3;i++)out[p++]=path[i];if(max>2){out[p++]='>';out[p++]=' ';out[p]=0;}}
-void term_char(char c){T.scroll=0;if(c>=32&&c<=126&&T.len<TERM_COLS){T.input[T.len++]=c;T.input[T.len]=0;}}
-void term_backspace(void){T.scroll=0;if(T.len)T.input[--T.len]=0;}
-void term_history(int direction){T.scroll=0;if(!T.hcount)return;if(T.hpos==T.hcount)kstrcpy(T.draft,T.input);int p=T.hpos+direction;if(p<0)p=0;if(p>T.hcount)p=T.hcount;T.hpos=p;kstrcpy(T.input,p==T.hcount?T.draft:T.history[p]);T.len=kstrlen(T.input);}
+void term_char(char c){T.scroll=0;if(c>=32&&c<=126){if(T.len<TERM_COLS){T.input[T.len++]=c;T.input[T.len]=0;}else T.input_overflow=1;}}
+void term_backspace(void){T.scroll=0;if(T.len)T.input[--T.len]=0;if(!T.len)T.input_overflow=0;}
+void term_history(int direction){T.scroll=0;if(!T.hcount)return;if(T.hpos==T.hcount){if(T.input_overflow)T.draft[0]=0;else kstrcpy(T.draft,T.input);}int p=T.hpos+direction;if(p<0)p=0;if(p>T.hcount)p=T.hcount;T.hpos=p;kstrcpy(T.input,p==T.hcount?T.draft:T.history[p]);T.len=kstrlen(T.input);T.input_overflow=0;}
 typedef struct { const char *name,*usage,*description,*example,*note; } Manual;
 static const Manual commands[]={
     {"help","help [COMMAND]","List commands, or show a command's manual.","help mkdir","Use Page Up / Page Down to read earlier output."},
@@ -69,6 +69,7 @@ static const Manual commands[]={
     {"cat","cat FILE","Print a file as text.","cat /readme.txt","Nonprinting bytes appear as dots; this does not change the file."},
     {"mkdir","mkdir PATH","Create one new folder.","mkdir /Projects","The parent must exist. An existing name is an error."},
     {"touch","touch PATH","Create a new empty file.","touch /Projects/notes.txt","Unlike Unix touch, an existing file is an error."},
+    {"mv","mv SOURCE DESTINATION_FOLDER","Move one file/folder into an existing folder; keep its name.","mv /prefs/calendar.v1 /Documents","Exactly two paths; double-quote spaces. No overwrite or rename."},
     {"rm","rm PATH","Permanently delete a file or a folder and its contents.","rm /Projects/old.txt","This bypasses Trash. There is no undo."},
     {"echo","echo TEXT","Print the remaining text on a new line.","echo Hello world","There are no variables, pipes, or output redirection."},
     {"clear","clear","Clear this terminal's output and graphics canvas.","clear","Command history and the current folder are kept."},
@@ -100,6 +101,14 @@ static int manual(const char *name){
         push(commands[i].usage);push(commands[i].description);push(commands[i].note);
         push("Example:");push(commands[i].example);
         if(!kstrcmp(name,"basic")){push("Canvas: 160x100; colors: 0..255; variables: A..Z.");push("Limit: 256 lines, 10000 statements, ten seconds.");}
+        if(!kstrcmp(name,"mv")){
+            push("Example with spaces: mv \"/old notes\" \"/Documents/archive folder\"");
+            push("Absolute or relative paths; no options, wildcards, or quote escapes.");
+            push("Root, apps, and folders containing apps cannot be moved.");
+            push("A folder cannot move into itself or its children.");
+            push("Changes stay in RAM until a successful disk save; busy means retry.");
+            push("Commands are limited to 80 characters; cd closer for long paths.");
+        }
         return 0;
     }
     push("No manual for that name. Type help to list commands.");return -1;
@@ -302,6 +311,66 @@ TermTaskUpdate term_task_poll_update(void){
 }
 int term_task_poll(void){return term_task_poll_update().flags!=0;}
 static int execute(const char *,int,int *);
+/* Unlike the legacy one-argument commands, mv must consume two complete
+ * operands before resolving either path. Do not accept quoted-prefix suffixes,
+ * embedded quotes, or a truncated operand as an accidental different path. */
+static int move_path(const char **remaining,char out[FS_PATH_LEN]){
+    const char *p=*remaining;
+    while(*p==' '||*p=='\t')p++;
+    int quoted=*p=='"',n=0;
+    if(quoted)p++;
+    while(*p&&(quoted?*p!='"':(*p!=' '&&*p!='\t'))){
+        if(*p=='"'||n>=FS_PATH_LEN-1)return -1;
+        out[n++]=*p++;
+    }
+    out[n]=0;
+    if(!n)return -1;
+    if(quoted){if(*p!='"')return -1;p++;}
+    if(*p&&*p!=' '&&*p!='\t')return -1;
+    *remaining=p;return 0;
+}
+static int move_within(int node,int ancestor){
+    for(int depth=0;node>=0&&depth<=FS_MAX_DEPTH;depth++){
+        if(node==ancestor)return 1;
+        node=fs_parent(node);
+    }
+    return 0;
+}
+static int move_command(int cwd,const char *remaining){
+    char source[FS_PATH_LEN],destination[FS_PATH_LEN];
+    if(move_path(&remaining,source)||move_path(&remaining,destination))goto usage;
+    while(*remaining==' '||*remaining=='\t')remaining++;
+    if(*remaining)goto usage;
+    int id=fs_resolve(cwd,source),parent=fs_resolve(cwd,destination);
+    if(!fs_valid(id)||id==fs_root()||fs_is_app(id)){
+        push("Cannot move: source must be an ordinary file or folder, not root or an app.");return -1;
+    }
+    if(!fs_is_dir(parent)){
+        push("Cannot move: destination must be an existing folder.");return -1;
+    }
+    for(int app=1;app<fs_node_limit();app++)if(fs_is_app(app)&&move_within(app,id)){
+        push("Cannot move: source folder contains an app.");return -1;
+    }
+    if(move_within(parent,id)){
+        push("Cannot move: a folder cannot move into itself or its children.");return -1;
+    }
+    /* fs_move's legacy collision policy generates a new name. Reject clashes
+     * first so this command always preserves the basename. No app dispatch or
+     * filesystem mutation occurs between this preflight and fs_move. */
+    int clash=fs_find_child(parent,fs_name(id));
+    if(clash>=0&&clash!=id){
+        push("Cannot move: that name already exists in the destination folder.");return -1;
+    }
+    if(fs_sync_busy())return FS_ERR_BUSY;
+    if(fs_parent(id)==parent){push("Already in that folder; nothing moved.");return 0;}
+    int result=fs_move(id,parent);
+    if(result==FS_ERR_BUSY)return result;
+    if(result<0){push("Cannot move: destination path is too deep or invalid.");return result;}
+    push("Moved in RAM; not yet saved to disk.");return 0;
+usage:
+    push("Usage: mv SOURCE DESTINATION_FOLDER (exactly two paths; double-quote spaces)");
+    return -1;
+}
 static int start_command(int file,const char *remaining,int quoted){
     if(quoted)remaining++;
     if(*remaining&&*remaining!=' ')return -1;
@@ -332,6 +401,7 @@ static int execute(const char *s,int depth,int *budget){
     while(*s==' ')s++;
     if(!*s||*s=='#')return 0;
     char cmd[81];int n=0;while(*s&&*s!=' '&&n<80)cmd[n++]=*s++;cmd[n]=0;while(*s==' ')s++;
+    if(!kstrcmp(cmd,"mv"))return move_command(term_cwd(),s);
     char arg[81];int a=0;const char *p=s;char quote=*p=='"'?*p++:0;
     while(*p&&(quote?*p!=quote:*p!=' ')&&a<80)arg[a++]=*p++;
     arg[a]=0;
@@ -399,8 +469,10 @@ static int execute(const char *s,int depth,int *budget){
 void term_enter(void){
     T.scroll=0;
     char line[81];kstrcpy(line,T.input);push(line);
-    if(T.len){if(T.hcount==16){for(int i=1;i<16;i++)kstrcpy(T.history[i-1],T.history[i]);T.hcount--;}kstrcpy(T.history[T.hcount++],line);}
+    int overflow=T.input_overflow;T.input_overflow=0;
+    if(T.len&&!overflow){if(T.hcount==16){for(int i=1;i<16;i++)kstrcpy(T.history[i-1],T.history[i]);T.hcount--;}kstrcpy(T.history[T.hcount++],line);}
     T.hpos=T.hcount;T.len=0;T.input[0]=0;T.draft[0]=0;int budget=256;
+    if(overflow){push("Command exceeds 80 characters; nothing was run. Use cd for shorter paths.");return;}
     int result=execute(line,0,&budget);
     if(result==FS_ERR_BUSY)push("Disk is saving; retry shortly.");
     else if(result)push("Error: check command, path, syntax, or available space.");

@@ -164,6 +164,17 @@ still required before claiming a measured speedup.
 
 Fonts use four bits per pixel (16 coverage levels), and window masks preserve the background at all four corners. The heavy layered shadows are removed. Font generation uses the included licensed font files and requires Python with Pillow; normal builds use the checked-in generated header.
 
+`python3 -m unittest discover -s tests -p 'test_terminal_move.py'` runs ordinary
+ASan/UBSan host checks for Terminal's strict two-path `mv`: binary files and nested
+folders keep their node/content identities and bytes, including a Calendar
+preference-folder collision repair. Coverage includes quoted/relative paths, exact
+operand counts, unmatched/adjacent quotes, full path-buffer bounds, overlong input,
+no-overwrite collisions, root/apps/app-containing folders, cycle/depth guards,
+same-parent no-ops, script failure propagation, live snapshot busy/retry, and a
+successful disk-save/remount. `mv` preflights collisions before the legacy
+`fs_move` auto-renaming branch, and delegates the mutation and depth/lease guards
+to `fs_move`. The command reports RAM-only success, not durable disk completion.
+
 Terminal opens with a help hint. Use `help` for the command index, `help NAME` or `man NAME` for usage and examples, and Page Up/Page Down to scroll. Output wraps to the window width.
 
 A controlled 20-frame QEMU test with five overlapping windows took 203 timer ticks before the compositor optimizations and 31 afterward: about 7 versus 45 rendered frames per second, including initial cache creation. This measures guest rendering in headless QEMU, not the macOS window's displayed frame rate. The test also checks that cached composition matches a complete redraw pixel-for-pixel. Host tests cover corner clipping, palette invalidation, font access, cursor restoration, and presentation with padded 16-, 24-, and 32-bit framebuffers.

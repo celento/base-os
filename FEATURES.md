@@ -59,7 +59,24 @@ the search bar has focus.
 
 Up/Down recalls the last 16 commands for that terminal. Page Up/Page Down scrolls output, which wraps to the window width. `help` lists every command; `man NAME` shows syntax, behavior, limits, and an example. Tab completes a unique command or path; ambiguous matches ask for more characters. Absolute and relative paths support `.` and `..`. Quote paths containing spaces when running commands. Completion handles unquoted paths.
 
-Commands: `help [COMMAND]`, `man COMMAND`, `ls [PATH]`, `cd PATH`, `pwd`, `cat PATH`, `mkdir PATH`, `touch PATH`, `rm PATH`, `echo TEXT`, `clear`, `stat PATH`, `df`, `run SCRIPT`, `basic FILE`, `exec FILE`, `start FILE`, `stop`, and `tasks`.
+Commands: `help [COMMAND]`, `man COMMAND`, `ls [PATH]`, `cd PATH`, `pwd`, `cat PATH`, `mkdir PATH`, `touch PATH`, `mv SOURCE DESTINATION_FOLDER`, `rm PATH`, `echo TEXT`, `clear`, `stat PATH`, `df`, `run SCRIPT`, `basic FILE`, `exec FILE`, `start FILE`, `stop`, and `tasks`.
+
+`mv SOURCE DESTINATION_FOLDER` moves one ordinary file or folder into an already
+existing folder, preserving its basename, node identities and every child's bytes.
+Use exactly two complete absolute or relative paths, with double quotes around a
+whole path containing spaces, for example `mv "/old notes" "/Documents/archive folder"`.
+There are no options, wildcards, quote escapes, renames or overwrites. An existing
+destination name, root, app shortcut, folder containing an app, or move into the
+source's own subtree is rejected without mutation. A same-folder move is a no-op.
+A disk snapshot in progress reports busy; retry afterward. Success explicitly says
+that the move is in RAM and is not yet saved to disk. Normal successful disk saving
+makes it durable. For example, `mv /prefs/calendar.v1 /Documents` preserves an
+unexpected Calendar preference folder and its contents so Calendar can retry saving;
+it fails safely if `/Documents/calendar.v1` already exists.
+
+Commands longer than 80 characters are rejected rather than executing a truncated
+prefix. Clear the whole input or select a history entry after overlong input. Use
+`cd` and relative paths when a full command would exceed the line limit.
 
 Scripts contain one terminal command per line; blank lines and lines beginning with `#` are ignored. Execution stops at the first error. Limits are 80 characters per command, four nested scripts, and 256 commands per invocation. There are no shell pipes, redirection, or environment variables.
 
