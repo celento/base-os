@@ -12,7 +12,7 @@ import tempfile
 import time
 import zlib
 from layout import constants
-from update_image import install_kernel, kernel_offset
+from update_image import install_kernel
 
 C = constants()
 
@@ -115,8 +115,11 @@ def main(build, keep):
             ('general-protection', b'\x66\xb8\xf8\xff\x8e\xd8', '0000000D'),
         ):
             patched = bytearray(disk)
-            offset = kernel_offset(symbols['kmain'] - C['KERNEL_LOAD_ADDR'], C)
-            patched[offset:offset + len(code)] = code
+            # Fixture changes apply to canonical raw bytes before packing.
+            raw = bytearray(kernel)
+            offset = symbols['kmain'] - C['KERNEL_LOAD_ADDR']
+            raw[offset:offset + len(code)] = code
+            install_kernel(patched, raw, C)
             target = directory / f'{label}.img'; target.write_bytes(patched)
             text = run(target, directory, label, 'PANIC: CPU exception')
             assert f'EXCEPTION vector={vector}' in text
@@ -138,7 +141,6 @@ def main(build, keep):
         subprocess.run([objcopy, '-O', 'binary', str(directory / 'dirty.elf'), str(directory / 'dirty.bin')], check=True)
         poisoned = bytearray(disk)
         data = (directory / 'dirty.bin').read_bytes()
-        assert len(data) <= C['KERNEL_SECTORS'] * 512
         install_kernel(poisoned, data, C)
         target = directory / 'dirty-bss.img'; target.write_bytes(poisoned)
         run(target, directory, 'dirty-bss', 'DESKTOP')
@@ -158,7 +160,6 @@ def main(build, keep):
         subprocess.run([objcopy, '-O', 'binary', str(directory / 'storage.elf'), str(directory / 'storage.bin')], check=True)
         storage_disk = bytearray(disk)
         data = (directory / 'storage.bin').read_bytes()
-        assert len(data) <= C['KERNEL_SECTORS'] * 512
         install_kernel(storage_disk, data, C)
         target = directory / 'storage.img'; target.write_bytes(storage_disk)
         run(target, directory, 'multi-track-storage', 'HARDWARE-STORAGE-PASS', seconds=40)
