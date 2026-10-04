@@ -967,6 +967,7 @@ static void launcher_open(void);
 static void saver_start(void);
 static void show_desktop(void);
 static void sysinfo_fill(SysInfo *si);
+static const char *win_display_title(int slot, char *buffer);
 static void draw_logo(int x, int y, int size);
 static void draw_mini_doc(int x, int y, uint8_t fg, uint8_t bg);
 static void icon_open(int id);
@@ -3761,7 +3762,8 @@ static int term_text(const char *s, int x, int y, int col, int cols) {
 }
 
 static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
-    gui_draw_window(wx, wy, ww, wh, term_task_running(context_slot)?"Terminal - native task":"Terminal", 0, inactive ? WIN_INACTIVE : 0);
+    char title[TERM_TASK_TITLE_LEN];
+    gui_draw_window(wx, wy, ww, wh, win_display_title(context_slot, title), 0, inactive ? WIN_INACTIVE : 0);
     draw_rect(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1, gfx_gray(0x20));
 
     int ax = wx + 1 + TERM_PAD;
@@ -5007,6 +5009,13 @@ static const char *win_app_name(int kind) {
     }
 }
 
+static const char *win_display_title(int slot, char *buffer) {
+    if (slot < 0 || slot >= MAX_WIN) return "App";
+    if (wins[slot].kind == WK_TERM && term_task_title(slot, buffer, TERM_TASK_TITLE_LEN))
+        return buffer;
+    return win_app_name(wins[slot].kind);
+}
+
 static void draw_icon16(int x, int y, const char *art, uint8_t ink) {
     draw_icon_art(x, y, art, 1, ink, -1);
 }
@@ -5338,7 +5347,8 @@ static void taskbar_layout(void) {
     int limit=n?(fb_w-128-(n-1)*6)/n:0;
     for (int k = 0; k < n; k++) {
         int i = order[k];
-        int tile_w = 42 + ui_string_w(win_app_name(wins[i].kind));
+        char title[TERM_TASK_TITLE_LEN];
+        int tile_w = 42 + ui_string_w(win_display_title(i, title));
         if(tile_w>limit)tile_w=limit;
         tb_id[tb_n] = i;
         tb_w[tb_n++] = tile_w;
@@ -5371,7 +5381,8 @@ static void draw_taskbar(void) {
     draw_string("Apps",41,ty,appink);
     for (int t = 0; t < tb_n; t++) {
         int i = tb_id[t];
-        const char *title = win_app_name(wins[i].kind);
+        char native_title[TERM_TASK_TITLE_LEN];
+        const char *title = win_display_title(i, native_title);
         int active = (i == front);
         uint8_t ink = active ? ui_accent_dk : (wins[i].min ? ui_text_dim : ui_text);
         if(!active&&taskbar_hover==i)draw_round_rect(tb_x[t],y+6,tb_w[t],TASKBAR_H-12,7,ui_chrome_dk);

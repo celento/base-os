@@ -199,7 +199,10 @@ static void tasks_draw(const MonitorLayout *l,const SysInfo *si){
         const TermTaskInfo *task=&si->tasks[i];
         int y=l->rows_y+i*TASK_ROW_H;
         MonitorRect show=task_button(l,i,0),stop=task_button(l,i,1);
-        text(l,task->name,l->x+6,y+2,show.x-l->x-12,1,app_text);
+        char title[TERM_TASK_TITLE_LEN]="";
+        append(title,task->name);
+        if(task->document[0]){append(title," - ");append(title,task->document);}
+        text(l,title,l->x+6,y+2,show.x-l->x-12,1,app_text);
         button(l,show,"Show terminal",0);button(l,stop,"Stop task",0);
         char detail[96]="Terminal ",t[24];
         fmt_uint(t,(unsigned)task->owner+1);append(detail,t);
