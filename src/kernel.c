@@ -13,6 +13,7 @@
 #include "download.h"
 #include "browser.h"
 #include "player.h"
+#include "writer.h"
 #include "video.h"
 #include "image_viewer.h"
 #include "audio_example.h"
@@ -660,11 +661,29 @@ enum {
     ICON_SETTINGS,
     ICON_BROWSER,
     ICON_PLAYER,
+    ICON_WRITER,
     ICON_TRASH,
     ICON_COUNT
 };
 #define ICON_DISK ICON_FILES
 
+static const char icon_writer16[] =
+    "   ##########   "
+    "   #........#   "
+    "   #.######.#   "
+    "   #.######.#   "
+    "   #........#   "
+    "   #.####...#   "
+    "   #........#   "
+    "   #.######.#   "
+    "   #........#   "
+    "   #.######.#   "
+    "   #........#   "
+    "   #.####...#   "
+    "   #........#   "
+    "   ##########   "
+    "                "
+    "                ";
 static const char icon_calc16[];
 static const char icon_paint16[];
 static const char icon_view16[];
@@ -707,6 +726,7 @@ static void icons_init(void) {
     icon_set(ICON_SETTINGS, "Settings", icon_gear16, 0x7C8494);
     icon_set(ICON_BROWSER, "Browser", icon_browser16, 0x2476C9);
     icon_set(ICON_PLAYER, "Media Player", icon_player16, 0xDC587A);
+    icon_set(ICON_WRITER, "Writer", icon_writer16, 0x557DD1);
     icon_set(ICON_TRASH, "Trash", icon_trash, 0x9CA3AF);
 
     int col_w = 96;
@@ -779,6 +799,11 @@ static void draw_app_symbol(int id,int x,int y,uint8_t ink) {
         symbol_box(x+2,y+2,28,28,14,ink);
         symbol_box(x+10,y+2,12,28,6,ink);
         draw_rect(x+3,y+10,26,2,ink);draw_rect(x+3,y+21,26,2,ink);break;
+    case ICON_WRITER:
+        symbol_box(x+5,y+1,23,30,3,ink);
+        draw_rect(x+10,y+7,13,4,ink);
+        for(int j=0;j<3;j++)draw_rect(x+10,y+15+j*4,j==2?8:13,1,ink);
+        break;
     case ICON_PLAYER:
         symbol_box(x+2,y+4,28,24,4,ink);
         for(int j=0;j<12;j++)draw_vline(x+11+j,y+10+j/2,14-j,ink);
@@ -1391,7 +1416,8 @@ enum WinKind {
     WK_SYSMON,
     WK_PROPERTIES,
     WK_BROWSER,
-    WK_PLAYER
+    WK_PLAYER,
+    WK_WRITER
 };
 
 /* Max 8 windows: kind, x, y, w, h, z. seq is taskbar creation order. */
@@ -1501,6 +1527,24 @@ static int title_click_window = -1;
 static char *const clip_buf=(char *)(EDITOR_BASE+EDITOR_CAPACITY-EDIT_BUF_SIZE);
 static char *const edit_scratch=(char *)(EDITOR_BASE+EDITOR_CAPACITY-2*EDIT_BUF_SIZE);
 static int clip_len = 0;
+static unsigned clip_generation;
+static void clipboard_changed(void) {
+    if (!++clip_generation) ++clip_generation;
+}
+unsigned writer_clipboard_set(const char *text, unsigned length) {
+    if (!text || length >= EDIT_BUF_SIZE) return 0;
+    kmemcpy(clip_buf, text, length);
+    clip_buf[length] = 0;
+    clip_len = (int)length;
+    clipboard_changed();
+    return clip_generation;
+}
+int writer_clipboard_get(char *text, unsigned capacity, unsigned *generation) {
+    if (!text || (unsigned)clip_len >= capacity) return -1;
+    kmemcpy(text, clip_buf, clip_len + 1);
+    if (generation) *generation = clip_generation;
+    return clip_len;
+}
 
 #define TERM_WIN_W   640
 #define TERM_WIN_H   400
@@ -1545,14 +1589,20 @@ static int name_dlg = 0;
 /* A close request owns a window incarnation, never whichever app draws last. */
 static int edit_close_owner = -1, edit_close_seq;
 static int edit_close_dlg, edit_close_focus, edit_close_failed;
+enum { DOCUMENT_CLOSE, DOCUMENT_NEW, DOCUMENT_OPEN };
+static int document_action, document_target = -1;
+static unsigned document_target_identity;
 static void edit_close_cancel(void) {
     edit_close_owner = -1;
+    document_action = DOCUMENT_CLOSE;
+    document_target = -1;
     edit_close_dlg = edit_close_failed = 0;
     dirty = 1;
 }
 static int edit_close_valid(void) {
     return edit_close_owner >= 0 && edit_close_owner < MAX_WIN &&
-        wins[edit_close_owner].open && wins[edit_close_owner].kind == WK_EDIT &&
+        wins[edit_close_owner].open &&
+        (wins[edit_close_owner].kind == WK_EDIT || wins[edit_close_owner].kind == WK_WRITER) &&
         wins[edit_close_owner].seq == edit_close_seq;
 }
 static int pick_cwd = 0;
@@ -1563,6 +1613,7 @@ static int pick_selected = 0;
 static uint32_t pick_last_click_frame = 0;
 static int pick_last_click_item = -1;
 static int pick_pics_only = 0;
+static int pick_writer, pick_owner = -1, pick_owner_seq;
 
 static uint32_t icon_last_frame = 0;
 static int icon_last = -1;
@@ -1667,6 +1718,7 @@ static void win_minimum(Win *w, int *mw, int *mh) {
     else if(w->kind==WK_VIEW){*mw=IMAGE_VIEWER_MIN_W+2;*mh=IMAGE_VIEWER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_BROWSER){*mw=BROWSER_MIN_W+2;*mh=BROWSER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_PLAYER){*mw=PLAYER_MIN_W+2;*mh=PLAYER_MIN_H+TITLE_H+2;}
+    else if(w->kind==WK_WRITER){*mw=WRITER_MIN_W+2;*mh=WRITER_MIN_H+TITLE_H+2;}
     else { int x, y; layout_window(w->kind, &x, &y, mw, mh); }
 }
 static void win_clamp(Win *w) {
@@ -1735,6 +1787,7 @@ static int win_open(int kind) {
     if (kind == WK_TERM) term_reset();
     if (kind == WK_BROWSER) browser_init();
     if (kind == WK_PLAYER) player_init();
+    if (kind == WK_WRITER) writer_init();
     if (kind == WK_SYSMON) sysmon_reset();
     wins[slot].kind = kind;
     wins[slot].open = 1;
@@ -1758,6 +1811,7 @@ static void win_close(int i) {
     if(wins[i].kind==WK_TERM)term_task_close(i);
     if(wins[i].kind==WK_BROWSER)browser_close();
     if(wins[i].kind==WK_PLAYER)player_close();
+    if(wins[i].kind==WK_WRITER)writer_close();
     wins[i].open = 0;
     context_set(win_front());
     if (dragging_win == i) {
@@ -1767,27 +1821,41 @@ static void win_close(int i) {
     dirty = 1;
 }
 
-/* All user-facing close routes pass here; win_close remains force teardown. */
-static void win_request_close(int i) {
-    if (i < 0 || i >= MAX_WIN || !wins[i].open || edit_close_owner >= 0)
-        return;
+/* An action owns its window and source-file incarnations throughout Save As. */
+static void document_finish(int owner, int action, int target, unsigned identity) {
+    if (action == DOCUMENT_CLOSE) { win_close(owner); return; }
+    if (owner < 0 || owner >= MAX_WIN || !wins[owner].open || wins[owner].kind != WK_WRITER) return;
+    context_set(owner);
+    if (action == DOCUMENT_NEW) writer_new();
+    else if (fs_valid(target) && fs_identity(target) == identity && writer_open_file(target))
+        fm_cwd = fs_parent(target);
+    dirty = 1;
+}
+static void document_request(int i, int action, int target) {
+    if (i < 0 || i >= MAX_WIN || !wins[i].open || edit_close_owner >= 0) return;
     Document *doc = &window_state[i].doc;
-    if (wins[i].kind != WK_EDIT || (doc->saved_ok &&
-        (doc->file < 0 || fs_identity(doc->file) == doc->identity))) {
-        win_close(i);
-        return;
-    }
+    int needs_save = wins[i].kind == WK_WRITER ?
+        (writer_dirty() || (writer_file() >= 0 && fs_identity(writer_file()) != writer_file_identity())) :
+        wins[i].kind == WK_EDIT && !(doc->saved_ok &&
+        (doc->file < 0 || fs_identity(doc->file) == doc->identity));
+    unsigned identity = fs_identity(target);
+    if (!needs_save) { document_finish(i, action, target, identity); return; }
     win_focus(i);
     edit_close_owner = i;
     edit_close_seq = wins[i].seq;
+    document_action = action;
+    document_target = target;
+    document_target_identity = identity;
     edit_close_dlg = 1;
     edit_close_focus = 2; /* Enter starts on Cancel, never Discard. */
     edit_close_failed = 0;
     open_menu = MENU_NONE;
     dragging_win = resizing_win = -1;
     drag_active = fm_dragging = fm_drag_active = edit_dragging = 0;
+    writer_release();
     dirty = 1;
 }
+static void win_request_close(int i) { document_request(i, DOCUMENT_CLOSE, -1); }
 
 static void wins_by_z(int *order, int *n, int front_first) {
     *n = 0;
@@ -1835,6 +1903,10 @@ static int menu_item_enabled(int m, int item) {
                 return clip_is_number();
             return 0;
         }
+        if (front_kind() == WK_WRITER) {
+            if (item == 0 || item == 1) return writer_caret() != writer_anchor();
+            return item == 2 && clip_len > 0;
+        }
         if (front_kind() != WK_EDIT)
             return 0;
         if (item == 0 || item == 1) /* Cut, Copy */
@@ -1854,7 +1926,7 @@ static int menu_item_enabled(int m, int item) {
         }
         if (item == 4) { /* Save */
             int fk = front_kind();
-            return !open_dlg && (fk == WK_EDIT || fk == WK_PAINT);
+            return !open_dlg && (fk == WK_EDIT || fk == WK_PAINT || fk == WK_WRITER);
         }
         if (item == 5) { /* Duplicate: Files + selected file/folder, not an app. */
             int id;
@@ -1966,6 +2038,7 @@ static void edit_copy(void) {
         clip_len = EDIT_BUF_SIZE - 1;
     kmemcpy(clip_buf, edit_buf + lo, clip_len);
     clip_buf[clip_len] = 0;
+    clipboard_changed();
 }
 
 static void edit_cut(void) {
@@ -2099,7 +2172,7 @@ static void edit_search_key(void){
     if(key_sc==KEY_ENTER){if(ctrl_down&&q->replace_mode){if(shift_down)edit_replace_everywhere();else edit_replace_one();}else edit_find_next(shift_down?-1:1);return;}
     if(ctrl_down&&key_sc==0x1e){q->selected[f]=1;dirty=1;return;}
     if(ctrl_down&&(key_sc==0x2e||key_sc==0x2d)&&q->selected[f]){
-        clip_len=length;kmemcpy(clip_buf,text,length+1);
+        clip_len=length;kmemcpy(clip_buf,text,length+1);clipboard_changed();
         if(key_sc==0x2d){text[0]=0;q->position[f]=0;q->selected[f]=0;}dirty=1;return;
     }
     if(ctrl_down&&key_sc==0x2f){
@@ -2203,15 +2276,28 @@ static int edit_save(void) {
     return 1;
 }
 
+static int writer_save_document(void) {
+    int result = writer_save();
+    if (result == WRITER_SAVE_NEEDS_NAME) namedlg_open(2, "untitled.bwr");
+    dirty = 1;
+    return result == WRITER_SAVE_OK;
+}
+static void writer_result(int result) {
+    if (result & WRITER_CHANGED) dirty = 1;
+    if (result & WRITER_REQUEST_SAVE) writer_save_document();
+    if (result & WRITER_REQUEST_SAVE_AS) namedlg_open(2, "untitled.bwr");
+    if (result & WRITER_REQUEST_EXPORT) namedlg_open(3, "document.rtf");
+}
 static void edit_close_choose(int choice) {
     if (!edit_close_valid()) { edit_close_cancel(); return; }
-    int owner = edit_close_owner;
+    int owner = edit_close_owner, action = document_action, target = document_target;
+    unsigned identity = document_target_identity;
     if (choice == 2) { edit_close_cancel(); return; }
-    if (choice == 1) { edit_close_cancel(); win_close(owner); return; }
+    if (choice == 1) { edit_close_cancel(); document_finish(owner, action, target, identity); return; }
     context_set(owner);
-    if (edit_save()) {
+    if (wins[owner].kind == WK_WRITER ? writer_save_document() : edit_save()) {
         edit_close_cancel();
-        win_close(owner);
+        document_finish(owner, action, target, identity);
     } else if (name_dlg) {
         edit_close_dlg = 0; /* Retain the owner while Save As is pending. */
     } else {
@@ -2461,6 +2547,7 @@ static void calc_copy(void) {
         clip_len = EDIT_BUF_SIZE - 1;
     kmemcpy(clip_buf, calc_entry, clip_len);
     clip_buf[clip_len] = 0;
+    clipboard_changed();
 }
 
 static void calc_paste(void) {
@@ -3686,13 +3773,25 @@ static void open_player(int file) {
     dirty=1;
 }
 
+static void open_writer(int file) {
+    int slot = win_open(WK_WRITER);
+    if (slot < 0) return;
+    if (file >= 0) document_request(slot, DOCUMENT_OPEN, file);
+    else if (!fs_is_dir(fm_cwd) || fm_cwd == fs_root()) {
+        int docs = fs_find_child(fs_root(), "Documents");
+        fm_cwd = fs_is_dir(docs) ? docs : fs_root();
+    }
+    dirty = 1;
+}
 static void open_fs_file(int id) {
     if (!fs_valid(id))
         return;
     const char *n = fs_name(id);
     if(fs_is_app(id)&&!kstrcmp(n,"Browser")){open_browser(-1);return;}
     if(fs_is_app(id)&&!kstrcmp(n,"Media Player")){open_player(-1);return;}
+    if(fs_is_app(id)&&!kstrcmp(n,"Writer")){open_writer(-1);return;}
     if(!fs_is_dir(id)&&!fs_is_app(id)){
+        if(file_extension(n,".bwr")){open_writer(id);return;}
         if(file_extension(n,".html")||file_extension(n,".htm")){open_browser(id);return;}
         if(file_extension(n,".wav")||file_extension(n,".wave")||file_extension(n,".mp3")||file_extension(n,".mpg")||file_extension(n,".mpeg")){open_player(id);return;}
     }
@@ -3776,6 +3875,8 @@ static void open_fs_file(int id) {
 
 static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     switch (kind) {
+    case WK_WRITER:
+        *w=WRITER_W+2;*h=WRITER_H+TITLE_H+2;break;
     case WK_BROWSER:
         *w=BROWSER_W+2;*h=BROWSER_H+TITLE_H+2;break;
     case WK_PLAYER:
@@ -4126,6 +4227,7 @@ static void do_empty_trash(void) {
 }
 
 static int od_row_enabled(int id) {
+    if (pick_writer) return !fs_is_app(id);
     if (!pick_pics_only)
         return 1;
     return fs_is_dir(id) || is_image_file(id);
@@ -4166,6 +4268,9 @@ static void start_open_dialog(int pics_only) {
     open_dlg = 1;
     pick_focus=0;pick_first=0;
     pick_pics_only = pics_only;
+    pick_owner = win_front();
+    pick_writer = pick_owner >= 0 && wins[pick_owner].kind == WK_WRITER && !pics_only;
+    pick_owner_seq = pick_owner >= 0 ? wins[pick_owner].seq : 0;
     pick_cwd = fs_root();
     pick_selected = 0;
     od_refresh();
@@ -4191,7 +4296,10 @@ static void od_open_selected(void) {
         return;
     }
     open_dlg = 0;
-    open_fs_file(id);
+    if (pick_writer) {
+        if (pick_owner >= 0 && wins[pick_owner].open && wins[pick_owner].kind == WK_WRITER &&
+            wins[pick_owner].seq == pick_owner_seq) document_request(pick_owner, DOCUMENT_OPEN, id);
+    } else open_fs_file(id);
 }
 
 /* ---------- Drawing ---------- */
@@ -4647,6 +4755,7 @@ static const char *win_app_name(int kind) {
     case WK_PROPERTIES: return "Properties";
     case WK_BROWSER: return "Browser";
     case WK_PLAYER: return "Media Player";
+    case WK_WRITER: return "Writer";
     default: return "App";
     }
 }
@@ -4786,6 +4895,8 @@ static void draw_tb_icon(int kind, int x, int y, uint8_t invert) {
         draw_icon16(x,y,icon_browser16,invert);
     else if(kind == WK_PLAYER)
         draw_icon16(x,y,icon_player16,invert);
+    else if(kind == WK_WRITER)
+        draw_icon16(x,y,icon_writer16,invert);
     else if (kind == WK_FILES)
         draw_icon16(x, y, icon_folder16, invert);
     else if (kind == WK_CLOCK)
@@ -4920,6 +5031,9 @@ static void draw_window_contents(Win *w, int inactive) {
     } else if (w->kind == WK_BREAKOUT) {
         gui_draw_window(wx, wy, ww, wh, "Breakout", 0, fl);
         bo_draw(wx, wy + TITLE_H + 1);
+    } else if (w->kind == WK_WRITER) {
+        gui_draw_window(wx,wy,ww,wh,writer_title(),0,fl);
+        writer_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
     } else if (w->kind == WK_BROWSER) {
         gui_draw_window(wx,wy,ww,wh,"Browser",0,fl);
         browser_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
@@ -5293,6 +5407,7 @@ static void icon_open(int id) {
     case ICON_SYSMON: win_open(WK_SYSMON); break;
     case ICON_BROWSER: open_browser(-1); break;
     case ICON_PLAYER: open_player(-1); break;
+    case ICON_WRITER: open_writer(-1); break;
     case ICON_TRASH: open_files(trash_id >= 0 ? trash_id : fs_root()); break;
     default: break;
     }
@@ -5322,7 +5437,9 @@ static void menu_activate(int m, int item) {
     if (m == MENU_FILE) {
         if (item == 0) {
             open_dlg = 0;
-            if (front_kind() == WK_PAINT) {
+            if (front_kind() == WK_WRITER) {
+                document_request(win_front(), DOCUMENT_NEW, -1);
+            } else if (front_kind() == WK_PAINT) {
                 paint_clear();
             } else if (front_kind() == WK_SNAKE) {
                 snake_reset();
@@ -5343,7 +5460,9 @@ static void menu_activate(int m, int item) {
         } else if (item == 3) {
             close_front();
         } else if (item == 4) {
-            if (front_kind() == WK_PAINT && !open_dlg) {
+            if (front_kind() == WK_WRITER && !open_dlg) {
+                writer_save_document();
+            } else if (front_kind() == WK_PAINT && !open_dlg) {
                 paint_save();
             } else if (front_kind() == WK_EDIT && !open_dlg) {
                 edit_save();
@@ -5357,7 +5476,10 @@ static void menu_activate(int m, int item) {
         return;
     }
     if (m == MENU_EDITM) {
-        if (front_kind() == WK_CALC) {
+        if (front_kind() == WK_WRITER) {
+            const int keys[] = {0x2d, 0x2e, 0x2f};
+            if (item >= 0 && item < 3) writer_result(writer_key(keys[item], 0, WRITER_MOD_CTRL));
+        } else if (front_kind() == WK_CALC) {
             if (item == 1)
                 calc_copy();
             else if (item == 2)
@@ -5712,12 +5834,17 @@ static void namedlg_commit(void) {
     name_buf[name_len] = 0;
     if (name_len == 0) { name_failed = 1; dirty = 1; return; }
     int close_after = edit_close_valid() && edit_close_owner == name_owner;
-    int ok = name_target == 0 ? edit_write_named(name_buf)
-                              : paint_write_named(name_buf);
+    int action = document_action, target = document_target;
+    unsigned identity = document_target_identity;
+    int parent = fs_is_dir(fm_cwd) ? fm_cwd : fs_root();
+    int ok = name_target == 0 ? edit_write_named(name_buf) :
+             name_target == 1 ? paint_write_named(name_buf) :
+             name_target == 2 ? writer_save_as(parent, name_buf) == WRITER_SAVE_OK :
+                                writer_export_rtf(parent, name_buf) >= 0;
     if (ok) {
         int owner = name_owner;
         namedlg_close();
-        if (close_after) win_close(owner);
+        if (close_after) document_finish(owner, action, target, identity);
     } else { name_failed = 1; dirty = 1; }
 }
 
@@ -5734,9 +5861,11 @@ static void draw_edit_close(void) {
     draw_shadow(x, y, 460, 184);
     draw_round_rect(x - 1, y - 1, 462, 186, 11, ui_border);
     draw_round_rect(x, y, 460, 184, 10, COLOR_WHITE);
-    draw_string_bold("Save changes before closing?", x + 22, y + 20, ui_text);
+    draw_string_bold(document_action == DOCUMENT_CLOSE ? "Save changes before closing?"
+        : "Save changes before replacing?", x + 22, y + 20, ui_text);
     const Document *doc = &window_state[edit_close_owner].doc;
-    const char *name = doc->file >= 0 && fs_identity(doc->file) == doc->identity
+    const char *name = wins[edit_close_owner].kind == WK_WRITER ? writer_title() :
+        doc->file >= 0 && fs_identity(doc->file) == doc->identity
                      ? fs_name(doc->file) : "untitled";
     draw_string_clip(name, x + 22, y + 50, ui_text, x + 438);
     draw_string(edit_close_failed ? "Save failed. Your document is still open."
@@ -5777,12 +5906,16 @@ static void draw_namedlg(void) {
     draw_shadow(x, y, w, h);
     draw_round_rect(x - 1, y - 1, w + 2, h + 2, 11, ui_border);
     draw_round_rect(x, y, w, h, 10, COLOR_WHITE);
-    draw_string_bold(name_target == 0 ? "Save document as" : "Save picture as",
+    draw_string_bold(name_target == 3 ? "Export rich text (RTF)" :
+                     name_target == 1 ? "Save picture as" : "Save document as",
                      x + 22, y + 20, ui_text);
-    draw_string(name_failed ? "Save failed. Check storage and file name."
-                            : name_target == 0 ? "Name your file in the current folder"
-                                               : "Saved to the Pictures folder",
-                x + 22, y + 20 + CHAR_H + 6, ui_text_dim);
+    char location[FS_NAME_LEN + 16];
+    kstrcpy(location, "Folder: ");
+    kstrcpy(location + 8, fs_is_dir(fm_cwd) && fm_cwd != fs_root() ? fs_name(fm_cwd) : "/");
+    const char *message = name_failed ?
+        (name_target >= 2 ? writer_status() : "Save failed. Check storage and file name.") :
+        name_target == 1 ? "Saved to the Pictures folder" : location;
+    draw_string_clip(message, x + 22, y + 20 + CHAR_H + 6, ui_text_dim, x + w - 22);
     int fx = x + 22, fy = y + 64, fw = w - 44, fh = 34;
     draw_round_rect(fx, fy, fw, fh, 7, ui_accent);
     draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 6, gfx_gray(0xF7));
@@ -5982,6 +6115,9 @@ static void handle_click(void) {
         }
         else if(w->kind==WK_BROWSER){
             if(browser_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
+        }else if(w->kind==WK_WRITER){
+            writer_result(writer_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,
+                mouse_x,mouse_y,(ctrl_down?WRITER_MOD_CTRL:0)|(shift_down?WRITER_MOD_SHIFT:0)));
         }else if(w->kind==WK_PLAYER){
             if(player_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
         }
@@ -6039,7 +6175,8 @@ static void handle_wheel(int amount) {
        (target<0||wins[i].z>wins[target].z))target=i;
     if(target<0)return;
     int original=win_front();context_set(target);Win *w=&wins[target];
-    if(w->kind==WK_BROWSER)browser_scroll(amount*3);
+    if(w->kind==WK_WRITER)writer_scroll(amount*3);
+    else if(w->kind==WK_BROWSER)browser_scroll(amount*3);
     else if(w->kind==WK_VIEW)image_viewer_scroll(amount*3);
     else if(w->kind==WK_TERM)term_scroll(-amount*3);
     else if(w->kind==WK_EDIT){
@@ -6090,6 +6227,13 @@ static void handle_key(void) {
         launcher_key();
         return;
     }
+    if (front_kind()==WK_WRITER && !open_dlg && open_menu<0 &&
+        !(alt_down || (ctrl_down && (key_sc==KEY_SPACE || key_sc==KEY_TAB ||
+          key_sc==KEY_M || key_sc==KEY_W || key_sc==KEY_N || key_sc==0x18)) || key_sc==0x44)) {
+        writer_result(writer_key(key_sc,key_char,(ctrl_down?WRITER_MOD_CTRL:0)|
+            (shift_down?WRITER_MOD_SHIFT:0)));
+        return;
+    }
     if (ctrl_down && !open_dlg) {
         if(key_sc==0x17 && front_kind()==WK_FILES){menu_activate(MENU_FILE,6);return;}
         if (key_sc == 0x2c || key_sc == 0x15) {
@@ -6126,7 +6270,7 @@ static void handle_key(void) {
             menu_activate(MENU_FILE, 0);
             return;
         }
-        if (key_sc == KEY_S && (front_kind() == WK_PAINT || front_kind() == WK_EDIT)) {
+        if (key_sc == KEY_S && (front_kind() == WK_PAINT || front_kind() == WK_EDIT || front_kind() == WK_WRITER)) {
             menu_activate(MENU_FILE, 4);
             return;
         }
@@ -6735,14 +6879,22 @@ static void session_save(void){
     if(!session_ready)return;
     int dir=fs_find_child(fs_root(),"prefs");if(dir<0)dir=fs_mkdir(fs_root(),"prefs");
     if(dir<0){session_status="Session not saved: no free folder slot.";return;}
+    unsigned writer_size=0;
+    const unsigned char *writer_draft=0;
+    int writer_slot=find_open_kind(WK_WRITER);
+    if(writer_slot>=0){
+        writer_draft=writer_snapshot(&writer_size);
+        if(!writer_draft){session_status="Writer recovery could not be prepared.";return;}
+    }
     int needed=0,projected=(int)fs_used_bytes();
     if(!fs_is_dir(dir))goto failure;
-    for(int i=-2;i<MAX_WIN;i++){
+    for(int i=-3;i<MAX_WIN;i++){
         char draft[]="draft0.txt";const char *name;
-        if(i==-2)name="session";
+        if(i==-3){if(writer_slot<0)continue;name="writer-draft.bwr";}
+        else if(i==-2)name="session";
         else if(i==-1){if(!paint_ready)continue;name="paint-draft";}
         else {if(!wins[i].open||wins[i].kind!=WK_EDIT)continue;draft[5]+=(char)i;name=draft;}
-        int size=i==-2?(int)sizeof(SavedSession):i==-1?PAINT_W*PAINT_H:window_state[i].doc.len;
+        int size=i==-3?(int)writer_size:i==-2?(int)sizeof(SavedSession):i==-1?PAINT_W*PAINT_H:window_state[i].doc.len;
         if(size<0||(unsigned)size>fs_file_limit())goto failure;
         int id=fs_find_child(dir,name);
         if(id<0)needed++;
@@ -6751,7 +6903,7 @@ static void session_save(void){
             int old_size=fs_size(id);
             /* Paint/session metadata are committed last, so do not spend
              * space that an unusually large older file might free later. */
-            projected-=i<0&&old_size>size?size:old_size;
+            projected-=(i==-2||i==-1)&&old_size>size?size:old_size;
         }
         projected+=size;
     }
@@ -6762,14 +6914,23 @@ static void session_save(void){
         Win *w=&wins[i];SavedWindow *v=&snap.win[i];
         if(!w->open||w->kind==WK_PROPERTIES)continue;
         context_set(i);v->open=1;v->kind=w->kind;v->x=w->x;v->y=w->y;v->w=w->w;v->h=w->h;v->min=w->min;v->z=w->z;
-        int id=w->kind==WK_EDIT?edit_file:w->kind==WK_FILES?fm_cwd:w->kind==WK_TERM?term_cwd():-1;
+        int id=w->kind==WK_EDIT?edit_file:w->kind==WK_WRITER?writer_file():w->kind==WK_FILES?fm_cwd:w->kind==WK_TERM?term_cwd():-1;
         if(w->kind==WK_EDIT && fs_identity(id)!=edit_identity)id=-1;
+        if(w->kind==WK_WRITER && fs_identity(id)!=writer_file_identity())id=-1;
         if(fs_valid(id))fs_path(id,v->path,sizeof v->path);
         if(w->kind==WK_EDIT)v->caret=edit_caret;
+        else if(w->kind==WK_WRITER)v->caret=(int)writer_caret();
     }
     /* Reclaim smaller drafts first, so the preflight's total-space promise
      * also holds when one document grows while another becomes shorter. */
-    for(int growing=0;growing<2;growing++)for(int i=0;i<MAX_WIN;i++){
+    for(int growing=0;growing<2;growing++)for(int i=-1;i<MAX_WIN;i++){
+        if(i==-1){
+            if(writer_slot<0)continue;
+            int old=fs_find_child(dir,"writer-draft.bwr"),old_size=old<0?0:fs_size(old);
+            if(((int)writer_size>old_size)!=growing)continue;
+            if(session_put(dir,"writer-draft.bwr",writer_draft,(int)writer_size)<0)goto failure;
+            continue;
+        }
         if(!wins[i].open||wins[i].kind!=WK_EDIT)continue;
         context_set(i);char name[]="draft0.txt";name[5]+=(char)i;
         int old=fs_find_child(dir,name),old_size=old<0?0:fs_size(old);
@@ -6787,12 +6948,24 @@ static void session_restore(void){
     if(id>=0 && fs_size(id)==sizeof snap){kmemcpy(&snap,fs_data(id),sizeof snap);
         if(snap.magic==0x53534542&&snap.version==1)for(int i=0;i<MAX_WIN;i++){
             SavedWindow *v=&snap.win[i];v->path[FS_PATH_LEN-1]=0;
-            if(!v->open||v->kind<0||v->kind>WK_PLAYER||v->kind==WK_PROPERTIES||v->w<1||v->h<1||v->w>4096||v->h>4096||v->x<0||v->x>4096||v->y<0||v->y>4096)continue;
+            if(!v->open||v->kind<0||v->kind>WK_WRITER||v->kind==WK_PROPERTIES||v->w<1||v->h<1||v->w>4096||v->h>4096||v->x<0||v->x>4096||v->y<0||v->y>4096)continue;
             int slot=win_open(v->kind);if(slot<0)break;Win *w=&wins[slot];w->x=v->x;w->y=v->y;w->w=v->w;w->h=v->h;w->min=!!v->min;w->z=v->z>=0&&v->z<100000?v->z:slot;win_clamp(w);
             if(w->z>wm_z)wm_z=w->z;
             int target=v->path[0]?fs_resolve(fs_root(),v->path):-1;
             if(v->kind==WK_FILES){fm_cwd=fs_is_dir(target)?target:fs_root();fm_refresh();}
             if(v->kind==WK_TERM)term_set_cwd(target);
+            if(v->kind==WK_WRITER){
+                if(fs_valid(target)&&!fs_is_dir(target)&&!fs_is_app(target))writer_open_file(target);
+                int draft=fs_find_child(dir,"writer-draft.bwr");
+                if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)){
+                    unsigned caret=v->caret>=0?(unsigned)v->caret:0;
+                    if(!writer_restore((const unsigned char *)fs_data(draft),(unsigned)fs_size(draft),
+                        target,fs_identity(target),1,caret,caret))
+                        session_status="Writer recovery could not be restored.";
+                }
+                int docs=fs_find_child(fs_root(),"Documents");
+                fm_cwd=fs_valid(target)?fs_parent(target):fs_is_dir(docs)?docs:fs_root();
+            }
             if(v->kind==WK_EDIT){edit_clear();if(fs_valid(target)&&!fs_is_dir(target))edit_load(target);
                 char name[]="draft0.txt";name[5]+=(char)i;int draft=fs_find_child(dir,name);
                 if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)){
@@ -6816,6 +6989,7 @@ void program_present(void){cursor_restore();draw_ui();flip_vga();cursor_on=0;dir
 static void install_examples(void){
     if(fs_find_child(fs_root(),"Browser")<0)fs_create_app(fs_root(),"Browser");
     if(fs_find_child(fs_root(),"Media Player")<0)fs_create_app(fs_root(),"Media Player");
+    if(fs_find_child(fs_root(),"Writer")<0)fs_create_app(fs_root(),"Writer");
     int media=fs_find_child(fs_root(),"Media");if(media<0)media=fs_mkdir(fs_root(),"Media");
     if(media>=0&&fs_find_child(media,"chime.wav")<0){int id=fs_create(media,"chime.wav");if(id>=0)fs_write(id,(const char *)audio_example,sizeof audio_example);}
     int docs=fs_find_child(fs_root(),"Documents");
@@ -7011,6 +7185,7 @@ void kmain(void) {
             context_set(original);dirty=1;
         }
         if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
+        if(writer_tick()&&find_open_kind(WK_WRITER)>=0)dirty=1;
         int player_update=player_tick();
         int player_slot=find_open_kind(WK_PLAYER);
         if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
@@ -7119,6 +7294,7 @@ void kmain(void) {
             if (fm_dragging)
                 files_drop();
             edit_dragging = 0;
+            writer_release();
             paint_mouse_up();
         }
 
@@ -7165,6 +7341,11 @@ void kmain(void) {
             }
         }
 
+        if (front_kind() == WK_WRITER && mouse_left && mouse_moved && !open_dlg &&
+            !name_dlg && !edit_close_dlg && !launcher_on && open_menu < 0 && dragging_win < 0) {
+            Win *w = &wins[win_front()];
+            if (writer_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
+        }
         if ((front_kind() == WK_EDIT && !open_dlg && edit_sel_a == edit_sel_b) ||
             fm_renaming) {
             uint32_t b = frame_count / 35;

@@ -187,6 +187,21 @@ python3 tools/volume.py build/baseos-data.img import build/custom.bex /Programs/
 
 Native execution requires a Pentium-or-newer CPU with 4 MB page support. The normal QEMU configuration supplies this. Task state occupies one MiB at 48 MiB; all integrated arenas are validated through 63 MiB. Normal runs use 64 MiB.
 
+## 11. Writer formatted documents
+
+Writer is a single-instance companion to the plain-text Editor. Its proportional
+page supports bold, italic, underline, heading/body paragraphs, alignment,
+selection, shared clipboard and eight grouped undo operations. Ctrl+N and Open
+retain changed work until Save, Discard or Cancel is chosen; all normal close
+routes use the same owner-bound guard. Native saves require successful disk sync.
+
+The native `.bwr` format preserves up to 32,768 ASCII text bytes and all supported
+styles. Plain import normalizes CRLF in an editable copy without overwriting the
+source. Ctrl+Shift+E exports a separate `.rtf` for other word processors. RTF is
+export-only; Unicode, DOCX, embedded images, pagination and printing are not
+implemented. Complete styled drafts and the caret recover after reboot. See the
+[Writer guide](docs/WRITER.md) for shortcuts, exact bounds and verification.
+
 ## Verification
 
 ```sh
