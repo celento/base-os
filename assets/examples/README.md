@@ -1,0 +1,96 @@
+# Harbor media examples
+
+Two small, original media files for the BaseOS Media Player:
+
+| File | Content | Encoding | Size |
+| --- | --- | --- | --- |
+| `harbor.mp3` | An 18-second gentle plucked-synth phrase with soft harmony | MPEG-1 Layer III, 80 kb/s, 44,100 Hz stereo | 180,506 bytes |
+| `harbor.mpg` | A 9-second sunset harbor with a moving sailboat, clouds, and water | MPEG-1 program stream; 320 × 240, 25 fps, 225 I/P/B pictures; 96 kb/s MP2 at 44,100 Hz stereo | 321,536 bytes |
+
+Together the media files occupy 502,042 bytes. Each fits the 2 MiB per-file
+limit of the BaseOS IDE data volume. They are too large for the older floppy-only
+filesystem. The MP3 keeps encoder delay/padding, yielding about 18.051 seconds of
+decoded playback. Video duration is exactly 225 / 25 = 9 seconds; program-stream
+container duration estimates can differ slightly from the picture duration.
+
+The MPEG soundtrack is a faded nine-second excerpt of the same composition.
+Older video-only BaseOS builds detect its MP2 stream but do not play the audio;
+see [`docs/VIDEO.md`](../../docs/VIDEO.md) for the build's current support.
+
+## Reproduce
+
+From the repository root, with Python 3, Pillow, FFmpeg (including libmp3lame),
+and FFprobe already installed:
+
+```sh
+python3 tools/generate_media_examples.py
+# Or generate elsewhere without changing the checked-in examples:
+python3 tools/generate_media_examples.py build/media-examples
+```
+
+The generator synthesizes its own PCM audio and draws every frame locally.
+It downloads nothing, uses no random inputs, and removes temporary PCM/RGB data.
+Encoding uses one thread, explicit codec settings, and bit-exact flags. It then
+checks both files with FFprobe and fully decodes both streams with FFmpeg,
+failing on decoder errors, unexpected codecs/dimensions/frame counts, or size
+limits. It prints sizes, stream details, and SHA-256 hashes.
+
+The checked-in files were generated with Python 3.12.14, Pillow 12.3.0, and FFmpeg
+7.1.5 (Debian build `7.1.5-0+deb13u1`). A separate regeneration with those versions
+produced byte-identical media. Different encoder/library versions may change the
+bytes while preserving the composition and picture sequence.
+
+The checked-in MPEG also passed the actual BaseOS host decoder under ASan/UBSan:
+all 225 frames, pause/resume, late resynchronization, and stop/replay. Compared
+against FFmpeg, worst per-plane mean absolute error was 0.0439 sample levels,
+RMS 0.2145, and peak 4. FFprobe found 19 I, 57 P, and 149 B pictures. No QEMU
+playback check was run as part of creating this pack.
+
+SHA-256:
+
+```text
+c0db55177263894ff18d2c73c356aa173c05ad2d8e9e848268038b74eca0b1b6  harbor.mp3
+aa376e83647e881e52faabbcda05f4da017fca888238f6fc7dbbda6bc236bb8c  harbor.mpg
+```
+
+## Try in BaseOS
+
+Boot a fresh IDE data disk once to initialize it, shut QEMU down, then import:
+
+```sh
+python3 tools/volume.py build/baseos-data.img import assets/examples/harbor.mp3 /harbor.mp3
+python3 tools/volume.py build/baseos-data.img import assets/examples/harbor.mpg /harbor.mpg
+```
+
+Boot again and select either file in Media Player. Never edit a disk image while
+QEMU is using it. The generator itself neither opens nor changes OS disk images.
+
+## Origin and license
+
+The musical phrase, synthesis, and procedural scenery were created specifically
+for BaseOS with AI assistance. Their complete source is
+[`tools/generate_media_examples.py`](../../tools/generate_media_examples.py).
+No third-party music, recordings, samples, fonts, photographs, or artwork are
+included. FFmpeg and Pillow are host-side creation tools, not embedded content.
+The generator and both media files are provided under the MIT license, matching
+the project's stated license:
+
+Copyright (c) 2026 BaseOS contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
