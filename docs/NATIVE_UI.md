@@ -1,14 +1,85 @@
-# Hosted native pointer service, staged implementation
+# Hosted native pointer service
 
-This candidate adds a kernel-owned endpoint for one existing native Terminal
-canvas. It does not create windows, allocate surfaces, deliver keyboard events,
-or implement a graceful close handshake. Existing BEX1 calls 0–27, byte-key
-queues, explicit frame-publication rules and forced Stop/host-close remain intact.
+The current qualified hosted-pointer contract provides one kernel-owned endpoint
+for an existing native Terminal canvas. The general [platform ABI is 1.1](NATIVE_PLATFORM_ABI.md);
+UI **1.0** is negotiated independently through gateway **29**. Hosted-UI feature
+bit **6** is advertised only for bound desktop tasks when trusted production
+input hooks are available. Synchronous `exec` and BASIC do not offer this service.
+See [isolated qualification](NATIVE_UI_QUALIFICATION.md) and its linked integration
+evidence for the tested source and scope; the staged history below is not a
+current instruction to leave the gateway disabled.
+
+Existing calls 0–27, byte-key queues, and forced Stop/host-close remain intact.
 Memory-info retains call 28 and feature bit 4; current-context BEX2 retains bit 5.
-The coordinated UI registry uses gateway 29, feature bit 6, and the private
-UI-target allocation domain 0x40000000. The general ABI query remains 96 bytes.
+The general ABI query remains 96 bytes. UI targets use a private allocation
+domain (`0x40000000`); applications treat handles as opaque. This service creates
+no windows or surfaces and adds no keyboard-event or graceful-close protocol.
+Independent app views/windows remain separate, unmerged work.
 
-## Stage 1: pure geometry and endpoint core
+## Current client quickstart
+
+Build `examples/c/pointer.c` with the normal SDK (default BEX1, or explicit
+`--format bex2`) and launch it through Files, Open, the launcher or Terminal
+`start`. On older or unavailable runtimes it reports unsupported normally.
+
+1. Check `bos_abi_query` and `BOS_FEATURE_HOSTED_UI`, then negotiate
+   `bos_ui_query` before reading its output. Open with `bos_ui_host_open` and
+   required `BOS_UI_SUB_POINTER`; HOVER and WHEEL are optional subscriptions.
+2. Consume the mandatory OPEN STATE_RESET. Drain `bos_ui_read` and the existing
+   `bos_key` byte queue; READ events keep their historical coordinates/geometry.
+   RESET/CANCEL abort a local gesture. Only ordinary final UP commits Pointer's
+   preview, and captured coordinates may lie outside the logical canvas.
+3. Explicitly present each complete dirty frame, then use `bos_ui_wait` with
+   QUEUE, optionally LEGACY_KEY. UI WAIT never publishes a working frame.
+4. Release the endpoint when finished; reopen gets a fresh identity and does not
+   turn an already-held button into a new press. Host close still stops the task.
+
+## Current wire contract
+
+`sdk/baseos_abi.h` defines fixed four-byte word layouts and checked offsets:
+64-byte UI query, 96-byte target info, 96-byte event. All reserved words are zero.
+The local operations are QUERY=0, HOST_OPEN=1, INFO=2, READ=3, WAIT=4, RELEASE=5.
+The negotiated UI/event major is 1 (UI minor 0). POINTER is required; HOVER and
+WHEEL are optional. No window/keyboard-event/surface capability is declared.
+
+Set EAX=29 for the syscall; the five argument registers are EBX, ECX, EDX, ESI,
+EDI in that order. EAX receives the result; other registers are preserved:
+
+| Operation | EBX, ECX, EDX, ESI, EDI |
+|---|---|
+| QUERY | 0, requested major, output, capacity, 0 |
+| HOST_OPEN | 1, requested major, output, capacity, subscriptions |
+| INFO | 2, target, output, capacity, 0 |
+| READ | 3, target, output, capacity, 0 |
+| WAIT | 4, target, QUEUE optionally with LEGACY_KEY, milliseconds, 0 |
+| RELEASE | 5, target, 0, 0, 0 |
+
+The process boundary checks the full declared output span before allocation
+or queue consumption. Query copies min(capacity, 64), with a 16-byte minimum;
+OPEN/INFO/READ require at least 96 bytes and copy exactly 96. Errors/PENDING leave
+all output untouched; successful copies preserve an unused output tail.
+
+- READ returns `BOS_OK` (0) after copying and consuming one 96-byte event (the
+  reset latch first), `BOS_PENDING` (1) if empty, or an error. Only success copies.
+- WAIT returns `BOS_OK` when a queued event/reset or requested legacy key is ready,
+  without consuming it. Zero milliseconds returns `BOS_PENDING` if not ready.
+  A pending wait of 1–60,000 ms suspends only this caller; readiness wins a
+  same-tick deadline. `BOS_E_TIMEOUT` (-1010) leaves the endpoint alive.
+- RELEASE returns `BOS_OK` for the live owned endpoint. A repeated RELEASE, or
+  another use of a released, revoked, wrong-owner or stale target, returns
+  `BOS_E_STALE` (-1005); discard that handle. Internal owner cleanup remains
+  idempotent. Invalid arguments and unavailable contexts retain their documented
+  INVALID/UNSUPPORTED errors.
+
+UI WAIT never publishes, retains no user pointer, and cannot satisfy a separate
+sync wait. By contrast, a positive pending `bos_sync_wait` publishes only when
+it actually suspends; zero-time polls and immediate completion/error do not.
+See [all canvas publication boundaries](NATIVE_CANVAS_PUBLICATION.md).
+
+## Historical stage 1: pure geometry and endpoint core
+
+This and the later stage records preserve implementation/verification history.
+Current availability, client behavior and wire contract are described above.
 
 At this stage the gateway is reserved but is not dispatched or advertised.
 `native_ui.c` can only be used after trusted desktop hooks are configured.
@@ -34,8 +105,9 @@ Every endpoint copies process/slot/generation. Fixed trusted snapshot hooks must
 check the live process and matching Terminal binding. Each syscall-side owner
 operation and each route refresh validates that snapshot. Wrong-owner, released,
 revoked and stale handles do not affect another endpoint. Handles, sequence
-numbers, geometry tokens and stream tokens do not wrap. Release and cleanup are
-idempotent at the owner level; reopened targets have fresh identities.
+numbers, geometry tokens and stream tokens do not wrap. Internal owner cleanup
+is idempotent; public RELEASE succeeds once and a repeated call returns STALE.
+Reopened targets have fresh identities.
 
 Opening fences all already-acquired input, suppresses physically held buttons,
 and requires reading the OPEN STATE_RESET before any gesture can begin. Routing
@@ -58,32 +130,7 @@ count. A pending reset does not rearm gestures. READ preserves the exact histori
 coordinates and dimensions; INFO reports current target state. An outside hover
 boundary clears POSITION_VALID once rather than becoming a global mouse monitor.
 
-## Wire contract
-
-`sdk/baseos_abi.h` defines fixed four-byte word layouts and checked offsets:
-64-byte UI query, 96-byte target info, 96-byte event. All reserved words are zero.
-The local operations are QUERY=0, HOST_OPEN=1, INFO=2, READ=3, WAIT=4, RELEASE=5.
-The negotiated event major is 1. POINTER is required; HOVER and WHEEL are optional.
-No unsupported window/keyboard-event/surface capability is declared.
-
-Intended gateway registers after EAX=29:
-
-| Operation | EBX, ECX, EDX, ESI, EDI |
-|---|---|
-| QUERY | 0, requested major, output, capacity, 0 |
-| HOST_OPEN | 1, requested major, output, capacity, subscriptions |
-| INFO | 2, target, output, capacity, 0 |
-| READ | 3, target, output, capacity, 0 |
-| WAIT | 4, target, QUEUE optionally with LEGACY_KEY, milliseconds, 0 |
-| RELEASE | 5, target, 0, 0, 0 |
-
-The process boundary must check the full declared output span before allocation
-or queue consumption. Query copies min(capacity, 64), with a 16-byte minimum;
-OPEN/INFO/READ require at least 96 bytes and copy exactly 96. Errors/PENDING leave
-all output untouched; successful copies preserve an unused output tail. WAIT
-must not publish, retain a user pointer, or satisfy a separate sync wait.
-
-## Executed stage-1 checks
+## Historical executed stage-1 checks
 
 - `test_canvas_view.py`: 1,932 deterministic legacy layouts, viewport edges,
   fractional/negative/offscreen coordinates; i386 has no division-runtime import.
@@ -99,7 +146,7 @@ must not publish, retain a user pointer, or satisfy a separate sync wait.
 No fuzzing, deliberate memory faults, debugger routes or guest callbacks are
 part of these deterministic host checks.
 
-## Stage 2: process boundary and SDK
+## Historical stage 2: process boundary and SDK
 
 Gateway 29 is now dispatched only for a bound desktop task when fixed UI hooks
 are configured. Synchronous `exec`/BASIC remain unsupported. The ABI feature bit
@@ -134,7 +181,7 @@ address-space host gates also pass. A freestanding kernel build passes. None of
 these host results substitute for the still-pending ordinary production guest
 routing and unchanged BEX1 compatibility gates.
 
-## Stage 3: production routing candidate and C example
+## Historical stage 3: production routing candidate and C example
 
 The ordinary desktop now configures trusted hooks when PS/2 initialization
 succeeds. Native pointer input uses the sole ordered ingress. Device polling still
@@ -187,9 +234,9 @@ Additional executed host gates:
 Production guest validation and final full-suite results are recorded separately
 once run; these host checks alone do not qualify the candidate for integration.
 
-## Qualified isolated candidate
+## Historical isolated qualification
 
-The exact runtime at `9e52fad` has now passed independent source review, all227
+The exact runtime at `9e52fad` passed independent source review, all 227
 host tests, 41 ordinary screenshot/offline assertions in each default/large
 profile, both existing production frame-publication profiles, and the legacy
 Files/search launch/save/Stop/exit gate. See [exact qualification evidence](NATIVE_UI_QUALIFICATION.md)

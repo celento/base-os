@@ -1,9 +1,11 @@
 # Native C application SDK
 
-BaseOS runs its own freestanding i386 BEX1 applications. The SDK compiles on the
-host; there is no in-guest compiler, libc, POSIX API, dynamic linker, or heap API.
-Apps run with ring-3 isolation in a 65,536-byte region and use `int 0x80` for
-bounded text, canvas, keyboard, timer and document operations.
+BaseOS runs freestanding i386 applications built by the host SDK. BEX1 remains
+the default, with an unchanged 65,536-byte process region. The qualified opt-in
+[BEX2 format](BEX2_FORMAT.md) uses a sparse 4 MiB offset extent with text, data,
+workspace and stack regions declared and committed at launch; gaps are not
+accessible memory. Both use `int 0x80` for bounded platform services. There is no
+in-guest compiler, libc, POSIX API, dynamic linker, or heap API.
 
 ## Build and install
 
@@ -30,9 +32,14 @@ builder rejects larger code/data images and code/data/BSS that extend beyond the
 first 48 KiB. The remaining 16 KiB is reserved for the stack; the initial stack
 pointer is offset 65,520. A handwritten executable must observe the same layout.
 An executable over 16,383 bytes needs the IDE data volume because the floppy's
-per-file limit remains unchanged. Application memory remains 64 KiB regardless
-of disk capacity. There is no independent BSS length field in the BEX1 header:
-the loader clears the whole region before copying the image.
+per-file limit remains unchanged. BEX1 application memory remains 64 KiB
+regardless of disk capacity. There is no independent BSS length field in the
+BEX1 header: the loader clears the whole region before copying the image.
+
+For an opt-in BEX2 build, use `--format bex2`; workspace and stack sizes are
+launch declarations, not runtime allocations. See [BEX2 build options and
+layout](BEX2_FORMAT.md#building-and-inspecting). BEX2 uses the desktop task route;
+synchronous `exec` accepts BEX1 only.
 
 Open a `.bex` file in **Files**, the ordinary **Open** dialog, or search for its
 filename with **Ctrl+Space** and press Enter. A program opens in a new Terminal
@@ -107,17 +114,22 @@ throughout. Its progress arithmetic also covers the opt-in 16 MiB file limit.
 
 ## Additive platform services
 
-The shared [platform ABI 1.0](NATIVE_PLATFORM_ABI.md) adds capability/limit
+The shared [platform ABI 1.1](NATIVE_PLATFORM_ABI.md) provides capability/limit
 discovery, process identities, versioned file handles, conditional replacement
-and owned asynchronous IDE completion at calls18–27. Existing calls and binaries
-remain unchanged. New code should query capabilities and use the documented
-extended errors; it must not assume every execution context/backend offers sync.
+and owned asynchronous IDE completion at calls 18–27, plus memory discovery at
+call 28. Call 29 is the independently negotiated [UI 1.0 gateway](NATIVE_UI.md);
+feature bit 6 is conditional on a bound desktop task and available trusted
+hosted-input hooks. Existing calls and binaries remain unchanged. Query
+capabilities and check results before reading output; neither hosted UI nor
+asynchronous sync is available in every execution context/backend.
 
 ## Extended legacy ABI
 
 The first thirteen syscall numbers retain their behavior. Default native and
 BASIC graphics are still 160×100. Other returning registers are preserved; EAX
-holds the result. User pointers are offsets in the isolated 64 KiB region.
+holds the result. User pointers are offsets in the process's declared memory:
+the contiguous 64 KiB region for BEX1, or accessible launch-declared regions in
+BEX2's sparse 4 MiB extent. Syscall transfer limits are the same for both.
 
 | EAX | SDK wrapper | Arguments | Result |
 | --- | --- | --- | --- |
@@ -138,9 +150,9 @@ path can be useful in a deeply nested folder. This is one document operand, not
 an argv vector, shell expansion, environment block or new entry-point convention.
 
 `bos_argument(out, capacity)` copies that path plus a trailing NUL into the app's
-existing 64 KiB region. The return value excludes the NUL. Capacity zero queries
+writable memory. The return value excludes the NUL. Capacity zero queries
 the length without touching `out`. A nonzero capacity must fit the whole path and
-NUL, and the entire declared output range must lie inside the process region;
+NUL, and the entire declared output range must be writable in that process;
 otherwise it returns -1 without a partial copy. An absent argument returns zero
 and writes an empty string when capacity is nonzero. The old `exec` and the
 no-argument Files/Open/search routes have no startup argument.
@@ -157,13 +169,15 @@ snapshot: reads still resolve it again on every call.
 All read chunks are at most 4096 bytes. The default data volume permits source
 files up to 2 MiB. The explicit [large-volume profile](LARGE_VOLUMES.md) permits
 16 MiB sources through the same API; an ordinary native reader has streamed a
-complete 16 MiB file in that profile. DocStats uses the same storage limits. Application memory remains 64 KiB. The
-path must be absolute printable ASCII with a nonzero length at most 128 bytes.
-Folders and app shortcuts are rejected. The complete output range must be inside
-the process region. An empty output capacity reads zero bytes. Offsets at or
-beyond EOF return zero, including very large unsigned offsets; they never wrap
-into the beginning of the file. A final partial chunk copies only the remaining
-bytes and leaves the rest of the output buffer unchanged.
+complete 16 MiB file in that profile. DocStats uses the same storage limits.
+BEX1 application memory remains 64 KiB; a larger disk does not change either
+format's launch-declared memory. The path must be absolute printable ASCII with
+a nonzero length at most 128 bytes. Folders and app shortcuts are rejected. The
+complete output range must be writable in the process's mapped regions. An empty
+output capacity reads zero bytes. Offsets at or beyond EOF return zero, including
+very large unsigned offsets; they never wrap into the beginning of the file.
+A final partial chunk copies only the remaining bytes and leaves the rest of
+the output buffer unchanged.
 
 `bos_read_file` retains its original start-of-file, at-most-4096-byte behavior.
 Those legacy path calls have no file handles or retained filesystem pointers.
@@ -187,32 +201,42 @@ resize another.
 In native task mode, drawing and resize affect a private working canvas. The
 complete frame and its dimensions become visible together at `bos_present`,
 `bos_yield`, `bos_sleep` (including zero), or explicit application exit/return.
-A nonzero application exit code still publishes; timer preemption, external
-Stop, exceptions and watchdog termination do not. The previous complete frame
-remains visible while drawing is unfinished, including during a desktop redraw
-caused by other activity. Resize clears working pixels immediately but its new
+A positive `bos_sync_wait` (1–60,000 ms) also publishes pending drawing, but only
+when the operation is still pending and the call actually suspends. A zero-time
+poll or an immediately completed/error result does not publish. `bos_ui_wait`
+never publishes. A nonzero application exit code still publishes; timer
+preemption, external Stop, exceptions and watchdog termination do not. The
+previous complete frame remains visible while drawing is unfinished, including
+during a desktop redraw caused by other activity. Resize clears working pixels
+immediately but its new
 geometry is published only at that same boundary. Calling a boundary without
 pending drawing does not copy or redraw the canvas. BASIC and synchronous `exec`
 retain their direct drawing/presenter behavior.
 
-The kernel-only `ProgramIO` structure has optional `resize(width,height)` and
-`rect(x,y,width,height,color)` callbacks, in that order after `present`. A null
-resize callback causes the resize call to return -1. A null rectangle callback
-retains the original per-pixel `plot` loop. Terminal's rectangle callback clips
-once and fills working-canvas rows with the existing byte-fill primitive; it
-never publishes, polls devices or switches tasks. Syscall 9 still checks both
-dimensions before accepting even an empty fill, returns the same result, and
-uses the same low byte of each color. Existing compiled BEX1 apps and SDK headers
-are unaffected. Kernel integrations must initialize optional fields to zero or
-a callback. The renderer reads `term_canvas_width()` and
-`term_canvas_height()`; native task pixels use the published width as a tightly
-packed stride. Native `ProgramIO.present` must be bounded and must not dispatch
-other applications; Terminal supplies a copy-only publication callback.
+The kernel-only `ProgramIO` adapter remains for BASIC and synchronous `exec`.
+Its optional `resize(width,height)` and `rect(x,y,width,height,color)` callbacks
+follow `present`. Desktop native tasks instead use a copied `ProcessIO` table;
+each callback receives the exact `(process, slot, generation)` binding and
+validates it before updating the explicit Terminal owner. A null resize callback
+returns -1; a null rectangle callback retains the per-pixel `plot` loop.
+Terminal's rectangle callback clips once and fills working-canvas rows without
+publishing, polling devices or switching tasks. Syscall 9 still checks both
+dimensions before accepting even an empty fill and uses each color's low byte.
+Kernel integrations must initialize optional fields to zero or a callback.
 
-A Terminal now occupies 91,516 bytes, including 320 scrollback rows, the complete-
-input overflow flag and all 64,000 possible canvas pixels. Eight use **732,128
-bytes**, below the fixed 786,432-byte terminal-state subarena, with 54,304 bytes spare before script
-scratch. The overall 1 MiB Terminal arena is unchanged. Published frames use
+Selected-Terminal renderer helpers `term_canvas_width()` and
+`term_canvas_height()` still exist; native pixels use the published width as a
+tightly packed stride. Explicit-owner input and occlusion helpers coexist:
+`term_canvas_size(slot, ...)` reads published geometry without changing selection.
+`ProcessIO.present` is bounded and must not dispatch other applications;
+Terminal supplies the copy-only publication callback. This is hosted Terminal
+integration, not independent native-window support.
+
+Historical footprint: the complete-input overflow checkpoint measured 91,516
+bytes per Terminal and **732,128 bytes** for eight, leaving 54,304 bytes before
+script scratch. Later binding/input fields changed that measurement. The current
+structure remains compile-time bounded by the fixed 786,432-byte terminal-state
+subarena within the unchanged 1 MiB Terminal arena. Published frames use
 512,000 bytes in a separately asserted 512 KiB reservation at `0x600000`–`0x680000`,
 in the existing Paint-to-DMA gap. No application-memory or machine-RAM increase
 is required; the existing boot E820 validation covers this arena.
@@ -383,22 +407,29 @@ passed the persistence-only reboot. No production scan code changed in that fix.
 `examples/c/pointer.c` is a regular C client for the pointer service described in
 [NATIVE_UI.md](NATIVE_UI.md). Build it as the default BEX1 or with the existing
 `--format bex2` option. New volumes install `/Programs/pointer.bex` without
-replacing an existing copy. It needs a separately qualified hosted-UI kernel; on
-older kernels it prints an unsupported message and exits normally.
+replacing an existing copy. The qualified hosted-UI runtime supports it; it
+queries capabilities first and exits normally with an unsupported message on
+older kernels or unavailable contexts.
 
 Open one owned endpoint with `bos_ui_host_open(BOS_UI_SUB_POINTER |
 BOS_UI_SUB_HOVER | BOS_UI_SUB_WHEEL, &info)`. First consume its mandatory
-STATE_RESET. READ uses fixed96-byte historical events, including coordinates and
-geometry tokens from their original route. Treat RESET/CANCEL as aborting any
-local gesture; do not commit because their accepted buttons became zero. The
-example keeps each stroke as a preview until ordinary final UP.
+STATE_RESET. READ returns `BOS_OK` (0) for one fixed 96-byte historical event,
+`BOS_PENDING` (1) for an empty queue, or an error; only success changes output.
+Events include coordinates and geometry tokens from their original route.
+Treat RESET/CANCEL as aborting any local gesture; do not commit because their
+accepted buttons became zero. The example keeps each stroke as a preview until
+ordinary final UP.
 
 Drain `bos_ui_read` and the unchanged `bos_key` byte queue, explicitly present a
 complete frame, then call `bos_ui_wait(target, BOS_UI_WAIT_QUEUE |
-BOS_UI_WAIT_LEGACY_KEY, milliseconds)`. Wait0 is a poll;1–60000 suspends only the
-caller. UI wait never publishes a working frame. TIMEOUT retains the endpoint;
-STALE means it must no longer be used. Release/reopen creates a fresh identity
-and does not turn an already-held button into a new press.
+BOS_UI_WAIT_LEGACY_KEY, milliseconds)`. WAIT returns `BOS_OK` when an event or
+requested legacy key is ready, without consuming it. Wait 0 returns `BOS_PENDING`
+if neither is ready; 1–60,000 ms suspends only while pending. UI wait never
+publishes a working frame. `BOS_E_TIMEOUT` retains the endpoint; `BOS_E_STALE`
+means it must no longer be used. RELEASE returns `BOS_OK` once, then
+`BOS_E_STALE` on the same handle; internal owner cleanup is idempotent.
+Release/reopen creates a fresh identity and does not turn an already-held
+button into a new press.
 
 The endpoint owns no Terminal chrome and creates no window. Captured pointer
 coordinates can be negative or outside the logical canvas; clip drawing rather

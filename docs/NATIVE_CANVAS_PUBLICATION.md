@@ -3,18 +3,23 @@
 Native tasks draw into per-Terminal working pixels. The renderer reads a separate,
 complete published frame and its own on/width/height metadata. Publication occurs
 before explicit `present`, `yield`, `sleep` (including zero) and application
-exit/return, including a nonzero exit status. A timer slice, external Stop, or
-generic failure completion cannot publish. Text and lifecycle updates remain
-independent. BASIC and legacy synchronous `exec` keep direct drawing behavior.
+exit/return, including a nonzero exit status. A positive `bos_sync_wait`
+(1–60,000 ms) also publishes pending drawing only when its operation is still
+pending and the call actually suspends. Zero-time polling and immediate
+completion/error do not publish; `bos_ui_wait` never publishes. A timer slice,
+external Stop, or generic failure completion cannot publish. Text and lifecycle
+updates remain independent. BASIC and legacy synchronous `exec` keep direct
+drawing behavior.
 
 Eight maximum frames use 512,000 bytes in the explicitly asserted 512 KiB arena
 at `0x600000`–`0x680000`. This is in the existing E820-validated Paint-to-disk-DMA
 gap, with unchanged 64 MiB/default and 128 MiB/large requirements. Each Terminal
-used 91,512 bytes in the original hourly04 publication implementation. The later
-complete-input overflow flag raises this to 91,516 bytes (732,128 for eight);
-all eight still fit before the existing script scratch.
-The bounded publication copy neither allocates nor polls/dispatches applications.
-The existing kernel renderer is unchanged.
+used 91,512 bytes in the original hourly04 publication implementation; the
+complete-input overflow checkpoint measured 91,516 bytes (732,128 for eight).
+These are historical footprints, before later binding/input fields. The current
+structure is compile-time checked against the same fixed subarena before script
+scratch. The bounded publication copy neither allocates nor polls/dispatches
+applications. The original publication change kept the kernel renderer unchanged.
 
 ## Host verification
 
