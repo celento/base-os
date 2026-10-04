@@ -157,7 +157,13 @@ suppressed until all held buttons are released. It does not become a gesture in
 another application. A scene-discard/input-loss boundary that authoritatively
 observes all buttons released clears the old suppression baseline.
 
-`examples/c/pointer.c` installs as `/Programs/pointer.bex` on a new volume only.
+`examples/c/pointer.c` is embedded by the qualified runtime; its normal example
+installer creates `/Programs/pointer.bex` when missing and preserves an existing
+name. The explicit `--pointer-example` packaging option adds an archived
+source-built binary, provenance and `Pointer guide.txt` to fresh release disks,
+requiring any already-seeded Pointer to match byte-for-byte. See
+[release instructions](RELEASE.md#optional-fresh-disk-pointer-sdk-example).
+The option preserves the existing runtime/defaults and never opens saved disks.
 It is a regular BEX1 SDK app, also buildable as BEX2. Left/right draw separate ink;
 a chord previews both. Only ordinary final UP commits the preview. RESET/CANCEL
 aborts it. R toggles 160×100/320×200 with explicit publication; C clears; O

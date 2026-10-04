@@ -8,7 +8,7 @@ from volume import data_layout, data_marker, load, resolve, commit
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def install(build, boot_image, data_image, epoch, profile='default', program_examples=()):
+def install(build, boot_image, data_image, epoch, profile='default', program_examples=(), program_guides=None, preinstalled_programs=()):
     """Boot an explicitly blank release disk, then atomically add original samples.
 
     Refuses all existing nonblank volume data. Called only for disposable release
@@ -35,16 +35,26 @@ def install(build, boot_image, data_image, epoch, profile='default', program_exa
                 ('harbor.mpg', media, (ROOT / 'assets/examples/harbor.mpg').read_bytes()),
                 ('Media guide.txt', docs, b'''HARBOR MEDIA EXAMPLES\n\nPress Ctrl+Space and type harbor.mp3 or harbor.mpg to open a file.\nThe Media Player also lists both files alongside the short chime.\n\nHarbor MP3: 18 seconds of original synthesized music, stereo 44.1 kHz.\nHarbor MPEG: a 9-second sunset sailboat scene with the same soundtrack.\nUse Space to pause/resume; S stops. Volume uses the on-screen buttons.\nMinimize to continue playback in the background; closing stops playback.\n\nThese sounds and pictures were generated for BaseOS, with no downloaded\nrecordings or artwork. MIT license. Complete generator, provenance and\nlicense are in source/assets/examples/README.md in the source package.\n\nImport your own compatible files only while QEMU is stopped. See\nsource/docs/MEDIA.md, VIDEO.md and IMAGE_FORMATS.md for exact limits.\n''')]
     examples.append(('Writer guide.bwr', docs, (ROOT / 'assets/examples/writer-guide.bwr').read_bytes()))
+    programs = -1
     if program_examples:
         from release_examples import GUIDE_NAME, GUIDE
         programs = resolve(nodes, '/Programs')
         if programs < 0:
             raise ValueError('Fresh disk has no Programs directory')
         examples.extend((name, programs, content) for name, content in program_examples)
-        examples.append((GUIDE_NAME, docs, GUIDE))
+        if program_guides is None:  # Preserve the original workspace-only caller contract.
+            program_guides = [(GUIDE_NAME, GUIDE)]
+        examples.extend((name, docs, content) for name, content in program_guides)
     for name, parent, content in examples:
-        if any(node['parent'] == parent and node['name'] == name for node in nodes.values()):
-            raise ValueError('Fresh demo destination unexpectedly exists: ' + name)
+        existing = [node for node in nodes.values() if node['parent'] == parent and node['name'] == name]
+        if existing:
+            # The qualified kernel already seeds Pointer. Only an explicitly
+            # allowed, exact program copy may be retained on this fresh disk.
+            if (name in preinstalled_programs and any(n == name and b == content for n, b in program_examples)
+                    and parent == programs and len(existing) == 1 and not existing[0]['directory']
+                    and not existing[0]['app'] and existing[0]['data'] == content):
+                continue
+            raise ValueError('Fresh demo destination unexpectedly exists or differs: ' + name)
         ident = next(i for i in range(1, layout.node_limit) if i not in nodes)
         nodes[ident] = dict(name=name, parent=parent, directory=0, app=0, data=content, modified=modified)
     before = set(data_image.parent.glob(data_image.name + '.*.bak'))
