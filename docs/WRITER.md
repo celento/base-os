@@ -4,14 +4,13 @@ Writer is a separate, single-instance native desktop app. The plain-text Editor
 remains available. Writer stores up to **32,768 ASCII text bytes**, with bold,
 italic, underline, heading/body paragraph styles and left/center/right alignment.
 Tabs and line breaks are supported. There is no Unicode, DOCX, general RTF import,
-image embedding, paginated editing or guest printing. RTF is an export format.
-A standalone paginated PDF export module is described below; it does not add
-a guest PDF viewer or printer driver.
+image embedding, paginated editing or guest printing. RTF and PDF are export formats. PDF files can be viewed or printed on another
+computer; there is no guest PDF viewer or printer driver.
 
 ## Editing
 
 The toolbar offers B / I / U, Body / Heading, paragraph alignment, Undo / Redo,
-Save and Export RTF. Character buttons affect selected text or subsequent typing.
+Save, RTF and PDF export. Character buttons affect selected text or subsequent typing.
 Paragraph buttons affect every touched paragraph; a selection ending exactly at
 the next paragraph's start does not include that next paragraph. Mixed selected
 character styles are turned on consistently by the corresponding button.
@@ -24,6 +23,7 @@ character styles are turned on consistently by the corresponding button.
 - Ctrl+Z / Ctrl+Y or Ctrl+Shift+Z: undo / redo
 - Ctrl+S / Ctrl+Shift+S: Save / Save As
 - Ctrl+Shift+E: Export RTF
+- Ctrl+Shift+P: Export PDF; choose Letter or A4 in the name dialog
 - Arrows, Home/End, Page Up/Page Down: visual navigation
 - Ctrl+Left/Right: word navigation; Ctrl+Home/End: document boundaries
 - Shift with navigation, Shift-click, or mouse drag: extend the selection
@@ -50,7 +50,7 @@ The Find toolbar button or Ctrl+F opens a one-line query bar. Ctrl+H adds a
 replacement field. Enter/F3 finds the next match; Shift+Enter/F3 searches backward,
 and both wrap through the document. Aa toggles ASCII case sensitivity. Tab moves
 between fields; Ctrl+A/C/X/V and Shift+arrows work within the focused field.
-Escape closes the bar without changing document text. Save, Save As, Export RTF
+Escape closes the bar without changing document text. Save, Save As, RTF/PDF export
 and document undo/redo remain available while a search field is focused.
 
 Replace or Ctrl+Enter replaces the selected match and selects the following
@@ -80,7 +80,7 @@ length, invalid character/paragraph properties and trailing bytes reject the
 whole open. See [WRITER_FORMAT.md](WRITER_FORMAT.md) for the wire format and RTF
 references.
 
-Native Save As requires `.bwr`; export requires `.rtf`. Existing unrelated names
+Native Save As requires `.bwr`; RTF and PDF export require `.rtf` and `.pdf`. Existing unrelated names
 are rejected. Ordinary Save checks the original filesystem identity, including
 after a `.bwr` rename: a deleted file's reused node ID is never overwritten.
 Renaming away from `.bwr` requires Save As. A clean
@@ -109,7 +109,7 @@ font sizes, empty/final paragraphs and all inline states. This is a deliberately
 small standards-compatible RTF export, not a claim of complete RTF support or
 pixel-identical layout in every external word processor.
 
-## Paginated PDF module
+## Paginated PDF export
 
 `writer_pdf_export` in `src/writer_pdf.c/.h` serializes the current rich model into
 ordinary letter or A4 portrait PDF pages, using standard Times fonts, 12/18-point
@@ -119,7 +119,32 @@ The model exporter takes caller-owned output, measures before writing, and rejec
 insufficient capacity without changing either output or native work. It adds no
 arena/BSS allocation. See [WRITER_PDF.md](WRITER_PDF.md) for exact layout, failure
 semantics, standard-font attribution, independent host verification and the safe
-file/UI integration contract. This module alone does not change the desktop menu.
+file/UI integration details.
+
+Click **PDF** or press **Ctrl+Shift+P**. The export dialog defaults to Letter and
+lets you select Letter or A4 with the mouse. Tab/Shift+Tab moves through filename,
+Letter, A4, Cancel and Export. On a paper control, Left/Right changes paper;
+Space/Enter selects it. Enter from the filename or Export writes the file;
+Escape or Cancel closes the dialog. The selected paper is highlighted, with a
+separate keyboard-focus outline. The compact RTF/PDF buttons fit the existing
+420px minimum toolbar without reducing its other controls.
+
+PDF export preflights the exact serialized size against the 512 KiB output buffer,
+the mounted per-file limit, projected node capacity and available byte storage
+before creating any file. The full output is then serialized before creation.
+A failed write removes only its newly created, identity-matching empty target.
+Export never changes native binding, dirty state, caret/selection or undo/redo.
+Existing files cannot be overwritten.
+
+If disk synchronization fails, the complete PDF is retained in RAM and the dialog
+stays open with an explicit error. Retry the **same filename and paper** while
+that document revision is still current. Writer verifies the owned node identity
+and every serialized byte, then retries synchronization without rewriting. If the
+document, paper or file contents changed, choose a new name instead. Only the most
+recent pending PDF export has this retry ownership; New/Open/Restore/Close clear
+it. A cancelled dialog does not delete the RAM file; ordinary later disk sync may
+persist it. A successful export does not save unsaved native edits, so the usual
+Save/Discard/Cancel guard still applies.
 
 ## Desktop integration contract
 
@@ -130,7 +155,7 @@ rectangle as well as the screen. The desktop owns New/Open/Close confirmation,
 window title decoration, name dialogs, file association and recovery scheduling.
 
 Input returns a bitmask: changed, request Save, request Save As, or request
-Export. Save APIs return `WRITER_SAVE_OK` (1), `WRITER_SAVE_NEEDS_NAME` (0), or
+RTF export or PDF export. Save APIs return `WRITER_SAVE_OK` (1), `WRITER_SAVE_NEEDS_NAME` (0), or
 `WRITER_SAVE_ERROR` (-1). Export returns the new nonnegative filesystem ID on
 success and -1 on failure. `writer_close()` is called **only after** a completed
 Save/Discard/Cancel guard; it resets document content while retaining clipboard.

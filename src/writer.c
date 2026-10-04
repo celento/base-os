@@ -47,6 +47,7 @@ static struct {
     unsigned identity;
     WriterBinding binding;
     int has_binding, binding_conflict;
+    struct { int valid, file; unsigned identity, revision, paper, length; } pending_pdf;
     unsigned group_kind, group_caret, group_ticks, group_count;
     unsigned stats_revision, words;
     struct {
@@ -537,6 +538,7 @@ static int search_key(int sc, char ch, int modifiers) {
 }
 
 void writer_new(void) {
+    state.pending_pdf.valid = 0;
     state.search.open = state.search.focus = 0;
     state.group_kind = 0;
     state.first = state.current = 0; state.count = 1;
@@ -593,6 +595,9 @@ int writer_open_file(int id) {
     if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id)) { status("That file is unavailable."); return 0; }
     int size = fs_size(id); const unsigned char *data = (const unsigned char *)fs_data(id);
     int native = native_name(fs_name(id));
+    if (extension(fs_name(id), "pdf") || (size >= 5 && data && data[0] == '%' && data[1] == 'P' && data[2] == 'D' && data[3] == 'F' && data[4] == '-')) {
+        status("PDF is export-only. Open the original .bwr to edit; view or print PDF on another computer."); return 0;
+    }
     if (extension(fs_name(id), "rtf") || (size >= 5 && data && data[0] == '{' && data[1] == '\\' && data[2] == 'r' && data[3] == 't' && data[4] == 'f')) {
         status("RTF is export-only. Open the original .bwr or import a plain-text copy."); return 0;
     }
@@ -601,6 +606,7 @@ int writer_open_file(int id) {
         status(native ? "Invalid or unsupported .bwr document; current work is unchanged." :
                         "Import rejected: ASCII with LF/CRLF breaks, at most 32,768 normalized bytes."); return 0;
     }
+    state.pending_pdf.valid = 0;
     state.search.open = state.search.focus = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); copy_bytes(&s->doc, &ARENA->staging, sizeof(WriterDoc));
@@ -704,11 +710,85 @@ int writer_export_rtf(int parent, const char *name) {
     if (fs_sync() < 0) { status("RTF exists in memory, but disk sync failed; native work is unchanged."); return -1; }
     status("Exported RTF and synchronized to disk. Native save state is unchanged."); return id;
 }
+int writer_export_pdf(int parent, const char *name, unsigned paper) {
+    if (!state.initialized) writer_init();
+    unsigned n = 0;
+    if (name) while (n < FS_NAME_LEN && name[n] && name[n] != '/') n++;
+    if (!name || !n || n == FS_NAME_LEN || name[n]) {
+        status("Choose a PDF name of 1-23 characters, with no slash."); return -1;
+    }
+    if (!extension(name, "pdf")) { status("PDF exports use the .pdf filename extension."); return -1; }
+    if (!fs_is_dir(parent)) { status("The export folder is unavailable; choose a valid folder."); return -1; }
+    if (paper != WRITER_PDF_LETTER && paper != WRITER_PDF_A4) {
+        status("Choose Letter or A4 paper; no PDF was created."); return -1;
+    }
+    int existing = fs_find_child(parent, name);
+    if (existing >= 0 && (!state.pending_pdf.valid || existing != state.pending_pdf.file ||
+        fs_identity(existing) != state.pending_pdf.identity || fs_is_dir(existing) || fs_is_app(existing))) {
+        status("Choose a new PDF name; existing files are never replaced."); return -1;
+    }
+    if (existing >= 0 && (snapshot()->revision != state.pending_pdf.revision || paper != state.pending_pdf.paper)) {
+        status("Pending PDF differs from this document or paper. Choose a new name; the old PDF is unchanged."); return -1;
+    }
+    unsigned length, pages;
+    if (writer_pdf_export(document(), paper, 0, 0, &length, &pages) != WRITER_PDF_OK) {
+        status("Could not measure PDF; the native document is unchanged."); return -1;
+    }
+    if (length > EXPORT_CAPACITY) {
+        status("PDF exceeds the 512 KiB export buffer. Simplify styles or split the document; no file was created."); return -1;
+    }
+    if (length > fs_file_limit()) { status("PDF exceeds this volume's per-file limit; no export was created."); return -1; }
+    if (existing < 0) {
+        unsigned count = (unsigned)fs_node_count(), capacity = fs_capacity_for_nodes(count + 1), used = fs_used_bytes();
+        if (count >= (unsigned)fs_node_limit()) { status("The volume has no free file slots; no PDF was created."); return -1; }
+        if (used > capacity || length > capacity - used) {
+            status("Not enough space for the complete PDF; no export was created."); return -1;
+        }
+    }
+    unsigned written, actual_pages;
+    if (writer_pdf_export(document(), paper, ARENA->output, EXPORT_CAPACITY, &written, &actual_pages) != WRITER_PDF_OK ||
+        written != length || actual_pages != pages) {
+        status("Could not serialize the complete PDF; no export was created."); return -1;
+    }
+    int id = existing;
+    if (id >= 0) {
+        /* A retry is sync-only, never an overwrite. Revision/paper guarantee the
+         * same deterministic export; compare every byte to detect outside edits.
+         * Polls only service devices and cannot dispatch edits or file changes. */
+        const unsigned char *bytes = (const unsigned char *)fs_data(id);
+        if (!bytes || fs_size(id) != (int)length || length != state.pending_pdf.length) {
+            status("The pending PDF changed outside Writer. Choose a new name; no file was replaced."); return -1;
+        }
+        for (unsigned i = 0; i < length; i++) {
+            if (bytes[i] != ARENA->output[i]) {
+                status("The pending PDF changed outside Writer. Choose a new name; no file was replaced."); return -1;
+            }
+            if ((i & 4095u) == 4095u) platform_poll();
+        }
+    } else {
+        id = fs_create(parent, name);
+        if (id < 0) { status("Could not create the PDF; check filename, folder, space and disk status."); return -1; }
+        unsigned identity = fs_identity(id);
+        if (fs_write(id, (const char *)ARENA->output, (int)length) < 0) {
+            /* Only the new empty target is ours to roll back. */
+            if (fs_valid(id) && fs_identity(id) == identity && !fs_is_dir(id) && !fs_is_app(id) && !fs_size(id)) fs_delete(id);
+            status("PDF write failed. Native work is unchanged; no complete export was written."); return -1;
+        }
+        state.pending_pdf.valid = 1; state.pending_pdf.file = id; state.pending_pdf.identity = identity;
+        state.pending_pdf.revision = snapshot()->revision; state.pending_pdf.paper = paper; state.pending_pdf.length = length;
+    }
+    if (fs_sync() < 0) {
+        status("PDF exists in RAM; disk sync failed. Retry this name and paper. Native work is unchanged."); return -1;
+    }
+    state.pending_pdf.valid = 0;
+    status("Exported PDF and synchronized to disk. Native save state is unchanged."); return id;
+}
 int writer_restore(const unsigned char *data, unsigned length, int file, unsigned identity,
                    int dirty, unsigned caret, unsigned anchor) {
     state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (writer_native_decode(&ARENA->staging, data, length)) { status("Invalid recovery document; current work is unchanged."); return 0; }
+    state.pending_pdf.valid = 0;
     state.search.open = state.search.focus = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); copy_bytes(&s->doc, &ARENA->staging, sizeof(WriterDoc));
@@ -764,12 +844,13 @@ int writer_key(int sc, char ch, int modifiers) {
     if (control && (sc == 0x21 || sc == 0x23)) { search_open(sc == 0x23); return WRITER_CHANGED; }
     if (sc == 0x3d) { if (!state.search.open) search_open(0); search_find(extend ? -1 : 1); return WRITER_CHANGED; }
     if (state.search.open && sc == 0x01) { state.search.open = state.search.focus = 0; return WRITER_CHANGED; }
-    if (state.search.open && state.search.focus && !(control && (sc == 0x1f || sc == 0x2c || sc == 0x15 || (sc == 0x12 && extend))))
+    if (state.search.open && state.search.focus && !(control && (sc == 0x1f || sc == 0x2c || sc == 0x15 || ((sc == 0x12 || sc == 0x19) && extend))))
         return search_key(sc, ch, modifiers);
     if (control) {
         switch (sc) {
         case 0x1f: state.group_kind = 0; return extend ? WRITER_REQUEST_SAVE_AS : WRITER_REQUEST_SAVE;
         case 0x12: if (extend) { state.group_kind = 0; return WRITER_REQUEST_EXPORT; } return format_paragraph(WRITER_ALIGN_MASK, WRITER_ALIGN_CENTER);
+        case 0x19: if (extend) { state.group_kind = 0; return WRITER_REQUEST_PDF; } return 0;
         case 0x30: return format_inline(WRITER_STYLE_BOLD);
         case 0x17: return format_inline(WRITER_STYLE_ITALIC);
         case 0x16: return format_inline(WRITER_STYLE_UNDERLINE);
@@ -984,7 +1065,7 @@ static const Button buttons[] = {
     {108, 5, 54, "Body", 4}, {166, 5, 76, "Heading", 5},
     {252, 5, 54, "Undo", 9}, {310, 5, 54, "Redo", 10},
     {8, 35, 54, "Left", 6}, {66, 35, 68, "Center", 7}, {138, 35, 60, "Right", 8},
-    {208, 35, 58, "Save", 11}, {270, 35, 88, "Export RTF", 12}, {366, 35, 46, "Find", 13}
+    {208, 35, 58, "Save", 11}, {270, 35, 42, "RTF", 12}, {316, 35, 42, "PDF", 14}, {366, 35, 46, "Find", 13}
 };
 static int button_active(unsigned action) {
     unsigned style = snapshot()->typing_style, para = paragraph_at(document(), snapshot()->caret);
@@ -1001,6 +1082,7 @@ static int button_action(unsigned action) {
     if (action == 9 || action == 10) return undo(action == 10);
     if (action == 11) return WRITER_REQUEST_SAVE;
     if (action == 12) return WRITER_REQUEST_EXPORT;
+    if (action == 14) return WRITER_REQUEST_PDF;
     search_open(0); return WRITER_CHANGED;
 }
 static void geometry(int w, int h) {
