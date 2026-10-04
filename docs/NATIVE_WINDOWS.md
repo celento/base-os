@@ -1,12 +1,14 @@
-# Independent native primary windows: candidate contract
+# Independent native primary windows: qualified contract
 
-This describes the isolated `feature/independent-native-windows` candidate on
-4 October 2026. It is **not guest-qualified, integrated into main, or a release
-availability claim**. Its base is the [qualified hosted app-view extraction](APP_VIEW_QUALIFICATION.md).
-That qualification covers the earlier runtime only; it does not qualify the
-new launch flag, owned backend, UI adoption operation, renderer or lifetime UI.
-Final aggregate/build/ordinary guest evidence must identify the exact candidate
-source and binaries separately.
+This records the independent-window contract qualified on the held production
+runtime `6d19b75a2caa546be5d86e7e2984a7174fa3265e` on 4 October 2026.
+[Exact qualification](NATIVE_WINDOWS_QUALIFICATION.md) records nineteen passed
+held-runtime guest phases plus one older-kernel refusal phase. The separate
+clean integration `9836220` has equal runtime source and passed 355 host tests
+and a clean build; the held guest results are not relabelled as that new binary.
+This is not a main-integration or release availability claim. The preceding
+[hosted app-view extraction](APP_VIEW_QUALIFICATION.md) remains a distinct,
+earlier qualification.
 
 The increment gives a GUI-declared BEX2 process one ordinary decorated primary
 window with its own copied title, canvas and bounded Output log. No Terminal is
@@ -16,7 +18,7 @@ callbacks, keyboard events, or a graceful-close/save handshake.
 
 ## Coordinated additive allocations
 
-The qualified baseline remains general ABI 1.1 and independently negotiated UI
+The preceding qualified baseline used general ABI 1.1 and independently negotiated UI
 1.0. The candidate uses general ABI **1.2** and UI **1.1**, with no new syscall:
 
 | Namespace | Candidate allocation |
@@ -227,7 +229,7 @@ reboot. No session wire layout or built-in kind number changes.
 ## Measured i386 storage and stack review
 
 Compile-only probes use the actual 32-bit freestanding definitions, not host
-pointer sizes. The 4 October candidate probe reports:
+pointer sizes. The frozen 6d19b75 i386 probe reports:
 
 | Typed allocation | Bytes |
 |---|---:|
@@ -242,6 +244,8 @@ pointer sizes. The 4 October candidate probe reports:
 | Published pixels / original published arena | 512,000 / 524,288 |
 | Remaining published arena space | 12,288 |
 | Process record / eight records | 4,720 / 37,760 |
+| UI target / eight target records | 6,364 / 50,912 |
+| Ordered input ingress / its sample array | 16,456 / 16,384 |
 
 `AppStorage` stays at `APPS_BASE + 0x300000`; published pixels remain at
 `NATIVE_CANVAS_BASE`. The extra log and metadata use **31,520 bytes** of the
@@ -257,7 +261,8 @@ bytes, no workspace and a 16,384-byte stack. Its rounded commitment is 2 text +
 artifact-specific sizes are not a new executable policy or a final kernel hash.
 
 Separate, serial compilation of `kernel`, `term`, `app_view`, `app_canvas`,
-`app_storage`, `canvas_view`, `process`, `native_ui`, `executable` and `sysmon`
+`app_storage`, `canvas_view`, `process`, `native_ui`, `executable`, `sysmon` and
+`input_ingress`
 with GCC 14.2.0 and Makefile production CFLAGS plus `-fstack-usage` gives these
 per-function frames (bytes include GCC's bounded outgoing-call usage):
 
@@ -277,8 +282,8 @@ per-function frames (bytes include GCC's bounded outgoing-call usage):
 | Existing Terminal `execute` / `term_enter` | 5,888 / 144 |
 | Existing session save / restore | 13,024 / 13,008 |
 
-The compiler reports only static or dynamic-bounded frames for the measured
-units. The kernel stack reservation is unchanged at 65,536 bytes,
+The exact frozen-source review contains 423 function reports, all static or
+dynamic-bounded; none is reported unbounded. The kernel stack reservation is unchanged at 65,536 bytes,
 `[0x1F0000,0x200000)`. The largest individual measured frame leaves 52,512 bytes
 before callees. Existing Terminal scripts permit five nested `execute` frames
 (depth 0–4): these alone sum to 29,440 bytes. Adding the measured `kmain`,
@@ -289,14 +294,16 @@ frames. This sum is **not** a whole-program worst-case or runtime stack high-wat
 proof. The separate syscall/interrupt stack also keeps its 65,536-byte reservation
 at `TASK_INTERRUPT_STACK_BASE`; BEX2 user stacks are distinct again.
 
-The already-linked ELF observed during this review ended at `0x1B1A70`, with
-255,376 bytes before `STACK_BOTTOM`. That is a **provisional build observation**,
-not a final source/binary identity or final budget. Subsequent source changes
-require a fresh final link, `__kernel_end` measurement and exact-artifact record.
+The final held 6d19b75 ELF ends at `0x1B1A90`, with **255,344 bytes** before
+`STACK_BOTTOM`; the clean 9836220 integration ELF independently has the same end.
+Their artifact hashes differ and are recorded separately in the
+[qualification](NATIVE_WINDOWS_QUALIFICATION.md#exact-source-and-build-identities).
 The linker retains `__kernel_end <= STACK_BOTTOM`. The code/BSS gap is not counted
-as part of the reserved kernel stack.
+as part of the reserved kernel stack. UI targets occupy 50,912 bytes of a
+54 KiB cap, leaving 4,384 bytes; ordered ingress remains 16,456 bytes.
 
-No whole build, guest execution, memory inspection, debugger, fuzzing or
-intentional-fault run was performed for this documentation/compile-only review.
-Host tests and ordinary guest checks owned by qualification work must report
-their own results; this document does not promote their pending status.
+The budget review itself was compile-only. The separately executed ordinary
+guest qualification and clean host/build results are recorded in
+[NATIVE_WINDOWS_QUALIFICATION.md](NATIVE_WINDOWS_QUALIFICATION.md), including
+unsuccessful observer/provenance attempts and their corrected reruns. No debugger,
+guest-memory inspection, fuzzing or intentional-fault route was used.
