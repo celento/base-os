@@ -7,7 +7,7 @@ import tempfile
 
 from elf_debug import DebugInfo
 from volume import load, resolve, commit
-from writer_input_test import WriterSession, WriterCheck, fixture
+from writer_input_test import WriterSession, WriterCheck, fixture, native
 
 
 class FilesCheck:
@@ -30,11 +30,17 @@ class FilesCheck:
         return result
 
     def focus(self, slot):
-        for _ in range(9):
-            if self.front()['slot'] == slot:
-                return
-            self.s.key('alt-tab')
-        raise AssertionError('Could not focus the existing Files window')
+        if self.front()['slot'] == slot:
+            return
+        self.s.wait(lambda: self.ui.o.integer('tb_n') == sum(w['open'] for w in self.ui.o.windows()),
+                    'taskbar reflects open windows')
+        count=self.ui.o.integer('tb_n')
+        ids=struct.unpack('<8i',self.ui.o.read('tb_id'))[:count]
+        index=ids.index(slot)
+        xs=struct.unpack('<8i',self.ui.o.read('tb_x'))
+        widths=struct.unpack('<8i',self.ui.o.read('tb_w'))
+        self.ui.click(xs[index]+widths[index]//2,self.ui.o.integer('fb_h')-22)
+        self.s.wait(lambda:self.front()['slot']==slot,'requested taskbar window is focused',10)
 
     def clipboard(self, key):
         before = self.ui.o.integer('files_message_until')
@@ -72,7 +78,8 @@ def run(build):
     disk = fixture(work, [('note.txt', b'Copy this document exactly.\n'), ('binary.dat', binary)])
     data = disk.read_bytes(); slot, generation, nodes = load(data)
     for ident, parent, name, directory, content in [(4, 0, 'Target', 1, b''), (5, 0, 'Moved', 1, b''),
-                                                   (6, 1, 'Folder', 1, b''), (7, 6, 'child.txt', 0, b'A nested document.\n')]:
+                                                   (6, 1, 'Folder', 1, b''), (7, 6, 'child.txt', 0, b'A nested document.\n'),
+                                                   (8, 1, 'rich.bwr', 0, native('Native copy document'))]:
         assert ident not in nodes
         nodes[ident] = dict(parent=parent, name=name, directory=directory, app=0, data=content, modified=0)
     commit(disk, data, slot, generation, nodes)
@@ -119,6 +126,25 @@ def run(build):
         nodes = load(disk.read_bytes())[2]
         assert nodes[check.state()['selected_id']]['data'] == binary
 
+        # Both Paste and File > Duplicate retain native document associations.
+        check.folder(disk, '/Documents'); check.select(8); check.clipboard('ctrl-c'); check.clipboard('ctrl-v')
+        rich_copy=check.state()['selected_id']; nodes=load(disk.read_bytes())[2]
+        assert rich_copy!=8 and nodes[rich_copy]['name'].endswith('.bwr')
+        session.key('ret'); assert check.ui.content()['text']==b'Native copy document'
+        session.key('ctrl-w'); check.focus(owner); check.select(8)
+        session.key('f10')
+        for _ in range(8):
+            if check.ui.o.integer('menu_sel')==5: break
+            session.key('down')
+        assert check.ui.o.integer('menu_sel')==5
+        session.key('ret')
+        session.wait(lambda: check.state()['selected_id']!=8 and check.ui.o.integer('fs_touched')==0,
+                     'Duplicate synchronized')
+        duplicate_rich=check.state()['selected_id']; nodes=load(disk.read_bytes())[2]
+        assert duplicate_rich not in (8,rich_copy) and nodes[duplicate_rich]['name'].endswith('.bwr')
+        session.key('ret'); assert check.ui.content()['text']==b'Native copy document'
+        session.key('ctrl-w'); check.focus(owner)
+
         # A deleted source's reused numeric ID cannot make a later paste target it.
         check.folder(disk, '/Moved'); check.select(2); check.clipboard('ctrl-c')
         session.launch('terminal'); session.text('rm /Moved/note.txt'); session.key('ret')
@@ -161,7 +187,7 @@ def run(build):
     result = {'passed': True, 'screenshots': captures,
               'checks': ['copy and collision-safe duplicate', 'Cut marker', 'collision-preserving Cut',
                          'identity-preserving move and same-folder no-op', 'recursive copy/subtree rejection',
-                         'Edit menu route', '65792-byte binary copy', 'deleted/reused source rejection',
+                         'Edit menu route', 'native file associations after Paste and Duplicate', '65792-byte binary copy', 'deleted/reused source rejection',
                          'Writer/Editor text clipboard separation', 'reboot persistence']}
     (work / 'results.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, indent=2))

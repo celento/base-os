@@ -71,3 +71,16 @@ Tests that deliberately close a dirty Editor through the user interface must
 choose Save or Discard, or Cancel to continue editing. Internal fixture teardown
 through `win_close` is unchanged. A pending Save As now returns incomplete from
 `edit_save`; success means a fully synchronized file.
+
+### Save As folder identity
+
+Editor and Writer retain the identity of their containing folder, not only a
+reusable filesystem slot. If that folder is removed and its slot reused, Save As
+falls back to the root rather than silently writing into the replacement folder.
+A still-existing folder remains selected. Editor restores its saved file's parent
+folder after reboot. Editor Save As rejects unrelated existing names; it permits
+retrying its own identity-matching file after a failed synchronization.
+
+`tools/save_folder_input_test.py` exercises these paths through the normal desktop,
+checks unchanged replacement folders and an existing-name collision, and reboots
+the disposable disk to verify the restored folder context.
