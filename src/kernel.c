@@ -3603,7 +3603,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     case WK_PLAYER:
         *w=PLAYER_W+2;*h=PLAYER_H+TITLE_H+2;break;
     case WK_PROPERTIES:
-        *x=300;*y=140;*w=500;*h=330;break;
+        *x=300;*y=140;*w=500;*h=380;break;
     case WK_HELLO:
         *w = 520;
         *h = 170;
@@ -4681,6 +4681,8 @@ static void draw_window_contents(Win *w, int inactive) {
         fmt_uint(number,fs_used_bytes());kstrcpy(row,"Volume bytes used: ");kstrcpy(row+19,number);PROP(row);
         fmt_uint(number,FS_MAX_NODES-fs_node_count());kstrcpy(row,"Free file/folder slots: ");kstrcpy(row+kstrlen(row),number);PROP(row);
         if(properties_reason[0])PROP(properties_reason);
+        PROP(fs_storage_name());
+        fmt_uint(number,fs_file_limit());kstrcpy(row,"Maximum file bytes: ");kstrcpy(row+kstrlen(row),number);PROP(row);
         PROP("Editor maximum: 16383 bytes");
         PROP(fs_storage_status()?fs_storage_status():"Disk is synchronized");
         #undef PROP

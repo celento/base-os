@@ -106,3 +106,7 @@ _Static_assert(GFX_CACHE_BASE >= APPS_BASE && GFX_CACHE_BASE + GFX_CACHE_CAPACIT
 _Static_assert(PRESENT_BASE + PRESENT_CAPACITY <= NET_BASE, "presenter overlaps network");
 _Static_assert(NET_BASE + NET_CAPACITY <= BROWSER_BASE, "network overlaps browser");
 _Static_assert(BROWSER_BASE + BROWSER_CAPACITY <= RAM_REQUIRED_END, "browser exceeds RAM");
+
+_Static_assert(TASK_BASE + TASK_CAPACITY <= EDITOR_BASE, "task state overlaps editor");
+_Static_assert(EDITOR_BASE + EDITOR_CAPACITY <= VIDEO_BASE, "editor overlaps video");
+_Static_assert(VIDEO_BASE + VIDEO_CAPACITY <= RAM_REQUIRED_END, "video exceeds RAM");
