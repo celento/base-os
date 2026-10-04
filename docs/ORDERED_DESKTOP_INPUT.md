@@ -70,7 +70,9 @@ return, matching the legacy shell behavior. Pointer records are fenced instead
 and cannot become deferred desktop clicks. The end callback first acquires the pending controller tail
 with a separate finite 1024-byte budget while that ownership still applies. If
 that budget fills, subsequent ordinary desktop turns keep consuming the tail in
-32-byte units until an empty controller is observed, without replaying it.
+32-byte units until an empty controller is observed, without replaying it. Legacy
+KEY callbacks update only input state; loss notices and cancellation run in the
+desktop begin/end hooks, never by recursively invoking another app from a syscall.
 
 ## Evidence and limits
 
