@@ -18,7 +18,8 @@ GUIDE = b'''NATIVE WORKSPACE EXAMPLES\n\nThese opt-in BEX2 C examples each use a
 
 POINTER_SPECS = (('pointer.bex', 'examples/c/pointer.c'),)
 POINTER_INPUTS = ('tools/build_app.py', 'sdk/start.c', 'sdk/app.ld',
-                  'sdk/baseos.h', 'sdk/baseos_abi.h', 'sdk/baseos_executable.h')
+                  'sdk/baseos.h', 'sdk/baseos_abi.h', 'sdk/baseos_executable.h',
+                  'examples/c/pointer_backend.h')
 POINTER_SERVICE_INPUTS = ('Makefile', 'src/kernel.c', 'src/process.c',
                           'src/native_ui.c', 'src/native_ui.h', 'src/canvas_view.c',
                           'src/canvas_view.h', 'src/input_ingress.c', 'src/input_ingress.h')
@@ -38,10 +39,18 @@ def require_pointer_service(source):
     the example negotiates its UI capabilities at runtime.
     """
     source = pathlib.Path(source)
+    # Both reviewed implementations scope bit 6 to a bound, input-enabled
+    # desktop task. In the owned-window implementation its alternative bit is
+    # selected by the executable's required launch flag, never globally ORed.
+    hosted_feature_wirings = (
+        'if(current_task&&current_task->bound&&native_ui_available())info.features|=BOS_FEATURE_HOSTED_UI;',
+        'if(current_task&&current_task->bound&&native_ui_available()){'
+        'info.features|=(current_task->plan.flags&BOS_BEX2_FLAG_NATIVE_WINDOW_V1)?'
+        'BOS_FEATURE_OWNED_NATIVE_WINDOW:BOS_FEATURE_HOSTED_UI;}',
+    )
     required = {
         'src/kernel.c': ('if(mouse_ok){const NativeUiHooks native_hooks={native_host_snapshot,native_host_acquired,native_host_focus};native_ui_init(&native_hooks);}',),
         'src/process.c': (
-            'if(current_task&&current_task->bound&&native_ui_available())info.features|=BOS_FEATURE_HOSTED_UI;',
             'if(!current_task||!current_task->bound||!native_ui_available())return BOS_E_UNSUPPORTED;',
             'else if(call==BOS_CALL_UI)r[7]=(unsigned)native_ui_call(r,a,b,c,d,e);'),
         'src/native_ui.c': ('int native_ui_available(void){return hooks.snapshot&&hooks.acquired&&hooks.focus;}',),
@@ -58,6 +67,10 @@ def require_pointer_service(source):
             code = re.sub(r'\s+', '', code)
             if any(code.count(re.sub(r'\s+', '', part)) != 1 for part in fragments):
                 raise ValueError('Pointer example requires known source-installed hosted UI wiring: ' + name)
+            if name == 'src/process.c' and (
+                    sum(code.count(part) for part in hosted_feature_wirings) != 1 or
+                    code.count('BOS_FEATURE_HOSTED_UI') != 1):
+                raise ValueError('Pointer example requires known context-scoped hosted UI feature wiring')
     except OSError as error:
         raise ValueError('Pointer example requires the source-installed hosted UI service') from error
 
