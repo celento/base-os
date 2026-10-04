@@ -25,9 +25,11 @@ int main(void) {
     }
     set(SHEET_ROWS-1,SHEET_COLS-1,"42");
     measure("3328-cell forward dependency chain");
+    assert(polls >= 20u && polls <= 256u);
     assert(!doc.cells[0].error&&doc.cells[0].value==42000);
     set(SHEET_ROWS-1,SHEET_COLS-1,"=A1");
     measure("3328-cell circular dependency");
+    assert(polls >= 20u && polls <= 256u);
     assert(doc.cells[0].error==SHEET_ERR_CYCLE);
     sheet_init(&doc);
     /* 120 ledger rows with five range-based per-row summary columns. */
@@ -39,6 +41,7 @@ int main(void) {
         set(r,6,"=MIN(D1:D120)");set(r,7,"=MAX(D1:D120)");set(r,8,"=COUNT(D1:D120)");
     }
     measure("120-row ledger, 720 formulas, 72000 range references");
+    assert(polls >= 250u && polls <= 1000u);
     assert(!doc.cells[4].error&&doc.cells[4].value==4444200);
     assert(!doc.cells[5].error&&doc.cells[5].value==37035);
     assert(!doc.cells[8].error&&doc.cells[8].value==120000);

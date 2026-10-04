@@ -24,7 +24,12 @@ checked arithmetic. All model storage belongs to the caller.
 - A native file needs at most **329,488 bytes**. A CSV export needs at most
   **642,432 bytes**. Query the exact size before reserving/writing file data.
 
-`platform_poll()` is called during model, range and codec work. Callbacks must
+`platform_poll()` is called during model and codec work. Recalculation polls
+at entry/exit and after every 256 cell/reference/evaluation work units, using a
+small local counter shared by nested parsing and dependency reparses. Model
+validation also polls every 128 cells; initialization and CSV byte scans poll
+around 4 KiB, and native records poll in batches of 32 (at most 3,168 bytes).
+There is no per-range-row or per-cell-reference device callback. Callbacks must
 not mutate the input/document/output or reenter the same document operation.
 The implementation is not a concurrent-edit API. The normal platform's
 non-reentrant device/background service is appropriate.
@@ -255,15 +260,17 @@ A production-style `-Os` host run on 2026-10-04 measured:
 
 | Ordinary workload | Host CPU time | Cooperative polls |
 |---|---:|---:|
-| Full 3,328-cell forward dependency chain | 0.403 ms | 6,783 |
-| Full 3,328-cell circular dependency | 0.245 ms | 6,785 |
-| 120-row ledger, 720 formulas, 72,000 range references | 0.567 ms | 80,228 |
+| Full 3,328-cell forward dependency chain | 0.307 ms | 105 |
+| Full 3,328-cell circular dependency | 0.266 ms | 105 |
+| 120-row ledger, 720 formulas, 72,000 range references | 0.533 ms | 367 |
 
 These are small host measurements with a no-op device-service stub, not guest
-responsiveness promises. The range workload's polls include range rows and
-reparsing after forward references. Production integration must measure real
+responsiveness promises. Work-unit batching reduced the range workload from
+80,228 callbacks to 367 while retaining bounded service during reparses and
+long chains. The test asserts a bounded nonzero callback count to guard against
+returning to per-item device I/O. Production integration must measure real
 platform callbacks. No evaluation-work cutoff leaves stale results: every valid
 cell reaches a value or explicit error during each complete recalculation.
 
-The final isolated i386 build measured model text **5,649 bytes**, codec text
-**2,923 bytes**, and zero mutable data/BSS in either object (8,572 bytes combined).
+The final isolated i386 build measured model text **5,721 bytes**, codec text
+**2,923 bytes**, and zero mutable data/BSS in either object (8,644 bytes combined).
