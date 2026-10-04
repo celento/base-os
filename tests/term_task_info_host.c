@@ -76,5 +76,24 @@ int main(void){
     now=UINT32_MAX-10;command("start /another.bex");now+=70;
     assert(term_task_info(1,&info)&&info.elapsed_sec==1);
     term_task_close(1);
+    /* pwd retains the complete valid path rather than a 63-byte prefix. */
+    term_reset();
+    int folder=fs_root();
+    for(int level=0;level<8;level++){
+        folder=fs_mkdir(folder,"long-folder-name-123456");
+        assert(folder>=0);
+    }
+    term_set_cwd(folder);
+    char expected[FS_PATH_LEN], actual[FS_PATH_LEN];
+    fs_path(folder,expected,sizeof expected);
+    assert(strlen(expected)>160);
+    int before=term_count();command("pwd");
+    unsigned used=0;
+    for(int row=before+1;row<term_count();row++){
+        unsigned length=(unsigned)strlen(term_get(row));
+        memcpy(actual+used,term_get(row),length);used+=length;
+    }
+    actual[used]=0;
+    assert(!strcmp(expected,actual));
     puts("task metadata: copied names, live status/lifetime, selection preservation, busy start, stop/exit/close/reset and restart identities passed");
 }
