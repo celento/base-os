@@ -21,6 +21,7 @@ endif
 SRC = src
 OUT = build
 PYTHON ?= python3
+QEMU_AUDIO ?= -device sb16
 
 CFLAGS = -std=gnu11 -ffreestanding -Os -g -Wall -Wextra -m32 \
 	-nostdlib -fno-pie -fno-pic -fno-stack-protector -fno-builtin \
@@ -77,12 +78,12 @@ $(IMG): $(OUT)/boot.bin $(OUT)/kernel.bin tools/update_image.py tools/layout.py 
 	$(PYTHON) tools/update_image.py $@ $(OUT)/boot.bin $(OUT)/kernel.bin
 
 run: $(IMG)
-	qemu-system-i386 -m 32M -vga std -nic user,model=rtl8139 \
+	qemu-system-i386 -m 32M -vga std -nic user,model=rtl8139 $(QEMU_AUDIO) \
 		-drive file=$(IMG),format=raw,index=0,if=floppy \
 		-serial file:$(OUT)/serial.out -no-reboot -display $(QEMU_DISPLAY)
 
 headless: $(IMG)
-	qemu-system-i386 -m 32M -vga std -nic user,model=rtl8139 \
+	qemu-system-i386 -m 32M -vga std -nic user,model=rtl8139 $(QEMU_AUDIO) \
 		-drive file=$(IMG),format=raw,index=0,if=floppy \
 		-serial stdio -display none -no-reboot
 
