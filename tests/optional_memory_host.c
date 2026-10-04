@@ -33,5 +33,17 @@ int main(void) {
     assert(!platform_memory_range_available(RAM_LARGE_REQUIRED_END, FS_LARGE_POOL_BASE));
     test_boot.map_count = E820_MAX + 1;
     assert(!platform_memory_range_available(FS_LARGE_POOL_BASE, RAM_LARGE_REQUIRED_END));
+    /* Shared allocator predicate preserves the exact boot/optional semantics. */
+    test_boot.map_count = 3;
+    assert(platform_memory_map_available(test_map, 3, FS_LARGE_POOL_BASE, RAM_LARGE_REQUIRED_END));
+    test_map[2] = (MemoryRange){0x6000000, 1, 2, 1};
+    assert(!platform_memory_map_available(test_map, 3, FS_LARGE_POOL_BASE, RAM_LARGE_REQUIRED_END));
+    assert(!platform_memory_range_available(FS_LARGE_POOL_BASE, RAM_LARGE_REQUIRED_END));
+    test_map[2] = (MemoryRange){UINT64_MAX - 1, 4, 1, 1};
+    assert(!platform_memory_map_valid(test_map, 3));
+    assert(!platform_memory_range_available(FS_LARGE_POOL_BASE, RAM_LARGE_REQUIRED_END));
+    test_map[2].attributes = 0;
+    assert(platform_memory_map_valid(test_map, 3));
+    assert(platform_memory_range_available(FS_LARGE_POOL_BASE, RAM_LARGE_REQUIRED_END));
     puts("optional memory: 64/128 MiB, adjacent ranges, gaps, reserved overlap and disabled ranges passed");
 }

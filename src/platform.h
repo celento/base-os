@@ -25,6 +25,12 @@ unsigned platform_memory_mb(void);
 /* Exact optional physical range check: rejects gaps, reservations and bad maps.
  * Does not access the queried memory or stop the machine. End is exclusive. */
 int platform_memory_range_available(uint32_t base, uint32_t end);
+/* Pure E820 predicates shared by boot admission and owned-page initialization.
+ * Enabled overflowing descriptors invalidate the whole map. Disabled/empty
+ * entries do not contribute; reserved overlaps win over the usable union. */
+int platform_memory_map_valid(const MemoryRange *map, unsigned count);
+int platform_memory_map_available(const MemoryRange *map, unsigned count,
+                                  uint64_t base, uint64_t end);
 uint32_t timer_ticks(void);
 void timer_delay(unsigned ticks);
 /* Collect input while blocking; never dispatch application actions here. */

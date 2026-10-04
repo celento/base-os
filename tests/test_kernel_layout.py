@@ -42,6 +42,19 @@ class KernelLayoutTests(unittest.TestCase):
         self.assertLessEqual(c['FB_BASE'], c['NATIVE_CANVAS_BASE'])
         self.assertLessEqual(c['NATIVE_CANVAS_BASE'] + c['NATIVE_CANVAS_CAPACITY'], c['RAM_REQUIRED_END'])
 
+    def test_owned_page_metadata_and_aperture_reservations(self):
+        c = constants()
+        self.assertEqual((c['PHYS_PAGE_BYTES'], c['PHYS_MANAGED_END']), (4096, 0x10000000))
+        self.assertEqual((c['TASK_PAGE_METADATA_BASE'], c['TASK_PAGE_METADATA_CAPACITY']),
+                         (0x3090000, 0x50000))
+        self.assertEqual(c['TASK_PAGE_METADATA_CAPACITY'],
+                         (c['PHYS_MANAGED_END'] // c['PHYS_PAGE_BYTES']) * 5)
+        self.assertEqual(c['TASK_PAGE_METADATA_BASE'] + c['TASK_PAGE_METADATA_CAPACITY'],
+                         c['TASK_INTERRUPT_STACK_BASE'])
+        self.assertEqual(c['USER_APERTURE_CAPACITY'], 0x400000)
+        self.assertEqual(c['USER_BASE'] + c['USER_APERTURE_CAPACITY'], c['DRAG_CACHE'])
+        self.assertEqual(c['USER_CAPACITY'], 65536)
+
     def test_full_tail_reservation_preserves_both_snapshots(self):
         c = constants()
         data = bytearray(c['DISK_SECTORS'] * 512)

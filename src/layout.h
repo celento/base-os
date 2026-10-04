@@ -56,6 +56,9 @@
 #define PAGING_CAPACITY 0x2000
 #define USER_BASE 0x1000000
 #define USER_CAPACITY 0x10000
+/* The compatibility page directory replaces this entire 4 MiB PDE. Unused
+ * addresses are not kernel identity mappings, so exclude every physical alias. */
+#define USER_APERTURE_CAPACITY 0x400000
 #define DRAG_CACHE 0x1400000
 #define DRAG_CAPACITY 0x100000
 #define PRESENT_BASE 0x1500000
@@ -76,6 +79,10 @@
 #define IMAGE_CAPACITY 0x700000
 #define TASK_BASE 0x3000000
 #define TASK_CAPACITY 0x100000
+/* Owned-page metadata: 65,536 aligned uint32 owners, then one-byte kinds.
+ * Task records must end before this boundary even while images remain inline. */
+#define TASK_PAGE_METADATA_BASE 0x3090000
+#define TASK_PAGE_METADATA_CAPACITY 0x50000
 #define TASK_INTERRUPT_STACK_BASE 0x30E0000
 #define TASK_INTERRUPT_STACK_CAPACITY 0x10000
 #define EDITOR_BASE 0x3100000
@@ -89,6 +96,9 @@
 #define FS_LARGE_IMG_BASE 0x5F00000
 #define FS_LARGE_IMG_CAPACITY 0x2000000
 #define RAM_LARGE_REQUIRED_END 0x7F00000
+/* Explicit first allocator ceiling; never infer this from a RAM-size label. */
+#define PHYS_PAGE_BYTES 4096
+#define PHYS_MANAGED_END 0x10000000
 #define FS_DISK_LBA 384
 #define FS_DISK_SECTORS 2400
 #define FS_SECOND_LBA 2784
