@@ -1,4 +1,4 @@
-; Place reachable code beyond the old 196096-byte disk reservation.
+; Place reachable code beyond the former 491008-byte raw disk reservation.
 bits 32
 section .text
 global extent_guest
@@ -13,3 +13,5 @@ beyond_primary:
     call kmain
 section .rodata
 message db 'KERNEL-EXTENT-PASS', 10, 0
+
+section .note.GNU-stack noalloc noexec nowrite progbits

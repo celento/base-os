@@ -9,6 +9,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 from update_image import update, install_kernel, kernel_offset
 from layout import constants
+from kernel_pack import RAW, pack_kernel
+from update_image import install_packed_kernel
 
 
 class ImageTests(unittest.TestCase):
@@ -40,8 +42,9 @@ class ImageTests(unittest.TestCase):
         data = bytearray(c['DISK_SECTORS'] * 512)
         start, end = c['FS_DISK_LBA'] * 512, c['KERNEL_EXT_LBA'] * 512
         data[start:end] = b'V' * (end - start)
-        kernel = bytes((i * 37) & 255 for i in range(300000))
-        install_kernel(data, kernel, c)
+        raw = bytes((i * 37) & 255 for i in range(300000))
+        kernel = pack_kernel(raw, c, codec=RAW)
+        install_packed_kernel(data, kernel, c)
         self.assertEqual(data[start:end], b'V' * (end - start))
         first = c['KERNEL_PRIMARY_SECTORS'] * 512
         self.assertEqual(data[512:512 + first], kernel[:first])
@@ -83,7 +86,8 @@ class ImageTests(unittest.TestCase):
             with self.assertRaises(ValueError): update(image, boot, kernel)
             self.assertEqual(image.read_bytes(), b'valuable data')
             image.write_bytes(bytes(2880 * 512))
-            kernel.write_bytes(bytes(constants()['KERNEL_SECTORS'] * 512 + 1))
+            c = constants()
+            kernel.write_bytes(bytes(c['STACK_BOTTOM'] - c['KERNEL_LOAD_ADDR'] + 1))
             with self.assertRaises(ValueError): update(image, boot, kernel)
             self.assertEqual(image.read_bytes(), bytes(2880 * 512))
 

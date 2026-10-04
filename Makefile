@@ -117,8 +117,11 @@ $(OUT)/kernel.elf: $(OBJS) $(OUT)/linker.ld
 $(OUT)/kernel.bin: $(OUT)/kernel.elf
 	$(OBJCOPY) -O binary $< $@
 
-$(IMG): $(OUT)/boot.bin $(OUT)/kernel.bin tools/update_image.py tools/layout.py $(SRC)/layout.h
-	$(PYTHON) tools/update_image.py $@ $(OUT)/boot.bin $(OUT)/kernel.bin
+$(OUT)/kernel.packed: $(OUT)/kernel.bin tools/kernel_pack.py tools/layout.py $(SRC)/layout.h
+	$(PYTHON) tools/kernel_pack.py $< $@
+
+$(IMG): $(OUT)/boot.bin $(OUT)/kernel.packed tools/update_image.py tools/kernel_pack.py tools/layout.py $(SRC)/layout.h
+	$(PYTHON) tools/update_image.py --packed $@ $(OUT)/boot.bin $(OUT)/kernel.packed
 
 $(DATA_IMG): tools/init_data.py tools/layout.py $(SRC)/layout.h | $(OUT)
 	$(PYTHON) tools/init_data.py $@
@@ -134,7 +137,7 @@ headless: $(IMG) $(DATA_IMG)
 		-serial stdio -display none -no-reboot
 
 clean:
-	rm -f $(OBJS) $(OUT)/boot.bin $(OUT)/kernel.bin $(OUT)/kernel.elf $(OUT)/linker.ld $(OUT)/layout.inc
+	rm -f $(OBJS) $(OUT)/boot.bin $(OUT)/kernel.bin $(OUT)/kernel.packed $(OUT)/kernel.elf $(OUT)/linker.ld $(OUT)/layout.inc
 
 .PHONY: all run headless clean
 

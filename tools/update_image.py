@@ -10,22 +10,25 @@ import os
 import pathlib
 import tempfile
 from layout import constants
+from kernel_pack import pack_kernel, unpack_kernel
 
 
-def update(image, boot, kernel):
+def update(image, boot, kernel, *, packed=False):
     # QEMU uses POSIX byte-range locks. Hold a conflicting whole-file lock
     # until replacement is complete, so a running guest cannot lose writes
     # into the old inode. File contents remain untouched on lock failure.
     if image.exists():
         with image.open('r+b') as original:
             fcntl.lockf(original, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            _update(image, boot, kernel, original.read())
+            _update(image, boot, kernel, original.read(), packed=packed)
     else:
-        _update(image, boot, kernel)
+        _update(image, boot, kernel, packed=packed)
 
 
 def kernel_offset(offset, c=None):
-    """Map a byte offset in the linked kernel to its split disk extent."""
+    """Map a packed disk-artifact byte offset to its split code extent.
+
+    Raw symbol offsets beyond the plain prefix do not map directly to disk."""
     c = c or constants()
     first = c['KERNEL_PRIMARY_SECTORS'] * c['SECTOR_SIZE']
     if not 0 <= offset < c['KERNEL_SECTORS'] * c['SECTOR_SIZE']:
@@ -35,8 +38,15 @@ def kernel_offset(offset, c=None):
 
 
 def install_kernel(data, kernel, c=None):
-    """Install both code extents without touching either filesystem snapshot."""
+    """Compatibility API: pack raw canonical bytes, then install both extents."""
     c = c or constants()
+    install_packed_kernel(data, pack_kernel(kernel, c), c)
+
+
+def install_packed_kernel(data, kernel, c=None):
+    """Validate/install a packed artifact without changing either snapshot."""
+    c = c or constants()
+    unpack_kernel(kernel, c)
     sector = c['SECTOR_SIZE']
     first = c['KERNEL_PRIMARY_SECTORS'] * sector
     extra = (c['KERNEL_SECTORS'] - c['KERNEL_PRIMARY_SECTORS']) * sector
@@ -57,20 +67,21 @@ def install_kernel(data, kernel, c=None):
         data[tail:tail + len(kernel) - first] = kernel[first:]
 
 
-def _update(image, boot, kernel, old=None):
+def _update(image, boot, kernel, old=None, *, packed=False):
     c = constants()
     sector = c['SECTOR_SIZE']
     boot_data, kernel_data = boot.read_bytes(), kernel.read_bytes()
     if len(boot_data) != sector or boot_data[-2:] != b'\x55\xaa':
         raise ValueError('invalid boot sector')
-    if not kernel_data or len(kernel_data) > c['KERNEL_SECTORS'] * sector:
-        raise ValueError('kernel exceeds its loader reservation')
+    if not packed:
+        kernel_data = pack_kernel(kernel_data, c)
+    unpack_kernel(kernel_data, c)
     if old is not None and len(old) not in (2880 * sector, c['DISK_SECTORS'] * sector):
         raise ValueError('unrecognized image size; refusing to overwrite it')
     data = bytearray(old or b'')
     data.extend(bytes(c['DISK_SECTORS'] * sector - len(data)))
     data[:sector] = boot_data
-    install_kernel(data, kernel_data, c)
+    install_packed_kernel(data, kernel_data, c)
     image.parent.mkdir(parents=True, exist_ok=True)
     if old is not None:
         # One backup per distinct previous image, rather than unbounded copies
@@ -107,8 +118,10 @@ if __name__ == '__main__':
     parser.add_argument('image', type=pathlib.Path)
     parser.add_argument('boot', type=pathlib.Path)
     parser.add_argument('kernel', type=pathlib.Path)
+    parser.add_argument('--packed', action='store_true',
+                        help='kernel input is explicitly a prebuilt packed artifact')
     args = parser.parse_args()
     try:
-        update(args.image, args.boot, args.kernel)
+        update(args.image, args.boot, args.kernel, packed=args.packed)
     except (ValueError, OSError) as exc:
         parser.exit(1, f'image update failed: {exc}\n')
