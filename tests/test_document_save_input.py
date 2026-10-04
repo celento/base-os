@@ -113,6 +113,18 @@ class DocumentCollectorTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             session.record_admission(7, 13.0)
 
+    def test_accepted_name_frame_reuses_same_pending_pixels_without_another_dump(self):
+        session = Session.__new__(Session)
+        session.last_accepted_name_frame = dict(ocr='ALPHA Saving | New edits stay private.',
+                                                pending_generations=[7], dumped=12.125)
+        session.frame = lambda *args: self.fail('Acceptance must reuse the already captured frame')
+        event = session.accepted_name_frame('ALPHA', 'Saving', generation=7, absent=('Save document as',))
+        self.assertEqual(event['dumped'], 12.125)
+        with self.assertRaises(AssertionError):
+            session.accepted_name_frame('ALPHA', generation=8)
+        with self.assertRaises(AssertionError):
+            session.accepted_name_frame('ALPHAZ', generation=7)
+
     def test_floppy_does_not_wait_for_async_markers(self):
         session = Session.__new__(Session)
         session.asynchronous = False
