@@ -220,6 +220,14 @@ def operation_key(session, key, predicate, message, seconds=120):
                          o['keys']>before['keys'] and predicate(o),message,seconds=seconds)[0]
 
 
+def enter_handle(session,handle,message):
+    before=session.until(lambda o:o['page']==0,'client before owner-handle check')[0]
+    text='h'+f'{handle:08x}'
+    session.text(text);session.key('ret')
+    return session.until(lambda o:o['process']==before['process'] and
+                         o['keys']>=before['keys']+len(text)+1 and o['foreign_result']==STALE,message)[0]
+
+
 def run_profile(build,work,profile,app,seed,timeout):
     disk,original,details=fixture(work,profile,app,seed)
     result=dict(profile=profile,ram_mib=128 if profile=='large' else 64,**details,checks=[],responses=[])
@@ -261,6 +269,7 @@ def run_profile(build,work,profile,app,seed,timeout):
         a=operation_key(session,'x',lambda o:o['file_result']==CHANGED,'stale writer gets explicit CHANGED')
         result['writer_conflict']=a
         result['checks'].append('two ordinary readers/writers reject changed chunks and lost update')
+        print(profile+' explicit changed read and conditional conflict passed',flush=True)
         # Reopen admits the current B version, then request its durability.
         a=operation_key(session,'o',lambda o:o['file_result']==4096,'reader reopens current version')
         assert a['read_hash']==fnv(b'B'*4096)
@@ -269,8 +278,7 @@ def run_profile(build,work,profile,app,seed,timeout):
         session.focus(bid)
         b=operation_key(session,'s',lambda o:o['sync_result']==1 and o['operation']!=0,'second owner joins pending durability')
         assert b['operation']!=handle_a;handle_b=b['operation'];result['second_pending']=b
-        session.text('h'+f'{handle_a:08x}');session.key('ret')
-        b=session.until(lambda o:o['foreign_result']==STALE,'other owner cannot consume first receipt')[0]
+        b=enter_handle(session,handle_a,'other owner cannot consume first receipt')
         assert b['sync_result']==1,'ownership checks must occur during a real pending commit'
         result['nonowner_result']=b
         session.focus(aid);session.key('l')
@@ -283,10 +291,10 @@ def run_profile(build,work,profile,app,seed,timeout):
         b=session.until(lambda o:o['operation']==handle_b and o['sync_result']==1,'release/close leaves second save active')[0]
         c=session.start_client();cid=c['process'];assert cid not in (aid,bid)
         assert c['slot']==a['slot'],'ordinary closed Terminal slot was not reused'
-        session.text('h'+f'{abandoned:08x}');session.key('ret')
-        c=session.until(lambda o:o['foreign_result']==STALE,'reused slot cannot own old completion')[0]
+        c=enter_handle(session,abandoned,'reused slot cannot own old completion')
         result['reused_owner_result']=c
         result['checks'].append('owned receipts, release, close and reused-slot stale cleanup')
+        print(profile+' owner-bound pending receipts, release, close and slot reuse passed',flush=True)
         # The frozen Counter is a third, independently scheduled old binary.
         session.key('ctrl-n');session.text('start /Programs/counter.bex');session.key('ret');session.key('alt-ret')
         counter=None
@@ -329,6 +337,7 @@ def run_profile(build,work,profile,app,seed,timeout):
         completed=session.until(lambda o:o['operation']==handle_b and o['sync_result']==0,'second owner receives durable completion',seconds=timeout,keep='durable')[0]
         assert completed['pending']>b['pending'] and completed['loops']>b['loops']
         result['completion']=completed
+        print(profile+' measured responsive pending save completed durably',flush=True)
         result['completed_client_limits']=session.page(2);session.page(0)
         result['checks'].append('real pending save preserves counter and ordinary PS/2 progress')
         session.focus(cid)
