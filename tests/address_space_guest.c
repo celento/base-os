@@ -116,6 +116,9 @@ static void as_exact_files(void){
             unsigned j=i+4064;as_check(bytes[i]==((j*37u+display*13u+(j>>12)*17u)&255u),"AS persisted exact bytes");
         }
     }
+    int counter=as_file("/Documents/counter-4.txt");
+    as_check(counter>=0&&fs_size(counter)==3&&fs_data(counter)[0]=='1'&&
+             fs_data(counter)[1]=='0'&&fs_data(counter)[2]=='\n',"AS reboot frozen input result");
     int id=as_file("/Documents/sdk-note.txt");const char note[]="This note was saved by a protected C application.\n";
     as_check(id>=0&&fs_size(id)==sizeof note-1,"AS frozen exec output size");
     for(unsigned i=0;i<sizeof note-1;i++)as_check(fs_data(id)[i]==note[i],"AS frozen exec exact bytes");
