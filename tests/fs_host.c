@@ -181,7 +181,7 @@ int main(void) {
     reset();
     int folder = fs_mkdir(0, "source");
     fs_create(folder, "one"); fs_create(folder, "two");
-    for (int i = 0; fs_node_count() < FS_MAX_NODES - 2; ++i) {
+    for (int i = 0; fs_node_count() < fs_node_limit() - 2; ++i) {
         char name[24]; snprintf(name, sizeof(name), "f%d", i);
         assert(fs_create(0, name) >= 0);
     }
@@ -196,12 +196,12 @@ int main(void) {
     reset();
     fs_empty_dir(0);
     static char content[FS_MAX_SIZE - 1]; memset(content, 'Z', sizeof(content));
-    for (int i = 1; i < FS_MAX_NODES; ++i) {
+    for (int i = 1; i < fs_node_limit(); ++i) {
         char name[24]; snprintf(name, sizeof(name), "full%d", i);
         int id = fs_create(0, name); assert(id >= 0);
         assert(fs_write(id, content, sizeof(content)) == sizeof(content));
     }
-    assert(fs_sync() == 0); remount(); assert(fs_node_count() == FS_MAX_NODES);
+    assert(fs_sync() == 0); remount(); assert(fs_node_count() == FS_LEGACY_NODES);
     assert(fs_size(fs_find_child(0, "full63")) == FS_MAX_SIZE - 1);
     assert(fs_create(0, "overflow") < 0);
     assert(fs_create(0, "../bad") < 0);
