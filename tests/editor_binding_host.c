@@ -55,7 +55,7 @@ static const char *name_failure_message, *edit_conflict_message="Source changed.
 static const char *session_status="";
 static int paint_ready;
 static unsigned char paint_pix[PAINT_W*PAINT_H];
-enum { WK_NONE=-1, WK_FILES=4, WK_EDIT=5, WK_TERM=11, WK_PROPERTIES=19, WK_WRITER=22, WK_SPREADSHEET=23 };
+enum { WK_NONE=-1, WK_HELLO=0, WK_FILES=4, WK_EDIT=5, WK_TERM=11, WK_PROPERTIES=19, WK_WRITER=22, WK_SPREADSHEET=23 };
 typedef struct { int open,kind,x,y,w,h,min,z; } Win;
 static Win wins[MAX_WIN];
 static int wm_z;

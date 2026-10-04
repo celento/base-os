@@ -46,7 +46,7 @@ class EditorBindingTests(unittest.TestCase):
             (directory / 'editor_kernel_ops.inc').write_text(operations)
             first = source.index('typedef struct { int open,kind,x,y,w,h,min,z,caret;')
             last = source.index('int program_key(void)', first)
-            (directory / 'editor_kernel_session.inc').write_text(source[first:last])
+            (directory / 'editor_kernel_session.inc').write_text(function(source, 'session_window_kind') + source[first:last])
             output = directory / 'editor_binding_host'
             compiler = shutil.which('clang') or shutil.which('cc')
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
