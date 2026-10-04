@@ -57,9 +57,10 @@ release-only after activation does not wake it. A wake consumes the full already
 acquired wake backlog, even across multiple 64-record turns, without click-through.
 
 Synchronous BASIC/exec temporarily owns the same stream through a small Terminal
-begin/end callback. INKEY retains its last-character behavior. Pointer records
-cannot become deferred desktop clicks, and unconsumed program key records are
-discarded on return. The end callback first acquires the pending controller tail
+begin/end callback. INKEY drains the entire available bounded snapshot and retains its last-character
+behavior. Unconsumed keyboard/modifier typeahead keeps its original ordering on
+return, matching the legacy shell behavior. Pointer records are fenced instead
+and cannot become deferred desktop clicks. The end callback first acquires the pending controller tail
 with a separate finite 1024-byte budget while that ownership still applies. If
 that budget fills, subsequent ordinary desktop turns keep consuming the tail in
 32-byte units until an empty controller is observed, without replaying it.

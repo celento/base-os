@@ -8212,6 +8212,7 @@ static unsigned desktop_input_turn(void) {
         /* An unusually full controller may need more than the exclusive end
          * budget. Finish draining across ordinary turns, never replay its tail. */
         input_tail_pending=input_acquire(32)==32;
+        if(device_input.loss&INPUT_LOSS_DEVICE)input_unknown_buttons=INPUT_LEFT|INPUT_RIGHT;
         input_discard(&device_input);desktop_input_fence();
         desktop_input_modifiers(device_input.modifiers);
         mouse_moved |= mouse_x!=device_input.x || mouse_y!=device_input.y;
@@ -8270,12 +8271,12 @@ static unsigned desktop_input_turn(void) {
     return count;
 }
 static void desktop_program_input(int active) {
-    /* Beginning keeps queued keys for INKEY; ending consumes any unhandled
-     * program keys instead of typing them into the Terminal command line. */
+    /* Preserve legacy keyboard typeahead when the synchronous owner returns.
+     * Pointer backlog is fenced; it cannot click the resumed desktop. */
     if(!active)input_tail_pending=input_acquire(1024)==1024;
     desktop_input_fence();
     if(!active) {
-        input_discard(&device_input);
+        if(device_input.loss&INPUT_LOSS_DEVICE)input_unknown_buttons=INPUT_LEFT|INPUT_RIGHT;
         desktop_input_modifiers(device_input.modifiers);
         input_cursor_moved |= mouse_x!=device_input.x || mouse_y!=device_input.y;
         mouse_x=device_input.x;mouse_y=device_input.y;
@@ -8287,7 +8288,8 @@ static int desktop_program_key(void) {
      * into whatever desktop window happens to be present when it returns. */
     drain_8042();
     InputSample sample;int result=0;
-    for(unsigned n=0;n<INPUT_BATCH && input_pop(&device_input,&sample);++n) {
+    unsigned available=device_input.count+(device_input.loss!=0);
+    for(unsigned n=0;n<available && input_pop(&device_input,&sample);++n) {
         desktop_input_modifiers(sample.modifiers);
         if(sample.kind==INPUT_KEY && (sample.flags&INPUT_MAKE)) {
             if(sample.character)result=(int)sample.character;
