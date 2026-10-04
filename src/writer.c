@@ -231,9 +231,10 @@ static void copy_selection(void) {
     status("Copied. Styles stay with this Writer clipboard selection.");
 }
 static void paste(void) {
-    state.group_kind = 0;
     unsigned generation = 0;
     int length = writer_clipboard_get((char *)ARENA->output, WRITER_TEXT_MAX + 1u, &generation);
+    if (!length) { status("Clipboard is empty. Nothing was changed."); return; }
+    state.group_kind = 0;
     const WriterDoc *c = &ARENA->clipboard;
     /* The zero-generation default indicates no shared clipboard integration. */
     int own = state.clipboard_owned && ((length < 0 && !state.clipboard_generation) ||
@@ -517,6 +518,7 @@ static int search_key(int sc, char ch, int modifiers) {
         unsigned generation;
         int n = writer_clipboard_get((char *)ARENA->output, WRITER_TEXT_MAX + 1u, &generation);
         if (n < 0) status("Clipboard is unavailable or too large for a search field.");
+        else if (!n) status("Clipboard is empty. The search field is unchanged.");
         else search_field_replace(ARENA->output, (unsigned)n);
     } else if (sc == 0x4b || sc == 0x4d || sc == 0x47 || sc == 0x4f) {
         if (sc == 0x4b && pos) pos--; else if (sc == 0x4d && pos < length) pos++;

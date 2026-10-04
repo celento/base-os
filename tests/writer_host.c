@@ -114,6 +114,15 @@ static void test_editing(void) {
     writer_clipboard_set("caf\xc3\xa9", 5); key(0x1e, WRITER_MOD_CTRL);
     prior = *writer_document(); key(0x2f, WRITER_MOD_CTRL); compare_docs(&prior, writer_document());
     assert(writer_caret() == 5 && writer_anchor() == 0);
+    /* Empty shared text is a no-op, even with a nonempty document selection. */
+    load_fixture("Keep selection"); select_range(5,14); prior = *writer_document();
+    writer_clipboard_set("",0); key(0x2f,WRITER_MOD_CTRL);
+    compare_docs(&prior,writer_document()); assert(writer_anchor()==5 && writer_caret()==14 && !writer_dirty());
+    key(0x2c,WRITER_MOD_CTRL); compare_docs(&prior,writer_document());
+    assert(writer_anchor()==5 && writer_caret()==14 && !writer_dirty());
+    /* An empty paste does not split a pending typing undo run either. */
+    writer_new(); type("ab"); key(0x2f,WRITER_MOD_CTRL); type("cd");
+    key(0x2c,WRITER_MOD_CTRL); check_text(""); assert(!writer_dirty());
     /* Multiple paragraphs retain canonical attributes through deletion/joins. */
     load_fixture("Alpha\nBeta\nGamma\n");
     select_range(6, 10); key(0x13, WRITER_MOD_CTRL); key(0x02, WRITER_MOD_CTRL);
@@ -337,7 +346,9 @@ static void test_search(void) {
     load_fixture("needle retained"); search_fields("needle", "x"); key(0x0f, 0); key(0x1e, WRITER_MOD_CTRL);
     memset(clipboard, 'q', 64); clipboard_length = 64; clipboard[64] = 0; clipboard_generation++;
     key(0x2f, WRITER_MOD_CTRL); key(0x1c, 0); assert(writer_anchor() == 0 && writer_caret() == 6);
-    key(0x01, 0);
+    key(0x1e,WRITER_MOD_CTRL); writer_clipboard_set("",0); key(0x2f,WRITER_MOD_CTRL);
+    key(0x1c,0); assert(writer_anchor()==0 && writer_caret()==6);
+    assert(!writer_dirty()); key(0x01, 0);
     puts("Writer search: wrapping/case, style-preserving single/all replacement, atomic limits and field editing passed");
 }
 static void write_ppm(const char *path) {
