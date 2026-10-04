@@ -7,6 +7,7 @@ There is no debugger, QMP, socket, guest-memory observation or invalid app probe
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -80,6 +81,42 @@ def prepare(args,work):
     return files,identity
 
 
+def prepare_rollback(args,work):
+    from build_app import tool
+    from platform_evidence import provenance
+    from update_image import install_kernel
+    old=args.old_build.resolve();runtime=old.parent
+    identity=provenance(old)
+    assert identity['built_source']['revision']==args.expected_old_revision
+    assert '#define BASEOS_BEX2_ENABLED 1' not in (runtime/'src/program.h').read_text()
+    directory=work/'rollback';directory.mkdir()
+    source=ROOT/'tests/address_space_rollback_guest.c'
+    command=[tool('gcc'),'-std=gnu11','-Os','-g','-Wall','-Wextra','-ffreestanding','-m32',
+        '-fno-pie','-fno-pic','-fno-stack-protector','-fno-builtin','-mno-sse','-mno-mmx','-msoft-float',
+        '-DAS_ROLLBACK_EXPECT='+str(args.old_result),'-I',str(runtime),'-I',str(runtime/'src'),
+        '-I',str(old),'-c',str(source),'-o',str(directory/'kernel.o')]
+    subprocess.run(command,check=True)
+    objects=[p for p in sorted(old.glob('*.o')) if p.name!='kernel.o']
+    subprocess.run([tool('ld'),'-T',str(old/'linker.ld'),'-nostdlib','-m','elf_i386',
+        '-z','noexecstack','-o',str(directory/'kernel.elf'),str(directory/'kernel.o'),*map(str,objects)],check=True)
+    subprocess.run([tool('objcopy'),'-O','binary',str(directory/'kernel.elf'),str(directory/'kernel.bin')],check=True)
+    spec=importlib.util.spec_from_file_location('rollback_layout',runtime/'tools/layout.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);c=module.constants()
+    image=bytearray(c['DISK_SECTORS']*512);image[:512]=(old/'boot.bin').read_bytes()
+    install_kernel(image,(directory/'kernel.bin').read_bytes(),c);(directory/'boot.img').write_bytes(image)
+    identity.update(expected_refusal=args.old_result,fixture_source_sha256=sha(source),compile_command=command,
+        production_object_sha256={p.name:sha(p) for p in objects},
+        fixture_artifacts={p.name:sha(p) for p in directory.iterdir()})
+    return identity
+
+
+def validate_programs(path,files):
+    import volume
+    nodes=volume.load(path.read_bytes())[2]
+    for name,data in files.items():assert nodes[volume.resolve(nodes,'/Programs/'+name)]['data']==data,name
+    return {name:hashlib.sha256(data).hexdigest() for name,data in files.items()}
+
+
 def disk(path,profile,files):
     from init_data import initialize
     import volume
@@ -144,6 +181,9 @@ def main(args):
     report=dict(passed=False,prepare_only=args.prepare_only,profiles={})
     try:
         files,report['provenance']=prepare(args,work)
+        if args.old_build:
+            assert args.expected_old_revision,'Need exact older build revision'
+            report['rollback_provenance']=prepare_rollback(args,work)
         for profile in (('default','large') if args.profile=='both' else (args.profile,)):
             data=work/(profile+'.img');disk(data,profile,files)
             item=report['profiles'][profile]=dict(ram_mib=64 if profile=='default' else 128,initial_disk_sha256=sha(data))
@@ -152,7 +192,15 @@ def main(args):
             item['before_reboot_files']=validate_files(data)
             item['reboot']=run(work/'boot.img',data,work,profile+'-reboot',str(item['ram_mib'])+'M','ADDRESS-SPACE-REBOOT-PASS',args.timeout)
             item['after_reboot_files']=validate_files(data)
-            assert item['before_reboot_files']==item['after_reboot_files'];item['final_disk_sha256']=sha(data)
+            assert item['before_reboot_files']==item['after_reboot_files']
+            if args.old_build:
+                item['rollback']=run(work/'rollback/boot.img',data,work,profile+'-rollback',str(item['ram_mib'])+'M','ADDRESS-SPACE-ROLLBACK-PASS',args.timeout)
+                item['after_rollback_files']=validate_files(data)
+                assert item['after_rollback_files']==item['after_reboot_files']
+                item['return_to_new']=run(work/'boot.img',data,work,profile+'-return-new',str(item['ram_mib'])+'M','ADDRESS-SPACE-REBOOT-PASS',args.timeout)
+                assert validate_files(data)==item['after_reboot_files']
+            item['preserved_programs']=validate_programs(data,files)
+            item['final_disk_sha256']=sha(data)
         report['passed']=not args.prepare_only
     finally:(work/'report.json').write_text(json.dumps(report,indent=2)+'\n')
     print('Prepared only; no guest started.' if args.prepare_only else 'PASS: ordinary BEX2 isolation, natural capacity, mixed legacy, owned cleanup and exact reboot files.')
@@ -164,4 +212,6 @@ if __name__=='__main__':
     parser.add_argument('--expected-revision',required=True);parser.add_argument('--build-log',type=Path,required=True)
     parser.add_argument('--work',type=Path,required=True);parser.add_argument('--profile',choices=('default','large','both'),default='both')
     parser.add_argument('--prepare-only',action='store_true');parser.add_argument('--timeout',type=int,default=180)
+    parser.add_argument('--old-build',type=Path);parser.add_argument('--expected-old-revision')
+    parser.add_argument('--old-result',type=int,default=-1)
     main(parser.parse_args())
