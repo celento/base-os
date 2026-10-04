@@ -11,7 +11,9 @@ node incarnation before activation; the loader copies the current program.
 
 ## Controls and persistence
 
-- `start FILE` starts one task owned by this Terminal. Starting over a live task is rejected.
+- `start FILE [DOCUMENT]` starts one task owned by this Terminal. Quote paths with
+  spaces; the optional ordinary-file path is resolved to an absolute path of at
+  most 128 printable ASCII bytes. Starting over a live task is rejected.
 - Printable keys, Enter, Backspace, and Escape are queued for the focused task. Ctrl+C is reserved for stopping it through the desktop.
 - `tasks` lists the terminal slots with runnable or sleeping tasks. `stop` stops the current terminal's task (also usable in a command script).
 - Minimizing or switching away leaves a task running. Closing or resetting its Terminal cancels it. A reused window slot starts clean.
@@ -43,6 +45,7 @@ Existing BEX1 headers and syscalls 0–9 retain their argument and return contra
 | 14 | `bos_canvas_size(width,height)` | Select and clear exactly 160×100 or 320×200; new apps default to 160×100. |
 | 15 | `bos_replace_file(path,data,bytes)` | Atomic RAM replacement up to 32,768 bytes, confined to `/Documents`. |
 | 16 | `bos_sync()` | Durable filesystem snapshot result: 0 success, -1 failure. |
+| 17 | `bos_argument(out,capacity)` | Copy the optional startup path plus NUL; return byte length, 0 absent, or -1. Capacity 0 queries length. |
 
 The extended calls do not enlarge application memory or bypass filesystem
 capacity. Sync can delay scheduling while the bounded disk write completes.
@@ -53,8 +56,14 @@ Key polling is nonblocking and returns one queued byte or zero. A full queue dro
 
 ## Kernel integration
 
-- `term_task_start_file(slot, file, identity)` is shared by desktop launches and Terminal `start`. It rejects changed/non-file identities and busy owners, preserves the caller's selection, and only clears the canvas after an accepted start.
-- `process_task_start(owner, file, size, io)` validates and copies the BEX1 plus callback values. It never retains a pointer into a mutable filesystem node.
+- `term_task_start_file(slot, file, identity)` remains the no-argument desktop
+  route; `term_task_start_file_with_arg` adds copied document launch metadata.
+  Both reject changed/non-file identities and busy owners, preserve the caller's
+  selection, and only clear the canvas after an accepted start.
+- `process_task_start(owner, file, size, io)` remains an argument-free wrapper.
+  `process_task_start_with_arg` also validates and copies one optional startup
+  path into supervisor-owned task storage. Neither retains a filesystem or caller
+  buffer pointer. Images remain 48 KiB maximum inside the existing 64 KiB region.
 - `process_task_step(owner)` runs at most one user slice, skipping a sleeper until its deadline. It is called only from the desktop's normal context, never an interrupt or reentrant polling hook.
 - `process_task_status/result`, `process_task_key`, `process_task_stop`, and `process_task_clear` expose bounded lifecycle operations.
 - `term_task_poll()` selects one fair runnable terminal, preserves the caller's selected terminal, and returns whether its output changed. The desktop marks itself dirty when this returns true.
@@ -63,7 +72,7 @@ Key polling is nonblocking and returns one queued byte or zero. A full queue dro
   pixels. A task retains its active dimensions across slices. The renderer must
   use `term_canvas_width/height`; pixels are packed with the current width.
 - Eight Terminals with 320 scrollback rows and maximum 320×200 canvases use
-  731,744 bytes, below the fixed 786,432-byte subarena before script scratch.
+  731,936 bytes, below the fixed 786,432-byte subarena before script scratch.
 
 The legacy synchronous `process_run` still has its two-second watchdog, checked syscalls, and audio pause/resume behavior. Running it does not destroy saved task images; asynchronous tasks resume afterward.
 
@@ -93,3 +102,10 @@ the main desktop must still wire its real focus/close/poll events as described a
 concurrent 2 MiB streams, EOF and partial reads, independent larger canvases,
 32 KiB durable replacement, DocStats sample/empty counts, legacy mode resets and
 full-volume rollback across reboot. Its host companion is `test_native_sdk.py`.
+
+The startup argument is immutable launch text, not a file handle or filesystem
+snapshot. `term_task_info` returns copied program and document basenames plus the
+existing task instance guard. `term_task_title` combines those names without
+changing selection; it returns no live title after exit, stop, close or reset.
+`tasks` prints the copied names alongside each live owner. See the SDK's startup
+argument section for exact query/copy and legacy behavior.
