@@ -133,6 +133,7 @@ class PlatformSession(DesktopSession):
     def __init__(self, *args, **kwargs):
         self.events = []
         self.last_key = time.monotonic()
+        self.last_io = 0
         super().__init__(*args, **kwargs)
 
     def command(self, name, arguments=None):
@@ -162,6 +163,14 @@ class PlatformSession(DesktopSession):
             if keep:
                 image.save(self.directory / (keep + '.png'))
         self.events.append(dict(kind='frame', wall=wall, qmp_ms=(wall - began) * 1000, keep=keep))
+        if wall - self.last_io >= 2:
+            self.last_io = wall
+            for entry in self.command('query-blockstats'):
+                if entry.get('device') == 'ide0-hd0':
+                    stats = entry['stats']
+                    self.events.append(dict(kind='blockstats', wall=wall, **{
+                        key: stats[key] for key in ('rd_bytes', 'wr_bytes', 'rd_operations',
+                                                   'wr_operations', 'flush_operations')}))
         return pixels, wall
 
     def observe(self, keep=None):

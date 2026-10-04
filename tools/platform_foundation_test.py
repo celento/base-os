@@ -389,6 +389,9 @@ def main():
     for name in ('platform_foundation_test.py','platform_evidence.py','platform_context_test.py'):
         shutil.copy2(ROOT/'tools'/name,args.work/name)
     shutil.copy2(ROOT/'tests/platform_client_app.c',args.work/'platform_client_app.c')
+    result['harness_files']={name:sha((args.work/name).read_bytes()) for name in
+                             ('platform_foundation_test.py','platform_evidence.py',
+                              'platform_context_test.py','platform_client_app.c')}
     try:
         app=args.work/'platform.bex';build_app(ROOT/'tests/platform_client_app.c',app)
         result['app_sha256']=sha(app.read_bytes())
