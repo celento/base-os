@@ -28,6 +28,8 @@ typedef struct {
     int state, result, fpu_ready;
     unsigned key_head, key_count;
     unsigned char keys[TASK_KEYS];
+    unsigned argument_length;
+    char argument[PROCESS_ARGUMENT_MAX+1];
 } NativeTask;
 static NativeTask *tasks=(NativeTask *)TASK_BASE;
 static NativeTask *current_task;
@@ -123,14 +125,24 @@ static NativeTask *task_at(int owner) {
     return tasks_ready&&owner>=0&&owner<PROCESS_TASKS?tasks+owner:0;
 }
 int process_task_start(int owner,const void *file,unsigned bytes,const ProgramIO *io) {
+    return process_task_start_with_arg(owner,file,bytes,io,0,0);
+}
+int process_task_start_with_arg(int owner,const void *file,unsigned bytes,const ProgramIO *io,
+                                const char *argument,unsigned argument_length) {
     uint32_t h[4];
     if(active||owner<0||owner>=PROCESS_TASKS||!io||!io->print||!io->plot||
        !valid_image(file,bytes,h))return -2;
+    if(argument_length>PROCESS_ARGUMENT_MAX||
+       (argument_length&&(!argument||argument[0]!='/')))return -2;
+    for(unsigned i=0;i<argument_length;i++)
+        if(argument[i]<32||argument[i]>126)return -2;
     if(!tasks_ready){kmemset(tasks,0,sizeof(NativeTask)*PROCESS_TASKS);tasks_ready=1;}
     NativeTask *task=tasks+owner;
     if(task->state==PROCESS_TASK_READY||task->state==PROCESS_TASK_SLEEPING)return -1;
     kmemset(task,0,sizeof(*task));
     kmemcpy(task->image,file,bytes);task->io=*io;
+    if(argument_length)kmemcpy(task->argument,argument,argument_length);
+    task->argument_length=argument_length;
     task->frame[8]=task->frame[9]=task->frame[10]=task->frame[11]=0x23;
     task->frame[14]=h[1];task->frame[15]=0x1b;task->frame[16]=0x202;
     task->frame[17]=USER_CAPACITY-16;task->frame[18]=0x23;
@@ -315,6 +327,17 @@ int process_interrupt(uint32_t *r){
     }
     else if(call==15)r[7]=(unsigned)file_call(call,a,b,c,d,0);
     else if(call==16)r[7]=(unsigned)fs_sync();
+    else if(call==17){
+        unsigned length=current_task?current_task->argument_length:0;
+        /* A zero-capacity query never touches a user pointer. No partial copies:
+         * even the terminator must fit in a completely checked user range. */
+        if(b&&(!user_range(a,b)||b<=length)){r[7]=(unsigned)-1;return 1;}
+        if(b){
+            if(length)kmemcpy((void *)(USER_BASE+a),current_task->argument,length);
+            *(char *)(USER_BASE+a+length)=0;
+        }
+        r[7]=length;
+    }
     else r[7]=(unsigned)-1;
     return 1;
 }

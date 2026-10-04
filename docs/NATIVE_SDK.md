@@ -46,7 +46,7 @@ but apps can read files and write documents through the documented API.
 Or, for a long-lived, interactive or streaming app, run:
 
 ```text
-start /Programs/docstats.bex
+start /Programs/docstats.bex /Documents/stats-sample.txt
 ```
 
 `exec` remains synchronous with its two-second watchdog. `start` gives the app
@@ -73,16 +73,18 @@ overwritten by an OS rebuild; install an updated example with an intentional
 
 ## DocStats example
 
-DocStats is a real C app verified with complete files up to 2 MiB in 4 KiB chunks
+DocStats is a real C app that streams complete files in 4 KiB chunks
 without keeping the whole file in application memory. Its 320×200 canvas shows
 byte, word and line counts and a 256-bin byte-frequency histogram. Low byte values
 are at the left; bar heights are normalized to the most frequent byte.
 
-- Default input: `/Documents/stats-sample.txt`.
-- To choose another file, save its absolute path as the entire contents of
+- Pass an input directly: `start /Programs/docstats.bex "/Documents/my notes.txt"`.
+- Without a startup argument, default input: `/Documents/stats-sample.txt`.
+- Without a startup argument, choose another file by saving its absolute path as the entire contents of
   `/Documents/stats-path.txt`. One trailing LF or CRLF is allowed. The path is at
   most 128 printable ASCII bytes; spaces within names are preserved.
-- **R** rereads the path setting and streams the input again.
+- **R** rereads the startup document, or rereads the path setting when no argument
+  was supplied, and streams the input again.
 - **S** writes `/Documents/stats-N.txt`, where N is the Terminal slot, then checks
   the disk-sync result. A failed sync is reported as a pending RAM-only save.
 - **Q/Escape** exits. **Ctrl+C** stops it from the desktop.
@@ -98,7 +100,9 @@ Each streaming call resolves the current path afresh. It is not a filesystem
 snapshot. DocStats rejects a length change observed during a read, but it cannot
 detect same-length concurrent edits. Avoid editing an input while analyzing it.
 The saved report includes a simple byte sum for reproducibility; it is not a
-cryptographic hash.
+cryptographic hash. Reads remain 4 KiB each; DocStats cooperatively yields every
+64 KiB and redraws progress every 256 KiB. PIT user-mode preemption remains active
+throughout. Its progress arithmetic also covers the opt-in 16 MiB file limit.
 
 ## Extended ABI
 
@@ -112,14 +116,39 @@ holds the result. User pointers are offsets in the isolated 64 KiB region.
 | 14 | `bos_canvas_size(width, height)` | EBX=width, ECX=height | 0 for a supported mode, otherwise -1 |
 | 15 | `bos_replace_file(path, data, bytes)` | EBX=path, ECX=path length, EDX=data, ESI=bytes≤32768 | Bytes replaced in RAM, or -1 |
 | 16 | `bos_sync()` | None | 0 after a durable filesystem snapshot, or -1 |
+| 17 | `bos_argument(out, capacity)` | EBX=output, ECX=capacity | Startup-path byte length, zero if absent, or -1 |
+
+### Startup document argument
+
+`start FILE [DOCUMENT]` accepts one optional existing ordinary file. Both paths
+may be double-quoted; relative paths use that Terminal's current folder. The
+resolved absolute document path must fit **128 printable ASCII bytes**. A longer
+path, empty quoted operand or extra operand is rejected, never silently truncated.
+The interactive command line still holds at most 80 bytes, so a short relative
+path can be useful in a deeply nested folder. This is one document operand, not
+an argv vector, shell expansion, environment block or new entry-point convention.
+
+`bos_argument(out, capacity)` copies that path plus a trailing NUL into the app's
+existing 64 KiB region. The return value excludes the NUL. Capacity zero queries
+the length without touching `out`. A nonzero capacity must fit the whole path and
+NUL, and the entire declared output range must lie inside the process region;
+otherwise it returns -1 without a partial copy. An absent argument returns zero
+and writes an empty string when capacity is nonzero. The old `exec` and the
+no-argument Files/Open/search routes have no startup argument.
+
+The kernel copies and validates startup bytes before accepting a task. A later
+source-buffer edit, file rename/deletion, yield, sleep or another task cannot
+change its argument. Task and window labels use copied launch basenames. These
+labels describe what was launched; they do not follow subsequent renames or
+claim that an app has opened the document. The pathname is not a locked file or
+snapshot: reads still resolve it again on every call.
 
 ### Streaming reads
 
 All read chunks are at most 4096 bytes. The default data volume permits source
 files up to 2 MiB. The explicit [large-volume profile](LARGE_VOLUMES.md) permits
 16 MiB sources through the same API; an ordinary native reader has streamed a
-complete 16 MiB file in that profile. DocStats performance at 16 MiB has not been
-measured. Application memory remains 64 KiB. The
+complete 16 MiB file in that profile. DocStats uses the same storage limits. Application memory remains 64 KiB. The
 path must be absolute printable ASCII with a nonzero length at most 128 bytes.
 Folders and app shortcuts are rejected. The complete output range must be inside
 the process region. An empty output capacity reads zero bytes. Offsets at or
@@ -149,9 +178,9 @@ compiled BEX1 apps are unaffected. Kernel integrations must initialize the new
 field to zero or a callback. The renderer reads `term_canvas_width()` and
 `term_canvas_height()`; pixels use the active width as a tightly packed stride.
 
-A Terminal now occupies 91,468 bytes, including 320 scrollback rows and all
-64,000 possible canvas pixels. Eight use **731,744 bytes**, below the fixed
-786,432-byte terminal-state subarena, with 54,688 bytes spare before script
+A Terminal now occupies 91,492 bytes, including 320 scrollback rows and all
+64,000 possible canvas pixels. Eight use **731,936 bytes**, below the fixed
+786,432-byte terminal-state subarena, with 54,496 bytes spare before script
 scratch. The overall 1 MiB Terminal arena and other memory mappings are unchanged.
 
 ### Replacement writes and durability
@@ -243,3 +272,15 @@ eight-window capacity, minimize, Stop, close, source deletion after start and Q
 exit. It observes only serial log files and independently parses the stopped
 volume. It uses no debugger, monitor, QMP or guest-memory reader. This functional
 fixture is distinct from a production-desktop PS/2/pixel test.
+
+### Startup argument regression
+
+`ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p test_native_arguments.py -v`
+checks production Terminal parsing and copied metadata, exact 128-byte canonical
+paths, legacy no-argument launches, and production DocStats analysis with complete
+2 MiB/16 MiB host fixtures. The real ring-3 companion is
+`python3 tools/native_arguments_test.py build`; `--compile-only` prepares its valid
+images without starting QEMU. It covers owned argument copies across yield/sleep,
+length queries, insufficient-capacity error returns without partial copies,
+independent owners, legacy exec/start, quoted/relative Terminal paths, source
+rename/deletion and synchronized records across reboot.

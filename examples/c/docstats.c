@@ -1,9 +1,10 @@
 #include "baseos.h"
-/* A complete streaming document tool. Edit /Documents/stats-path.txt to choose
- * an absolute input path; R reloads it. Each terminal saves its own report. */
+/* A streaming document tool. A startup path takes priority over stats-path.txt;
+ * R rereads that input. Each terminal saves its own report. */
 static unsigned char chunk[BOS_FILE_CHUNK_MAX];
 static unsigned histogram[256],bytes,words,lines,checksum;
 static char path[129];
+static char startup_path[BOS_ARGUMENT_MAX+1];
 static unsigned owner,ready;
 static const unsigned char glyphs[36][5]={
     {7,5,5,5,7},{2,6,2,2,7},{7,1,7,4,7},{7,1,7,1,7},{5,5,7,1,1},
@@ -46,7 +47,8 @@ static void draw(unsigned expected){
     }
     if(ready)text(12,187,"R RELOAD   S SAVE   Q EXIT",7);
     else{
-        unsigned progress=expected?bytes*296u/expected:0;
+        /* Divide first: bytes*296 would overflow for a supported 16 MiB file. */
+        unsigned progress=expected?bytes/((expected+295u)/296u):0;
         if(progress>296)progress=296;
         bos_rect(12,187,progress,5,7);
     }
@@ -55,6 +57,11 @@ static void draw(unsigned expected){
 static int input_path(void){
     static const char config[]="/Documents/stats-path.txt";
     static const char fallback[]="/Documents/stats-sample.txt";
+    if(startup_path[0]){
+        unsigned length=bos_strlen(startup_path);
+        for(unsigned i=0;i<=length;i++)path[i]=startup_path[i];
+        return 0;
+    }
     int size=bos_file_size(config);
     if(size<0){for(unsigned i=0;i<sizeof fallback;i++)path[i]=fallback[i];return 0;}
     if(size<1||size>130)return -1;
@@ -73,7 +80,7 @@ static int analyze(void){
     for(unsigned i=0;i<256;i++)histogram[i]=0;
     if(input_path()){bos_print("Use one absolute path, at most 128 bytes, in stats-path.txt.\n");return -1;}
     int expected=bos_file_size(path);
-    if(expected<0){bos_print("Input file is missing. Check /Documents/stats-path.txt.\n");return -1;}
+    if(expected<0){bos_print("Input file is missing: ");bos_print(path);bos_print("\n");return -1;}
     bos_print("Reading: ");bos_print(path);bos_print("\n");
     unsigned in_word=0,last=0,chunks=0;
     for(;;){
@@ -87,8 +94,12 @@ static int analyze(void){
             in_word=!space;if(c=='\n')lines++;last=c;
         }
         bytes+=(unsigned)got;
-        if(!(++chunks%16u))draw((unsigned)expected);
-        if(owner)bos_yield();
+        ++chunks;
+        /* Each read stays 4 KiB. Redraw per 256 KiB and yield per 64 KiB, rather
+         * than scheduling a full desktop turn for every small read. PIT still
+         * preempts user execution, including processing any individual chunk. */
+        if(!(chunks%64u))draw((unsigned)expected);
+        else if(owner&&!(chunks%16u))bos_yield();
     }
     /* Stat/read are independent calls; reject a changed-length source. Same-size
      * concurrent edits cannot be detected without a filesystem snapshot API. */
@@ -115,9 +126,13 @@ static void save_report(void){
 }
 int main(void){
     owner=bos_task_id();
+    if(bos_argument(startup_path,sizeof startup_path)<0){
+        bos_print("This app needs the native startup-argument API.\n");return 1;
+    }
     if(bos_canvas_size(320,200)){bos_print("This app needs the 320x200 native canvas API.\n");return 1;}
-    bos_print("Document Stats streams up to 2 MiB in 4096-byte chunks.\n");
-    bos_print("Choose an input in /Documents/stats-path.txt; R reloads.\n");
+    bos_print("Document Stats streams files in 4096-byte chunks.\n");
+    bos_print(startup_path[0]?"Using the startup document; R rereads it.\n":
+              "Choose an input in /Documents/stats-path.txt; R reloads.\n");
     analyze();
     if(!owner)return ready?0:1;
     for(;;){
