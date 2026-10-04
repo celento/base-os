@@ -18,7 +18,8 @@ static int td_field_len, td_field_on;
  * saved node numbers alone are not a binding. No borrowed FS pointers survive. */
 enum {
     TODO_IDLE, TODO_QUEUED, TODO_RAM, TODO_SAVED, TODO_PATH_FAILED,
-    TODO_FULL_FAILED, TODO_WRITE_FAILED, TODO_CONFLICT, TODO_SYNC_FAILED, TODO_RELOAD
+    TODO_FULL_FAILED, TODO_WRITE_FAILED, TODO_CONFLICT, TODO_SYNC_FAILED, TODO_RELOAD,
+    TODO_UNSUPPORTED
 };
 static int td_pending, td_state;
 static int td_source_file = -1, td_source_len;
@@ -130,6 +131,7 @@ const char *todo_status(void) {
     case TODO_CONFLICT: return "Todo file changed; fix path, then Ctrl+S.";
     case TODO_SYNC_FAILED: return "RAM only; disk save failed. Ctrl+S retries.";
     case TODO_RELOAD: return "Todo file changed; reopen to reload.";
+    case TODO_UNSUPPORTED: return "Unsupported Todo file; existing bytes kept.";
     default: return "";
     }
 }
@@ -160,6 +162,22 @@ static void todo_changed(void) {
     td_state = TODO_QUEUED;
     todo_tick();
 }
+static int todo_source_supported(const char *data, int size) {
+    int pos=0, rows=0;
+    while(pos<size){
+        if(data[pos]=='\n'){pos++;continue;}
+        char mark=data[pos++];
+        if(mark!=' '&&mark!='x'&&mark!='X')return 0;
+        int length=0;
+        while(pos<size&&data[pos]!='\n'){
+            unsigned char c=(unsigned char)data[pos++];
+            if(c<' '||c>'~'||++length>=FS_NAME_LEN)return 0;
+        }
+        if(length&&++rows>TODO_MAX)return 0;
+        if(pos<size)pos++;
+    }
+    return 1;
+}
 void todo_load(void) {
     /* Closing/reopening a window must not discard deferred edits or its field.
      * Reload from disk only when no accepted/private work needs preserving. */
@@ -182,12 +200,14 @@ void todo_load(void) {
     char buf[TODO_FILE_MAX];
     int n = fs_read(f, buf, (int)sizeof buf);
     if (n < 0) { td_state = TODO_WRITE_FAILED; return; }
+    /* Never bind a truncated or unrelated text file as an editable Todo list. */
+    if(fs_size(f)!=n||!todo_source_supported(buf,n)){
+        td_state=TODO_UNSUPPORTED;
+        return;
+    }
     todo_capture_source(f, buf, n);
     td_state = TODO_RAM;
-    /* The legacy reader remains bounded. A larger external file is never
-     * overwritten with the truncated list: source-size validation rejects it. */
-    if (fs_size(f) != n) td_state = TODO_CONFLICT;
-    else if (!fs_sync_busy()) todo_observe();
+    if (!fs_sync_busy()) todo_observe();
     int i = 0;
     while (i < n && td_n < TODO_MAX) {
         if (buf[i] == '\n') { i++; continue; }

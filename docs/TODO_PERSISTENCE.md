@@ -3,6 +3,10 @@
 Todo keeps its existing `/prefs/todo` line format, twelve-item limit and
 23-character task text. A leading space means incomplete; `x` means complete.
 The reader still accepts an uppercase `X`. No disk format changes are involved.
+Unrelated text, lines beyond 23 characters, more than twelve nonempty items and
+files beyond the complete bounded format are rejected without binding or
+overwriting them. A final line without a newline and empty separator lines remain
+compatible. Rejection alone does not create unsaved work or prevent shutdown.
 
 ## Accepted edits and background saves
 
