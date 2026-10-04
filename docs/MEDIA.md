@@ -57,10 +57,9 @@ playback does not wait in a busy loop. WAV needs eight polls to prefill the ring
 MP3 takes additional bounded frame-decode polls. At 44.1 kHz stereo, each half holds
 about 186 ms. Callers should service audio every 70 ms or better. A missed refill
 or a delay longer than the complete ring stops playback with an explicit
-underrun error instead of silently repeating stale music. Native programs still
-run synchronously and may hold the desktop for up to two seconds; callers
-should pause audio around native execution until the scheduler can service
-media during that interval. Do not run `audio_poll()` from an IRQ handler.
+underrun error instead of silently repeating stale music. Legacy `exec` pauses and resumes audio around its synchronous two-second
+execution. Long-running `start` applications yield or return after one PIT tick;
+the desktop continues polling media between those bounded slices. Do not run `audio_poll()` from an IRQ handler.
 
 A 50 ms zero-filled drain preserves the end of the clip before deactivating the
 QEMU voice. Pause/resume retains the DMA cursor. Missing devices, busy DSP ports,

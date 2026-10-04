@@ -6583,23 +6583,39 @@ static int session_ready;
 static int session_put(int dir,const char *name,const void *data,int size){
     int id=fs_find_child(dir,name);
     if(id>=0&&fs_size(id)==size){const unsigned char *a=(const unsigned char *)fs_data(id),*b=data;int i=0;while(i<size&&a[i]==b[i])i++;if(i==size)return 0;}
-    if(id<0)id=fs_create(dir,name);
-    return id<0?-1:fs_write(id,data,size);
+    int created=id<0;
+    if(created)id=fs_create(dir,name);
+    if(id<0)return -1;
+    int result=fs_write(id,data,size);
+    if(result<0&&created)fs_delete(id);
+    return result;
 }
 static void session_save(void){
     if(!session_ready)return;
     int dir=fs_find_child(fs_root(),"prefs");if(dir<0)dir=fs_mkdir(fs_root(),"prefs");
     if(dir<0){session_status="Session not saved: no free folder slot.";return;}
-    int needed=0;
+    int needed=0,projected=(int)fs_used_bytes();
     if(!fs_is_dir(dir))goto failure;
     for(int i=-2;i<MAX_WIN;i++){
         char draft[]="draft0.txt";const char *name;
         if(i==-2)name="session";
         else if(i==-1){if(!paint_ready)continue;name="paint-draft";}
         else {if(!wins[i].open||wins[i].kind!=WK_EDIT)continue;draft[5]+=(char)i;name=draft;}
-        int id=fs_find_child(dir,name);if(id<0)needed++;else if(fs_is_dir(id)||fs_is_app(id))goto failure;
+        int size=i==-2?(int)sizeof(SavedSession):i==-1?PAINT_W*PAINT_H:window_state[i].doc.len;
+        if(size<0||(unsigned)size>fs_file_limit())goto failure;
+        int id=fs_find_child(dir,name);
+        if(id<0)needed++;
+        else {
+            if(fs_is_dir(id)||fs_is_app(id))goto failure;
+            int old_size=fs_size(id);
+            /* Paint/session metadata are committed last, so do not spend
+             * space that an unusually large older file might free later. */
+            projected-=i<0&&old_size>size?size:old_size;
+        }
+        projected+=size;
     }
-    if(needed>FS_MAX_NODES-fs_node_count())goto failure;
+    /* No draft is changed until every new node and replacement byte fits. */
+    if(needed>FS_MAX_NODES-fs_node_count()||projected>(int)fs_capacity())goto failure;
     SavedSession snap;kmemset(&snap,0,sizeof snap);snap.magic=0x53534542;snap.version=1;
     for(int i=0;i<MAX_WIN;i++){
         Win *w=&wins[i];SavedWindow *v=&snap.win[i];
@@ -6608,8 +6624,16 @@ static void session_save(void){
         int id=w->kind==WK_EDIT?edit_file:w->kind==WK_FILES?fm_cwd:w->kind==WK_TERM?term_cwd():-1;
         if(w->kind==WK_EDIT && fs_identity(id)!=edit_identity)id=-1;
         if(fs_valid(id))fs_path(id,v->path,sizeof v->path);
-        if(w->kind==WK_EDIT){char name[]="draft0.txt";name[5]+=(char)i;v->caret=edit_caret;
-            if(session_put(dir,name,edit_buf,edit_len)<0)goto failure;}
+        if(w->kind==WK_EDIT)v->caret=edit_caret;
+    }
+    /* Reclaim smaller drafts first, so the preflight's total-space promise
+     * also holds when one document grows while another becomes shorter. */
+    for(int growing=0;growing<2;growing++)for(int i=0;i<MAX_WIN;i++){
+        if(!wins[i].open||wins[i].kind!=WK_EDIT)continue;
+        context_set(i);char name[]="draft0.txt";name[5]+=(char)i;
+        int old=fs_find_child(dir,name),old_size=old<0?0:fs_size(old);
+        if((edit_len>old_size)!=growing)continue;
+        if(session_put(dir,name,edit_buf,edit_len)<0)goto failure;
     }
     if(paint_ready && session_put(dir,"paint-draft",paint_pix,PAINT_W*PAINT_H)<0)goto failure;
     if(session_put(dir,"session",&snap,sizeof snap)<0)goto failure;
@@ -6630,7 +6654,11 @@ static void session_restore(void){
             if(v->kind==WK_TERM)term_set_cwd(target);
             if(v->kind==WK_EDIT){edit_clear();if(fs_valid(target)&&!fs_is_dir(target))edit_load(target);
                 char name[]="draft0.txt";name[5]+=(char)i;int draft=fs_find_child(dir,name);
-                if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)){edit_len=fs_read(draft,edit_buf,EDIT_BUF_SIZE-1);edit_buf[edit_len]=0;edit_saved_ok=0;}
+                if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)){
+                    if(fs_size(draft)<EDIT_BUF_SIZE){
+                        edit_len=fs_read(draft,edit_buf,EDIT_BUF_SIZE);edit_buf[edit_len]=0;edit_saved_ok=0;
+                    }else session_status="Recovery draft exceeds the Editor limit.";
+                }
                 edit_caret=v->caret>=0&&v->caret<=edit_len?v->caret:edit_len;edit_sel_a=edit_sel_b=edit_caret;
             }
         }

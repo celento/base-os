@@ -25,7 +25,7 @@ def run(build, output, extended=False):
              'desktop_apps', 'images_input', 'download_input']
     if extended:
         tests += ['network', 'browser', 'download', 'data_volume', 'editor',
-                  'storage_audio', 'task_media', 'video']
+                  'session_draft', 'storage_audio', 'task_media', 'video', 'demo']
     commands += [(name, [sys.executable, 'tools/' + name + '_test.py', str(build)]) for name in tests]
     if extended:
         commands += [('mpeg_av_48', [sys.executable, 'tools/mpeg_av_test.py', str(build), '--rate', '48000']),
