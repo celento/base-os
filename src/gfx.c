@@ -759,9 +759,13 @@ static int same_span(const uint8_t *a,const uint8_t *b,int n) {
     return 1;
 }
 void gfx_present(void) {
+    if(flip_hook)flip_hook();
     if(!presented_valid){flip_vga();return;}
     const uint8_t *old=(const uint8_t *)PRESENT_BASE;
     for(int y=0;y<fb_h;y++){
+        /* Device service must not depend on which rows happened to change.
+         * A modal can leave only a short video strip exposed between hooks. */
+        if((y&63)==0&&flip_hook)flip_hook();
         const uint8_t *a=fb+y*fb_w,*b=old+y*fb_w;int run=-1;
         for(int x=0;x<fb_w;x+=32){
             int n=fb_w-x<32?fb_w-x:32;
