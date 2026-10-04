@@ -50,7 +50,13 @@ static void begin_frame(int width,int height){
     memcpy(frame,term_canvas(),(size_t)width*height);render();memcpy(reference,rendered,sizeof reference);
     terms[0].task_dirty=0;
 }
+static unsigned program_input_calls;
+static void program_input(int active) {
+    assert(active == !(program_input_calls & 1));
+    ++program_input_calls;
+}
 int main(void){
+    term_set_program_input(program_input);
     reset();executable("canvas.bex");term_select(0);term_reset();command("start /canvas.bex");
     assert(callbacks[0].present&&!term_canvas());
     step(IDLE,TERM_TASK_TEXT|TERM_TASK_LAYOUT|TERM_TASK_LIFECYCLE);
@@ -105,9 +111,12 @@ int main(void){
     for(int owner=0;owner<8;owner++)if(owner!=3){
         term_select(owner);assert(term_canvas_width()==320&&term_canvas()[63999]==owner+1);
     }
-    term_select(3);term_task_stop(3);command("exec /canvas.bex");plot(2,3,9);
+    assert(!program_input_calls);
+    term_select(3);term_task_stop(3);command("exec /canvas.bex");
+    assert(program_input_calls==2);plot(2,3,9);
     assert(term_canvas()==terms[3].canvas&&term_canvas()[3*160+2]==9);
-    command("basic /canvas.bex");plot(4,5,10);
+    command("basic /canvas.bex");
+    assert(program_input_calls==4);plot(4,5,10);
     assert(term_canvas()==terms[3].canvas&&term_canvas()[5*160+4]==10);
     puts("Native publication: preempted working bytes/metadata stay hidden from actual renderer; publication, resize, stop/close, clear, reuse, eight slots and synchronous compatibility passed.");
 }
