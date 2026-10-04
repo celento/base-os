@@ -4,7 +4,9 @@ Writer is a separate, single-instance native desktop app. The plain-text Editor
 remains available. Writer stores up to **32,768 ASCII text bytes**, with bold,
 italic, underline, heading/body paragraph styles and left/center/right alignment.
 Tabs and line breaks are supported. There is no Unicode, DOCX, general RTF import,
-image embedding, pagination or printing. RTF is an export format.
+image embedding, paginated editing or guest printing. RTF is an export format.
+A standalone paginated PDF export module is described below; it does not add
+a guest PDF viewer or printer driver.
 
 ## Editing
 
@@ -106,6 +108,18 @@ bold, italic and underline. An independent test parser checks paragraph alignmen
 font sizes, empty/final paragraphs and all inline states. This is a deliberately
 small standards-compatible RTF export, not a claim of complete RTF support or
 pixel-identical layout in every external word processor.
+
+## Paginated PDF module
+
+`writer_pdf_export` in `src/writer_pdf.c/.h` serializes the current rich model into
+ordinary letter or A4 portrait PDF pages, using standard Times fonts, 12/18-point
+body/headings, bold/italic/underline, left/center/right alignment, word wrapping
+and one-inch margins. It is independent of the screen layout and filesystem.
+The model exporter takes caller-owned output, measures before writing, and rejects
+insufficient capacity without changing either output or native work. It adds no
+arena/BSS allocation. See [WRITER_PDF.md](WRITER_PDF.md) for exact layout, failure
+semantics, standard-font attribution, independent host verification and the safe
+file/UI integration contract. This module alone does not change the desktop menu.
 
 ## Desktop integration contract
 
