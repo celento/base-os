@@ -132,7 +132,9 @@ def validate_files(path):
     import volume
     nodes=volume.load(path.read_bytes())[2]
     expected={'/Documents/as-complete.txt':COMPLETE,'/Documents/sdk-note.txt':NOTE,
-              '/Documents/as-2.bin':expected_output(2),'/Documents/as-6.bin':expected_output(6)}
+              '/Documents/as-2.bin':expected_output(2),'/Documents/as-6.bin':expected_output(6),
+              '/Documents/counter-4.txt':b'10\n',
+              '/Documents/source.bin':bytes((i*29+7)&255 for i in range(8192))}
     for name,data in expected.items():assert nodes[volume.resolve(nodes,name)]['data']==data,name
     return {name:dict(bytes=len(data),sha256=hashlib.sha256(data).hexdigest()) for name,data in expected.items()}
 

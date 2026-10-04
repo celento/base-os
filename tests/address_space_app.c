@@ -52,6 +52,7 @@ static int reads(void){
     return bos_file_close(source.handle)==BOS_OK;
 }
 int main(void){
+    if(stage||steps||checksum||checks||operation||output.handle||abi.struct_size||memory.struct_size)return 39;
     if(bos_abi_query(&abi,sizeof abi)!=BOS_OK||bos_memory_info(&memory,sizeof memory)!=BOS_OK)return 41;
     if(initialized_word!=0x53706163u)return 40;
     display=bos_task_id();
