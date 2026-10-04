@@ -51,7 +51,17 @@ class DesktopSession:
     def screenshot(self,name):
         target=self.directory/name;self.command('screendump',{'filename':str(target),'format':'png'});return target
     def close(self):
-        if self.process.poll() is None:self.process.terminate()
-        self.process.wait(timeout=5);self.stderr.close()
+        try:
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=5)
+            else:self.process.wait(timeout=5)
+        finally:
+            for stream in (self.process.stdin,self.process.stdout):
+                if stream:stream.close()
+            self.stderr.close()
     def __enter__(self):return self
     def __exit__(self,*_):self.close()
