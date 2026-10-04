@@ -86,7 +86,8 @@ Key polling is nonblocking and returns one queued byte or zero. A full queue dro
 - Published canvases occupy 512,000 bytes of the 512 KiB reservation at
   `0x600000`–`0x680000`, inside the existing E820-validated RAM span.
 - Eight Terminals with 320 scrollback rows and maximum 320×200 canvases use
-  732,096 bytes, below the fixed 786,432-byte subarena before script scratch.
+  732,128 bytes, including the complete-input overflow flag in each Terminal,
+  below the fixed 786,432-byte subarena before script scratch.
 
 The legacy synchronous `process_run` still has its two-second watchdog, checked syscalls, and audio pause/resume behavior. Running it does not destroy saved task images; asynchronous tasks resume afterward.
 
