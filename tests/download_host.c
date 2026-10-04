@@ -37,6 +37,7 @@ int program_key(void){return 0;}
 void program_present(void){}
 int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;return -1;}
 int process_task_start(int owner,const void *p,unsigned n,const ProgramIO *io){(void)owner;(void)p;(void)n;(void)io;return -1;}
+int process_task_start_with_arg(int owner,const void *p,unsigned n,const ProgramIO *io,const char *argument,unsigned length){(void)argument;(void)length;return process_task_start(owner,p,n,io);}
 int process_task_step(int owner){(void)owner;return 0;}
 int process_task_status(int owner){(void)owner;return PROCESS_TASK_EMPTY;}
 int process_task_result(int owner){(void)owner;return 0;}
