@@ -58,6 +58,87 @@ static int contains_apps(int node) {
     return 0;
 }
 
+static int normal_extension(const char *name) {
+    int dot = -1, length = kstrlen(name);
+    for (int i = 1; i < length; ++i) if (name[i] == '.') dot = i;
+    if (dot < 0 || dot == length - 1) return -1;
+    for (int i = dot + 1; i < length; ++i) {
+        char c = name[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9'))) return -1;
+    }
+    return dot;
+}
+
+static int copy_suffix(char *out, int number) {
+    kstrcpy(out, " copy");
+    int length = 5;
+    if (number > 1) {
+        char digits[10];
+        int count = 0;
+        out[length++] = ' ';
+        do {
+            digits[count++] = (char)('0' + number % 10);
+            number /= 10;
+        } while (number);
+        while (count) out[length++] = digits[--count];
+    }
+    out[length] = 0;
+    return length;
+}
+
+/* Select the final name before allocating anything. Folders and names without
+ * a normal final extension retain the existing filesystem naming convention. */
+static int choose_copy_name(int node, int directory, char *out) {
+    const char *name = fs_name(node);
+    if (fs_find_child(directory, name) < 0) {
+        kstrcpy(out, name);
+        return 0;
+    }
+    int dot = fs_is_dir(node) ? -1 : normal_extension(name);
+    if (dot < 0) return fs_unique_copy(directory, name, out);
+    int extension_length = kstrlen(name + dot); /* Includes the final dot. */
+    for (int number = 1; number <= fs_node_limit(); ++number) {
+        char suffix[16];
+        int suffix_length = copy_suffix(suffix, number);
+        int stem_length = FS_NAME_LEN - 1 - suffix_length - extension_length;
+        /* Preserve the complete extension and at least one stem character.
+         * An unusually long extension can leave no room for a copy label. */
+        if (stem_length < 1) return -1;
+        if (stem_length > dot) stem_length = dot;
+        kmemcpy(out, name, stem_length);
+        kstrcpy(out + stem_length, suffix);
+        kstrcpy(out + stem_length + suffix_length, name + dot);
+        if (fs_find_child(directory, out) < 0) return 0;
+    }
+    return -1;
+}
+
+int file_copy_named(int node, int directory) {
+    if (!fs_valid(node) || node == fs_root() || fs_is_app(node) ||
+        !fs_is_dir(directory) || within(directory, node) ||
+        (fs_is_dir(node) && contains_apps(node))) return -1;
+    char final_name[FS_NAME_LEN];
+    if (choose_copy_name(node, directory, final_name) < 0) return -1;
+    int result = fs_copy(node, directory);
+    if (result < 0) return -1;
+    /* fs_copy is also the legacy Duplicate, so it always chooses a " copy"
+     * name after the whole filename. Finalize our already-chosen free name
+     * in RAM before the caller's sync. Rename cannot fail under the current
+     * valid-volume contract: final_name is valid, fs_copy proved subtree depth
+     * fits, every legal-depth path fits FS_PATH_LEN, and fs_background_poll
+     * cannot mutate the tree during copy. Keep a defensive rollback if a
+     * future contract changes; never retain an unexpected copy or overwrite
+     * any pre-existing node. */
+    _Static_assert(FS_MAX_DEPTH * FS_NAME_LEN < FS_PATH_LEN,
+                   "legal-depth paths must fit after finalizing a copied name");
+    if (kstrcmp(fs_name(result), final_name) && fs_rename(result, final_name) < 0) {
+        fs_delete(result);
+        return -1;
+    }
+    return result;
+}
+
 int file_clipboard_set(int node, int requested_mode) {
     if (requested_mode != FILE_CLIPBOARD_COPY && requested_mode != FILE_CLIPBOARD_CUT) {
         status("Choose Copy or Cut.");
@@ -148,31 +229,12 @@ int file_clipboard_paste(int directory, int *result_node) {
         return FILE_CLIPBOARD_NOOP;
     }
 
-    char original_name[FS_NAME_LEN];
-    int preserve_name = operation == FILE_CLIPBOARD_COPY &&
-                        fs_find_child(directory, fs_name(node)) < 0;
-    if (preserve_name) kstrcpy(original_name, fs_name(node));
-    int result = operation == FILE_CLIPBOARD_COPY ? fs_copy(node, directory)
+    int result = operation == FILE_CLIPBOARD_COPY ? file_copy_named(node, directory)
                                                   : fs_move(node, directory);
     if (result < 0) {
         status(operation == FILE_CLIPBOARD_COPY
-            ? "Copy did not fit; check free slots, free bytes and folder depth."
+            ? "Copy did not fit; check names, free slots, free bytes and folder depth."
             : "Move did not fit; destination path is too deep.");
-        return FILE_CLIPBOARD_ERROR;
-    }
-    /* fs_copy is also Duplicate, so it always chooses a " copy" name. A normal
-     * cross-folder Paste can restore the unused original name before our one
-     * disk sync. This rename cannot fail for the current valid-volume contract:
-     * the original name is valid, fs_copy already proved subtree depth fits,
-     * every legal-depth path fits FS_PATH_LEN, and fs_background_poll cannot
-     * mutate the destination during the copy. Keep a defensive rollback if a
-     * future filesystem contract changes; never retain an unexpected copy or
-     * overwrite any pre-existing node. */
-    _Static_assert(FS_MAX_DEPTH * FS_NAME_LEN < FS_PATH_LEN,
-                   "legal-depth paths must fit after restoring the original name");
-    if (preserve_name && fs_rename(result, original_name) < 0) {
-        fs_delete(result);
-        status("Copy cancelled; original name could not be used. No copy retained.");
         return FILE_CLIPBOARD_ERROR;
     }
     completed_node = operation == FILE_CLIPBOARD_COPY ? result : node;

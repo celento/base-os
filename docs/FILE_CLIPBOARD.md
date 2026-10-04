@@ -14,10 +14,13 @@ copy, move and dual-snapshot synchronization paths.
   not. Copy uses the source's current contents when Paste runs, rather than a
   snapshot of the contents at the time of Copy.
 - Copy keeps the original name when it is unused in the destination. For a
-  collision, including a same-folder copy, it uses `fs_copy`'s bounded unique
-  `name copy`, `name copy 2`, and later names. Names fit the filesystem's
-  23-character limit. Existing files are never overwritten. Recursive copies
-  retain child names and data while allocating new identities.
+  collision, including a same-folder copy, it adds a unique copy label before a
+  normal file extension: `report copy.bwr`, `report copy 2.bwr`, and later names.
+  The extension keeps its original case and the stem is shortened to fit the
+  filesystem's 23-character limit. Folders and files without a normal extension
+  retain the bounded `name copy` convention. Existing files are never
+  overwritten. Recursive copies retain child names and data while allocating
+  new identities.
 - Cut makes no immediate filesystem change. Paste moves the existing object
   with its original identity. Unlike the general `fs_move` auto-renaming path,
   this clipboard rejects a name collision before calling `fs_move`. The source
@@ -80,24 +83,38 @@ dirty state.
 6. Display `file_clipboard_status()` for bounded human-readable feedback. The
    string is always NUL-terminated and shorter than 128 bytes. Name, source,
    identity and mode getters are available for menu/selection information.
+7. Use `file_copy_named(source, destination)` for another copy route, such as
+   File > Duplicate, so it preserves the same file associations. This public
+   helper returns a new node or `-1` and only changes the filesystem in RAM.
+   It does not synchronize or change any clipboard selection, status or pending
+   retry state. The caller owns synchronization and its user-facing feedback.
 
 This clipboard is RAM-only and is not restored across reboot. It does not
 implement multi-selection, links, clipboard file content snapshots or file
 operation undo.
 
-### Original-name preservation
+### Copy naming and atomic completion
 
-The wrapper lets the existing atomic `fs_copy` create its generated name, then
-renames that new copy to the unused original name before the single `fs_sync`.
-It does not change the global Duplicate behavior or synchronize an intermediate
-name. This rename is guaranteed under the current valid-volume contracts: the
-source name is valid, the successful copy already validated subtree depth, all
-legal-depth paths fit in `FS_PATH_LEN`, and filesystem background servicing
-cannot mutate the tree during the operation. A compile-time assertion records
-the path-size invariant. If a future contract change nevertheless makes the
-rename fail, the wrapper deletes only its new copy before returning an error.
-That defensive fallback can conservatively leave the filesystem dirty, but
-retains no extra copy and never deletes or overwrites an original file.
+`file_copy_named` chooses a free final name before it allocates anything. A
+normal extension is the last non-leading dot followed by one or more ASCII
+letters or digits. Multiple-dot names preserve the final extension, such as
+`read.me copy.html`; a lone leading dot or trailing dot is not an extension.
+The complete extension and at least one stem character must fit alongside the
+copy label. An unusually long extension that cannot fit is rejected rather than
+truncated. An unused original name is always preserved.
+
+The helper lets the existing atomic `fs_copy` create its generated name, then
+renames that new copy to the chosen final name in RAM. Paste calls `fs_sync`
+only after naming is complete. The global `fs_copy` implementation is unchanged,
+and no intermediate name is synchronized. This rename is guaranteed under the
+current valid-volume contracts: the selected name is valid and free, the
+successful copy already validated subtree depth, all legal-depth paths fit in
+`FS_PATH_LEN`, and filesystem background servicing cannot mutate the tree
+during the operation. A compile-time assertion records the path-size invariant.
+If a future contract change nevertheless makes the rename fail, the helper
+deletes only its new copy before returning an error. That defensive fallback
+can conservatively leave the filesystem dirty, but retains no extra copy and
+never deletes or overwrites an original file.
 
 ## Verification
 
@@ -110,7 +127,9 @@ ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p test_file_c
 The suite compiles the module separately with AddressSanitizer,
 UndefinedBehaviorSanitizer and warnings as errors. It uses valid floppy and IDE
 volumes, binary/empty files, live renames and edits, deletion/reuse, repeated
-long collision names, recursive copies, identity-preserving moves, same-folder
+long collision names, `.bwr`/`.mp3`/`.html` association-preserving names,
+case-preserved extensions, standalone RAM-helper state isolation, recursive
+copies, identity-preserving moves, same-folder
 no-op, app/subtree/collision rejection, full 64/256-node limits, partial copy
 rollback, full data allowance, deepest supported paths and successful remounts.
 A temporarily unavailable mock storage device checks the ordinary RAM-only
