@@ -106,6 +106,7 @@ static void test_editing(void) {
     key(0x2e, WRITER_MOD_CTRL); writer_new(); key(0x2f, WRITER_MOD_CTRL);
     check_text("world"); assert(writer_document()->style[0] == 7);
     assert(writer_document()->paragraph[0] == 5);
+    type("!"); check_text("world!"); assert(writer_document()->style[5] == 7);
     /* Same bytes with a different clipboard owner must lose the Writer styles. */
     writer_clipboard_set("world", 5); writer_new(); key(0x2f, WRITER_MOD_CTRL);
     check_text("world"); assert(!writer_document()->style[0]); assert(!writer_document()->paragraph[0]);
@@ -157,6 +158,10 @@ static void test_files(void) {
     sync_failure = 1; assert(writer_save() == WRITER_SAVE_ERROR); assert(writer_dirty());
     sync_failure = 0; assert(writer_save() == WRITER_SAVE_OK); assert(!writer_dirty());
     assert(writer_file() == id && writer_file_identity() == identity);
+    /* Opening starts at the first character's style, not EOF insertion style. */
+    key(0x4f, WRITER_MOD_CTRL); key(0x30, WRITER_MOD_CTRL); assert(writer_save() == WRITER_SAVE_OK);
+    assert(writer_open_file(id)); type("A"); assert(writer_document()->style[0] == WRITER_STYLE_BOLD);
+    key(0x2c, WRITER_MOD_CTRL); assert(!writer_dirty());
     /* Renames preserve stable binding. Reused numeric node IDs do not. */
     strcpy(files[id].name, "renamed.bwr"); type("?"); assert(writer_save() == WRITER_SAVE_OK);
     assert(!strcmp(writer_title(), "renamed.bwr"));

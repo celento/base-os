@@ -154,7 +154,7 @@ static int replace(unsigned lo, unsigned hi, const unsigned char *text, unsigned
             status("Only printable ASCII, tabs and LF line breaks are supported."); return 0;
         }
     }
-    unsigned typing = snapshot()->typing_style;
+    unsigned typing = styles && paragraphs ? styles[length] : snapshot()->typing_style;
     unsigned inherited = paragraph_at(d, lo);
     n->length = d->length - (hi - lo) + length;
     for (unsigned i = 0; i <= n->length; i++) n->paragraph[i] = 0;
@@ -578,7 +578,7 @@ int writer_open_file(int id) {
     state.search.open = state.search.focus = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); copy_bytes(&s->doc, &ARENA->staging, sizeof(WriterDoc));
-    s->caret = s->anchor = s->affinity = 0; s->typing_style = s->doc.style[s->doc.length];
+    s->caret = s->anchor = s->affinity = 0; s->typing_style = s->doc.style[0];
     s->revision = ++state.next_revision; state.saved_revision = native ? s->revision : 0;
     state.file = native ? id : -1; state.identity = native ? fs_identity(id) : 0;
     state.failed_save = state.dragging = 0; state.scroll = 0;
@@ -671,7 +671,7 @@ int writer_restore(const unsigned char *data, unsigned length, int file, unsigne
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); copy_bytes(&s->doc, &ARENA->staging, sizeof(WriterDoc));
     s->affinity = 0; s->caret = min_u(caret, s->doc.length); s->anchor = min_u(anchor, s->doc.length);
-    s->typing_style = s->doc.style[s->doc.length]; s->revision = ++state.next_revision;
+    s->typing_style = s->doc.style[s->caret]; s->revision = ++state.next_revision;
     state.file = file; state.identity = identity;
     if (!binding_valid()) { state.file = -1; state.identity = 0; dirty = 1; }
     state.saved_revision = dirty ? 0 : s->revision; state.failed_save = 0;
