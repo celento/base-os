@@ -17,7 +17,7 @@ class WriterTests(unittest.TestCase):
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-fsanitize=address,undefined', '-DWRITER_HOST_TEST', '-I', str(ROOT / 'src'),
                             str(ROOT / 'tests/writer_host.c'), str(ROOT / 'src/writer.c'),
-                            str(ROOT / 'src/writer_codec.c'), '-o', str(output)], check=True)
+                            str(ROOT / 'src/writer_codec.c'), str(ROOT / 'src/writer_pdf.c'), '-o', str(output)], check=True)
             environment = dict(os.environ, ASAN_OPTIONS=os.environ.get('ASAN_OPTIONS', 'detect_leaks=0'),
                                UBSAN_OPTIONS='halt_on_error=1')
             subprocess.run([str(output)], check=True, env=environment)

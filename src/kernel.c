@@ -2512,6 +2512,7 @@ static void writer_result(int result) {
     if (result & WRITER_REQUEST_SAVE) writer_save_document();
     if (result & WRITER_REQUEST_SAVE_AS) namedlg_open(2, "untitled.bwr");
     if (result & WRITER_REQUEST_EXPORT) namedlg_open(3, "document.rtf");
+    if (result & WRITER_REQUEST_PDF) namedlg_open(6, "document.pdf");
 }
 static int spreadsheet_save_document(void) {
     int had_binding = spreadsheet_file() >= 0;
@@ -6277,6 +6278,7 @@ static int name_target = 0;
 static char name_buf[FS_NAME_LEN];
 static int name_len = 0;
 static int name_focus, name_owner, name_owner_seq;
+static unsigned name_pdf_paper;
 
 static void namedlg_open(int target, const char *initial) {
     fm_checked_cwd();
@@ -6286,6 +6288,7 @@ static void namedlg_open(int target, const char *initial) {
     name_owner = context_slot;
     name_owner_seq = wins[name_owner].seq;
     name_target = target;
+    name_pdf_paper = WRITER_PDF_LETTER;
     name_len = 0;
     for (int i = 0; initial && initial[i] && i < FS_NAME_LEN - 1; i++)
         name_buf[name_len++] = initial[i];
@@ -6301,7 +6304,7 @@ static void namedlg_close(void) {
 
 static void namedlg_geom(int *x, int *y, int *w, int *h) {
     *w = 420;
-    *h = 168;
+    *h = name_target == 6 ? 260 : 168;
     *x = (fb_w - *w) / 2;
     *y = MENUBAR_H + 140;
 }
@@ -6318,7 +6321,7 @@ static void namedlg_commit(void) {
         wins[name_owner].seq != name_owner_seq) { namedlg_close(); return; }
     context_set(name_owner);
     name_buf[name_len] = 0;
-    if (name_len == 0) { name_failed = 1; dirty = 1; return; }
+    if (name_len == 0 && name_target != 6) { name_failed = 1; dirty = 1; return; }
     int close_after = edit_close_valid() && edit_close_owner == name_owner;
     int action = document_action, target = document_target;
     unsigned identity = document_target_identity;
@@ -6327,6 +6330,7 @@ static void namedlg_commit(void) {
              name_target == 1 ? paint_write_named(name_buf) :
              name_target == 2 ? writer_save_as(parent, name_buf) == WRITER_SAVE_OK :
              name_target == 3 ? writer_export_rtf(parent, name_buf) >= 0 :
+             name_target == 6 ? writer_export_pdf(parent, name_buf, name_pdf_paper) >= 0 :
              name_target == 4 ? spreadsheet_save_as(parent, name_buf) == SPREADSHEET_SAVE_OK :
                                 spreadsheet_export_csv(parent, name_buf) >= 0;
     if (ok) {
@@ -6386,6 +6390,23 @@ static void edit_close_key(void) {
     } else if (key_sc == KEY_ENTER) edit_close_choose(edit_close_focus);
 }
 
+/* PDF errors must remain readable rather than disappearing beyond one line. */
+static void namedlg_pdf_message(const char *message, int x, int y, int width) {
+    for (int row = 0; row < 3 && *message; row++) {
+        char line[112]; int n = 0, last_space = -1;
+        while (message[n] && n < (int)sizeof(line) - 1) {
+            line[n] = message[n]; line[n + 1] = 0;
+            if (ui_string_w(line) > width) break;
+            if (message[n] == ' ') last_space = n;
+            n++;
+        }
+        if (message[n] && last_space > 0) n = last_space;
+        if (!n) n = 1;
+        line[n] = 0;
+        draw_string_clip(line, x, y + row * 18, ui_text_dim, x + width);
+        message += n; while (*message == ' ') message++;
+    }
+}
 static void draw_namedlg(void) {
     if (!name_dlg)
         return;
@@ -6395,7 +6416,8 @@ static void draw_namedlg(void) {
     draw_shadow(x, y, w, h);
     draw_round_rect(x - 1, y - 1, w + 2, h + 2, 11, ui_border);
     draw_round_rect(x, y, w, h, 10, COLOR_WHITE);
-    draw_string_bold(name_target == 5 ? "Export values (CSV)" :
+    int pdf = name_target == 6;
+    draw_string_bold(pdf ? "Export PDF pages" : name_target == 5 ? "Export values (CSV)" :
                      name_target == 4 ? "Save spreadsheet as" :
                      name_target == 3 ? "Export rich text (RTF)" :
                      name_target == 1 ? "Save picture as" : "Save document as",
@@ -6404,24 +6426,36 @@ static void draw_namedlg(void) {
     kstrcpy(location, "Folder: ");
     kstrcpy(location + 8, fs_is_dir(fm_cwd) && fm_cwd != fs_root() ? fs_name(fm_cwd) : "/");
     const char *message = name_failed ?
-        (name_target >= 4 ? spreadsheet_status() : name_target >= 2 ? writer_status() : name_failure_message ? name_failure_message :
+        ((name_target == 4 || name_target == 5) ? spreadsheet_status() : name_target >= 2 ? writer_status() : name_failure_message ? name_failure_message :
          "Save failed. Check storage and file name.") :
         name_target == 5 ? "Other apps may run formula-like CSV text." :
         name_target == 1 ? "Saved to the Pictures folder" : location;
-    draw_string_clip(message, x + 22, y + 20 + CHAR_H + 6, ui_text_dim, x + w - 22);
-    int fx = x + 22, fy = y + 64, fw = w - 44, fh = 34;
-    draw_round_rect(fx, fy, fw, fh, 7, ui_accent);
+    if (pdf) namedlg_pdf_message(message, x + 22, y + 44, w - 44);
+    else draw_string_clip(message, x + 22, y + 20 + CHAR_H + 6, ui_text_dim, x + w - 22);
+    int fx = x + 22, fy = y + (pdf ? 108 : 64), fw = w - 44, fh = 34;
+    draw_round_rect(fx, fy, fw, fh, 7, !pdf || !name_focus ? ui_accent : ui_border);
     draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 6, gfx_gray(0xF7));
     name_buf[name_len] = 0;
     draw_string(name_buf, fx + 12, fy + (fh - CHAR_H) / 2, ui_text);
     int cx2 = fx + 12 + ui_string_w(name_buf);
-    if ((frame_count / 35) & 1)
+    if ((!pdf || !name_focus) && ((frame_count / 35) & 1))
         draw_rect(cx2 + 1, fy + 8, 2, fh - 16, ui_accent);
+    if (pdf) {
+        draw_string("Paper:", x + 22, y + 158, ui_text);
+        const char *labels[] = {"Letter (US)", "A4"};
+        for (int i = 0; i < 2; i++) {
+            int bx = x + 88 + i * 156;
+            if (name_pdf_paper == (unsigned)i) draw_default_button(bx, y + 152, 148, BTN_H, labels[i]);
+            else draw_button(bx, y + 152, 148, BTN_H, labels[i]);
+            if (name_focus == i + 1) draw_frame(bx - 3, y + 149, 154, BTN_H + 6, ui_accent);
+        }
+        draw_string("Tab: focus   Arrows/Space: paper   Esc: cancel", x + 22, y + 186, ui_text_dim);
+    }
     int sx, cx, by, bw;
     namedlg_buttons(x, y, w, h, &sx, &cx, &by, &bw);
     draw_button(cx, by, bw, BTN_H, "Cancel");
-    draw_default_button(sx, by, bw, BTN_H, "Save");
-    if (name_focus) draw_frame((name_focus==1?cx:sx)-3,by-3,bw+6,BTN_H+6,ui_accent);
+    draw_default_button(sx, by, bw, BTN_H, pdf ? "Export" : "Save");
+    if (name_focus >= (pdf ? 3 : 1)) draw_frame((name_focus==(pdf?3:1)?cx:sx)-3,by-3,bw+6,BTN_H+6,ui_accent);
 }
 
 static int namedlg_click(void) {
@@ -6433,6 +6467,12 @@ static int namedlg_click(void) {
     }
     int sx, cx, by, bw;
     namedlg_buttons(x, y, w, h, &sx, &cx, &by, &bw);
+    if (name_target == 6) {
+        for (int i = 0; i < 2; i++) if (hit(mouse_x, mouse_y, x + 88 + i * 156, y + 152, 148, BTN_H)) {
+            name_pdf_paper = (unsigned)i; name_focus = i + 1; name_failed = 0; dirty = 1; return 1;
+        }
+        if (hit(mouse_x, mouse_y, x + 22, y + 108, w - 44, 34)) { name_focus = 0; dirty = 1; return 1; }
+    }
     if (hit(mouse_x, mouse_y, sx, by, bw, BTN_H))
         namedlg_commit();
     else if (hit(mouse_x, mouse_y, cx, by, bw, BTN_H))
@@ -6441,8 +6481,15 @@ static int namedlg_click(void) {
 }
 
 static void namedlg_key(void) {
-    if (key_sc == KEY_TAB) { name_focus=(name_focus+(shift_down?2:1))%3;dirty=1;return; }
-    if (key_sc == KEY_ENTER && name_focus==1) { namedlg_close();return; }
+    int pdf = name_target == 6, stops = pdf ? 5 : 3;
+    if (key_sc == KEY_TAB) { name_focus=(name_focus+(shift_down?stops-1:1))%stops;dirty=1;return; }
+    if (pdf && (name_focus == 1 || name_focus == 2)) {
+        if (key_sc == KEY_LEFT || key_sc == KEY_RIGHT || key_sc == KEY_SPACE || key_sc == KEY_ENTER) {
+            if (key_sc == KEY_LEFT || key_sc == KEY_RIGHT) name_focus = 3 - name_focus;
+            name_pdf_paper = (unsigned)(name_focus - 1); name_failed = 0; dirty = 1; return;
+        }
+    }
+    if (key_sc == KEY_ENTER && name_focus==(pdf?3:1)) { namedlg_close();return; }
     if (name_focus && key_sc!=KEY_ENTER && key_sc!=KEY_ESC) return;
     if (key_sc == KEY_ESC)
         namedlg_close();

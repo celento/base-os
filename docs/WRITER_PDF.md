@@ -119,29 +119,36 @@ exceeds the default data volume's 2 MiB per-file limit. An explicit large volume
 has a 16 MiB per-file limit, but that does **not** enlarge Writer's output arena.
 No large-volume arenas are borrowed. Floppy per-file storage remains 16 KiB.
 
-## Integration contract
+## Writer file and UI integration
 
-The standalone module is intentionally separate from `writer.c` and `kernel.c`.
-A desktop integration can add `writer_pdf.c` to `CSRC` and provide a Writer wrapper
-similar to `writer_export_rtf`, using the existing `ARENA->output` buffer:
+`writer_export_pdf(parent, name, paper)` in `writer.c` integrates the model using
+Writer's existing 512 KiB output buffer. The PDF toolbar button and Ctrl+Shift+P
+open a named export dialog with explicit Letter/A4 controls. RTF keeps its
+separate toolbar action and Ctrl+Shift+E shortcut. Both buttons fit the same
+88px toolbar allocation, with a 4px gap, at the 420px minimum client width.
 
-1. Validate a new `.pdf` name and reject any existing target. Do not replace the
-   native file or any unrelated export.
-2. Query exact size/pages, then reject sizes above `EXPORT_CAPACITY`,
-   `fs_file_limit()` or available destination storage **before file creation**.
-   Report which bound failed; preserve native state and keep the document open.
-3. Export to `ARENA->output`. A successful query does not remove the need to
-   check the write call's return value.
-4. Only after complete serialization, create the ordinary PDF file and call the
-   atomic `fs_write`. If writing fails, remove only this newly created empty
-   target, with identity checking if application callbacks are possible.
-5. Call `fs_sync()`. A sync failure means the export may exist only in RAM; report
-   that exact state rather than claiming disk success. Do not clear the native
-   dirty flag or rebind the native document in any path.
+The wrapper validates the filename, destination folder and paper; checks for a
+new target; measures exact PDF size/pages; and checks the 512 KiB arena, mounted
+per-file limit, free node slots and byte capacity **for the projected node count**.
+All this happens before file creation. It serializes the complete PDF and checks
+both resulting counts, then creates the new ordinary file and writes atomically.
+A write failure removes only that newly created, identity-matching empty file.
+A successful result requires `fs_sync()`; native save state is never changed.
 
-A convenient UI wrapper would be `writer_export_pdf(parent, name, paper)` returning
-its new file ID or -1. Keep it distinct from `writer_pdf_export`, which is the pure
-model serializer above. The module has no implicit default paper setting.
+If sync fails, the error says that the PDF exists in RAM and the dialog remains
+open. Repeating the same name and paper can retry **sync only**, provided the
+most recent pending export's node identity, document revision, paper, size and
+every byte of regenerated output still match. No retry overwrites a file. An
+external replacement, reused node, document edit or paper change requires a new
+name. New/Open/Restore/Close clear pending ownership; cancelling the dialog does
+not delete the RAM export. A later filesystem sync can persist it, but Writer
+never reports successful export until a sync call succeeds. Export does not
+clear the native dirty marker, rebind a `.bwr`, or alter text/styles, history or
+caret/selection. The ordinary unsaved-document guards still apply.
+
+The UI does not import, display or print PDF in the guest. Writer explicitly
+rejects `.pdf` names and `%PDF-` signatures as export-only input. Use the original
+`.bwr` for editing and a host PDF reader for viewing or printing exported pages.
 
 ## Sources and attribution
 
@@ -193,3 +200,22 @@ using system Poppler with installed Nimbus Roman fonts and MuPDF's built-in
 standard fonts gave correct matching layout. This is a renderer configuration
 caveat, not a promise of identical outlines in every PDF program. Guest export UI
 and file persistence require their own integration/QEMU checks.
+
+## Integrated verification
+
+`tests/writer_host.c` exercises the actual file wrapper, minimum-width toolbar
+hits, both export shortcuts while searching, exact per-file/storage boundaries,
+projected-node accounting, full node slots, failed create/write/sync, repeated
+sync-only retry, changed bytes, changed size, reused IDs, changed document/paper,
+native binding/selection/history preservation, read-only PDF rejection and
+512 KiB rejection. The ordinary host suite uses ASan/UBSan.
+
+`python3 tools/writer_pdf_input_test.py build` uses a copy of the unmodified packed
+production floppy and a fresh disposable data volume. It drives only normal
+QMP PS/2 keys/mouse and screendumps: no debugger, paused boot, guest-memory
+observations or injected calls. The stopped volume must contain exact native and
+RTF bytes, complete Letter/A4 PDFs and no cancelled/invalid/over-capacity targets.
+pypdf strictly parses every saved page and checks text/dimensions; MuPDF renders
+first/last pages. It preserves screenshots of paper selection, 420px controls,
+errors and the native close guard. Readers are required for this end-to-end
+check; their absence is an error rather than an independent-validation claim.
