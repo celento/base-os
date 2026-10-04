@@ -1,15 +1,16 @@
-# Additive native platform ABI 1.0
+# Additive native platform ABI 1.1
 
 This is compatibility-preserving groundwork for independent applications, not
 Win95/98 platform parity. It implements discoverable owner-bound file versions,
-conditional replacement and asynchronous IDE durability completion. It does not
-add larger process memory, directory enumeration, a general window/event API,
-IPC, user networking, threads or kernel preemption.
+conditional replacement and asynchronous IDE durability completion. ABI1.1 additionally supplies a versioned memory-info query. A separately gated
+BEX2 context can describe committed sparse private memory; BEX1 remains exact.
+It does not add directory enumeration, a general window/event API, IPC, user
+networking, threads or kernel preemption.
 
 ## Compatibility boundary
 
 The BEX1 header is still exactly four little-endian words: magic `BEX1`, entry
-offset, complete file byte length and required-zero reserved word. The entire
+offset, complete file byte length and required-zero reserved word. The BEX1
 process remains 65,536 bytes, with offset pointers. Calls **0–17 retain their
 numbers, arguments and results**. In particular:
 
@@ -52,6 +53,10 @@ Feature bits are:
   or synchronous `exec`.
 - `BOS_FEATURE_OPERATION_WAIT`: bounded task suspension for owned sync handles,
   advertised only where the owned asynchronous service is available.
+- `BOS_FEATURE_MEMORY_INFO`: call28 describes this context, in desktop and exec.
+- `BOS_FEATURE_BEX2`: this running process uses the BEX2 sparse memory contract.
+  It is never advertised by BEX1 or synchronous exec and does not advertise a
+  global capability to launch arbitrary BEX2 files.
 
 The query reports context, process identity, runtime backend file limit,
 per-process/global service capacities, copy/replacement/path limits, wait limit
@@ -125,6 +130,9 @@ copies only the current structure. Errors never copy partial metadata.
 |25 file read-at|handle, buffer, capacity, file offset,0|byte count or error|
 |26 conditional replace|handle, data, byte count, info output, info capacity|`BOS_OK`|
 |27 file close|handle,0,0,0,0|`BOS_OK`|
+|28 memory info|output, capacity, requested version,0,0|`BOS_OK`; memory prefix|
+
+Call29 is reserved for a later UI service and is not implemented.
 
 File metadata is32 bytes: structure size, handle, file size, granted flags,
 opaque revision and three zero reserved words. Info capacities must be at least
@@ -178,3 +186,37 @@ protected machine instructions, guest faults, fuzzing or malformed executables.
 publication rules. Real service correctness and guest/desktop responsiveness
 need their own module and integration tests; these host checks do not substitute
 for those gates.
+
+## Memory discovery (call28)
+
+`bos_memory_info(&memory,sizeof(memory))` requests version1. BosMemoryInfo is
+128 bytes, little-endian32-bit fields: struct_size,version,format,page_bytes,
+virtual_bytes,mapped_pages,owned_pages,table_pages,policy_pages,pool_total_pages,
+pool_free_pages,region_count,reserved[4], then four16-byte records containing
+offset,bytes,protection,purpose. The minimum accepted output capacity is16;
+the entire supplied capacity must be writable, and only min(capacity,128) bytes
+are copied. Unused arguments must be zero. Unsupported version returns
+UNSUPPORTED, invalid arguments return INVALID, unavailable pool accounting
+returns BUSY. All errors leave all output bytes unchanged.
+
+Format1 is BEX1; format2 is BEX2. READ/WRITE/EXEC flags are1/2/4. Region purposes
+are LEGACY1,TEXT2,DATA3,WORKSPACE4,STACK5. BEX1 has one64KiB RWX region. BEX2 has
+only nonempty text/data/workspace/stack regions, in that order; unused records
+and reserved words are zero. EXEC describes code-segment reachability. There is
+no NX paging feature or new comprehensive W^X/security promise.
+
+For BEX1, user_bytes and virtual_bytes both mean the contiguous65536-byte extent;
+image_bytes49152 and stack_reserved_bytes16384 remain unchanged. For BEX2,
+user_bytes and virtual_bytes mean the sparse4194304-byte offset extent, not
+permission to access all addresses below it. The null page, stack guard and
+undeclared gaps are absent. Only reported regions are committed; text is read-only.
+BEX2 image_bytes is min(262144,backend file cap), and stack_reserved_bytes is the
+actual declared/committed stack extent. All syscall transfer limits stay unchanged.
+
+Mapped pages count accessible user pages. Owned pages include all committed
+storage plus table_pages, which includes both directory and page table. A BEX1
+desktop process reports16 mapped/16 owned/0 table/policy16; synchronous exec
+reports16 mapped/0 owned/0 table/policy0. BEX2 reports its actual counts and a
+fixed1024-owned-page policy including the two table pages. Pool totals and free
+counts are momentary non-reserving snapshots, not quotas or allocation promises.
+No physical addresses, frame handles, allocation or resize service are exposed.

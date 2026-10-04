@@ -299,7 +299,9 @@ int term_task_start_file_with_arg(int slot,int file,unsigned identity,
         if(created)
             push(created==PROCESS_CREATE_MEMORY?"Cannot start: native backing memory is unavailable.":
                  created==-1?"Cannot start: all native process records are in use.":
-                 "Cannot start: not a supported BEX1 program (maximum 49152 bytes).");
+                 created==PROCESS_CREATE_UNSUPPORTED?"Cannot start: this executable format or ABI is not enabled.":
+                 created==PROCESS_CREATE_LAYOUT?"Cannot start: executable exceeds this context's file or memory policy.":
+                 "Cannot start: invalid native executable header or layout.");
         else {
             ProcessIO io={{process,(unsigned)slot,T.binding_generation+1},
                           native_print,native_plot,native_present,native_resize,native_rect};
@@ -564,6 +566,10 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"basic")||!kstrcmp(cmd,"exec")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
         if(term_task_running(selected)){push("Stop this terminal's native task first.");return -1;}
+        const unsigned char *image=(const unsigned char *)fs_data(id);
+        if(!kstrcmp(cmd,"exec")&&fs_size(id)>=4&&image[0]=='B'&&image[1]=='E'&&image[2]=='X'&&image[3]=='2'){
+            push("Legacy exec supports BEX1 only; use start for this program.");return -1;
+        }
         ProgramIO io={push,plot,program_key,program_present,canvas_resize,canvas_rect};T.canvas_buffered=0;canvas_reset();
         if(program_input_hook)program_input_hook(1);
         int rc=!kstrcmp(cmd,"basic")?basic_run(fs_data(id),fs_size(id),&io):process_run(fs_data(id),fs_size(id),&io);

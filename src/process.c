@@ -26,6 +26,9 @@ _Static_assert(TASK_BACKING_PAGES==16&&USER_CAPACITY%PHYS_PAGE_BYTES==0,"BEX1 ba
 typedef struct { unsigned char bytes[108]; } FpuState;
 typedef struct {
     uint32_t backing[TASK_BACKING_PAGES];
+    ExecutablePlan plan;
+    uint32_t private_frames[PROCESS_PRIVATE_PAGE_LIMIT-BOS_BEX2_TABLE_PAGES];
+    uint32_t directory,table;
     uint32_t frame[FRAME_WORDS];
     FpuState fpu;
     ProcessIO io;
@@ -46,6 +49,48 @@ static int tasks_ready, have_fpu;
 static unsigned schedule_next;
 static unsigned owner_serial;
 static BosHandle synchronous_owner;
+/* The physical-to-kernel pointer is identity-mapped under every native root.
+ * Tests substitute only this adapter, never pointer or ownership validation. */
+static uint32_t *space_frame_pointer(uint32_t frame) { return (uint32_t *)(uintptr_t)frame; }
+static int task_private(const NativeTask *task) {
+    return task&&task->plan.kind==BOS_EXECUTABLE_BEX2;
+}
+static void task_private_release(NativeTask *task) {
+    if(active)panic("release active address space");
+    if(physmem_release(task->owner_id,PHYS_USER_IMAGE,task->private_frames,
+                       task->plan.mapped_pages)!=PHYS_OK||
+       physmem_release(task->owner_id,PHYS_PAGE_TABLE,&task->table,1)!=PHYS_OK||
+       physmem_release(task->owner_id,PHYS_PAGE_DIRECTORY,&task->directory,1)!=PHYS_OK)
+        panic("native private-page ownership");
+    kmemset(task->private_frames,0,sizeof task->private_frames);
+    task->directory=task->table=0;
+}
+static void task_private_copy(NativeTask *task,unsigned first,const void *source,unsigned bytes) {
+    const unsigned char *input=source;
+    for(unsigned page=first;bytes;page++){
+        unsigned count=bytes<PHYS_PAGE_BYTES?bytes:PHYS_PAGE_BYTES;
+        kmemcpy((void *)(uintptr_t)task->private_frames[page],input,count);
+        input+=count;bytes-=count;
+    }
+}
+static int task_private_create(NativeTask *task,const void *file) {
+    PhysmemStats stats;
+    if(physmem_stats(&stats)!=PHYS_OK||stats.free<task->plan.owned_pages)return 0;
+    /* Preflight the complete footprint. These serialized calls cannot race with
+     * another owner; rollback still covers an unavailable later allocator call. */
+    if(physmem_alloc(task->owner_id,PHYS_USER_IMAGE,task->plan.mapped_pages,task->private_frames)!=PHYS_OK||
+       physmem_alloc(task->owner_id,PHYS_PAGE_DIRECTORY,1,&task->directory)!=PHYS_OK||
+       physmem_alloc(task->owner_id,PHYS_PAGE_TABLE,1,&task->table)!=PHYS_OK){
+        if(physmem_release_owner(task->owner_id)!=PHYS_OK)panic("native create rollback");
+        return 0;
+    }
+    address_space_tables(space_frame_pointer(task->directory),space_frame_pointer(task->table),
+                         USER_DIRECTORY_INDEX,task->table,&task->plan,task->private_frames);
+    const unsigned char *image=file;
+    task_private_copy(task,0,image+task->plan.text.offset,task->plan.text_file_bytes);
+    task_private_copy(task,task->plan.text.pages,image+task->plan.data.offset,task->plan.data_file_bytes);
+    return 1;
+}
 /* Allocation domains never wrap or reset, even when a display slot is reused. */
 static BosHandle allocate_owner(void) {
     if(owner_serial==BOS_HANDLE_SERIAL_MAX)return BOS_HANDLE_INVALID;
@@ -65,7 +110,8 @@ static void task_release(NativeTask *task) {
     if(task->resources_live){
         /* This list is private, immutable while live, and released only after
          * process_leave and x87/kernel restoration. Never retain freed frames. */
-        if(physmem_release(task->owner_id,PHYS_BEX1_BACKING,task->backing,
+        if(task_private(task))task_private_release(task);
+        else if(physmem_release(task->owner_id,PHYS_BEX1_BACKING,task->backing,
                            TASK_BACKING_PAGES)!=PHYS_OK)panic("native backing ownership");
         kmemset(task->backing,0,sizeof task->backing);
         release_owner(task->owner_id);task->resources_live=0;
@@ -142,6 +188,7 @@ static unsigned char *const kernel_stack=(unsigned char *)TASK_INTERRUPT_STACK_B
 /* 32-bit TSS; I/O bitmap offset equals descriptor size, denying all ports. */
 static unsigned char tss[104] __attribute__((aligned(4)));
 _Static_assert(PAGING_CAPACITY==3*PHYS_PAGE_BYTES,"reserve compatibility PD/PT and kernel PD");
+_Static_assert(USER_DIRECTORY_INDEX==(USER_BASE>>22),"native aperture directory index");
 _Static_assert(KERNEL_DIRECTORY_BASE==PAGING_BASE+2*PHYS_PAGE_BYTES,"kernel root follows compatibility tables");
 static int paging_ready;
 static void protect_memory(void){
@@ -171,15 +218,32 @@ static void descriptor(unsigned char *p,unsigned base,unsigned limit,unsigned ac
  * owner release. Kernel code/stacks/devices stay supervisor identity-mapped in
  * every root. IRQs cannot dispatch user work while this serialized path runs. */
 static void process_kernel_context(void) {
+    unsigned flags;
+    __asm__ volatile("pushfl; popl %0; cli":"=r"(flags)::"memory");
     __asm__ volatile("mov %0,%%cr3"::"r"(KERNEL_DIRECTORY_BASE):"memory");
     descriptor(gdt_user_code,USER_BASE,USER_CAPACITY-1,0xfa,0x40);
     descriptor(gdt_user_data,USER_BASE,USER_CAPACITY-1,0xf2,0x40);
+    __asm__ volatile("pushl %0; popfl"::"r"(flags):"memory","cc");
+}
+static uint32_t process_user_root(const NativeTask *task) {
+    unsigned root=PAGING_BASE;
+    if(task_private(task)){
+        descriptor(gdt_user_code,USER_BASE,task->plan.code_limit,0xfa,0x40);
+        /* A 4 MiB segment has encoded page limit0x3ff, not0x3fffff. */
+        descriptor(gdt_user_data,USER_BASE,task->plan.data_limit>>12,0xf2,0xc0);
+        root=task->directory;
+    }else {
+        descriptor(gdt_user_code,USER_BASE,USER_CAPACITY-1,0xfa,0x40);
+        descriptor(gdt_user_data,USER_BASE,USER_CAPACITY-1,0xf2,0x40);
+    }
+    return root;
 }
 static void process_user_context(const NativeTask *task) {
-    (void)task;
-    descriptor(gdt_user_code,USER_BASE,USER_CAPACITY-1,0xfa,0x40);
-    descriptor(gdt_user_data,USER_BASE,USER_CAPACITY-1,0xf2,0x40);
-    __asm__ volatile("mov %0,%%cr3"::"r"(PAGING_BASE):"memory");
+    unsigned flags;
+    __asm__ volatile("pushfl; popl %0; cli":"=r"(flags)::"memory");
+    unsigned root=process_user_root(task);
+    __asm__ volatile("mov %0,%%cr3"::"r"(root):"memory");
+    __asm__ volatile("pushl %0; popfl"::"r"(flags):"memory","cc");
 }
 void process_init(void){
     if(active)return;
@@ -203,8 +267,29 @@ static int valid_image(const void *file,unsigned bytes,uint32_t h[4]) {
     kmemcpy(h,file,16);
     return h[0]==0x31584542&&h[1]>=16&&h[1]<bytes&&h[2]==bytes&&!h[3];
 }
+static unsigned image_magic(const void *file,unsigned bytes) {
+    uint32_t magic=0;if(file&&bytes>=4)kmemcpy(&magic,file,4);return magic;
+}
+static int image_plan(const void *file,unsigned bytes,ExecutablePlan *plan) {
+    uint32_t h[4];
+    if(valid_image(file,bytes,h)){
+        kmemset(plan,0,sizeof *plan);
+        plan->kind=BOS_EXECUTABLE_BEX1;plan->file_bytes=bytes;plan->entry_offset=h[1];
+        plan->virtual_bytes=USER_CAPACITY;plan->initial_sp=USER_CAPACITY-16;
+        plan->mapped_pages=plan->owned_pages=TASK_BACKING_PAGES;
+        return 0;
+    }
+    if(image_magic(file,bytes)!=BOS_BEX2_MAGIC)return -2;
+    if(!BASEOS_BEX2_ENABLED)return PROCESS_CREATE_UNSUPPORTED;
+    ExecutablePolicy policy={BOS_ABI_MAJOR,BOS_ABI_MINOR,fs_file_limit(),PROCESS_PRIVATE_PAGE_LIMIT};
+    int result=executable_plan_bex2(file,bytes,&policy,plan);
+    if(result==EXECUTABLE_OK)return 0;
+    if(result==EXECUTABLE_UNSUPPORTED)return PROCESS_CREATE_UNSUPPORTED;
+    return result==EXECUTABLE_CAPACITY?PROCESS_CREATE_LAYOUT:-2;
+}
 int process_run(const void *file,unsigned bytes,const ProgramIO *io){
     uint32_t h[4];
+    if(!active&&image_magic(file,bytes)==BOS_BEX2_MAGIC)return PROCESS_CREATE_UNSUPPORTED;
     if(active||!io||!io->print||!io->plot||!valid_image(file,bytes,h))return -2;
     synchronous_owner=allocate_owner();
     if(!synchronous_owner)return -2;
@@ -232,8 +317,10 @@ static NativeTask *task_lookup(ProcessHandle process) {
 }
 int process_create(const void *file,unsigned bytes,const char *argument,
                    unsigned argument_length,ProcessHandle *out_process) {
-    uint32_t h[4];
-    if(active||!out_process||!valid_image(file,bytes,h))return -2;
+    ExecutablePlan plan;
+    if(active||!out_process)return -2;
+    int validation=image_plan(file,bytes,&plan);
+    if(validation)return validation;
     if(argument_length>PROCESS_ARGUMENT_MAX||
        (argument_length&&(!argument||argument[0]!='/')))return -2;
     for(unsigned i=0;i<argument_length;i++)
@@ -246,19 +333,21 @@ int process_create(const void *file,unsigned bytes,const char *argument,
     BosHandle owner_id=allocate_owner();
     if(!owner_id)return -2;
     kmemset(task,0,sizeof(*task));
-    task->state=PROCESS_TASK_CREATING;task->owner_id=owner_id;
-    if(physmem_alloc(owner_id,PHYS_BEX1_BACKING,TASK_BACKING_PAGES,task->backing)!=PHYS_OK){
+    task->state=PROCESS_TASK_CREATING;task->owner_id=owner_id;task->plan=plan;
+    int allocated=task_private(task)?task_private_create(task,file):
+        physmem_alloc(owner_id,PHYS_BEX1_BACKING,TASK_BACKING_PAGES,task->backing)==PHYS_OK;
+    if(!allocated){
         /* Allocation publishes nothing on failure. Keep the consumed serial,
          * but expose neither a partial record nor a fallback inline image. */
         kmemset(task,0,sizeof(*task));return PROCESS_CREATE_MEMORY;
     }
     task->resources_live=1;
-    task_image_write(task,file,bytes);
+    if(!task_private(task))task_image_write(task,file,bytes);
     if(argument_length)kmemcpy(task->argument,argument,argument_length);
     task->argument_length=argument_length;
     task->frame[8]=task->frame[9]=task->frame[10]=task->frame[11]=0x23;
-    task->frame[14]=h[1];task->frame[15]=0x1b;task->frame[16]=0x202;
-    task->frame[17]=USER_CAPACITY-16;task->frame[18]=0x23;
+    task->frame[14]=plan.entry_offset;task->frame[15]=0x1b;task->frame[16]=0x202;
+    task->frame[17]=plan.initial_sp;task->frame[18]=0x23;
     task->canvas_width=PROGRAM_CANVAS_DEFAULT_WIDTH;task->canvas_height=PROGRAM_CANVAS_DEFAULT_HEIGHT;
     task->state=PROCESS_TASK_CREATED;
     *out_process=owner_id;
@@ -329,7 +418,7 @@ int process_step(ProcessHandle process) {
     }
     if(!task_wake(task))return 0;
     protect_memory();
-    task_image_read(task,(void *)USER_BASE);
+    if(!task_private(task))task_image_read(task,(void *)USER_BASE);
     canvas_width=task->canvas_width;canvas_height=task->canvas_height;
     output=0;current_task=task;active=1;process_result=0;
     process_user_context(task);
@@ -341,7 +430,7 @@ int process_step(ProcessHandle process) {
     fpu_leave(task);active=0;current_task=0;
     if(task->stop_requested)task_mark_exit(task,PROCESS_TASK_STOPPED,PROCESS_EXIT_STOP);
     if(task->state==PROCESS_TASK_EXITING)task_finalize(task);
-    else task_image_write(task,(const void *)USER_BASE,USER_CAPACITY);
+    else if(!task_private(task))task_image_write(task,(const void *)USER_BASE,USER_CAPACITY);
     return 1;
 }
 ProcessHandle process_schedule_one(void) {
@@ -419,9 +508,12 @@ static void finish(int result,unsigned reason) {
     /* Synchronous and desktop owners remain live through process_leave. */
     process_leave();
 }
-static unsigned user_extent(void) { return USER_CAPACITY; }
+static unsigned user_extent(void) {
+    return task_private(current_task)?current_task->plan.virtual_bytes:USER_CAPACITY;
+}
 static int user_span(unsigned offset,unsigned bytes,enum UserAccess access) {
-    return address_space_span(0,user_extent(),offset,bytes,access);
+    const uint32_t *table=task_private(current_task)?space_frame_pointer(current_task->table):0;
+    return address_space_span(table,user_extent(),offset,bytes,access);
 }
 static int user_path(unsigned offset, unsigned length, char path[129]) {
     if (!length || length > 128 || !user_span(offset,length,USER_READ)) return 0;
@@ -478,11 +570,17 @@ static int abi_query(unsigned buffer,unsigned capacity,unsigned major,unsigned r
     BosAbiInfo info;
     kmemset(&info,0,sizeof(info));
     info.struct_size=sizeof(info);info.abi_major=BOS_ABI_MAJOR;info.abi_minor=BOS_ABI_MINOR;
-    info.features=BOS_FEATURE_VERSIONED_FILES|BOS_FEATURE_PROCESS_ID;
+    info.features=BOS_FEATURE_VERSIONED_FILES|BOS_FEATURE_PROCESS_ID|BOS_FEATURE_MEMORY_INFO;
     info.context=current_task?BOS_CONTEXT_DESKTOP_TASK:BOS_CONTEXT_LEGACY_EXEC;
     info.process=current_owner();
     info.user_bytes=USER_CAPACITY;info.image_bytes=PROCESS_IMAGE_LIMIT;
     info.stack_reserved_bytes=16384;info.path_bytes=NATIVE_FILE_PATH_MAX;
+    if(task_private(current_task)){
+        info.features|=BOS_FEATURE_BEX2;
+        info.user_bytes=current_task->plan.virtual_bytes;
+        info.image_bytes=fs_file_limit()<BOS_BEX2_FILE_MAX?fs_file_limit():BOS_BEX2_FILE_MAX;
+        info.stack_reserved_bytes=current_task->plan.stack.bytes;
+    }
     info.file_chunk_bytes=NATIVE_FILE_READ_MAX;
     info.replace_bytes=fs_file_limit()<NATIVE_FILE_REPLACE_MAX?fs_file_limit():NATIVE_FILE_REPLACE_MAX;
     info.file_bytes=fs_file_limit();
@@ -494,6 +592,43 @@ static int abi_query(unsigned buffer,unsigned capacity,unsigned major,unsigned r
         info.operations_total=native_sync_capacity();info.wait_milliseconds=TASK_MAX_SLEEP_MS;
     }
     unsigned bytes=capacity<sizeof(info)?capacity:sizeof(info);
+    kmemcpy((void *)(USER_BASE+buffer),&info,(int)bytes);
+    return BOS_OK;
+}
+static void memory_region(BosMemoryInfo *info,const ExecutableRegion *region,
+                          unsigned protection,unsigned purpose) {
+    if(!region->bytes)return;
+    BosMemoryRegion *out=info->regions+info->region_count++;
+    out->offset=region->offset;out->bytes=region->bytes;
+    out->protection=protection;out->purpose=purpose;
+}
+static int memory_info(unsigned buffer,unsigned capacity,unsigned version,unsigned reserved0,unsigned reserved1) {
+    if(version!=BOS_MEMORY_INFO_VERSION)return BOS_E_UNSUPPORTED;
+    if(reserved0||reserved1||capacity<BOS_MEMORY_INFO_MIN_SIZE||!user_span(buffer,capacity,USER_WRITE))
+        return BOS_E_INVALID;
+    PhysmemStats stats;
+    if(physmem_stats(&stats)!=PHYS_OK)return BOS_E_BUSY;
+    BosMemoryInfo info;kmemset(&info,0,sizeof info);
+    info.struct_size=sizeof info;info.version=BOS_MEMORY_INFO_VERSION;
+    info.format=BOS_EXECUTABLE_BEX1;info.page_bytes=PHYS_PAGE_BYTES;
+    info.virtual_bytes=USER_CAPACITY;info.mapped_pages=TASK_BACKING_PAGES;
+    info.pool_total_pages=stats.total;info.pool_free_pages=stats.free;
+    if(task_private(current_task)){
+        const ExecutablePlan *plan=&current_task->plan;
+        info.format=plan->kind;info.virtual_bytes=plan->virtual_bytes;
+        info.mapped_pages=plan->mapped_pages;info.owned_pages=plan->owned_pages;
+        info.table_pages=plan->table_pages;info.policy_pages=PROCESS_PRIVATE_PAGE_LIMIT;
+        memory_region(&info,&plan->text,BOS_MEMORY_READ|BOS_MEMORY_EXEC,BOS_MEMORY_TEXT);
+        memory_region(&info,&plan->data,BOS_MEMORY_READ|BOS_MEMORY_WRITE,BOS_MEMORY_DATA);
+        memory_region(&info,&plan->workspace,BOS_MEMORY_READ|BOS_MEMORY_WRITE,BOS_MEMORY_WORKSPACE);
+        memory_region(&info,&plan->stack,BOS_MEMORY_READ|BOS_MEMORY_WRITE,BOS_MEMORY_STACK);
+    }else {
+        if(current_task)info.owned_pages=info.policy_pages=TASK_BACKING_PAGES;
+        info.region_count=1;
+        info.regions[0]=(BosMemoryRegion){0,USER_CAPACITY,
+            BOS_MEMORY_READ|BOS_MEMORY_WRITE|BOS_MEMORY_EXEC,BOS_MEMORY_LEGACY};
+    }
+    unsigned bytes=capacity<sizeof info?capacity:sizeof info;
     kmemcpy((void *)(USER_BASE+buffer),&info,(int)bytes);
     return BOS_OK;
 }
@@ -623,6 +758,7 @@ int process_interrupt(uint32_t *r){
 
     }
     else if(call==BOS_CALL_ABI_QUERY)r[7]=(unsigned)abi_query(a,b,c,d,e);
+    else if(call==BOS_CALL_MEMORY_INFO)r[7]=(unsigned)memory_info(a,b,c,d,e);
     else if(call>=BOS_CALL_SYNC_BEGIN&&call<=BOS_CALL_SYNC_RELEASE){
         if(!current_task){r[7]=(unsigned)BOS_E_UNSUPPORTED;return 1;}
         if(c||d||e||(call!=BOS_CALL_SYNC_WAIT&&b)){
