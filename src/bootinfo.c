@@ -88,7 +88,11 @@ _Static_assert(STACK_TOP - STACK_BOTTOM == 0x10000 && STACK_TOP <= FB_BASE,
 _Static_assert(FB_BASE + FB_CAPACITY <= FS_BASE, "backbuffer overlaps FS");
 _Static_assert(FS_BASE + FS_CAPACITY <= WRITER_BASE, "FS metadata overlaps Writer");
 _Static_assert(WRITER_BASE + WRITER_CAPACITY <= PAINT_MEM, "Writer overlaps Paint");
-_Static_assert(PAINT_MEM + PAINT_CAPACITY <= DMA_BASE, "paint overlaps DMA");
+_Static_assert(PAINT_MEM + PAINT_CAPACITY <= NATIVE_CANVAS_BASE, "paint overlaps published canvases");
+_Static_assert(NATIVE_CANVAS_BASE + NATIVE_CANVAS_CAPACITY <= DMA_BASE, "published canvases overlap DMA");
+_Static_assert(NATIVE_CANVAS_BASE >= FB_BASE &&
+               NATIVE_CANVAS_BASE + NATIVE_CANVAS_CAPACITY <= RAM_REQUIRED_END,
+               "published canvases must be covered by the boot E820 validation");
 _Static_assert(DMA_BASE % 65536 == 0 && DMA_CAPACITY <= 65536 &&
                DMA_BASE + DMA_CAPACITY <= 0x1000000, "invalid ISA DMA arena");
 _Static_assert(DMA_BASE + DMA_CAPACITY <= DESK_CACHE, "DMA overlaps cache");

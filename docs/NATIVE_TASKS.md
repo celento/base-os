@@ -37,9 +37,9 @@ Existing BEX1 headers and syscalls 0–9 retain their argument and return contra
 
 | Syscall | SDK wrapper | Meaning |
 | --- | --- | --- |
-| 5 | `bos_present()` | In task mode, yields after drawing. In `exec`, calls the legacy presenter. |
-| 10 | `bos_yield()` | Resume on a later desktop turn; returns 0. `exec` returns -1. |
-| 11 | `bos_sleep(ms)` | Wait at least the requested 0–60,000 ms, rounded up to PIT ticks. Zero yields. Invalid values and `exec` return -1. |
+| 5 | `bos_present()` | In task mode, publishes the complete canvas then yields. In `exec`, calls the legacy presenter. |
+| 10 | `bos_yield()` | Publish pending canvas and resume on a later desktop turn; returns 0. `exec` returns -1. |
+| 11 | `bos_sleep(ms)` | Publish pending canvas, then wait at least the requested 0–60,000 ms, rounded up to PIT ticks. Zero yields. Invalid values and `exec` return -1. |
 | 12 | `bos_task_id()` | Owning terminal slot 1–8; `exec` returns 0. |
 | 13 | `bos_read_file_at(path,out,capacity,offset)` | Up to 4096 bytes from any file offset; returns 0 at/beyond EOF. |
 | 14 | `bos_canvas_size(width,height)` | Select and clear exactly 160×100 or 320×200; new apps default to 160×100. |
@@ -69,10 +69,17 @@ Key polling is nonblocking and returns one queued byte or zero. A full queue dro
 - `term_task_poll()` selects one fair runnable terminal, preserves the caller's selected terminal, and returns whether its output changed. The desktop marks itself dirty when this returns true.
 - `term_task_running/key/stop/close` route focus, Ctrl+C and close by explicit window slot. Reset also clears the owned task.
 - `ProgramIO.resize` is optional. Terminal supplies it; accepted mode changes clear
-  pixels. A task retains its active dimensions across slices. The renderer must
-  use `term_canvas_width/height`; pixels are packed with the current width.
+  working pixels. A task retains its active dimensions across slices. The renderer
+  uses `term_canvas_width/height`; pixels are packed with the published width.
+- `ProgramIO.present` publishes complete working pixels plus geometry before
+  explicit present/yield/sleep and explicit application exit (any exit status).
+  Timer preemption, Stop and generic failure completion never publish. Terminal
+  retains the last published frame until reset/new launch, so a full redraw cannot
+  reveal unfinished working pixels. This callback does not dispatch applications.
+- Published canvases occupy 512,000 bytes of the 512 KiB reservation at
+  `0x600000`–`0x680000`, inside the existing E820-validated RAM span.
 - Eight Terminals with 320 scrollback rows and maximum 320×200 canvases use
-  731,936 bytes, below the fixed 786,432-byte subarena before script scratch.
+  732,096 bytes, below the fixed 786,432-byte subarena before script scratch.
 
 The legacy synchronous `process_run` still has its two-second watchdog, checked syscalls, and audio pause/resume behavior. Running it does not destroy saved task images; asynchronous tasks resume afterward.
 

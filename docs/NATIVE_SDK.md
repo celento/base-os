@@ -170,18 +170,34 @@ start leaves the live task's canvas alone.
 The filled-rectangle syscall (9) accepts widths/heights no greater than the
 active canvas, so its largest loop is 320×200 pixels. Pixels outside the canvas
 are clipped. Task geometry is saved independently across slices; changing one
-Terminal cannot resize another. `present` still yields in task mode.
+Terminal cannot resize another.
+
+In native task mode, drawing and resize affect a private working canvas. The
+complete frame and its dimensions become visible together at `bos_present`,
+`bos_yield`, `bos_sleep` (including zero), or explicit application exit/return.
+A nonzero application exit code still publishes; timer preemption, external
+Stop, exceptions and watchdog termination do not. The previous complete frame
+remains visible while drawing is unfinished, including during a desktop redraw
+caused by other activity. Resize clears working pixels immediately but its new
+geometry is published only at that same boundary. Calling a boundary without
+pending drawing does not copy or redraw the canvas. BASIC and synchronous `exec`
+retain their direct drawing/presenter behavior.
 
 The kernel `ProgramIO` structure appends an optional `resize(width,height)`
 callback. A null callback causes the new resize call to return -1. Existing
 compiled BEX1 apps are unaffected. Kernel integrations must initialize the new
 field to zero or a callback. The renderer reads `term_canvas_width()` and
-`term_canvas_height()`; pixels use the active width as a tightly packed stride.
+`term_canvas_height()`; native task pixels use the published width as a tightly
+packed stride. Native `ProgramIO.present` must be bounded and must not dispatch
+other applications; Terminal supplies a copy-only publication callback.
 
-A Terminal now occupies 91,492 bytes, including 320 scrollback rows and all
-64,000 possible canvas pixels. Eight use **731,936 bytes**, below the fixed
-786,432-byte terminal-state subarena, with 54,496 bytes spare before script
-scratch. The overall 1 MiB Terminal arena and other memory mappings are unchanged.
+A Terminal now occupies 91,512 bytes, including 320 scrollback rows and all
+64,000 possible canvas pixels. Eight use **732,096 bytes**, below the fixed
+786,432-byte terminal-state subarena, with 54,336 bytes spare before script
+scratch. The overall 1 MiB Terminal arena is unchanged. Published frames use
+512,000 bytes in a separately asserted 512 KiB reservation at `0x600000`–`0x680000`,
+in the existing Paint-to-DMA gap. No application-memory or machine-RAM increase
+is required; the existing boot E820 validation covers this arena.
 
 ### Replacement writes and durability
 

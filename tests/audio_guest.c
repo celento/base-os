@@ -1,7 +1,10 @@
 #define FEATURE_TEST
 #include "../src/kernel.c"
 #include "../src/audio.h"
-static uint8_t *const test_wave=(uint8_t *)0x600000;
+/* Dedicated fixture scratch in the remaining gap below disk DMA. */
+static uint8_t *const test_wave=(uint8_t *)(NATIVE_CANVAS_BASE+NATIVE_CANVAS_CAPACITY);
+_Static_assert(NATIVE_CANVAS_BASE+NATIVE_CANVAS_CAPACITY+88200*4+44<=DMA_BASE,
+               "audio fixture scratch overlaps disk DMA");
 static void au16(unsigned p,unsigned v){test_wave[p]=v;test_wave[p+1]=v>>8;}
 static void au32(unsigned p,unsigned v){au16(p,v);au16(p+2,v>>16);}
 static void audio_check(int condition,const char *message){if(!condition)panic(message);}

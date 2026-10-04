@@ -32,6 +32,16 @@ class KernelLayoutTests(unittest.TestCase):
         self.assertEqual(c['SHEET_BASE'] + c['SHEET_CAPACITY'], c['DESK_CACHE'])
         self.assertLessEqual(2824636, c['SHEET_CAPACITY'])
 
+    def test_published_canvas_reservation(self):
+        c = constants()
+        self.assertEqual((c['NATIVE_CANVAS_BASE'], c['NATIVE_CANVAS_CAPACITY']),
+                         (0x600000, 0x80000))
+        self.assertLessEqual(c['PAINT_MEM'] + c['PAINT_CAPACITY'], c['NATIVE_CANVAS_BASE'])
+        self.assertLessEqual(8 * 320 * 200, c['NATIVE_CANVAS_CAPACITY'])
+        self.assertLessEqual(c['NATIVE_CANVAS_BASE'] + c['NATIVE_CANVAS_CAPACITY'], c['DMA_BASE'])
+        self.assertLessEqual(c['FB_BASE'], c['NATIVE_CANVAS_BASE'])
+        self.assertLessEqual(c['NATIVE_CANVAS_BASE'] + c['NATIVE_CANVAS_CAPACITY'], c['RAM_REQUIRED_END'])
+
     def test_full_tail_reservation_preserves_both_snapshots(self):
         c = constants()
         data = bytearray(c['DISK_SECTORS'] * 512)
