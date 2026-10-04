@@ -135,13 +135,18 @@ static inline int bos_sync_compatible(unsigned allow_legacy_blocking) {
     int released=bos_sync_release(operation);
     return result==BOS_OK ? released : result;
 }
-/* Hosted pointer service. Drain events and bos_key(), explicitly present your
+/* Pointer service. Drain events and bos_key(), explicitly present your
  * frame, then wait. UI wait never publishes an unfinished working canvas. */
 static inline int bos_ui_query(BosUiInfoV1 *out,unsigned capacity) {
     return bos_call(BOS_CALL_UI,BOS_UI_QUERY,BOS_UI_MAJOR,(unsigned)out,capacity,0);
 }
 static inline int bos_ui_host_open(unsigned subscriptions,BosUiTargetInfoV1 *out) {
     return bos_call(BOS_CALL_UI,BOS_UI_HOST_OPEN,BOS_UI_MAJOR,(unsigned)out,sizeof *out,subscriptions);
+}
+/* GUI BEX2 only: adopt the existing primary window endpoint. This does not
+ * create a window. Releasing the endpoint leaves the window and task alive. */
+static inline int bos_ui_window_adopt(unsigned subscriptions,BosUiTargetInfoV1 *out) {
+    return bos_call(BOS_CALL_UI,BOS_UI_WINDOW_ADOPT,BOS_UI_MAJOR,(unsigned)out,sizeof *out,subscriptions);
 }
 static inline int bos_ui_info(BosHandle target,BosUiTargetInfoV1 *out) {
     return bos_call(BOS_CALL_UI,BOS_UI_INFO,target,(unsigned)out,sizeof *out,0);

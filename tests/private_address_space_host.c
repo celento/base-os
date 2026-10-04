@@ -164,7 +164,7 @@ static void check_query(unsigned destination){
     BosAbiInfo abi;BosMemoryInfo memory;
     assert(invoke(BOS_CALL_ABI_QUERY,destination,sizeof abi,1,0,0)==BOS_OK);
     memcpy(&abi,user_memory+destination,sizeof abi);
-    assert(abi.abi_major==1&&abi.abi_minor==1&&abi.user_bytes==4194304);
+    assert(abi.abi_major==1&&abi.abi_minor==BOS_ABI_MINOR&&abi.user_bytes==4194304);
     assert((abi.features&(BOS_FEATURE_BEX2|BOS_FEATURE_MEMORY_INFO))==(BOS_FEATURE_BEX2|BOS_FEATURE_MEMORY_INFO));
     assert(abi.file_chunk_bytes==4096&&abi.replace_bytes==32768&&abi.path_bytes==128);
     assert(invoke(BOS_CALL_MEMORY_INFO,destination,sizeof memory,1,0,0)==BOS_OK);
