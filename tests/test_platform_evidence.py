@@ -7,6 +7,7 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -125,6 +126,35 @@ class PlatformEvidenceTests(unittest.TestCase):
             observed=session.focus(7)
         self.assertEqual(observed,dict(process=7,keys=5))
         self.assertEqual(session.sent,['a','ctrl-tab','a'])
+
+    def test_semantic_page_rejects_transient_row_without_accepting_wrong_limit(self):
+        class Process:
+            def poll(self):return None
+        class Log:
+            def read_text(self):return ''
+        class Session:
+            until=PlatformSession.until
+            def __init__(self,directory,values):
+                self.directory=directory;self.values=iter(values);self.events=[]
+                self.transition_count=0;self.last_key=time.monotonic()
+                self.process=Process();self.log=Log()
+            def observe(self):
+                value=next(self.values)
+                return value,np.zeros((8,8,3),dtype=np.uint8),time.monotonic()
+        partial=dict(process=1,page=1,keys=1,loops=5,ticks=638,file_bytes=0)
+        complete=dict(partial,file_bytes=16383)
+        with tempfile.TemporaryDirectory() as temp,patch('platform_evidence.time.sleep'):
+            directory=Path(temp)
+            session=Session(directory,[partial,complete,dict(complete,loops=6,ticks=645)])
+            result,_,_=session.until(lambda o:o['page']==1,'capability page',seconds=1)
+            self.assertEqual(result['file_bytes'],16383)
+            self.assertEqual(session.transition_count,1)
+            self.assertTrue((directory/'transition-001-before.png').exists())
+            self.assertTrue((directory/'transition-001-after.png').exists())
+            wrong=Session(directory,[partial,dict(partial,loops=6,ticks=645)])
+            result,_,_=wrong.until(lambda o:o['page']==1,'stable incorrect capability',seconds=1)
+            with self.assertRaises(AssertionError):
+                assert result['file_bytes']==16383
 
     def test_fixture_profiles_use_exact_frozen_apps_and_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
