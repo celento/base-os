@@ -1,5 +1,7 @@
 # Spreadsheet
 
+![Original budget with live totals](../screenshots/spreadsheet-budget.png)
+
 The bounded Spreadsheet client is implemented in `src/sheet.[ch]`. It uses the
 real formula engine and file codecs described in [SHEET_MODEL.md](SHEET_MODEL.md).
 The desktop integrates its window, green grid icon, launcher, filename dialogs,
@@ -161,8 +163,8 @@ unchanged. Python independently verifies saved BSH1 records and exported CSV.
 No intentional memory-fault probes, fuzzing or QEMU instances are used here.
 
 A freestanding i386 build with production flags also checks unresolved symbols,
-object BSS and stack usage. Guest window/menu integration and real disk/session
-recovery testing remain the desktop integration owner's verification work.
+object BSS and stack usage. Normal production PS/2, pointer and real disk/session
+recovery checks passed on 2026-10-04; see the [integration verification record](session-2026-10-04/SPREADSHEET.md).
 
 ## Desktop recovery and examples
 
@@ -206,3 +208,11 @@ DWARF observations. It covers cell edit/cancel, formulas, range clipboard and
 undo, native reopening, exact quoted CSV, lifecycle guards, source conflicts,
 pending-edit recovery across reboots, read-only saves and minimum window sizing.
 It never modifies guest memory, opens a saved user disk, fuzzes or probes faults.
+
+`python3 tools/sheet_pointer_test.py build` additionally checks real mouse
+click/drag/release routing, wheel and horizontal scrolling, the shipped budget's
+guest totals on a fresh boot floppy, and explicit New/Close Discard.
+
+![Minimum Spreadsheet window](../screenshots/spreadsheet-minimum.png)
+
+![Changed source remains protected](../screenshots/spreadsheet-conflict.png)
