@@ -20,7 +20,8 @@ class ProcessLifetimeTests(unittest.TestCase):
                 '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                 '-fsanitize=address,undefined', '-I', str(ROOT / 'src'), '-I', str(directory),
                 str(ROOT / 'tests/process_lifetime_host.c'),
-                str(ROOT / 'src/physmem.c'), str(ROOT / 'src/bootinfo.c'), '-o', str(executable)], check=True)
+                str(ROOT / 'src/physmem.c'), str(ROOT / 'src/bootinfo.c'),
+                str(ROOT / 'src/executable.c'), '-o', str(executable)], check=True)
             for ram in (64, 128):
                 subprocess.run([str(executable), str(ram)], check=True, env=dict(os.environ,
                     ASAN_OPTIONS='detect_leaks=0', UBSAN_OPTIONS='halt_on_error=1'))
