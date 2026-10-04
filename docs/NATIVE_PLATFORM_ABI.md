@@ -1,5 +1,12 @@
 # Additive native platform ABI 1.1
 
+Candidate scope note: the isolated independent-window branch adds general ABI
+1.2, current-context owned-window feature bit 7 and the coordinated UI 1.1
+extension. See [candidate native-window contract](NATIVE_WINDOWS.md) for the
+required BEX2 flag, exact allocations, unchanged wire sizes and qualification
+limits. This page's ABI 1.1 description records the qualified baseline; it does
+not claim that the independent-window candidate is guest-qualified or shipped.
+
 This is compatibility-preserving groundwork for independent applications, not
 Win95/98 platform parity. It implements discoverable owner-bound file versions,
 conditional replacement and asynchronous IDE durability completion. ABI1.1 additionally supplies a versioned memory-info query. A separately gated
@@ -228,3 +235,17 @@ reports16 mapped/0 owned/0 table/policy0. BEX2 reports its actual counts and a
 fixed1024-owned-page policy including the two table pages. Pool totals and free
 counts are momentary non-reserving snapshots, not quotas or allocation promises.
 No physical addresses, frame handles, allocation or resize service are exposed.
+
+## Independent-window candidate context clarification
+
+In the owned native-window candidate, call 12 remains the bound one-based
+legacy display slot. For old hosted tasks this is still their Terminal slot;
+for a GUI task it is its owned window/view slot. It never becomes an opaque
+window handle or process-record index. Synchronous exec still returns zero.
+`processes_total` and the eight-window/task bounds do not increase.
+
+The candidate's BEX2 flag 0x1 requires general ABI minor 2. Bit 7 is advertised
+only for a bound owned-window task with trusted input hooks; it replaces hosted
+bit 6 in that context, not in hosted contexts. QUERY/OPEN negotiation and
+context-specific capability meanings are defined by the
+[candidate contract](NATIVE_WINDOWS.md#coordinated-additive-allocations).

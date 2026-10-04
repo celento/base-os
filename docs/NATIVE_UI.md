@@ -1,5 +1,13 @@
 # Hosted native pointer service
 
+Candidate scope note: this page records the qualified hosted UI 1.0 contract and
+its history. The isolated [independent-window candidate](NATIVE_WINDOWS.md)
+adds UI 1.1 WINDOW_ADOPT=6, owned kind 2 and capability bits 8/9 while retaining
+the same event engine and wire sizes. The candidate's hosted contexts keep
+HOST_OPEN and hosted capabilities; owned contexts use ADOPT and owned
+capabilities. The independent-window path is not covered by the hosted or
+app-view extraction qualification below.
+
 The current qualified hosted-pointer contract provides one kernel-owned endpoint
 for an existing native Terminal canvas. The general [platform ABI is 1.1](NATIVE_PLATFORM_ABI.md);
 UI **1.0** is negotiated independently through gateway **29**. Hosted-UI feature
