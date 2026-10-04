@@ -2011,7 +2011,7 @@ static int menu_item_enabled(int m, int item) {
         }
         if (front_kind() == WK_SPREADSHEET) {
             if (item == 0 || item == 1) return 1;
-            return item == 2 && clip_len > 0 && file_clipboard_mode()==FILE_CLIPBOARD_NONE;
+            return item == 2 && clip_generation != 0 && file_clipboard_mode()==FILE_CLIPBOARD_NONE;
         }
         if (front_kind() == WK_WRITER) {
             if (item == 0 || item == 1) return writer_caret() != writer_anchor();

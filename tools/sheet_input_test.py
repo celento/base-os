@@ -163,7 +163,13 @@ def run(build):
         session.key('ctrl-a'); session.key('ctrl-c'); session.key('ctrl-w')
         session.wait(lambda: check.o.integer('edit_close_dlg') == 1, 'Editor clipboard fixture guard')
         check.choose('discard'); session.launch('spreadsheet'); check.jump('D1'); session.key('ctrl-v')
-        check.expect(3, '25', 2, 25000); session.key('ctrl-z'); check.expect(3, b'', 0)
+        check.expect(3, '25', 2, 25000)
+        # A copied empty cell is a valid zero-byte text clipboard, and Edit/Paste
+        # must still be enabled so it can clear a destination cell.
+        check.jump('C10'); session.key('ctrl-c'); check.jump('D1')
+        session.key('f10'); session.key('right'); session.key('down'); session.key('down'); session.key('ret')
+        check.expect(3, b'', 0); session.key('ctrl-z'); check.expect(3, '25', 2)
+        session.key('ctrl-z'); check.expect(3, b'', 0)
         # Find/Replace are disabled and cannot type their shortcut letter into a cell.
         before = check.cell(53); session.key('ctrl-f'); session.key('ctrl-h'); assert check.cell(53) == before and check.state()['mode'] == 0
         check.save_as('range.bsh'); expected = decode(contents(disk, '/Documents/range.bsh'))
