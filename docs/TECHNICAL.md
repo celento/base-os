@@ -6,17 +6,41 @@
 
 Normal builds update only the boot/kernel reservation. Filesystem sectors survive rebuilds and `make clean`. Before updating an existing image, the build saves its previous contents as `build/baseos.img.<hash>.bak`. The updater refuses an image locked by a running QEMU guest; shut the guest down before rebuilding.
 
-The image updater extends an old 1.44 MB image to 2.88 MB without changing its existing volume bytes or LBAs. The kernel reads v1 and v2 filesystems and writes v3, which adds modification timestamps. Its first changed save goes into the second snapshot, leaving the old snapshot intact. Each snapshot holds the full existing capacity: 64 nodes with up to 16,383 data bytes per file.
+The image updater extends an old 1.44 MB image to 2.88 MB without changing its existing volume bytes or LBAs. The kernel reads v1 and v2 filesystems and writes v3, which adds modification timestamps. Its first changed save goes into the second snapshot, leaving the old snapshot intact. Each floppy snapshot retains the full existing capacity: 64 nodes with up to 16,383 data bytes per file.
 
 Saves alternate between two snapshots. A save writes and verifies the new payload, then commits a checksummed header. On boot, the kernel validates both snapshots and loads the newest complete one. It never automatically reformats a corrupt or unreadable disk. The desktop displays a disk warning if changes are only in RAM; Shutdown stays in the desktop if flushing fails. Automatic retries are five seconds apart and stop after three failures. Selecting Shutdown explicitly retries a failed flush, unless a mount or uncertain commit has protected the disk until reboot.
 
 The current split-extent loader requires a 2.88 MB floppy. The image updater upgrades legacy 1.44 MB disks before installing this loader, preserving both the existing volume data and an original-image backup. Keep backups outside the running image for host disk failure or damage to both snapshots. The snapshot protocol protects against interrupted guest writes; it cannot guarantee durability if the host storage stack loses or reorders acknowledged writes after host power loss.
 
+## Separate persistent data disk
+
+`make` creates `build/baseos-data.img` through `tools/init_data.py` only when absent. The initializer never reformats or truncates an existing file: it verifies the exact size and marker, obtains QEMU-compatible locks, and leaves all bytes unchanged. Existing unknown files are rejected. Both images and backups survive `make clean`. Preserve both images when moving a saved installation; the boot floppy alone may contain an older state after migration.
+
+The 16 MiB disk has 32,768 sectors. Sector 0 is an explicit BaseOS data marker: seven little-endian 32-bit words holding magic `0x44534F42` (`BOSD`), marker version 1, sector count 32768, slot size 16383, slot LBAs 1 and 16384, and CRC32 of the first 24 bytes. Remaining marker bytes are zero. Snapshot slots reserve 16,383 sectors each; the last disk sector is unused. A generic blank disk without this marker is never initialized.
+
+Each v4 snapshot uses the existing 28-byte checksummed header in one sector and 40-byte v3-compatible node records followed by exact binary content. Version 4 permits 2,097,152 bytes per file. The conservative volume file-data limit is 8,385,024 bytes, leaving room for every node's metadata and the header; it is separate from the per-file limit. There remain 64 nodes. Floppy snapshots continue using v3, preserving compatibility with existing tools and disks.
+
+The RAM node table holds offsets into an 8 MiB compacting byte arena, rather than reserving 2 MiB for every node. Nonempty files also have a convenience NUL byte outside their reported size. Writes check all limits before changing metadata or bytes. Removal/resizing compacts the arena; equal-length overwrites stay in place. Source aliases from `fs_data()` are staged first, so self-overwrites and file copies survive moves. `fs_data()` returns a borrowed pointer valid only until the next filesystem mutation. Consumers needing long-lived data must copy it. Editor/BASIC/script/native-loader limits remain independently bounded by `FS_MAX_SIZE`; general files use `fs_file_limit()`.
+
+Mount prefers a valid data volume. When both marked data slots are wholly blank, it first mounts the boot floppy, then stages those files for the first data-disk save. It never writes the floppy during migration, and never migrates from an incompletely readable source. Legacy 1.44 MB source geometry is supported read-only. A missing IDE disk selects ordinary floppy storage. An unknown/corrupt/unreadable IDE volume exposes boot files as a protected recovery view; it does not silently format either disk. A valid surviving snapshot can recover a damaged peer using the existing alternating-snapshot protocol.
+
+The ATA driver supports only legacy primary-master ATA, LBA28, 512-byte logical sectors, polled 16-bit PIO, and an explicitly advertised cache-flush command. It does not mount partitions, SATA/AHCI, USB or arbitrary host disks. Sector bounds and two-second hardware waits are checked. The save sequence writes payload, flushes the ATA cache, reads and verifies payload, writes the commit header, flushes again, then validates the complete snapshot. Uncertain commit outcomes protect the volume until remount. This remains dependent on QEMU and host storage honoring flushes; keep external backups.
+
+The normal command line includes:
+
+```sh
+qemu-system-i386 -m 64M -vga std -boot a \
+  -drive file=build/baseos.img,format=raw,index=0,if=floppy \
+  -drive file=build/baseos-data.img,format=raw,index=0,if=ide,cache=writeback
+```
+
+Use `make run QEMU_DATA=` for the optional-disk fallback. Use `python3 tools/volume.py build/baseos-data.img info` for actual capacity and `import`/`export` for byte-preserving exchange while QEMU is stopped. The host updater retains the other snapshot and makes a content-addressed whole-image backup before atomically replacing the target. Kernel rebuilds never rewrite data-disk contents. ATA emulation and cache-option references: [QEMU IDE implementation](https://github.com/qemu/qemu/blob/master/hw/ide/core.c), [QEMU command-line reference](https://www.qemu.org/docs/master/system/qemu-manpage.html).
+
 ## Supported machine
 
-BaseOS targets a legacy BIOS Pentium-or-newer x86 PC with PSE, one CPU, drive A with 80 cylinders and two heads, VBE direct-color graphics, PS/2 input, a PIC/PIT, and an ISA DMA floppy controller. Normal runs use QEMU standard VGA, 32 MB RAM, and a 2.88 MB floppy. Startup checks the BIOS E820 map for the reserved memory areas and stops if they are unavailable. It accepts matching RGB565 or RGB888 framebuffer formats and stops if video initialization fails. UEFI boot is not supported.
+BaseOS targets a legacy BIOS Pentium-or-newer x86 PC with PSE, one CPU, drive A with 80 cylinders and two heads, VBE direct-color graphics, PS/2 input, a PIC/PIT, and an ISA DMA floppy controller. Normal runs use QEMU standard VGA, 64 MiB RAM, a 2.88 MB boot floppy, and an optional primary-master ATA data disk. Startup checks the BIOS E820 map for the reserved memory areas and stops if they are unavailable. It accepts matching RGB565 or RGB888 framebuffer formats and stops if video initialization fails. UEFI boot is not supported.
 
-Built-in applications run cooperatively in the kernel. Loadable BEX1 programs run one at a time in a protected 64 KB user region, with checked syscalls and a two-second watchdog. Kernel exceptions print a serial diagnostic and halt; user-program faults return to Terminal. Only the timer interrupt is enabled among hardware IRQs; PS/2 and floppy I/O remain polled. There is no general-purpose heap or background process scheduler.
+Built-in applications run cooperatively in the kernel. Loadable BEX1 programs run one at a time in a protected 64 KB user region, with checked syscalls and a two-second watchdog. Kernel exceptions print a serial diagnostic and halt; user-program faults return to Terminal. Only the timer interrupt is enabled among hardware IRQs; PS/2, floppy, and ATA I/O remain polled. There is no general-purpose heap or background process scheduler.
 
 ## Checks
 
@@ -25,13 +49,16 @@ make test
 make
 python3 tools/smoke_test.py build --keep
 python3 tools/extent_test.py build
+python3 tools/data_volume_test.py build --keep
 python3 tools/process_test.py build
 python3 tools/ui_test.py build
 python3 tools/input_test.py build
 python3 tools/render_test.py build --optimized
 ```
 
-`make test` uses a host C compiler with AddressSanitizer and UndefinedBehaviorSanitizer. It tests image preservation and locking, interrupted commits, corrupt filesystem data, legacy migration, full capacity, copy rollback, floppy error recovery, RTC snapshots, and memory/video validation.
+`make test` uses a host C compiler with AddressSanitizer and UndefinedBehaviorSanitizer. It tests image preservation and locking, interrupted commits, corrupt filesystem data, legacy migration, full capacity, copy rollback, floppy/ATA error recovery, RTC snapshots, and memory/video validation. If the host runs under a tracer that prevents LeakSanitizer startup, use `ASAN_OPTIONS=detect_leaks=0 make test`; address/undefined-behavior checks remain enabled.
+
+`tools/data_volume_test.py` runs thirteen ordinary QEMU boot/restart checks without CPU-fault injection. It verifies exact 2 MiB binary files, host import/export and guest changes, both v4 snapshots at the full 8,385,024-byte data limit, source-alias overwrites, atomic capacity failures, shrink/refill, v3 migration, optional-disk fallback, and byte-preserving protection of unmarked disks. Every disk is disposable; `--keep` retains serial logs and exact disk bytes.
 
 The QEMU suite creates disposable images and checks fresh boot, reboot, timer progress, exception diagnostics, low-memory/video failure, deliberately dirty BSS, and multi-track storage. `--keep` preserves its logs, test disks, and desktop screenshot in the printed temporary directory. No test boots or writes your normal image.
 
@@ -46,13 +73,21 @@ The QEMU suite creates disposable images and checks fresh boot, reboot, timer pr
 | `0x300000` | filesystem node table       |
 | `0x500000` | Paint canvas / viewer arena |
 | `0x700000` | disk DMA bounce buffer      |
-| `0x800000` | on-disk filesystem image    |
+| `0x710000`–`0x720000` | SB16 ISA DMA ring          |
 | `0xA00000` | cached desktop wallpaper    |
 | `0xB00000` | app state and undo storage  |
+| `0xDF0000`–`0xE00000` | reserved graphics lookup cache within app arena |
 | `0xF00000` | page directory and user page table |
 | `0x1000000` | protected native-program region |
 | `0x1400000` | cached background during dragging |
 | `0x1500000` | last-presented framebuffer mirror |
+| `0x1600000`–`0x1610000` | network arena |
+| `0x1610000`–`0x1650000` | browser arena |
+| `0x1700000`–`0x1900000` | audio source/work arena |
+| `0x1900000`–`0x2000000` | reserved image decoding / owned pixels |
+| `0x2000000`–`0x2800000` | compact file-data pool (8 MiB) |
+| `0x2800000`–`0x3000000` | filesystem snapshot staging (8 MiB) |
+| `0x3000000`–`0x3100000` | reserved native task-save arena |
 
 Disk LBA 0 contains the loader. The kernel uses LBAs 1–383 and the previously unused tail at LBAs 5184–5695, for 895 sectors total. The loader joins those extents in memory. Snapshot slots remain at LBAs 384 and 2784, each reserving 2400 sectors; their existing on-disk data is never relocated. The linker independently limits the complete kernel and BSS below the stack. All physical addresses, disk boundaries, and the kernel sector budget are defined in `src/layout.h` and checked by the linker, C assertions, and image builder.
 
@@ -62,7 +97,7 @@ The 256-entry palette is laid out as 16 fixed base colors, a 32-step gray ramp, 
 
 ## Rendering and terminal help
 
-Window drags cache the unchanged desktop behind the moving window. The presenter compares RAM buffers and transfers only changed horizontal spans to video memory. Palette lookups and rounded-corner coverage are cached; bulk fills/copies use x86 word operations. Background app visuals refresh when the drag finishes, while the dragged app is repainted during movement. The idle desktop sleeps until the next timer tick instead of continuously polling. Normal QEMU runs still use 32 MB; the compositor reservations now require RAM through 22 MB.
+Window drags cache the unchanged desktop behind the moving window. The presenter compares RAM buffers and transfers only changed horizontal spans to video memory. Palette lookups and rounded-corner coverage are cached; bulk fills/copies use x86 word operations. Background app visuals refresh when the drag finishes, while the dragged app is repainted during movement. The idle desktop sleeps until the next timer tick instead of continuously polling. Normal QEMU runs use 64 MiB; all fixed reservations, including file data and staging, require RAM through 49 MiB.
 
 Fonts use four bits per pixel (16 coverage levels), and window masks preserve the background at all four corners. The heavy layered shadows are removed. Font generation uses the included licensed font files and requires Python with Pillow; normal builds use the checked-in generated header.
 

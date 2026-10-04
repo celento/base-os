@@ -3,7 +3,7 @@ import json,pathlib,subprocess,sys,tempfile,time
 image=pathlib.Path(sys.argv[1]).resolve();output=pathlib.Path(sys.argv[2]).resolve()
 with tempfile.TemporaryDirectory(prefix='baseos-capture-') as temp:
     log=pathlib.Path(temp)/'serial'
-    p=subprocess.Popen(['qemu-system-i386','-m','32M','-vga','std','-drive',f'file={image},format=raw,index=0,if=floppy','-display','none','-serial',f'file:{log}','-qmp','stdio','-no-reboot'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    p=subprocess.Popen(['qemu-system-i386','-m','64M','-vga','std','-drive',f'file={image},format=raw,index=0,if=floppy','-display','none','-serial',f'file:{log}','-qmp','stdio','-no-reboot'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     try:
         greeting=p.stdout.readline()
         if not greeting:raise RuntimeError(p.stderr.read().decode())

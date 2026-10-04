@@ -105,6 +105,8 @@ class NativeTests(unittest.TestCase):
     def test_floppy(self): self.run_native("persist_host")
     def test_bootinfo(self): self.run_native("bootinfo_host")
     def test_filesystem(self): self.run_native('fs_host')
+    def test_data_volume(self): self.run_native('data_volume_host')
+    def test_ata(self): self.run_native('ata_host')
     def test_rtc(self): self.run_native('rtc_host', ['-DRTC_HOST_TEST', ROOT / 'src/rtc.c'])
 
 if __name__ == '__main__': unittest.main()

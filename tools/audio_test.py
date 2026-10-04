@@ -35,7 +35,7 @@ def capture(build, directory):
     log = directory/'serial.log'; log.write_text('')
     recording = directory/'capture.wav'
     with (directory/'qemu.stderr').open('w') as errors:
-        proc = subprocess.Popen(['qemu-system-i386', '-m', '32M', '-vga', 'std',
+        proc = subprocess.Popen(['qemu-system-i386', '-m', '64M', '-vga', 'std',
             '-drive', f'file={image},format=raw,index=0,if=floppy',
             '-serial', f'file:{log}', '-display', 'none', '-monitor', 'none', '-no-reboot',
             '-audiodev', f'wav,id=test,path={recording},out.frequency=44100,out.channels=2,out.format=s16',

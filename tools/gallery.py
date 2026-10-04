@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix="baseos-gallery-") as temp:
     log = work / "serial.log"
     OUTPUT.mkdir(parents=True, exist_ok=True)
     guest = subprocess.Popen([
-        "qemu-system-i386", "-m", "32M", "-vga", "std", "-drive",
+        "qemu-system-i386", "-m", "64M", "-vga", "std", "-drive",
         f"file={work / 'disk.img'},format=raw,index=0,if=floppy", "-display", "none",
         "-serial", f"file:{log}", "-qmp", "stdio", "-no-reboot"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

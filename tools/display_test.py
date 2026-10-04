@@ -28,7 +28,7 @@ c = constants(); disk = bytearray(c['DISK_SECTORS'] * 512)
 disk[:512] = (build/'boot.bin').read_bytes(); install_kernel(disk, (work/'kernel.bin').read_bytes(), c)
 image = work/'disk.img'; image.write_bytes(disk)
 log = work/'display.log'; log.write_text('')
-process = subprocess.Popen(['qemu-system-i386', '-m', '32M', '-vga', 'std', '-drive',
+process = subprocess.Popen(['qemu-system-i386', '-m', '64M', '-vga', 'std', '-drive',
                            f'file={image},format=raw,index=0,if=floppy', '-serial', f'file:{log}',
                            '-display', 'none', '-qmp', 'stdio', '-no-reboot'],
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

@@ -29,12 +29,15 @@ CFLAGS = -std=gnu11 -ffreestanding -Os -g -Wall -Wextra -m32 \
 ASFLAGS = -f elf
 LDFLAGS = -T $(OUT)/linker.ld -nostdlib -m elf_i386 -z noexecstack
 
-CSRC = player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c mines.c game2048.c breakout.c sysmon.c
+CSRC = ata.c player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c mines.c game2048.c breakout.c sysmon.c
 OBJS = $(OUT)/kernel_entry.o $(OUT)/interrupts.o $(OUT)/process_entry.o $(addprefix $(OUT)/,$(CSRC:.c=.o))
 HDRS = $(wildcard $(SRC)/*.h) $(wildcard assets/*.h)
 IMG = $(OUT)/baseos.img
+DATA_IMG = $(OUT)/baseos-data.img
+QEMU_MEMORY ?= 64M
+QEMU_DATA = -drive file=$(DATA_IMG),format=raw,index=0,if=ide,cache=writeback
 
-all: $(IMG)
+all: $(IMG) $(DATA_IMG)
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -97,14 +100,17 @@ $(OUT)/kernel.bin: $(OUT)/kernel.elf
 $(IMG): $(OUT)/boot.bin $(OUT)/kernel.bin tools/update_image.py tools/layout.py $(SRC)/layout.h
 	$(PYTHON) tools/update_image.py $@ $(OUT)/boot.bin $(OUT)/kernel.bin
 
-run: $(IMG)
-	qemu-system-i386 -m 32M -vga std -nic user,model=rtl8139 $(QEMU_AUDIO) \
-		-drive file=$(IMG),format=raw,index=0,if=floppy \
+$(DATA_IMG): tools/init_data.py tools/layout.py $(SRC)/layout.h | $(OUT)
+	$(PYTHON) tools/init_data.py $@
+
+run: $(IMG) $(DATA_IMG)
+	qemu-system-i386 -m $(QEMU_MEMORY) -vga std -nic user,model=rtl8139 $(QEMU_AUDIO) \
+		-boot a -drive file=$(IMG),format=raw,index=0,if=floppy $(QEMU_DATA) \
 		-serial file:$(OUT)/serial.out -no-reboot -display $(QEMU_DISPLAY)
 
-headless: $(IMG)
-	qemu-system-i386 -m 32M -vga std -nic user,model=rtl8139 $(QEMU_AUDIO) \
-		-drive file=$(IMG),format=raw,index=0,if=floppy \
+headless: $(IMG) $(DATA_IMG)
+	qemu-system-i386 -m $(QEMU_MEMORY) -vga std -nic user,model=rtl8139 $(QEMU_AUDIO) \
+		-boot a -drive file=$(IMG),format=raw,index=0,if=floppy $(QEMU_DATA) \
 		-serial stdio -display none -no-reboot
 
 clean:
