@@ -405,6 +405,8 @@ TermTaskUpdate term_task_poll_update(void){
     return update;
 }
 int term_task_poll(void){return term_task_poll_update().flags!=0;}
+static void (*program_input_hook)(int active);
+void term_set_program_input(void (*hook)(int active)) { program_input_hook=hook; }
 static int execute(const char *,int,int *);
 /* Unlike the legacy one-argument commands, mv must consume two complete
  * operands before resolving either path. Do not accept quoted-prefix suffixes,
@@ -557,7 +559,9 @@ static int execute(const char *s,int depth,int *budget){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
         if(term_task_running(selected)){push("Stop this terminal's native task first.");return -1;}
         ProgramIO io={push,plot,program_key,program_present,canvas_resize,canvas_rect};T.canvas_buffered=0;canvas_reset();
+        if(program_input_hook)program_input_hook(1);
         int rc=!kstrcmp(cmd,"basic")?basic_run(fs_data(id),fs_size(id),&io):process_run(fs_data(id),fs_size(id),&io);
+        if(program_input_hook)program_input_hook(0);
         if(rc){push("Program stopped (error, fault, or execution limit).");return -1;}push("Program finished.");
     }else return -1;return 0;
 }

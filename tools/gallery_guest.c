@@ -23,11 +23,12 @@ static void gallery_show(int n) {
     while(timer_ticks()-start<14)__asm__ volatile("hlt");
     flip_vga();
     platform_log("GALLERY ");kprint_uint(n);platform_log("\n");
-    kqn=0;
+    input_discard(&device_input);
     for(;;){
-        drain_8042();int next=0;
-        for(int i=0;i<kqn;i++)if(kq[i]==KEY_SPACE)next=1;
-        kqn=0;if(next)break;
+        drain_8042();int next=0;InputSample sample;
+        for(unsigned i=0;i<INPUT_BATCH&&input_pop(&device_input,&sample);++i)
+            if(sample.kind==INPUT_KEY&&(sample.flags&INPUT_MAKE)&&sample.scancode==KEY_SPACE)next=1;
+        if(next)break;
         __asm__ volatile("hlt");
     }
 }

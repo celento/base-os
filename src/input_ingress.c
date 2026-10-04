@@ -136,3 +136,7 @@ int input_pop(InputIngress *in, InputSample *s) {
     return 1;
 }
 void input_pointer_fence(InputIngress *in) { ++in->epoch; }
+
+void input_discard(InputIngress *in) {
+    in->head = in->count = in->loss = in->dropped = 0;
+}

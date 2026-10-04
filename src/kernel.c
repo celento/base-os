@@ -24,6 +24,7 @@
 #include "audio_example.h"
 #include "platform.h"
 #include "physmem.h"
+#include "input_ingress.h"
 #include "history.h"
 #include "program.h"
 #include "native_example.h"
@@ -1135,16 +1136,21 @@ static void draw_pulldown(int open_menu, int menu_sel) {
 static int mouse_x;
 static int mouse_y;
 static int mouse_left = 0;
-static int mouse_left_prev = 0;
-static int mouse_clicked = 0;
 static int mouse_right = 0;
-static int mouse_rclicked = 0;
 static int mouse_moved = 0;
 static int mouse_ok = 0;
 
-static uint8_t mouse_pkt[4];
-static int mouse_packet_bytes=3,mouse_wheel=0,mouse_type=0;
-static int mouse_pkt_n = 0;
+static int mouse_type;
+static InputIngress device_input;
+static uint32_t input_sample_ticks;
+static int input_routing, input_cursor_moved, input_tail_pending;
+static unsigned input_suppressed, input_saver_buttons, input_unknown_buttons;
+static uint64_t input_wake_serial;
+static void desktop_input_cancel(unsigned buttons);
+static void desktop_input_fence(void);
+static unsigned desktop_input_turn(void);
+static int desktop_program_key(void);
+static uint32_t input_gesture_ticks(void) { return input_routing ? input_sample_ticks : frame_count; }
 
 static uint8_t cursor_saved[CURSOR_W * CURSOR_H];
 static int cursor_sx = -1, cursor_sy = -1;
@@ -1213,71 +1219,17 @@ void mouse_init(void) {
     if (!mouse_cmd(0xF6))
         return;
     /* QEMU's IntelliMouse negotiation: 200, 100, 80 samples/second. */
-    mouse_packet_bytes=3;mouse_type=0;
+    mouse_type=0;
     if(mouse_cmd(0xF3)&&mouse_cmd(200)&&mouse_cmd(0xF3)&&mouse_cmd(100)&&
        mouse_cmd(0xF3)&&mouse_cmd(80)&&mouse_cmd(0xF2)&&mouse_wait_read()){
         mouse_type=inb(0x60);
-        if(mouse_type==3||mouse_type==4)mouse_packet_bytes=4;
     }
     if (!mouse_cmd(0xF4))
         return;
 
     mouse_flush();
     mouse_ok = 1;
-    mouse_pkt_n = 0;
-}
-
-static void mouse_handle_byte(uint8_t b) {
-    if (mouse_pkt_n == 0 && !(b & 0x08))
-        return;
-
-    mouse_pkt[mouse_pkt_n++] = b;
-    if (mouse_pkt_n < mouse_packet_bytes)
-        return;
-    mouse_pkt_n = 0;
-
-    if(mouse_packet_bytes==4){
-        int wheel=mouse_type==4?(int)(mouse_pkt[3]&15):(int)(int8_t)mouse_pkt[3];
-        if(mouse_type==4&&wheel>=8)wheel-=16;
-        mouse_wheel+=wheel;
-        if(mouse_wheel>64)mouse_wheel=64;
-        if(mouse_wheel<-64)mouse_wheel=-64;
-    }
-    uint8_t flags = mouse_pkt[0];
-    if (flags & 0xC0)
-        return;
-
-    int16_t dx = mouse_pkt[1];
-    int16_t dy = mouse_pkt[2];
-    if (flags & 0x10)
-        dx |= (int16_t)0xFF00;
-    if (flags & 0x20)
-        dy |= (int16_t)0xFF00;
-
-    int nx = mouse_x + dx;
-    int ny = mouse_y - dy;
-    if (nx < 0)
-        nx = 0;
-    if (nx > fb_w - 1)
-        nx = fb_w - 1;
-    if (ny < 0)
-        ny = 0;
-    if (ny > fb_h - 1)
-        ny = fb_h - 1;
-
-    if (nx != mouse_x || ny != mouse_y)
-        mouse_moved = 1;
-    mouse_x = nx;
-    mouse_y = ny;
-
-    mouse_left_prev = mouse_left;
-    mouse_left = flags & 0x01;
-    if (mouse_left && !mouse_left_prev)
-        mouse_clicked = 1;
-    int right = flags & 0x02;
-    if (right && !mouse_right)
-        mouse_rclicked = 1;
-    mouse_right = right;
+    input_mouse_type(&device_input, (unsigned)mouse_type);
 }
 
 void cursor_restore(void) {
@@ -1320,81 +1272,28 @@ void cursor_save_draw(void) {
 static int shift_down = 0;
 static int alt_down;
 static int ctrl_down = 0;
-static int key_pressed = 0;
 static uint8_t key_sc = 0;
 static char key_char = 0;
-
-static const char keymap[0x40] = {
-    0,   0,   '1', '2', '3', '4', '5', '6',
-    '7', '8', '9', '0', '-', '=', 0,   0,
-    'q', 'w', 'e', 'r', 't', 'y', 'u', 'i',
-    'o', 'p', '[', ']', 0,   0,   'a', 's',
-    'd', 'f', 'g', 'h', 'j', 'k', 'l', ';',
-    '\'', '`', 0,  '\\', 'z', 'x', 'c', 'v',
-    'b', 'n', 'm', ',', '.', '/', 0,   '*',
-    0,   ' ', 0,   0,   0,   0,   0,   0};
-
-static const char keymap_shift[0x40] = {
-    0,   0,   '!', '@', '#', '$', '%', '^',
-    '&', '*', '(', ')', '_', '+', 0,   0,
-    'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I',
-    'O', 'P', '{', '}', 0,   0,   'A', 'S',
-    'D', 'F', 'G', 'H', 'J', 'K', 'L', ':',
-    '"', '~', 0,  '|', 'Z', 'X', 'C', 'V',
-    'B', 'N', 'M', '<', '>', '?', 0,   '*',
-    0,   ' ', 0,   0,   0,   0,   0,   0};
-
-static void keyboard_handle_byte(uint8_t sc) {
-    if (sc == 0xE0)
-        return;
-
-    if (sc & 0x80) {
-        uint8_t make = sc & 0x7F;
-        if (make == KEY_LSHIFT || make == KEY_RSHIFT)
-            shift_down = 0;
-        if (make == 0x38) alt_down = 0;
-        if (make == KEY_LCTRL)
-            ctrl_down = 0;
-        return;
-    }
-
-    if (sc == KEY_LSHIFT || sc == KEY_RSHIFT) {
-        shift_down = 1;
-        return;
-    }
-    if (sc == 0x38) { alt_down = 1; return; }
-    if (sc == KEY_LCTRL) {
-        ctrl_down = 1;
-        return;
-    }
-
-    key_sc = sc;
-    key_pressed = 1;
-    if (sc < 0x40) {
-        key_char = shift_down ? keymap_shift[sc] : keymap[sc];
-    } else {
-        key_char = 0;
-    }
-}
-
-static uint8_t kq[1024];
 static int input_ready;
 void platform_poll(void){if(input_ready)drain_8042();audio_poll();net_poll();}
 void fs_background_poll(void){platform_poll();}
-static int kqn;
 
-void drain_8042(void) {
-    for (int i = 0; i < 32; i++) {
+static unsigned input_acquire(unsigned budget) {
+    unsigned acquired=0;
+    /* Acquisition only, including when rendering/storage/syscalls poll us. */
+    for (unsigned i = 0; i < budget; i++) {
         uint8_t status = inb(KEYBOARD_STATUS_PORT);
-        if ((status & 1) == 0)
-            break;
+        if (!(status & 1)) break;
         uint8_t data = inb(KEYBOARD_DATA_PORT);
-        if (status & 0x20)
-            mouse_handle_byte(data);
-        else if (kqn < (int)sizeof kq)
-            kq[kqn++] = data;
+        ++acquired;
+        uint32_t ticks = timer_ticks();
+        if (status & 0xc0) input_device_loss(&device_input, ticks);
+        else if (status & 0x20) input_mouse_byte(&device_input, data, ticks);
+        else input_keyboard_byte(&device_input, data, ticks);
     }
+    return acquired;
 }
+void drain_8042(void) { (void)input_acquire(32); }
 
 static void poll_time(void) {
     frame_count = timer_ticks();
@@ -4469,10 +4368,10 @@ static void edit_ensure_caret_visible(int rows, int cols) {
 }
 
 static int double_click(int item, int *last_item, uint32_t *last_frame) {
-    unsigned dt = frame_count - *last_frame;
+    unsigned dt = input_gesture_ticks() - *last_frame;
     int is_dbl = (item == *last_item && dt < TIMER_HZ * 2 / 5);
     *last_item = item;
-    *last_frame = frame_count;
+    *last_frame = input_gesture_ticks();
     return is_dbl;
 }
 
@@ -6315,6 +6214,8 @@ static int launcher_click(void) {
 }
 
 static void saver_start(void) {
+    input_saver_buttons=(mouse_left?INPUT_LEFT:0)|(mouse_right?INPUT_RIGHT:0);
+    desktop_input_fence();
     saver_on = 1;
     open_menu = MENU_NONE;
 }
@@ -6757,10 +6658,10 @@ static void handle_click(void) {
             return;
         }
         if (hit(mouse_x, mouse_y, w->x, w->y, w->w, TITLE_H)) {
-            if (title_click_window == i && frame_count-title_click_time < 28) {
+            if (title_click_window == i && input_gesture_ticks()-title_click_time < 28) {
                 title_click_window=-1; win_arrange(i,0); return;
             }
-            title_click_window=i; title_click_time=frame_count;
+            title_click_window=i; title_click_time=input_gesture_ticks();
             dragging_win = i;
             drag_active = 0;
             drag_from_x = mouse_x;
@@ -7893,11 +7794,7 @@ static void session_restore(void){
     id=fs_find_child(dir,"paint-draft");if(id>=0&&fs_size(id)==PAINT_W*PAINT_H){paint_init();kmemcpy(paint_pix,fs_data(id),PAINT_W*PAINT_H);}
     session_ready=1;context_set(win_front());dirty=1;
 }
-int program_key(void){
-    drain_8042();int result=0;
-    for(int i=0;i<kqn;i++){key_char=0;key_sc=0;keyboard_handle_byte(kq[i]);if(key_char)result=key_char;else if(key_sc==KEY_ESC)result=27;}
-    kqn=0;return result;
-}
+int program_key(void){ return desktop_program_key(); }
 void program_present(void){cursor_restore();draw_ui();flip_vga();cursor_on=0;dirty=1;}
 static void install_examples(void){
     if(fs_find_child(fs_root(),"Browser")<0)fs_create_app(fs_root(),"Browser");
@@ -7992,6 +7889,8 @@ static void draw_display_confirmation(void) {
 }
 
 static void display_refresh_layout(void) {
+    desktop_input_fence();
+    input_resize(&device_input, fb_w, fb_h);
     cursor_on = 0;
     dragging_win = resizing_win = -1;
     drag_cached = -1;
@@ -8139,6 +8038,262 @@ static int term_task_render_action(TermTaskUpdate update) {
     return TERM_RENDER_FULL;
 }
 
+/* Desktop-only compatibility adapter for the one ordered device stream. */
+typedef struct {
+    Win win[MAX_WIN];
+    int menu, picker, name, close, launcher, saver, display;
+    int valid;
+} InputScene;
+static InputScene input_scene;
+static int desktop_input_scene_changed(void) {
+    if (!input_scene.valid || input_scene.menu != open_menu ||
+        input_scene.picker != open_dlg || input_scene.name != name_dlg ||
+        input_scene.close != edit_close_dlg || input_scene.launcher != launcher_on ||
+        input_scene.saver != saver_on || input_scene.display != display_pending) return 1;
+    for (int i=0;i<MAX_WIN;++i) {
+        Win *a=&input_scene.win[i], *b=&wins[i];
+        if (a->open!=b->open || (b->open && (a->seq!=b->seq || a->kind!=b->kind ||
+            a->min!=b->min || a->z!=b->z || a->x!=b->x || a->y!=b->y ||
+            a->w!=b->w || a->h!=b->h))) return 1;
+    }
+    return 0;
+}
+static void desktop_input_remember_scene(void) {
+    kmemcpy(input_scene.win,wins,sizeof wins);
+    input_scene.menu=open_menu; input_scene.picker=open_dlg; input_scene.name=name_dlg;
+    input_scene.close=edit_close_dlg; input_scene.launcher=launcher_on;
+    input_scene.saver=saver_on; input_scene.display=display_pending; input_scene.valid=1;
+}
+static int desktop_input_blocked(void) {
+    return open_menu>=0 || open_dlg || name_dlg || edit_close_dlg || launcher_on || saver_on || display_pending;
+}
+static void desktop_input_modifiers(unsigned modifiers) {
+    shift_down=!!(modifiers&INPUT_SHIFT); ctrl_down=!!(modifiers&INPUT_CTRL); alt_down=!!(modifiers&INPUT_ALT);
+}
+static void desktop_input_cancel(unsigned buttons) {
+    /* Cancellation never commits a file drop, snapped window or Paint shape. */
+    dragging_win=resizing_win=-1; drag_active=fm_dragging=fm_drag_active=0;
+    for(int i=0;i<MAX_WIN;++i) window_state[i].doc.dragging=0;
+    writer_release(); spreadsheet_release();
+    if(paint_shape_drag)dirty=1;
+    paint_dragging=paint_shape_drag=0;
+    mouse_left=mouse_right=0;
+    input_suppressed=buttons;
+}
+static void desktop_input_clear_clicks(void) {
+    title_click_window=icon_last=pick_last_click_item=-1;
+    for(int i=0;i<MAX_WIN;++i)window_state[i].last_click_item=-1;
+}
+static void desktop_input_fence(void) {
+    input_pointer_fence(&device_input);
+    unsigned partial=device_input.packet_n ? device_input.packet[0]&(INPUT_LEFT|INPUT_RIGHT) : 0;
+    desktop_input_cancel(device_input.buttons|partial);
+    desktop_input_clear_clicks();
+}
+static void desktop_pointer_motion(void) {
+        win_resize_tick();
+        if (dragging_win >= 0 && mouse_left && !open_dlg) {
+            Win *dw = &wins[dragging_win];
+            int dx = mouse_x - drag_from_x;
+            int dy = mouse_y - drag_from_y;
+            int adx = dx < 0 ? -dx : dx;
+            int ady = dy < 0 ? -dy : dy;
+            if (!drag_active && (adx > 3 || ady > 3))
+                drag_active = 1;
+            if (drag_active) {
+                int nx = drag_orig_x + dx;
+                int ny = drag_orig_y + dy;
+                if (nx != dw->x || ny != dw->y) {
+                    dw->x = nx;
+                    dw->y = ny;
+                    win_clamp(dw);
+                    dirty = 1;
+                }
+            }
+        }
+        if (fm_dragging && mouse_left) {
+            int dx = mouse_x - fm_drag_sx;
+            int dy = mouse_y - fm_drag_sy;
+            if (dx < 0)
+                dx = -dx;
+            if (dy < 0)
+                dy = -dy;
+            if (!fm_drag_active && (dx > 4 || dy > 4)) {
+                fm_drag_active = 1;
+                fm_last_click_item = -1;
+                dirty = 1;
+            }
+            if (fm_drag_active && mouse_moved)
+                dirty = 1;
+        }
+        if (edit_dragging && front_kind() == WK_EDIT && !open_dlg) {
+            int wx, wy, ww, wh;
+            if (win_geom_kind(WK_EDIT, &wx, &wy, &ww, &wh)) {
+                int idx = edit_index_at(wx, wy, ww, wh, mouse_x, mouse_y);
+                if (idx != edit_sel_b) {
+                    edit_sel_b = idx;
+                    edit_caret = idx;
+                    dirty = 1;
+                }
+            }
+        }
+
+        if (front_kind() == WK_WRITER && mouse_left && mouse_moved && !open_dlg &&
+            !name_dlg && !edit_close_dlg && !launcher_on && open_menu < 0 && dragging_win < 0) {
+            Win *w = &wins[win_front()];
+            if (writer_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
+        }
+        if (front_kind() == WK_SPREADSHEET && mouse_left && mouse_moved && !open_dlg &&
+            !name_dlg && !edit_close_dlg && !launcher_on && open_menu < 0 && dragging_win < 0) {
+            Win *w = &wins[win_front()];
+            if (spreadsheet_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
+        }
+        if (paint_dragging || paint_shape_drag) paint_drag_tick();
+}
+static void desktop_pointer_release(void) {
+            resizing_win=-1;
+            if (dragging_win >= 0 && drag_active) {
+                if (mouse_x < 12) win_arrange(dragging_win,1);
+                else if (mouse_x > fb_w-12) win_arrange(dragging_win,2);
+                else if (mouse_y < MENUBAR_H+12) win_arrange(dragging_win,0);
+            }
+            if (dragging_win >= 0 && !drag_active && !open_dlg &&
+                wins[dragging_win].kind == WK_FILES && fm_cwd != fs_root())
+                fm_go_up();
+            dragging_win = -1;
+            drag_active = 0;
+            if (fm_dragging)
+                files_drop();
+            edit_dragging = 0;
+            writer_release();
+            spreadsheet_release();
+            paint_mouse_up();
+}
+static void desktop_pointer_sample(const InputSample *sample) {
+    if(sample->epoch!=device_input.epoch)return;
+    unsigned prior=(mouse_left?INPUT_LEFT:0)|(mouse_right?INPUT_RIGHT:0);
+    input_suppressed &= sample->buttons;
+    input_unknown_buttons &= sample->buttons;
+    unsigned buttons=sample->buttons & ~(input_suppressed|input_unknown_buttons);
+    mouse_moved=sample->x!=mouse_x || sample->y!=mouse_y;
+    input_cursor_moved |= mouse_moved;
+    mouse_x=sample->x; mouse_y=sample->y;
+    /* Final release coordinates belong to the gesture being released. */
+    if(mouse_moved && (prior&INPUT_LEFT)) desktop_pointer_motion();
+    mouse_left=!!(buttons&INPUT_LEFT); mouse_right=!!(buttons&INPUT_RIGHT);
+    if(open_menu>=0 && mouse_moved) {
+        int selected=menu_item_at(open_menu,mouse_x,mouse_y);
+        if(selected!=menu_sel){menu_sel=selected;dirty=1;}
+    }
+    if((buttons&INPUT_RIGHT) && !(prior&INPUT_RIGHT))handle_rclick();
+    if((buttons&INPUT_LEFT) && !(prior&INPUT_LEFT))handle_click();
+    if(sample->epoch!=device_input.epoch)return;
+    if((prior&INPUT_LEFT) && !(buttons&INPUT_LEFT))desktop_pointer_release();
+    if(sample->wheel)handle_wheel(sample->wheel);
+    /* A dismissal click is already consumed; held gestures cannot click through
+     * a newly opened menu/modal or continue behind it. Focus by DOWN is ordered
+     * normally, so the same queued DOWN/UP survives without an epoch change. */
+    if(desktop_input_blocked())desktop_input_cancel(sample->buttons);
+    if(mouse_moved && dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
+}
+static void desktop_input_reset(const InputSample *sample) {
+    if(sample->reason&INPUT_LOSS_DEVICE)input_unknown_buttons=INPUT_LEFT|INPUT_RIGHT;
+    desktop_input_cancel(sample->buttons);
+    desktop_input_clear_clicks();
+    input_cursor_moved |= mouse_x!=sample->x || mouse_y!=sample->y;
+    mouse_x=sample->x;mouse_y=sample->y;
+    desktop_input_modifiers(sample->modifiers);
+}
+static unsigned desktop_input_turn(void) {
+    if(input_tail_pending) {
+        /* An unusually full controller may need more than the exclusive end
+         * budget. Finish draining across ordinary turns, never replay its tail. */
+        input_tail_pending=input_acquire(32)==32;
+        input_discard(&device_input);desktop_input_fence();
+        desktop_input_modifiers(device_input.modifiers);
+        mouse_moved |= mouse_x!=device_input.x || mouse_y!=device_input.y;
+        mouse_x=device_input.x;mouse_y=device_input.y;
+        last_input_frame=frame_count;desktop_input_remember_scene();
+        return INPUT_BATCH;
+    }
+    /* Changes made by a routed record are remembered immediately. Only an
+     * autonomous scene change fences backlog, including same-slot reuse. */
+    if(desktop_input_scene_changed())desktop_input_fence();
+    desktop_input_remember_scene();
+    input_cursor_moved=mouse_moved;
+    unsigned count=0;
+    InputSample sample;
+    while(count<INPUT_BATCH && input_pop(&device_input,&sample)) {
+        ++count;last_input_frame=frame_count;
+        input_routing=1;input_sample_ticks=sample.ticks;
+        if(saver_on) {
+            int wake=(sample.kind==INPUT_KEY || sample.kind==INPUT_MODIFIER) && (sample.flags&INPUT_MAKE);
+            if(sample.kind==INPUT_POINTER) {
+                wake=sample.x!=mouse_x || sample.y!=mouse_y || sample.wheel || (sample.buttons&~input_saver_buttons);
+                input_saver_buttons=sample.buttons;
+                mouse_x=sample.x;mouse_y=sample.y;
+            }
+            if(sample.kind==INPUT_RESET)desktop_input_reset(&sample);
+            desktop_input_modifiers(sample.modifiers);
+            if(wake) {
+                input_wake_serial=device_input.serial;
+                saver_stop();desktop_input_fence();
+                input_cursor_moved=1;
+                mouse_x=device_input.x;mouse_y=device_input.y;
+            }
+        }
+        else if(sample.kind==INPUT_RESET)desktop_input_reset(&sample);
+        else if(sample.serial<=input_wake_serial) {
+            /* Consume the complete wake backlog across bounded turns. */
+            desktop_input_modifiers(sample.modifiers);
+        }
+        else if(sample.kind==INPUT_POINTER) {
+            if(sample.epoch==device_input.epoch) {
+                desktop_input_modifiers(sample.modifiers);
+                desktop_pointer_sample(&sample);
+            }
+        } else {
+            desktop_input_modifiers(sample.modifiers);
+            if(sample.kind==INPUT_KEY && (sample.flags&INPUT_MAKE)) {
+                key_sc=(uint8_t)sample.scancode;key_char=(char)sample.character;
+                handle_key();
+                if(desktop_input_scene_changed())desktop_input_cancel(sample.buttons);
+            }
+        }
+        input_routing=0;
+        desktop_input_remember_scene();
+    }
+    mouse_moved=input_cursor_moved;
+    return count;
+}
+static void desktop_program_input(int active) {
+    /* Beginning keeps queued keys for INKEY; ending consumes any unhandled
+     * program keys instead of typing them into the Terminal command line. */
+    if(!active)input_tail_pending=input_acquire(1024)==1024;
+    desktop_input_fence();
+    if(!active) {
+        input_discard(&device_input);
+        desktop_input_modifiers(device_input.modifiers);
+        input_cursor_moved |= mouse_x!=device_input.x || mouse_y!=device_input.y;
+        mouse_x=device_input.x;mouse_y=device_input.y;
+    }
+}
+static int desktop_program_key(void) {
+    /* Synchronous BASIC/exec temporarily owns this stream. Its old INKEY
+     * last-character behavior stays, but no pointer click is saved for replay
+     * into whatever desktop window happens to be present when it returns. */
+    drain_8042();
+    InputSample sample;int result=0;
+    for(unsigned n=0;n<INPUT_BATCH && input_pop(&device_input,&sample);++n) {
+        desktop_input_modifiers(sample.modifiers);
+        if(sample.kind==INPUT_KEY && (sample.flags&INPUT_MAKE)) {
+            if(sample.character)result=(int)sample.character;
+            else if(sample.scancode==KEY_ESC)result=27;
+        } else if(sample.kind==INPUT_POINTER || sample.kind==INPUT_RESET)desktop_input_reset(&sample);
+    }
+    return result;
+}
+
 void kmain(void) {
     kprint_debug("Kernel started\nBuild " BASEOS_BUILD_LABEL "\n");
     platform_validate_memory();
@@ -8175,6 +8330,7 @@ void kmain(void) {
     display_load();
     theme_apply();
     term_reset();
+    term_set_program_input(desktop_program_input);
     kprint_debug("FS ready\n");
 
     menu_bar_init();
@@ -8182,6 +8338,7 @@ void kmain(void) {
     mouse_x = fb_w / 2;
     mouse_y = fb_h / 2;
 
+    input_init(&device_input, fb_w, fb_h, mouse_x, mouse_y);
     mouse_init();
     if (mouse_ok)
         kprint_debug("Mouse ready\n");
@@ -8189,7 +8346,6 @@ void kmain(void) {
         kprint_debug("Mouse init failed\n");
 
     drain_8042();
-    kqn = 0;
 
     input_ready=1;
     boot_splash();
@@ -8227,109 +8383,16 @@ void kmain(void) {
         context_set(win_front());
         drain_8042();
 
+        unsigned input_count = desktop_input_turn();
         if (saver_on) {
-            int woke = kqn > 0 || mouse_clicked || mouse_moved || mouse_rclicked || mouse_wheel;
-            kqn = 0;
-            mouse_clicked = 0;
-            mouse_rclicked = 0;
-            mouse_moved = 0;mouse_wheel=0;
-            if (woke) {
-                saver_stop();
-            } else {
-                if(fs_needs_sync())fs_autosync();
-                saver_frame();
-                continue;
-            }
+            if(fs_needs_sync())fs_autosync();
+            saver_frame();
+            continue;
         }
-        if (kqn > 0 || mouse_clicked || mouse_moved || mouse_rclicked || mouse_wheel)
-            last_input_frame = frame_count;
-        else if (saver_enabled && !display_pending && video_status()->state!=VIDEO_PLAYING && video_status()->state!=VIDEO_LOADING && frame_count - last_input_frame > SAVER_DELAY && !open_dlg && !name_dlg && !edit_close_dlg)
+        if (!input_count && saver_enabled && !display_pending &&
+            video_status()->state!=VIDEO_PLAYING && video_status()->state!=VIDEO_LOADING &&
+            frame_count-last_input_frame>SAVER_DELAY && !open_dlg && !name_dlg && !edit_close_dlg) {
             saver_start();
-
-        while (kqn > 0) {
-            uint8_t sc=kq[0];
-            for(int j=1;j<kqn;j++)kq[j-1]=kq[j];
-            kqn--;
-            key_pressed = 0;
-            key_char = 0;
-            key_sc = 0;
-            keyboard_handle_byte(sc);
-            if (key_pressed)
-                handle_key();
-        }
-        kqn = 0;
-        if(mouse_wheel){int amount=mouse_wheel;mouse_wheel=0;handle_wheel(amount);}
-        if (mouse_rclicked) {
-            handle_rclick();
-            mouse_rclicked = 0;
-        }
-
-        if (open_menu >= 0 && mouse_moved) {
-            int nsel = menu_item_at(open_menu, mouse_x, mouse_y);
-            if (nsel != menu_sel) {
-                menu_sel = nsel;
-                dirty = 1;
-            }
-        }
-
-        if (mouse_clicked) {
-            handle_click();
-            mouse_clicked = 0;
-        }
-
-        win_resize_tick();
-        if (dragging_win >= 0 && mouse_left && !open_dlg) {
-            Win *dw = &wins[dragging_win];
-            int dx = mouse_x - drag_from_x;
-            int dy = mouse_y - drag_from_y;
-            int adx = dx < 0 ? -dx : dx;
-            int ady = dy < 0 ? -dy : dy;
-            if (!drag_active && (adx > 3 || ady > 3))
-                drag_active = 1;
-            if (drag_active) {
-                int nx = drag_orig_x + dx;
-                int ny = drag_orig_y + dy;
-                if (nx != dw->x || ny != dw->y) {
-                    dw->x = nx;
-                    dw->y = ny;
-                    win_clamp(dw);
-                    dirty = 1;
-                }
-            }
-        }
-        if (fm_dragging && mouse_left) {
-            int dx = mouse_x - fm_drag_sx;
-            int dy = mouse_y - fm_drag_sy;
-            if (dx < 0)
-                dx = -dx;
-            if (dy < 0)
-                dy = -dy;
-            if (!fm_drag_active && (dx > 4 || dy > 4)) {
-                fm_drag_active = 1;
-                fm_last_click_item = -1;
-                dirty = 1;
-            }
-            if (fm_drag_active && mouse_moved)
-                dirty = 1;
-        }
-        if (!mouse_left) {
-            resizing_win=-1;
-            if (dragging_win >= 0 && drag_active) {
-                if (mouse_x < 12) win_arrange(dragging_win,1);
-                else if (mouse_x > fb_w-12) win_arrange(dragging_win,2);
-                else if (mouse_y < MENUBAR_H+12) win_arrange(dragging_win,0);
-            }
-            if (dragging_win >= 0 && !drag_active && !open_dlg &&
-                wins[dragging_win].kind == WK_FILES && fm_cwd != fs_root())
-                fm_go_up();
-            dragging_win = -1;
-            drag_active = 0;
-            if (fm_dragging)
-                files_drop();
-            edit_dragging = 0;
-            writer_release();
-            spreadsheet_release();
-            paint_mouse_up();
         }
 
         /* Flush changed files once the mouse is up, so a save or a drag
@@ -8339,8 +8402,6 @@ void kmain(void) {
             fs_autosync();
             if (before != fs_storage_status()) dirty = 1;
         }
-        if (paint_dragging || paint_shape_drag)
-            paint_drag_tick();
         snake_tick();
         if (find_open_kind(WK_BREAKOUT) >= 0 && !wins[find_open_kind(WK_BREAKOUT)].min) {
             static uint32_t bo_last = 0;
@@ -8362,28 +8423,6 @@ void kmain(void) {
                 blink_last = b;
                 dirty = 1;
             }
-        }
-        if (edit_dragging && front_kind() == WK_EDIT && !open_dlg) {
-            int wx, wy, ww, wh;
-            if (win_geom_kind(WK_EDIT, &wx, &wy, &ww, &wh)) {
-                int idx = edit_index_at(wx, wy, ww, wh, mouse_x, mouse_y);
-                if (idx != edit_sel_b) {
-                    edit_sel_b = idx;
-                    edit_caret = idx;
-                    dirty = 1;
-                }
-            }
-        }
-
-        if (front_kind() == WK_WRITER && mouse_left && mouse_moved && !open_dlg &&
-            !name_dlg && !edit_close_dlg && !launcher_on && open_menu < 0 && dragging_win < 0) {
-            Win *w = &wins[win_front()];
-            if (writer_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
-        }
-        if (front_kind() == WK_SPREADSHEET && mouse_left && mouse_moved && !open_dlg &&
-            !name_dlg && !edit_close_dlg && !launcher_on && open_menu < 0 && dragging_win < 0) {
-            Win *w = &wins[win_front()];
-            if (spreadsheet_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
         }
         if ((front_kind() == WK_EDIT && !open_dlg && edit_sel_a == edit_sel_b) ||
             fm_renaming) {
@@ -8442,6 +8481,6 @@ void kmain(void) {
             }
         }
         /* ATA uses polling, not IRQ14: do not sleep once per sector wait. */
-        if(!fs_sync_busy()&&!dirty&&!mouse_left&&!mouse_moved&&kqn==0)__asm__ volatile("hlt");
+        if(!fs_sync_busy()&&!dirty&&!mouse_left&&!mouse_moved&&!input_pending(&device_input))__asm__ volatile("hlt");
     }
 }
