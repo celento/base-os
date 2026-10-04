@@ -35,7 +35,7 @@ def install(build, boot_image, data_image, epoch):
     for name, parent, content in examples:
         if any(node['parent'] == parent and node['name'] == name for node in nodes.values()):
             raise ValueError('Fresh demo destination unexpectedly exists: ' + name)
-        ident = next(i for i in range(1, 64) if i not in nodes)
+        ident = next(i for i in range(1, DATA_LAYOUT.node_limit) if i not in nodes)
         nodes[ident] = dict(name=name, parent=parent, directory=0, app=0, data=content, modified=modified)
     before = set(data_image.parent.glob(data_image.name + '.*.bak'))
     commit(data_image, data, slot, generation, nodes)
