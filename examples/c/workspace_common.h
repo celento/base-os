@@ -28,13 +28,18 @@ static int save_report(const char *prefix,const char *report,unsigned bytes) {
     n=append_text(path,n,prefix);n=append_text(path,n,"-");
     n=append_number(path,n,bos_task_id());n=append_text(path,n,".txt");path[n]=0;
     BosFileInfo file;
-    int result=bos_file_open(path,BOS_FILE_OPEN_READ|BOS_FILE_OPEN_WRITE,&file);
-    if(result==BOS_E_NOT_FOUND)
-        result=bos_file_open(path,BOS_FILE_OPEN_READ|BOS_FILE_OPEN_WRITE|BOS_FILE_OPEN_CREATE,&file);
+    int result;
+    for(unsigned attempt=0;;attempt++){
+        result=bos_file_open(path,BOS_FILE_OPEN_READ|BOS_FILE_OPEN_WRITE,&file);
+        if(result==BOS_E_NOT_FOUND)
+            result=bos_file_open(path,BOS_FILE_OPEN_READ|BOS_FILE_OPEN_WRITE|BOS_FILE_OPEN_CREATE,&file);
+        if(result!=BOS_E_BUSY||attempt==5999)break;
+        if(bos_sleep(10)<0)break;
+    }
     if(result!=BOS_OK)return result;
     for(unsigned attempt=0;;attempt++){
         result=bos_file_replace(file.handle,report,bytes,&file);
-        if(result!=BOS_E_BUSY||attempt==199)break;
+        if(result!=BOS_E_BUSY||attempt==5999)break;
         if(bos_sleep(10)<0)break;
     }
     int closed=bos_file_close(file.handle);

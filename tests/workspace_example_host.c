@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 static unsigned char *workspace,*input;
-static unsigned workspace_size,input_size,input_live,output_live,yields,reads,replaces,waits;
+static unsigned workspace_size,input_size,input_live,output_live,yields,reads,replaces,waits,creates;
 static unsigned saved_size;
 static char saved[256];
 void *bos_workspace(void){return workspace;}
@@ -21,6 +21,7 @@ int bos_file_open(const char *path,unsigned flags,BosFileInfo *out){
     assert(strstr(path,"-3.txt"));
     if(flags==(BOS_FILE_OPEN_READ|BOS_FILE_OPEN_WRITE))return BOS_E_NOT_FOUND;
     assert(flags==(BOS_FILE_OPEN_READ|BOS_FILE_OPEN_WRITE|BOS_FILE_OPEN_CREATE));
+    if(!creates++)return BOS_E_BUSY;
     *out=(BosFileInfo){.struct_size=sizeof *out,.handle=2,.revision=19};output_live=1;return BOS_OK;
 }
 int bos_file_read_at(BosHandle file,void *out,unsigned capacity,unsigned offset){
@@ -55,7 +56,7 @@ int main(int argc,char **argv){
     long size=ftell(f);assert(size>=0&&size<16777216);rewind(f);input_size=(unsigned)size;
     input=malloc(input_size+1);assert(input);assert(fread(input,1,input_size,f)==input_size);fclose(f);
     assert(workspace_example_main()==0);
-    assert(!input_live&&!output_live&&yields>=workspace_size/16384u*2u&&reads>=2&&replaces==2&&waits==2);
+    assert(!input_live&&!output_live&&yields>=workspace_size/16384u*2u&&reads>=2&&replaces==2&&waits==2&&creates==2);
     f=fopen(argv[2],"rb");assert(f);char expected[256];size_t bytes=fread(expected,1,sizeof expected,f);fclose(f);
     assert(bytes==saved_size&&!memcmp(expected,saved,bytes));
     fwrite(saved,1,saved_size,stdout);free(workspace);free(input);
