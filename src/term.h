@@ -43,6 +43,10 @@ typedef struct {
 } TermTaskInfo;
 /* Returns 1 for a live task, otherwise 0 and a cleared output. No selection change. */
 int term_task_info(int slot, TermTaskInfo *out);
+/* Start from an identity-matching ordinary file, copying its image and name.
+ * Returns 0 on success, -1 on failure; preserves selected terminal and rejects
+ * live owners without clearing their canvas, input or metadata. */
+int term_task_start_file(int slot, int file, unsigned identity);
 int term_task_poll(void);
 int term_task_running(int slot);
 int term_task_key(int slot, int key);

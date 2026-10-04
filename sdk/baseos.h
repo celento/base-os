@@ -19,7 +19,8 @@ static inline void bos_present(void) { bos_call(5,0,0,0,0,0); }
 static inline int bos_read_file(const char *path,void *out,unsigned capacity) {
     return bos_call(6,(unsigned)path,bos_strlen(path),(unsigned)out,capacity,0);
 }
-/* Writes are confined to /Documents and its existing subfolders. */
+/* Atomic RAM writes, confined to /Documents and its existing subfolders.
+ * A successful return is not durable until bos_sync() succeeds. */
 static inline int bos_write_file(const char *path,const void *data,unsigned bytes) {
     return bos_call(7,(unsigned)path,bos_strlen(path),(unsigned)data,bytes,0);
 }

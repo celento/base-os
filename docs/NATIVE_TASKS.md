@@ -2,6 +2,13 @@
 
 `start /Programs/counter.bex` starts an ordinary BEX1 program without the two-second lifetime limit of `exec`. Open another Terminal and run the same command: each copy maintains its own counter, canvas, input, stack, and data. The desktop continues taking input and servicing its cooperative built-in applications between native slices.
 
+Open `.bex` programs from Files, the ordinary Open dialog, or Ctrl+Space filename
+search. Each activation gets a fresh Terminal owner and the same protected
+runtime as `start`; no Terminal command is required. A full eight-window desktop
+asks for a window to be closed. Unsupported binaries produce a visible Terminal
+error and are never opened as text or modified. Files/Open/search reject a stale
+node incarnation before activation; the loader copies the current program.
+
 ## Controls and persistence
 
 - `start FILE` starts one task owned by this Terminal. Starting over a live task is rejected.
@@ -9,7 +16,7 @@
 - `tasks` lists the terminal slots with runnable or sleeping tasks. `stop` stops the current terminal's task (also usable in a command script).
 - Minimizing or switching away leaves a task running. Closing or resetting its Terminal cancels it. A reused window slot starts clean.
 - A native exit or fault ends only that task. A canceled task does not receive another slice or perform another syscall.
-- The desktop session does not save live executable state. Apps explicitly save documents through the file API. Counter uses `/Documents/counter-N.txt`, where N is its terminal slot; S saves and a later start in that slot loads the saved number.
+- The desktop session does not save live executable state. Apps explicitly save documents through the file API. Counter uses `/Documents/counter-N.txt`, where N is its terminal slot; S writes and explicitly synchronizes the disk; a later start in that slot loads the saved number. A failed sync says RAM only instead of Saved. Notebook follows the same explicit-sync rule.
 - Runtime ownership is per slot, not a durable process identity. The same slot may be reused after close.
 
 ## Execution model
@@ -46,6 +53,7 @@ Key polling is nonblocking and returns one queued byte or zero. A full queue dro
 
 ## Kernel integration
 
+- `term_task_start_file(slot, file, identity)` is shared by desktop launches and Terminal `start`. It rejects changed/non-file identities and busy owners, preserves the caller's selection, and only clears the canvas after an accepted start.
 - `process_task_start(owner, file, size, io)` validates and copies the BEX1 plus callback values. It never retains a pointer into a mutable filesystem node.
 - `process_task_step(owner)` runs at most one user slice, skipping a sleeper until its deadline. It is called only from the desktop's normal context, never an interrupt or reentrant polling hook.
 - `process_task_status/result`, `process_task_key`, `process_task_stop`, and `process_task_clear` expose bounded lifecycle operations.

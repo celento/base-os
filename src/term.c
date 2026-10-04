@@ -162,6 +162,31 @@ int term_task_running(int slot){
     int state=process_task_status(slot);
     return state==PROCESS_TASK_READY||state==PROCESS_TASK_SLEEPING;
 }
+int term_task_start_file(int slot,int file,unsigned identity){
+    if(slot<0||slot>=PROCESS_TASKS)return -1;
+    int previous=selected;term_select(slot);
+    int result=-1;
+    if(!identity||!fs_valid(file)||fs_is_dir(file)||fs_is_app(file)||fs_identity(file)!=identity)
+        push("Cannot start: the selected program changed or is no longer a file.");
+    else if(term_task_running(slot))
+        push("Cannot start: this terminal already has a native task.");
+    else {
+        ProgramIO io={push,plot,0,0,canvas_resize};
+        /* No task runs between this identity check and the loader's owned copy. */
+        if(process_task_start(slot,fs_data(file),fs_size(file),&io))
+            push("Cannot start: not a supported BEX1 program (maximum 49152 bytes).");
+        else {
+            kstrcpy(T.task_name,fs_name(file));T.task_started=timer_ticks();
+            if(!++next_task_instance)++next_task_instance;
+            T.task_instance=next_task_instance;
+            canvas_reset();T.scroll=0;
+            push(T.task_name);
+            push("Native task started. Ctrl+C stops; close ends it.");
+            result=0;
+        }
+    }
+    selected=previous;return result;
+}
 int term_task_info(int slot,TermTaskInfo *out){
     if(!out)return 0;
     kmemset(out,0,sizeof *out);
@@ -266,15 +291,7 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"stop")){if(!term_task_running(selected))push("No native task in this terminal.");else term_task_stop(selected);}
     else if(!kstrcmp(cmd,"start")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
-        ProgramIO io={push,plot,0,0,canvas_resize};
-        if(process_task_start(selected,fs_data(id),fs_size(id),&io)){
-            push("Cannot start: this terminal is busy or the BEX1 file is invalid.");return -1;
-        }
-        kstrcpy(T.task_name,fs_name(id));T.task_started=timer_ticks();
-        if(!++next_task_instance)++next_task_instance;
-        T.task_instance=next_task_instance;
-        canvas_reset();
-        push("Native task started. Ctrl+C stops; close ends it.");
+        return term_task_start_file(selected,id,fs_identity(id));
     }
     else if(!kstrcmp(cmd,"basic")||!kstrcmp(cmd,"exec")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
