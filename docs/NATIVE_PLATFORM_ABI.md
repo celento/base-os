@@ -64,8 +64,13 @@ the top of the existing64KiB region. **It is not a separately protected stack or
 a guarantee of16384 usable stack bytes.** Initial ESP is65520, leaving16368 bytes
 above the image/BSS bound before startup/call frames. Handwritten BEX1 code must
 follow that layout itself. No physical arena, window index or device address is
-part of this new contract. `processes_total=9` describes eight desktop tasks plus
-one synchronous execution; it does not provide a new process creation syscall.
+part of this new contract. `processes_total=9` is a capacity for **retained
+execution contexts**: eight desktop task contexts plus one synchronous `exec`
+context. The synchronous execution temporarily pauses desktop-task scheduling;
+it does not add a ninth native window or ninth independently scheduled task.
+The desktop still has an **eight-window limit**, and applications have no
+process-creation/spawn syscall. This field is not a count of free desktop slots
+or a promise that the user can launch nine apps from the desktop.
 
 ## Owned resources and errors
 
