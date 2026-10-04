@@ -31,7 +31,7 @@ void feature_test(void){
     edit_search_open(1);kstrcpy(edit_search.text[0],"a");kstrcpy(edit_search.text[1],"b");edit_replace_everywhere();
     editor_check(edit_len==50000&&edit_buf[49999]=='b',"50 KB replace all");
     edit_undo(0);editor_check(edit_buf[49999]=='a',"50 KB undo");edit_undo(1);
-    fm_cwd=docs;editor_check(edit_write_named("large-editor.txt"),"50 KB save");
+    fm_set_cwd(docs);editor_check(edit_write_named("large-editor.txt"),"50 KB save");
     editor_check(fs_size(edit_file)==50000,"50 KB file size");
     int editor=win_front();open_edit();editor_type("Independent second document");
     editor_check(window_state[editor].doc.len==50000,"large independent document");

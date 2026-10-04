@@ -1513,6 +1513,21 @@ _Static_assert(sizeof(WindowState) * MAX_WIN < EDITOR_CAPACITY - 2 * EDIT_BUF_SI
 #define edit_sel_a (window_state[context_slot].doc.sel_a)
 #define edit_sel_b (window_state[context_slot].doc.sel_b)
 #define edit_dragging (window_state[context_slot].doc.dragging)
+/* Folder contexts belong to an object incarnation, not a reusable node slot. */
+static void fm_set_cwd(int id) {
+    WindowState *state=&window_state[context_slot];
+    if(!fs_is_dir(id))id=fs_root();
+    unsigned identity=fs_identity(id);
+    if(state->cwd!=id||state->cwd_identity!=identity)state->manual_files_scroll=0;
+    state->cwd=state->cwd_tracked=id;
+    state->cwd_identity=identity;
+}
+static int fm_checked_cwd(void) {
+    WindowState *state=&window_state[context_slot];
+    if(!fs_is_dir(state->cwd)||state->cwd_tracked!=state->cwd||
+       state->cwd_identity!=fs_identity(state->cwd))fm_set_cwd(fs_root());
+    return state->cwd;
+}
 static void edit_record(void) { history_record(&window_state[context_slot].history, &window_state[context_slot].doc); }
 static void edit_undo(int redo) {
     int file=edit_file;unsigned identity=edit_identity;
@@ -1593,6 +1608,7 @@ static const CalcKey calc_keys[] = {
 static int open_dlg = 0;
 static int name_dlg = 0;
 static int name_failed;
+static const char *name_failure_message;
 /* A close request owns a window incarnation, never whichever app draws last. */
 static int edit_close_owner = -1, edit_close_seq;
 static int edit_close_dlg, edit_close_focus, edit_close_failed;
@@ -1788,6 +1804,7 @@ static int win_open(int kind) {
     kmemset(&wins[slot], 0, sizeof(Win));
     kmemset(&window_state[slot], 0, sizeof(WindowState));
     context_set(slot);
+    fm_set_cwd(fs_root());
     edit_file = -1;
     fm_last_click_item = -1;
     window_state[slot].history = (History){0, 0, 8, sizeof(Document), (unsigned char *)window_state[slot].undo};
@@ -1835,7 +1852,7 @@ static void document_finish(int owner, int action, int target, unsigned identity
     context_set(owner);
     if (action == DOCUMENT_NEW) writer_new();
     else if (fs_valid(target) && fs_identity(target) == identity && writer_open_file(target))
-        fm_cwd = fs_parent(target);
+        fm_set_cwd(fs_parent(target));
     dirty = 1;
 }
 static void document_request(int i, int action, int target) {
@@ -1999,10 +2016,7 @@ static int fm_row_id(int row) {
 }
 
 static void fm_refresh(void) {
-    WindowState *state=&window_state[context_slot];
-    if(!fs_is_dir(fm_cwd)||(state->cwd_tracked==fm_cwd&&state->cwd_identity&&state->cwd_identity!=fs_identity(fm_cwd)))fm_cwd=fs_root();
-    if(state->cwd_tracked!=fm_cwd)fm_manual_scroll=0;
-    state->cwd_tracked=fm_cwd;state->cwd_identity=fs_identity(fm_cwd);
+    fm_checked_cwd();
     int raw[FS_MAX_NODES];
     int n = fs_list(fm_cwd, raw, FS_MAX_NODES);
     fm_count = 0;
@@ -2248,9 +2262,14 @@ static int edit_search_click(int wx,int wy,int ww,int wh){
 static void namedlg_open(int target, const char *initial);
 
 static int edit_write_named(const char *name) {
-    int parent = fs_is_dir(fm_cwd) ? fm_cwd : fs_root();
+    name_failure_message=0;
+    int parent = fm_checked_cwd();
     int id = fs_find_child(parent, name);
     int created = id < 0;
+    if(!created&&(id!=edit_file||fs_identity(id)!=edit_identity)){
+        name_failure_message="That name exists. Choose another name.";
+        return 0;
+    }
     if (created)
         id = fs_create(parent, name);
     if (id < 0)
@@ -2325,7 +2344,7 @@ static void edit_close_choose(int choice) {
 
 static void open_files(int cwd) {
     if (win_open(WK_FILES) < 0) return;
-    fm_cwd = cwd;
+    fm_set_cwd(cwd);
     fm_selected = 0;
     fm_refresh();
     dirty = 1;
@@ -3809,7 +3828,7 @@ static void open_writer(int file) {
     if (file >= 0) document_request(slot, DOCUMENT_OPEN, file);
     else if (!fs_is_dir(fm_cwd) || fm_cwd == fs_root()) {
         int docs = fs_find_child(fs_root(), "Documents");
-        fm_cwd = fs_is_dir(docs) ? docs : fs_root();
+        fm_set_cwd(fs_is_dir(docs) ? docs : fs_root());
     }
     dirty = 1;
 }
@@ -3895,7 +3914,7 @@ static void open_fs_file(int id) {
         win_open(WK_PROPERTIES);dirty=1;return;
     }
     if (win_open(WK_EDIT) < 0) return;
-    fm_cwd = fs_parent(id);
+    fm_set_cwd(fs_parent(id));
     edit_load(id);
     dirty = 1;
 }
@@ -4111,7 +4130,7 @@ static void fm_open_selected(void) {
         return;
     }
     if (fs_is_dir(id)) {
-        fm_cwd = id;
+        fm_set_cwd(id);
         fm_selected = 0;
         fm_refresh();
         dirty = 1;
@@ -4123,7 +4142,7 @@ static void fm_open_selected(void) {
 static void fm_go_up(void) {
     int p = fs_parent(fm_cwd);
     if (p >= 0) {
-        fm_cwd = p;
+        fm_set_cwd(p);
         fm_selected = 0;
         fm_refresh();
         dirty = 1;
@@ -4215,7 +4234,7 @@ static void do_duplicate(void) {
     if (parent < 0)
         parent = fm_cwd;
     fm_rename_cancel();
-    int copy = fs_copy(id, parent);
+    int copy = file_copy_named(id, parent);
     if (copy < 0)
         return;
     fm_refresh();
@@ -4270,7 +4289,7 @@ static void do_empty_trash(void) {
         edit_clear();
     if (find_open_kind(WK_FILES) >= 0) {
         if (!fs_valid(fm_cwd))
-            fm_cwd = trash_id;
+            fm_set_cwd(trash_id);
         fm_refresh();
     }
     if (open_dlg)
@@ -5354,7 +5373,7 @@ static void files_drop(void) {
     if (find_open_kind(WK_FILES) >= 0) {
         if (fm_cwd == id) {
             int p = fs_parent(id);
-            fm_cwd = (p >= 0) ? p : fs_root();
+            fm_set_cwd((p >= 0) ? p : fs_root());
         }
         fm_refresh();
     }
@@ -5859,8 +5878,10 @@ static int name_len = 0;
 static int name_focus, name_owner, name_owner_seq;
 
 static void namedlg_open(int target, const char *initial) {
+    fm_checked_cwd();
     name_dlg = 1;
     name_focus = name_failed = 0;
+    name_failure_message=0;
     name_owner = context_slot;
     name_owner_seq = wins[name_owner].seq;
     name_target = target;
@@ -5900,7 +5921,7 @@ static void namedlg_commit(void) {
     int close_after = edit_close_valid() && edit_close_owner == name_owner;
     int action = document_action, target = document_target;
     unsigned identity = document_target_identity;
-    int parent = fs_is_dir(fm_cwd) ? fm_cwd : fs_root();
+    int parent = fm_checked_cwd();
     int ok = name_target == 0 ? edit_write_named(name_buf) :
              name_target == 1 ? paint_write_named(name_buf) :
              name_target == 2 ? writer_save_as(parent, name_buf) == WRITER_SAVE_OK :
@@ -5977,7 +5998,8 @@ static void draw_namedlg(void) {
     kstrcpy(location, "Folder: ");
     kstrcpy(location + 8, fs_is_dir(fm_cwd) && fm_cwd != fs_root() ? fs_name(fm_cwd) : "/");
     const char *message = name_failed ?
-        (name_target >= 2 ? writer_status() : "Save failed. Check storage and file name.") :
+        (name_target >= 2 ? writer_status() : name_failure_message ? name_failure_message :
+         "Save failed. Check storage and file name.") :
         name_target == 1 ? "Saved to the Pictures folder" : location;
     draw_string_clip(message, x + 22, y + 20 + CHAR_H + 6, ui_text_dim, x + w - 22);
     int fx = x + 22, fy = y + 64, fw = w - 44, fh = 34;
@@ -7026,7 +7048,7 @@ static void session_restore(void){
             int slot=win_open(v->kind);if(slot<0)break;Win *w=&wins[slot];w->x=v->x;w->y=v->y;w->w=v->w;w->h=v->h;w->min=!!v->min;w->z=v->z>=0&&v->z<100000?v->z:slot;win_clamp(w);
             if(w->z>wm_z)wm_z=w->z;
             int target=v->path[0]?fs_resolve(fs_root(),v->path):-1;
-            if(v->kind==WK_FILES){fm_cwd=fs_is_dir(target)?target:fs_root();fm_refresh();}
+            if(v->kind==WK_FILES){fm_set_cwd(fs_is_dir(target)?target:fs_root());fm_refresh();}
             if(v->kind==WK_TERM)term_set_cwd(target);
             if(v->kind==WK_WRITER){
                 if(fs_valid(target)&&!fs_is_dir(target)&&!fs_is_app(target))writer_open_file(target);
@@ -7046,9 +7068,11 @@ static void session_restore(void){
                         session_status="Writer recovery could not be restored.";
                 }
                 int docs=fs_find_child(fs_root(),"Documents");
-                fm_cwd=fs_valid(target)?fs_parent(target):fs_is_dir(docs)?docs:fs_root();
+                fm_set_cwd(fs_valid(target)?fs_parent(target):fs_is_dir(docs)?docs:fs_root());
             }
-            if(v->kind==WK_EDIT){edit_clear();if(fs_valid(target)&&!fs_is_dir(target))edit_load(target);
+            if(v->kind==WK_EDIT){edit_clear();if(fs_valid(target)&&!fs_is_dir(target)){
+                    fm_set_cwd(fs_parent(target));edit_load(target);
+                }
                 char name[]="draft0.txt";name[5]+=(char)i;int draft=fs_find_child(dir,name);
                 if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)){
                     if(fs_size(draft)<EDIT_BUF_SIZE){
