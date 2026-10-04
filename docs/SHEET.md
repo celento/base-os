@@ -137,12 +137,21 @@ clipboard never falls back to stale private data.
   **Formula-like literal text is exported verbatim and another spreadsheet
   program may execute it.** BaseOS CSV import keeps it literal. CSV quoting
   escapes delimiters; it is not a formula-neutralization mechanism.
-- The filesystem write must accept the complete encoded file, and `fs_sync()`
-  must succeed before native work is marked saved. Failed writes/syncs keep
-  work open and dirty. After a successful RAM write but failed disk sync, the
-  source baseline updates to those pending RAM bytes so Save can retry safely.
-  Failed export sync leaves the new export pending in memory and reports this;
-  native dirty state/binding are unchanged.
+- IDE native saves and CSV exports return after installing the complete RAM
+  output and accepting an owned background durability boundary. Only exact
+  successful completion can mark the submitted native revision saved; newer
+  committed or still-edited cells stay dirty. Floppy saves still wait. Source
+  fingerprints update after successful RAM replacement, so failed-boundary
+  retries remain safe. No IDE failure falls back to blocking synchronization.
+- Accepted Save As/CSV dialogs dismiss separately from cancellation. Failed
+  exports remain complete in RAM, including empty zero-byte CSV. An exact owned
+  same-name retry checks source revision, parent/name, mount/node/content tokens
+  and all output bytes, then requests synchronization without writing again.
+  Reopening CSV prefills a usable failed-export name. Native save state is unchanged.
+- Busy or duplicate requests do not commit an in-progress cell edit or queue new
+  bytes. Save-before-Close/New/Open waits for its exact request, then rechecks
+  all dirty state and the requested Open target. Cancel keeps the sheet open
+  while already-started durability continues.
 - A malformed import or recovery snapshot leaves the entire existing sheet,
   selection and pending editor intact. The desktop must guard new/open/close
   using its normal Save/Discard/Cancel workflow.
@@ -264,3 +273,11 @@ guest totals on a fresh boot floppy, and explicit New/Close Discard.
 ![Minimum Spreadsheet window](../screenshots/spreadsheet-minimum.png)
 
 ![Changed source remains protected](../screenshots/spreadsheet-conflict.png)
+
+## Responsive persistence protocol
+
+`SPREADSHEET_SAVE_PENDING` is 2; `SPREADSHEET_EXPORT_PENDING` is -2. Save success
+remains 1 and export success remains a nonnegative durable file ID. A dedicated
+top-level post-storage hook collects results even when the sheet is not editing,
+minimized or backgrounded. See [RESPONSIVE_DOCUMENT_SAVES.md](RESPONSIVE_DOCUMENT_SAVES.md)
+for exact identity, revision, resource and verification limits.

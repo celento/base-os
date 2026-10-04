@@ -88,10 +88,13 @@ bound document whose file disappears is treated as unsaved and needs Save As.
 Ordinary Save also compares the source's exact byte count, FNV-1a and CRC32
 fingerprints with the baseline captured at Open or the previous RAM write. An
 externally changed same-ID file requires a new Save As; no source bytes change.
-Every successful save requires `fs_sync()` to finish successfully. Failed writes
-or synchronization leave the document open and unsaved. A newly created empty
-target is removed after write failure. A target with a pending in-memory write
-is retained with its known identity after a sync failure so retry is safe.
+IDE saves publish the complete RAM replacement, then return while an owned
+background durability boundary runs. Only its verified successful completion
+marks the submitted revision saved. Newer edits and pending RAM-only saves remain
+unsaved, including when undo returns to an older saved revision. Floppy-only
+saves still wait through the explicit compatibility path. Failed writes or
+synchronization keep the document open. Only a newly created incomplete empty
+placeholder is removed; a complete RAM replacement remains bound for safe retry.
 Serialized size is checked against the mounted volume's per-file limit before
 creating a new target. Native storage is approximately three times text length;
 the full 32 KiB text limit therefore needs the optional data volume.
@@ -136,13 +139,16 @@ A failed write removes only its newly created, identity-matching empty target.
 Export never changes native binding, dirty state, caret/selection or undo/redo.
 Existing files cannot be overwritten.
 
-If disk synchronization fails, the complete PDF is retained in RAM and the dialog
-stays open with an explicit error. Retry the **same filename and paper** while
-that document revision is still current. Writer verifies the owned node identity
-and every serialized byte, then retries synchronization without rewriting. If the
-document, paper or file contents changed, choose a new name instead. Only the most
-recent pending PDF export has this retry ownership; New/Open/Restore/Close clear
-it. A cancelled dialog does not delete the RAM file; ordinary later disk sync may
+Accepted IDE exports dismiss the filename dialog immediately and show a compact
+exporting footer; editing and other windows remain available. An admission error
+keeps the dialog open. A later disk error retains the complete RAM export and
+reports in Writer without stealing focus. Reopen export to retry the **same
+filename and paper** while that revision is current; a valid owned retry is
+prefilled. Writer verifies mount, parent/name, node identity, content version,
+source revision, options and every serialized byte, then retries synchronization
+without rewriting. Changed document, paper or file requires a new name. RTF and
+PDF share one bounded failed-export descriptor, separate from native save state.
+New/Open/Restore/Close clear retry authority. A cancelled dialog does not delete the RAM file; ordinary later disk sync may
 persist it. A successful export does not save unsaved native edits, so the usual
 Save/Discard/Cancel guard still applies.
 
@@ -155,9 +161,14 @@ rectangle as well as the screen. The desktop owns New/Open/Close confirmation,
 window title decoration, name dialogs, file association and recovery scheduling.
 
 Input returns a bitmask: changed, request Save, request Save As, or request
-RTF export or PDF export. Save APIs return `WRITER_SAVE_OK` (1), `WRITER_SAVE_NEEDS_NAME` (0), or
-`WRITER_SAVE_ERROR` (-1). Export returns the new nonnegative filesystem ID on
-success and -1 on failure. `writer_close()` is called **only after** a completed
+RTF export or PDF export. Save APIs return `WRITER_SAVE_OK` (1),
+`WRITER_SAVE_PENDING` (2), `WRITER_SAVE_NEEDS_NAME` (0), or `WRITER_SAVE_ERROR` (-1).
+Export returns a durable nonnegative filesystem ID, `WRITER_EXPORT_PENDING` (-2),
+or error (-1). These are explicitly distinct from the coordinator's BOS codes.
+One top-level hook after storage service collects results independently of blink
+and focus. Save-before-Close/New/Open retains exact document owner/request and
+window/target identities; it finishes only after matching success with no newer
+unsaved edits. Cancel cancels navigation, never the already-started disk commit. `writer_close()` is called **only after** a completed
 Save/Discard/Cancel guard; it resets document content while retaining clipboard.
 `writer_tick()` and release are safe before first initialization.
 
@@ -256,3 +267,10 @@ a matching reboot, a stopped-volume replacement and missing legacy metadata.
 `tools/writer_search_test.py` verifies the actual 420-pixel client, mouse case toggle,
 style-preserving Replace All and one-step undo/redo, wrapped F3 navigation, Edit-menu
 routing, live counts, and complete capacity rejection with unchanged history.
+
+## Responsive persistence verification
+
+See [RESPONSIVE_DOCUMENT_SAVES.md](RESPONSIVE_DOCUMENT_SAVES.md) for the ownership,
+revision, recovery and bounded-memory contract and exact verification scope.
+Encoding, fingerprinting and atomic RAM replacement remain synchronous. This
+change does not add Unicode, larger models, new file formats or a preemptive kernel.

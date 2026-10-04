@@ -4,6 +4,7 @@
 #include "fs.h"
 #include "layout.h"
 #include "platform.h"
+#include "../sdk/baseos_abi.h"
 
 #define HISTORY 9u
 #define LINE_MAX (WRITER_TEXT_MAX + 1u)
@@ -17,7 +18,8 @@
 
 typedef struct {
     WriterDoc doc;
-    unsigned caret, anchor, revision, typing_style, affinity;
+    unsigned caret, anchor, typing_style, affinity;
+    DocumentRevision revision;
 } Snapshot;
 typedef struct {
     unsigned y;
@@ -31,6 +33,7 @@ typedef struct {
     unsigned char output[EXPORT_CAPACITY];
 } WriterArena;
 _Static_assert(sizeof(Line) == 12, "Writer line bound changed");
+_Static_assert(sizeof(WriterArena) == 1999164u, "Writer footprint changed");
 _Static_assert(sizeof(WriterArena) <= WRITER_CAPACITY, "Writer arena overflow");
 #ifdef WRITER_HOST_TEST
 static WriterArena host_arena;
@@ -40,16 +43,26 @@ static WriterArena host_arena;
 #endif
 
 static struct {
-    unsigned first, count, current, next_revision, saved_revision;
+    unsigned first, count, current;
+    DocumentRevision next_revision, saved_revision;
     unsigned clipboard_generation, clipboard_length;
-    unsigned line_count, layout_revision;
+    unsigned line_count;
+    DocumentRevision layout_revision;
     int initialized, file, failed_save, clipboard_owned, dragging;
-    unsigned identity;
+    unsigned identity, binding_incarnation;
     WriterBinding binding;
     int has_binding, binding_conflict;
-    struct { int valid, file; unsigned identity, revision, paper, length; } pending_pdf;
+    DocumentSave save;
+    struct {
+        int valid, parent;
+        unsigned parent_identity, kind, option;
+        DocumentTarget target;
+        DocumentRevision revision;
+        char name[FS_NAME_LEN];
+    } export_retry;
     unsigned group_kind, group_caret, group_ticks, group_count;
-    unsigned stats_revision, words;
+    DocumentRevision stats_revision;
+    unsigned words;
     struct {
         int open, replacing, focus, field, exact;
         unsigned caret[2], anchor[2];
@@ -59,6 +72,7 @@ static struct {
     int layout_valid, blink, last_blink, hit_affinity;
     char title[64], status[112];
 } state;
+_Static_assert(sizeof(state.export_retry) <= 72u, "Writer export retry exceeds budget");
 
 /* Default clipboard is local; the desktop supplies shared generation hooks. */
 __attribute__((weak)) unsigned writer_clipboard_set(const char *text, unsigned length) {
@@ -101,7 +115,18 @@ static void reveal(void);
 static void invalidate(void) { state.layout_valid = 0; state.desired_x = -1; state.blink = 1; }
 
 /* Each complete operation records one state. Older states drop as a ring. */
+static int revision_available(void) {
+    DocumentRevision last = state.next_revision, next;
+    if (document_revision_next(&last, &next)) return 1;
+    status("Revision capacity exhausted. Work is unchanged."); return 0;
+}
+static int next_revision(DocumentRevision *out) {
+    if (document_revision_next(&state.next_revision, out)) return 1;
+    status("Revision capacity exhausted. Work is unchanged."); return 0;
+}
 static Snapshot *begin_edit(void) {
+    DocumentRevision revision;
+    if (!next_revision(&revision)) return 0;
     state.group_kind = 0; state.manual_scroll = 0;
     unsigned old = (state.first + state.current) % HISTORY;
     state.count = state.current + 1;
@@ -112,25 +137,28 @@ static Snapshot *begin_edit(void) {
     state.current++; state.count++;
     Snapshot *s = snapshot();
     copy_bytes(s, &ARENA->history[old], sizeof(*s));
-    s->revision = ++state.next_revision;
+    s->revision = revision;
     invalidate();
     return s;
 }
-static void accept_staging(unsigned caret, unsigned typing_style, unsigned group) {
+static int accept_staging(unsigned caret, unsigned typing_style, unsigned group) {
     unsigned now = timer_ticks();
     int join = group && state.group_kind == group && state.group_caret == snapshot()->caret &&
                snapshot()->caret == snapshot()->anchor && state.current + 1 == state.count &&
-               snapshot()->revision != state.saved_revision && state.group_count < 512u &&
+               !document_revision_equal(snapshot()->revision, state.saved_revision) && state.group_count < 512u &&
                now - state.group_ticks < TIMER_HZ;
     unsigned count = join ? state.group_count + 1 : 1;
     Snapshot *s;
-    if (join) { s = snapshot(); s->revision = ++state.next_revision; invalidate(); }
-    else s = begin_edit();
+    if (join) {
+        DocumentRevision revision;
+        if (!next_revision(&revision)) return 0;
+        s = snapshot(); s->revision = revision; invalidate();
+    } else { s = begin_edit(); if (!s) return 0; }
     copy_bytes(&s->doc, &ARENA->staging, sizeof(WriterDoc));
     s->caret = s->anchor = caret; s->affinity = 0;
     s->typing_style = typing_style & WRITER_STYLE_MASK;
     state.group_kind = group; state.group_caret = caret; state.group_ticks = now; state.group_count = count;
-    status("Edited. Ctrl+S saves the native document.");
+    status("Edited. Ctrl+S saves the native document."); return 1;
 }
 static int undo(int redo) {
     state.group_kind = 0; state.manual_scroll = 0;
@@ -186,7 +214,7 @@ static int replace(unsigned lo, unsigned hi, const unsigned char *text, unsigned
     if (!lo) n->paragraph[0] = (unsigned char)(paragraphs && length ? paragraphs[0] : inherited);
     n->style[n->length] = (unsigned char)typing;
     if (writer_doc_validate(n)) { status("The edit could not be represented safely."); return 0; }
-    accept_staging(lo + length, typing, group); return 1;
+    return accept_staging(lo + length, typing, group);
 }
 static int format_inline(unsigned mask) {
     unsigned lo = selection_low(), hi = selection_high(), typing = snapshot()->typing_style;
@@ -194,6 +222,7 @@ static int format_inline(unsigned mask) {
     if (lo == hi) turn_on = !(typing & mask);
     else for (unsigned i = lo; i < hi; i++) if (!(document()->style[i] & mask)) { turn_on = 1; break; }
     Snapshot *s = begin_edit();
+    if (!s) return WRITER_CHANGED;
     for (unsigned i = lo; i < hi; i++) s->doc.style[i] = (unsigned char)(turn_on ? s->doc.style[i] | mask : s->doc.style[i] & ~mask);
     s->typing_style = turn_on ? typing | mask : typing & ~mask;
     s->doc.style[s->doc.length] = (unsigned char)s->typing_style;
@@ -206,6 +235,7 @@ static int format_paragraph(unsigned mask, unsigned value) {
     unsigned first = paragraph_start(d, lo);
     unsigned last = paragraph_start(d, hi > lo ? hi - 1 : hi);
     Snapshot *s = begin_edit();
+    if (!s) return WRITER_CHANGED;
     for (unsigned p = first;;) {
         s->doc.paragraph[p] = (unsigned char)((s->doc.paragraph[p] & ~mask) | value);
         if (p >= last) break;
@@ -232,6 +262,7 @@ static void copy_selection(void) {
     status("Copied. Styles stay with this Writer clipboard selection.");
 }
 static void paste(void) {
+    if (!revision_available()) return;
     unsigned generation = 0;
     int length = writer_clipboard_get((char *)ARENA->output, WRITER_TEXT_MAX + 1u, &generation);
     if (!length) { status("Clipboard is empty. Nothing was changed."); return; }
@@ -261,7 +292,7 @@ static int advance(unsigned char ch, unsigned style, unsigned paragraph, int x) 
 void writer_layout(int width) {
     if (!state.initialized) writer_init();
     width = clamp(width, 32, 4096);
-    if (state.layout_valid && state.width == width && state.layout_revision == snapshot()->revision) return;
+    if (state.layout_valid && state.width == width && document_revision_equal(state.layout_revision, snapshot()->revision)) return;
     const WriterDoc *d = document();
     unsigned at = 0, y = 0, paragraph = d->paragraph[0], count = 0;
     for (;;) {
@@ -375,7 +406,7 @@ static void append_number(char *text, unsigned capacity, unsigned number) {
 }
 unsigned writer_word_count(void) {
     if (!state.initialized) return 0;
-    if (state.stats_revision != snapshot()->revision) {
+    if (!document_revision_equal(state.stats_revision, snapshot()->revision)) {
         const WriterDoc *d = document(); int previous_word = 0;
         state.words = 0;
         for (unsigned i = 0; i < d->length; i++) {
@@ -433,6 +464,7 @@ static int search_find(int direction) {
     status("Text not found."); return 0;
 }
 static void search_replace_one(void) {
+    if (!revision_available()) return;
     unsigned n = string_length(state.search.text[0]), r = string_length(state.search.text[1]);
     if (!n) { status("Enter text to find before replacing."); return; }
     unsigned lo = selection_low(), hi = selection_high();
@@ -477,7 +509,8 @@ static void search_replace_all(void) {
     out->length = written; out->style[written] = d->style[d->length];
     out->paragraph[written] = !written ? d->paragraph[0] : out->text[written - 1] == '\n' ? d->paragraph[d->length] : 0;
     if (writer_doc_validate(out)) { status("Replacement could not be represented safely."); return; }
-    accept_staging(0, snapshot()->typing_style, 0); reveal();
+    if (!accept_staging(0, snapshot()->typing_style, 0)) return;
+    reveal();
     char message[64] = ""; append_number(message, sizeof(message), matches);
     unsigned end = string_length(message); text_copy(message + end, sizeof(message) - end, " replacements. Undo restores all text and styles.");
     status(message);
@@ -538,14 +571,17 @@ static int search_key(int sc, char ch, int modifiers) {
 }
 
 void writer_new(void) {
-    state.pending_pdf.valid = 0;
+    DocumentRevision revision;
+    if (!next_revision(&revision)) return;
+    document_save_detach(&state.save);
+    state.export_retry.valid = 0;
     state.search.open = state.search.focus = 0;
     state.group_kind = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); writer_doc_init(&s->doc);
     s->caret = s->anchor = s->typing_style = s->affinity = 0;
-    s->revision = ++state.next_revision; state.saved_revision = s->revision;
-    state.file = -1; state.identity = 0; state.has_binding = state.binding_conflict = 0; state.failed_save = state.dragging = 0;
+    s->revision = revision; state.saved_revision = s->revision;
+    state.file = -1; state.identity = state.binding_incarnation = 0; state.has_binding = state.binding_conflict = 0; state.failed_save = state.dragging = 0;
     state.scroll = state.manual_scroll = 0; text_copy(state.title, sizeof(state.title), "Untitled");
     invalidate(); status("New document. Body text, printable ASCII and tabs.");
 }
@@ -590,7 +626,6 @@ int writer_binding_matches(int file, const WriterBinding *binding) {
     return actual.hash_a == binding->hash_a && actual.hash_b == binding->hash_b;
 }
 int writer_open_file(int id) {
-    state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id)) { status("That file is unavailable."); return 0; }
     int size = fs_size(id); const unsigned char *data = (const unsigned char *)fs_data(id);
@@ -606,13 +641,18 @@ int writer_open_file(int id) {
         status(native ? "Invalid or unsupported .bwr document; current work is unchanged." :
                         "Import rejected: ASCII with LF/CRLF breaks, at most 32,768 normalized bytes."); return 0;
     }
-    state.pending_pdf.valid = 0;
+    DocumentRevision revision;
+    if (!next_revision(&revision)) return 0;
+    document_save_detach(&state.save);
+    state.export_retry.valid = 0;
+    state.group_kind = 0;
     state.search.open = state.search.focus = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); copy_bytes(&s->doc, &ARENA->staging, sizeof(WriterDoc));
     s->caret = s->anchor = s->affinity = 0; s->typing_style = s->doc.style[0];
-    s->revision = ++state.next_revision; state.saved_revision = native ? s->revision : 0;
+    s->revision = revision; state.saved_revision = native ? s->revision : DOCUMENT_REVISION_NONE;
     state.file = native ? id : -1; state.identity = native ? fs_identity(id) : 0;
+    state.binding_incarnation = native ? fs_incarnation() : 0;
     state.has_binding = native; state.binding_conflict = 0;
     if (native) fingerprint(data, (unsigned)size, &state.binding);
     state.failed_save = state.dragging = 0; state.scroll = state.manual_scroll = 0;
@@ -621,7 +661,9 @@ int writer_open_file(int id) {
 }
 static int binding_valid(void) {
     return state.file >= 0 && fs_valid(state.file) && !fs_is_dir(state.file) && !fs_is_app(state.file) &&
-           native_name(fs_name(state.file)) && fs_identity(state.file) == state.identity;
+           native_name(fs_name(state.file)) && state.identity && state.binding_incarnation &&
+           fs_incarnation() == state.binding_incarnation && fs_identity(state.file) == state.identity &&
+           fs_content_revision(state.file) != 0;
 }
 int writer_binding(WriterBinding *out) {
     if (!out || !state.initialized || !state.has_binding || !binding_valid()) return 0;
@@ -632,30 +674,78 @@ const unsigned char *writer_snapshot(unsigned *length) {
     if (writer_native_encode(document(), ARENA->output, EXPORT_CAPACITY, length)) { status("Could not encode document."); return 0; }
     return ARENA->output;
 }
-static int save_to(int id) {
-    unsigned length;
-    if (!writer_snapshot(&length)) return WRITER_SAVE_ERROR;
+static void persistence_complete(void) {
+    if (state.save.kind == DOCUMENT_SAVE_NATIVE) {
+        if (state.save.result == BOS_OK && (!binding_valid() || state.file != state.save.target.file ||
+            state.identity != state.save.target.identity || !document_target_matches(&state.save.target)))
+            state.save.result = BOS_E_STALE;
+        if (state.save.result == BOS_OK) {
+            state.saved_revision = state.save.revision; state.failed_save = 0;
+            text_copy(state.title, sizeof(state.title), fs_name(state.file));
+            status(document_revision_equal(snapshot()->revision, state.saved_revision) ?
+                   "Saved to disk." : "Saved earlier version. New edits remain unsaved.");
+        } else { state.failed_save = 1; status(document_save_error(&state.save)); }
+    } else if (state.save.result == BOS_OK) {
+        state.export_retry.valid = 0;
+        status(state.save.kind == DOCUMENT_SAVE_PDF ? "PDF saved to disk. Native state unchanged." :
+               "RTF saved to disk. Native state unchanged.");
+    } else status(document_save_error(&state.save));
+}
+int writer_persistence_poll(void) {
+    if (!state.initialized || !document_save_poll(&state.save)) return 0;
+    persistence_complete(); return WRITER_CHANGED;
+}
+void writer_save_info(DocumentSave *out) { if (out) *out = state.save; }
+int writer_export_retry_name(unsigned kind, char *out, unsigned capacity, unsigned *option) {
+    if (!out || !capacity || !state.export_retry.valid || state.export_retry.kind != kind ||
+        !document_revision_equal(snapshot()->revision, state.export_retry.revision) ||
+        !document_target_matches(&state.export_retry.target) ||
+        fs_identity(state.export_retry.parent) != state.export_retry.parent_identity ||
+        fs_find_child(state.export_retry.parent, state.export_retry.name) != state.export_retry.target.file ||
+        string_length(state.export_retry.name) >= capacity) return 0;
+    text_copy(out, capacity, state.export_retry.name);
+    if (option) *option = state.export_retry.option;
+    return 1;
+}
+static int persistence_ready(void) {
+    if (!document_save_ensure_owner(&state.save)) {
+        status("Save owner capacity exhausted. Work is unchanged."); return 0;
+    }
+    if (!fs_version_available(0)) {
+        status("File version capacity exhausted. Work is unchanged."); return 0;
+    }
+    return 1;
+}
+static void rollback_empty(int file, unsigned incarnation, unsigned identity) {
+    if (identity && incarnation == fs_incarnation() && fs_valid(file) && fs_identity(file) == identity &&
+        !fs_is_dir(file) && !fs_is_app(file) && !fs_size(file)) (void)fs_delete(file);
+}
+static int save_to(int id, unsigned length, int *installed) {
+    *installed = 0;
+    if (!fs_version_available(0)) { status("File version capacity exhausted. Work is unchanged."); return WRITER_SAVE_ERROR; }
     int written = fs_write(id, (const char *)ARENA->output, (int)length);
     if (written == FS_ERR_BUSY) { status("Disk is saving; retry shortly."); return WRITER_SAVE_ERROR; }
-    if (written < 0) {
+    if (written != (int)length) {
         state.failed_save = 1; status("Save failed; the complete document remains open."); return WRITER_SAVE_ERROR;
     }
-    /* Update the baseline immediately after the atomic RAM write, including
-     * failed-sync retries. This target is ours, even for a new Save As. */
-    state.file = id; state.identity = fs_identity(id); state.has_binding = 1; state.binding_conflict = 0;
+    *installed = 1;
+    /* RAM binding and durable baseline are independent. This complete target
+     * is ours even if admission or the eventual durability boundary fails. */
+    state.file = id; state.identity = fs_identity(id); state.binding_incarnation = fs_incarnation();
+    state.has_binding = 1; state.binding_conflict = 0; state.failed_save = 1;
     fingerprint(ARENA->output, length, &state.binding);
     text_copy(state.title, sizeof(state.title), fs_name(id));
-    /* fs_write may replace bytes in RAM; only fs_sync makes this a saved state. */
-    if (fs_sync() < 0) {
-        state.failed_save = 1; status("Disk sync failed. Unsaved work remains open; retry Save."); return WRITER_SAVE_ERROR;
-    }
-    state.file = id; state.identity = fs_identity(id); state.saved_revision = snapshot()->revision;
-    state.failed_save = 0; text_copy(state.title, sizeof(state.title), fs_name(id));
-    status("Saved and synchronized to disk."); return WRITER_SAVE_OK;
+    int result = document_save_begin(&state.save, DOCUMENT_SAVE_NATIVE, snapshot()->revision, id, length, 0);
+    if (result == DOCUMENT_SAVE_PENDING) status("Saving to disk. You can keep editing.");
+    else persistence_complete();
+    return result;
 }
 int writer_save(void) {
+    if (state.save.pending) {
+        status(state.save.kind == DOCUMENT_SAVE_NATIVE ? "Save in progress. New edits remain private." : "Export in progress; retry Save shortly.");
+        return state.save.kind == DOCUMENT_SAVE_NATIVE ? WRITER_SAVE_PENDING : WRITER_SAVE_ERROR;
+    }
     if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return WRITER_SAVE_ERROR; }
-    state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (!binding_valid()) { status("Choose Save As for a new native .bwr file."); return WRITER_SAVE_NEEDS_NAME; }
     if (!state.has_binding || !writer_binding_matches(state.file, &state.binding)) {
@@ -663,11 +753,14 @@ int writer_save(void) {
         status("The source file changed outside Writer. Save As a new .bwr; the source is unchanged.");
         return WRITER_SAVE_NEEDS_NAME;
     }
-    return save_to(state.file);
+    if (!persistence_ready()) return WRITER_SAVE_ERROR;
+    state.group_kind = 0;
+    unsigned length;
+    if (!writer_snapshot(&length)) return WRITER_SAVE_ERROR;
+    int installed; return save_to(state.file, length, &installed);
 }
 int writer_save_as(int parent, const char *name) {
-    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return WRITER_SAVE_ERROR; }
-    state.group_kind = 0;
+    if (state.save.pending || fs_sync_busy()) { status("Disk is saving; retry shortly."); return WRITER_SAVE_ERROR; }
     if (!state.initialized) writer_init();
     if (!name || !native_name(name)) { status("Native documents use the .bwr filename extension."); return WRITER_SAVE_ERROR; }
     int existing = fs_find_child(parent, name);
@@ -678,129 +771,123 @@ int writer_save_as(int parent, const char *name) {
     unsigned length;
     if (!writer_snapshot(&length)) return WRITER_SAVE_ERROR;
     if (length > fs_file_limit()) { status("Native document exceeds this volume's per-file limit; no file was created."); return WRITER_SAVE_ERROR; }
+    if (!persistence_ready() || !fs_version_available(1)) {
+        status("Save identity capacity unavailable. Work is unchanged."); return WRITER_SAVE_ERROR;
+    }
+    state.group_kind = 0;
+    unsigned incarnation = fs_incarnation();
     int id = fs_create(parent, name);
     if (id < 0) { status("Could not create that file; check name, space and disk status."); return WRITER_SAVE_ERROR; }
     unsigned identity = fs_identity(id);
-    int result = save_to(id);
-    if (result != WRITER_SAVE_OK) {
-        /* A created target with a pending verified-write failure is ours, never
-         * an unrelated reused node. Keep its identity so a retry is safe. */
-        if (fs_valid(id) && fs_identity(id) == identity && !fs_size(id)) {
-            fs_delete(id);
-        } else if (fs_valid(id) && fs_identity(id) == identity) {
-            state.file = id; state.identity = identity;
-            text_copy(state.title, sizeof(state.title), name);
-        }
-    }
+    int installed, result = save_to(id, length, &installed);
+    if (!installed) rollback_empty(id, incarnation, identity);
     return result;
 }
-int writer_export_rtf(int parent, const char *name) {
-    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return -1; }
-    state.group_kind = 0;
-    if (!state.initialized) writer_init();
-    if (!name || !extension(name, "rtf")) { status("RTF exports use the .rtf filename extension."); return -1; }
-    if (fs_find_child(parent, name) >= 0) {
-        status("Choose a new export filename; existing files are never replaced."); return -1;
-    }
-    unsigned length;
-    if (writer_rtf_export(document(), ARENA->output, EXPORT_CAPACITY, &length)) {
-        status("RTF export exceeds its 512 KiB bound; simplify styles or split the document."); return -1;
-    }
-    if (length > fs_file_limit()) { status("RTF exceeds this volume's per-file limit; no export was created."); return -1; }
-    int id = fs_create(parent, name);
-    if (id < 0) { status("Could not create the export file."); return -1; }
-    if (fs_write(id, (const char *)ARENA->output, (int)length) < 0) {
-        fs_delete(id); status("RTF write failed. Native document is unchanged."); return -1;
-    }
-    if (fs_sync() < 0) { status("RTF exists in memory, but disk sync failed; native work is unchanged."); return -1; }
-    status("Exported RTF and synchronized to disk. Native save state is unchanged."); return id;
-}
-int writer_export_pdf(int parent, const char *name, unsigned paper) {
-    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return -1; }
-    if (!state.initialized) writer_init();
+static int export_name(int parent, const char *name, unsigned kind, unsigned option) {
     unsigned n = 0;
-    if (name) while (n < FS_NAME_LEN && name[n] && name[n] != '/') n++;
+    if (name) while (n < FS_NAME_LEN && name[n] && name[n] != '/') ++n;
     if (!name || !n || n == FS_NAME_LEN || name[n]) {
-        status("Choose a PDF name of 1-23 characters, with no slash."); return -1;
+        status("Choose an export name of 1-23 characters, with no slash."); return 0;
     }
-    if (!extension(name, "pdf")) { status("PDF exports use the .pdf filename extension."); return -1; }
-    if (!fs_is_dir(parent)) { status("The export folder is unavailable; choose a valid folder."); return -1; }
-    if (paper != WRITER_PDF_LETTER && paper != WRITER_PDF_A4) {
-        status("Choose Letter or A4 paper; no PDF was created."); return -1;
+    if (!extension(name, kind == DOCUMENT_SAVE_PDF ? "pdf" : "rtf")) {
+        status(kind == DOCUMENT_SAVE_PDF ? "PDF exports use the .pdf filename extension." : "RTF exports use the .rtf filename extension."); return 0;
     }
+    if (!fs_is_dir(parent) || !fs_identity(parent)) { status("The export folder is unavailable; choose a valid folder."); return 0; }
+    if (kind == DOCUMENT_SAVE_PDF && option != WRITER_PDF_LETTER && option != WRITER_PDF_A4) {
+        status("Choose Letter or A4 paper; no PDF was created."); return 0;
+    }
+    return 1;
+}
+static int export_to(int parent, const char *name, unsigned kind, unsigned option) {
+    if (state.save.pending || fs_sync_busy()) { status("Disk is saving; retry shortly."); return -1; }
+    if (!state.initialized) writer_init();
+    if (!export_name(parent, name, kind, option)) return -1;
     int existing = fs_find_child(parent, name);
-    if (existing >= 0 && (!state.pending_pdf.valid || existing != state.pending_pdf.file ||
-        fs_identity(existing) != state.pending_pdf.identity || fs_is_dir(existing) || fs_is_app(existing))) {
-        status("Choose a new PDF name; existing files are never replaced."); return -1;
-    }
-    if (existing >= 0 && (snapshot()->revision != state.pending_pdf.revision || paper != state.pending_pdf.paper)) {
-        status("Pending PDF differs from this document or paper. Choose a new name; the old PDF is unchanged."); return -1;
-    }
-    unsigned length, pages;
-    if (writer_pdf_export(document(), paper, 0, 0, &length, &pages) != WRITER_PDF_OK) {
-        status("Could not measure PDF; the native document is unchanged."); return -1;
-    }
-    if (length > EXPORT_CAPACITY) {
-        status("PDF exceeds the 512 KiB export buffer. Simplify styles or split the document; no file was created."); return -1;
-    }
-    if (length > fs_file_limit()) { status("PDF exceeds this volume's per-file limit; no export was created."); return -1; }
-    if (existing < 0) {
-        unsigned count = (unsigned)fs_node_count(), capacity = fs_capacity_for_nodes(count + 1), used = fs_used_bytes();
-        if (count >= (unsigned)fs_node_limit()) { status("The volume has no free file slots; no PDF was created."); return -1; }
-        if (used > capacity || length > capacity - used) {
-            status("Not enough space for the complete PDF; no export was created."); return -1;
+    if (existing >= 0) {
+        if (!state.export_retry.valid || state.export_retry.kind != kind || state.export_retry.parent != parent ||
+            state.export_retry.parent_identity != fs_identity(parent) || kstrcmp(state.export_retry.name, name) ||
+            existing != state.export_retry.target.file || !document_target_matches(&state.export_retry.target)) {
+            status("Choose a new export name; existing files are never replaced."); return -1;
+        }
+        if (!document_revision_equal(snapshot()->revision, state.export_retry.revision) || option != state.export_retry.option) {
+            status("Pending export differs from this document or paper. Choose a new name."); return -1;
         }
     }
-    unsigned written, actual_pages;
-    if (writer_pdf_export(document(), paper, ARENA->output, EXPORT_CAPACITY, &written, &actual_pages) != WRITER_PDF_OK ||
-        written != length || actual_pages != pages) {
-        status("Could not serialize the complete PDF; no export was created."); return -1;
+    unsigned length, pages = 0;
+    if (kind == DOCUMENT_SAVE_PDF) {
+        if (writer_pdf_export(document(), option, 0, 0, &length, &pages) != WRITER_PDF_OK) {
+            status("Could not measure PDF; the native document is unchanged."); return -1;
+        }
+        if (length > EXPORT_CAPACITY) {
+            status("PDF exceeds the 512 KiB export buffer. Simplify styles or split the document."); return -1;
+        }
+    } else if (writer_rtf_export(document(), ARENA->output, EXPORT_CAPACITY, &length)) {
+        status("RTF export exceeds its 512 KiB bound; simplify styles or split the document."); return -1;
+    }
+    if (length > fs_file_limit()) { status("Export exceeds this volume's per-file limit; no file was created."); return -1; }
+    if (existing < 0) {
+        unsigned count = (unsigned)fs_node_count(), capacity = fs_capacity_for_nodes(count + 1), used = fs_used_bytes();
+        if (count >= (unsigned)fs_node_limit()) { status("The volume has no free file slots; no export was created."); return -1; }
+        if (used > capacity || length > capacity - used) { status("Not enough space for the complete export; no file was created."); return -1; }
+    }
+    if (kind == DOCUMENT_SAVE_PDF) {
+        unsigned written, actual_pages;
+        if (writer_pdf_export(document(), option, ARENA->output, EXPORT_CAPACITY, &written, &actual_pages) != WRITER_PDF_OK ||
+            written != length || actual_pages != pages) { status("Could not serialize the complete PDF; no export was created."); return -1; }
     }
     int id = existing;
     if (id >= 0) {
-        /* A retry is sync-only, never an overwrite. Revision/paper guarantee the
-         * same deterministic export; compare every byte to detect outside edits.
-         * Polls only service devices and cannot dispatch edits or file changes. */
         const unsigned char *bytes = (const unsigned char *)fs_data(id);
-        if (!bytes || fs_size(id) != (int)length || length != state.pending_pdf.length) {
-            status("The pending PDF changed outside Writer. Choose a new name; no file was replaced."); return -1;
+        if (!bytes || fs_size(id) != (int)length || length != state.export_retry.target.length) {
+            status("The pending export changed outside Writer. Choose a new name."); return -1;
         }
-        for (unsigned i = 0; i < length; i++) {
-            if (bytes[i] != ARENA->output[i]) {
-                status("The pending PDF changed outside Writer. Choose a new name; no file was replaced."); return -1;
-            }
+        for (unsigned i = 0; i < length; ++i) {
+            if (bytes[i] != ARENA->output[i]) { status("The pending export changed outside Writer. Choose a new name."); return -1; }
             if ((i & 4095u) == 4095u) platform_poll();
         }
+        if (!document_save_ensure_owner(&state.save)) { status("Save owner capacity exhausted. Work is unchanged."); return -1; }
     } else {
+        if (!persistence_ready() || !fs_version_available(1)) { status("Save identity capacity unavailable. Work is unchanged."); return -1; }
+        unsigned incarnation = fs_incarnation();
         id = fs_create(parent, name);
-        if (id < 0) { status("Could not create the PDF; check filename, folder, space and disk status."); return -1; }
+        if (id < 0) { status("Could not create the export; check filename, folder, space and disk status."); return -1; }
         unsigned identity = fs_identity(id);
-        if (fs_write(id, (const char *)ARENA->output, (int)length) < 0) {
-            /* Only the new empty target is ours to roll back. */
-            if (fs_valid(id) && fs_identity(id) == identity && !fs_is_dir(id) && !fs_is_app(id) && !fs_size(id)) fs_delete(id);
-            status("PDF write failed. Native work is unchanged; no complete export was written."); return -1;
+        if (!fs_version_available(0) || fs_write(id, (const char *)ARENA->output, (int)length) != (int)length) {
+            rollback_empty(id, incarnation, identity);
+            status("Export write failed. Native work is unchanged; no complete export was written."); return -1;
         }
-        state.pending_pdf.valid = 1; state.pending_pdf.file = id; state.pending_pdf.identity = identity;
-        state.pending_pdf.revision = snapshot()->revision; state.pending_pdf.paper = paper; state.pending_pdf.length = length;
+        DocumentTarget target;
+        if (!document_target_capture(id, length, &target)) { status("Export remains in RAM; file version is unavailable."); return -1; }
+        /* Replace only after a complete new output is installed. Never delete
+         * an older complete export when replacing its retry authority. */
+        state.export_retry.valid = 1; state.export_retry.parent = parent;
+        state.export_retry.parent_identity = fs_identity(parent); state.export_retry.kind = kind;
+        state.export_retry.option = option; state.export_retry.target = target;
+        state.export_retry.revision = snapshot()->revision;
+        text_copy(state.export_retry.name, sizeof(state.export_retry.name), name);
     }
-    if (fs_sync() < 0) {
-        status("PDF exists in RAM; disk sync failed. Retry this name and paper. Native work is unchanged."); return -1;
-    }
-    state.pending_pdf.valid = 0;
-    status("Exported PDF and synchronized to disk. Native save state is unchanged."); return id;
+    state.group_kind = 0;
+    int result = document_save_begin(&state.save, kind, snapshot()->revision, id, length, option);
+    if (result == DOCUMENT_SAVE_PENDING) { status("Exporting to disk. Native state unchanged."); return WRITER_EXPORT_PENDING; }
+    persistence_complete(); return result == DOCUMENT_SAVE_OK ? id : -1;
 }
+int writer_export_rtf(int parent, const char *name) { return export_to(parent, name, DOCUMENT_SAVE_RTF, 0); }
+int writer_export_pdf(int parent, const char *name, unsigned paper) { return export_to(parent, name, DOCUMENT_SAVE_PDF, paper); }
 int writer_restore(const unsigned char *data, unsigned length, int file, unsigned identity,
                    int dirty, unsigned caret, unsigned anchor) {
-    state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (writer_native_decode(&ARENA->staging, data, length)) { status("Invalid recovery document; current work is unchanged."); return 0; }
-    state.pending_pdf.valid = 0;
+    DocumentRevision revision;
+    if (!next_revision(&revision)) return 0;
+    document_save_detach(&state.save);
+    state.export_retry.valid = 0;
+    state.group_kind = 0;
     state.search.open = state.search.focus = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); copy_bytes(&s->doc, &ARENA->staging, sizeof(WriterDoc));
     s->affinity = 0; s->caret = min_u(caret, s->doc.length); s->anchor = min_u(anchor, s->doc.length);
-    s->typing_style = s->doc.style[s->caret]; s->revision = ++state.next_revision;
-    state.file = file; state.identity = identity;
+    s->typing_style = s->doc.style[s->caret]; s->revision = revision;
+    state.file = file; state.identity = identity; state.binding_incarnation = fs_incarnation();
     state.has_binding = state.binding_conflict = 0;
     if (!binding_valid()) { state.file = -1; state.identity = 0; dirty = 1; }
     else {
@@ -812,13 +899,13 @@ int writer_restore(const unsigned char *data, unsigned length, int file, unsigne
             state.has_binding = 1;
         }
     }
-    state.saved_revision = dirty ? 0 : s->revision; state.failed_save = 0;
+    state.saved_revision = dirty ? DOCUMENT_REVISION_NONE : s->revision; state.failed_save = 0;
     text_copy(state.title, sizeof(state.title), state.file >= 0 ? fs_name(state.file) : "Recovered document");
     state.scroll = state.dragging = state.manual_scroll = 0; invalidate(); status("Recovered document draft."); return 1;
 }
 const char *writer_title(void) { return state.initialized ? state.title : "Untitled"; }
 const char *writer_status(void) { return state.status; }
-int writer_dirty(void) { return state.initialized && (state.failed_save || state.binding_conflict || snapshot()->revision != state.saved_revision || (state.file >= 0 && !binding_valid())); }
+int writer_dirty(void) { return state.initialized && (state.failed_save || state.binding_conflict || !document_revision_equal(snapshot()->revision, state.saved_revision) || (state.file >= 0 && !binding_valid())); }
 int writer_read_only(void) { return 0; } /* All valid imports are editable copies. */
 int writer_file(void) { return state.initialized && binding_valid() ? state.file : -1; }
 unsigned writer_file_identity(void) { return state.initialized && binding_valid() ? state.identity : 0; }
@@ -827,7 +914,7 @@ unsigned writer_caret(void) { return state.initialized ? snapshot()->caret : 0; 
 unsigned writer_anchor(void) { return state.initialized ? snapshot()->anchor : 0; }
 const WriterDoc *writer_document(void) { if (!state.initialized) writer_init(); return document(); }
 unsigned writer_line_count(void) { writer_layout(state.width); return state.line_count; }
-void writer_close(void) { if (state.initialized) writer_new(); }
+void writer_close(void) { if (state.initialized) writer_new(); document_save_detach(&state.save); state.export_retry.valid = 0; }
 void writer_release(void) { if (state.initialized) state.dragging = 0; }
 int writer_scroll(int lines) {
     if (lines) state.manual_scroll = 1;
@@ -854,9 +941,9 @@ int writer_key(int sc, char ch, int modifiers) {
         return search_key(sc, ch, modifiers);
     if (control) {
         switch (sc) {
-        case 0x1f: state.group_kind = 0; return extend ? WRITER_REQUEST_SAVE_AS : WRITER_REQUEST_SAVE;
-        case 0x12: if (extend) { state.group_kind = 0; return WRITER_REQUEST_EXPORT; } return format_paragraph(WRITER_ALIGN_MASK, WRITER_ALIGN_CENTER);
-        case 0x19: if (extend) { state.group_kind = 0; return WRITER_REQUEST_PDF; } return 0;
+        case 0x1f: return extend ? WRITER_REQUEST_SAVE_AS : WRITER_REQUEST_SAVE;
+        case 0x12: if (extend) return WRITER_REQUEST_EXPORT; return format_paragraph(WRITER_ALIGN_MASK, WRITER_ALIGN_CENTER);
+        case 0x19: if (extend) return WRITER_REQUEST_PDF; return 0;
         case 0x30: return format_inline(WRITER_STYLE_BOLD);
         case 0x17: return format_inline(WRITER_STYLE_ITALIC);
         case 0x16: return format_inline(WRITER_STYLE_UNDERLINE);
@@ -868,7 +955,8 @@ int writer_key(int sc, char ch, int modifiers) {
         case 0x15: undo(1); reveal(); return WRITER_CHANGED;
         case 0x1e: snapshot()->anchor = 0; move_to(document()->length, 1, 0); return WRITER_CHANGED;
         case 0x2e: copy_selection(); return WRITER_CHANGED;
-        case 0x2d: copy_selection(); if (selection_low() != selection_high()) replace(selection_low(), selection_high(), 0, 0, 0, 0, 0); reveal(); return WRITER_CHANGED;
+        case 0x2d: if (selection_low() != selection_high() && !revision_available()) return WRITER_CHANGED;
+            copy_selection(); if (selection_low() != selection_high()) replace(selection_low(), selection_high(), 0, 0, 0, 0, 0); reveal(); return WRITER_CHANGED;
         case 0x2f: paste(); reveal(); return WRITER_CHANGED;
         }
     }
@@ -1081,7 +1169,6 @@ static int button_active(unsigned action) {
     return 0;
 }
 static int button_action(unsigned action) {
-    state.group_kind = 0;
     if (action <= 3) return format_inline(1u << (action - 1));
     if (action == 4 || action == 5) return format_paragraph(WRITER_PARAGRAPH_HEADING, action == 5 ? WRITER_PARAGRAPH_HEADING : 0);
     if (action >= 6 && action <= 8) return format_paragraph(WRITER_ALIGN_MASK, action - 6);
@@ -1149,10 +1236,11 @@ void writer_draw(int x, int y, int w, int h) {
     }
     draw_search(all);
     rect(all, x, y + h - FOOT_H, w, FOOT_H, gfx_rgb(237, 241, 247));
-    char foot[112]; const char *prefix = writer_dirty() ? "Unsaved | " : "Saved | ";
+    char foot[112]; const char *prefix = state.save.pending ? (state.save.kind == DOCUMENT_SAVE_NATIVE ? "Saving | " : "Exporting | ") : writer_dirty() ? "Unsaved | " : "Saved | ";
     text_copy(foot, sizeof(foot), prefix);
     unsigned offset = 0; while (foot[offset]) offset++;
-    text_copy(foot + offset, sizeof(foot) - offset, state.status);
+    text_copy(foot + offset, sizeof(foot) - offset, state.save.pending ?
+              (state.save.kind == DOCUMENT_SAVE_NATIVE ? "New edits stay private." : "Native state unchanged.") : state.status);
     char counts[48] = ""; append_number(counts, sizeof(counts), writer_word_count());
     unsigned used = string_length(counts); text_copy(counts + used, sizeof(counts) - used, " words | ");
     append_number(counts, sizeof(counts), d->length);

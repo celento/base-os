@@ -133,16 +133,21 @@ per-file limit, free node slots and byte capacity **for the projected node count
 All this happens before file creation. It serializes the complete PDF and checks
 both resulting counts, then creates the new ordinary file and writes atomically.
 A write failure removes only that newly created, identity-matching empty file.
-A successful result requires `fs_sync()`; native save state is never changed.
+A successful result requires a verified owned durability completion; IDE acceptance
+returns `WRITER_EXPORT_PENDING` (-2), and floppy compatibility still waits. Native
+save state is never changed.
 
-If sync fails, the error says that the PDF exists in RAM and the dialog remains
-open. Repeating the same name and paper can retry **sync only**, provided the
-most recent pending export's node identity, document revision, paper, size and
-every byte of regenerated output still match. No retry overwrites a file. An
-external replacement, reused node, document edit or paper change requires a new
-name. New/Open/Restore/Close clear pending ownership; cancelling the dialog does
-not delete the RAM export. A later filesystem sync can persist it, but Writer
-never reports successful export until a sync call succeeds. Export does not
+Accepted IDE output hides the dialog without canceling any unrelated work.
+Later synchronization failure reports in Writer and retains the complete PDF
+in RAM. Reopening PDF prefills a still-valid failed output's name and paper.
+Repeating that name/paper retries **sync only** if mount, parent/name, node
+identity, content version, full document revision, options, size and every byte
+of regenerated output still match. No retry overwrites a file. A replacement,
+reused node, document edit or paper change requires a new name. One failed-export
+descriptor is shared with RTF; new complete output may replace its authority
+without deleting the old file. New/Open/Restore/Close clear retry authority;
+canceling a dialog never deletes an export or cancels an accepted disk commit.
+Only observed matching success is reported as durable. Export does not
 clear the native dirty marker, rebind a `.bwr`, or alter text/styles, history or
 caret/selection. The ordinary unsaved-document guards still apply.
 

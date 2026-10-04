@@ -1,6 +1,7 @@
 #ifndef BASEOS_SPREADSHEET_H
 #define BASEOS_SPREADSHEET_H
 #include "sheet_codec.h"
+#include "document_save.h"
 #define SPREADSHEET_W 720
 #define SPREADSHEET_H 520
 #define SPREADSHEET_MIN_W 360
@@ -15,6 +16,8 @@
 #define SPREADSHEET_SAVE_ERROR (-1)
 #define SPREADSHEET_SAVE_NEEDS_NAME 0
 #define SPREADSHEET_SAVE_OK 1
+#define SPREADSHEET_SAVE_PENDING 2
+#define SPREADSHEET_EXPORT_PENDING (-2)
 #define SPREADSHEET_CLIPBOARD_CAPACITY 65536u
 /* Singleton client-area app, independent of the model's sheet_init(). The
  * desktop owns Save/Discard/Cancel guards before new/open/close, filename
@@ -33,14 +36,23 @@ void spreadsheet_release(void);
 int spreadsheet_scroll(int lines);
 int spreadsheet_tick(void);
 void spreadsheet_close(void);
-/* Save/export reject a temporary storage lease with their normal error result
- * and a retry message, before committing a cell edit or changing save state. */
+/* IDE durability is asynchronous. Pending is never SAVE_OK; edits can continue.
+ * The desktop polls once after storage service, independently of blink/edit mode.
+ * Active saves/exports and temporary storage leases reject new writes before
+ * committing cell edits. A duplicate native Save returns its existing pending. */
+int spreadsheet_persistence_poll(void);
+void spreadsheet_save_info(DocumentSave *out);
 int spreadsheet_save(void);
 int spreadsheet_save_as(int parent, const char *name);
-/* New .csv name only, calculated values, no native rebind/dirty reset.
+/* New .csv name, or exact owned failed-export retry; calculated values only.
+ * No native rebind or dirty reset.
  * Formula-like text is verbatim and other spreadsheet programs may execute it.
- * Returns new filesystem ID or -1; failed sync leaves pending export in RAM. */
+ * Returns durable filesystem ID, SPREADSHEET_EXPORT_PENDING, or -1.
+ * Failed durability retains complete RAM output for an explicit same-name retry. */
 int spreadsheet_export_csv(int parent, const char *name);
+/* Exact owned retry name for a still-matching document/target. No polling,
+ * mutation or truncation; returns zero without changing out when unavailable. */
+int spreadsheet_export_retry_name(char *out, unsigned capacity);
 const char *spreadsheet_title(void);
 const char *spreadsheet_status(void);
 int spreadsheet_dirty(void);

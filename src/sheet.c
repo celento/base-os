@@ -4,6 +4,7 @@
 #include "fs.h"
 #include "layout.h"
 #include "platform.h"
+#include "../sdk/baseos_abi.h"
 
 #ifndef SHEET_BASE
 #define SHEET_BASE 0x720000
@@ -21,14 +22,22 @@
 #define ROW_W 42
 #define OUTPUT_CAPACITY SHEET_CSV_MAX_SIZE
 
-typedef struct { SheetDoc doc; unsigned caret, anchor, revision; } Snapshot;
+typedef struct { SheetDoc doc; unsigned caret, anchor; DocumentRevision revision; } Snapshot;
+typedef struct {
+    int valid, parent;
+    unsigned parent_identity;
+    DocumentTarget target;
+    DocumentRevision revision;
+    char name[FS_NAME_LEN];
+} SpreadsheetExportRetry;
+_Static_assert(sizeof(SpreadsheetExportRetry) == 64u, "Spreadsheet export retry budget changed");
 typedef struct {
     Snapshot history[HISTORY];
     SheetDoc staging;
     unsigned char output[OUTPUT_CAPACITY];
     unsigned char clipboard[SPREADSHEET_CLIPBOARD_CAPACITY];
 } SpreadsheetArena;
-_Static_assert(sizeof(SpreadsheetArena) == 2844916u, "Spreadsheet footprint changed");
+_Static_assert(sizeof(SpreadsheetArena) == 2844936u, "Spreadsheet footprint changed");
 _Static_assert(sizeof(SpreadsheetArena) <= SHEET_CAPACITY, "Spreadsheet arena overflow");
 #ifdef SPREADSHEET_HOST_TEST
 static SpreadsheetArena host_arena;
@@ -37,12 +46,15 @@ static SpreadsheetArena host_arena;
 #define ARENA ((SpreadsheetArena *)SHEET_BASE)
 #endif
 static struct {
-    unsigned first, count, current, next_revision, saved_revision;
+    unsigned first, count, current;
+    DocumentRevision next_revision, saved_revision;
+    DocumentSave save;
+    SpreadsheetExportRetry export_retry;
     unsigned clipboard_generation, clipboard_length, clipboard_rows, clipboard_cols;
     unsigned clipboard_text_length;
     int clipboard_owned;
     int initialized, file, failed_save, has_binding, binding_conflict;
-    unsigned identity;
+    unsigned identity, incarnation;
     SpreadsheetBinding binding;
     unsigned first_row, first_col, visible_rows, scroll_x;
     int width, height, dragging, drag_kind, blink, last_blink;
@@ -60,6 +72,7 @@ static struct {
 /* The weak hooks implement a local-only clipboard. -2 is reserved for that
  * fallback; a real desktop hook returns -1 on failure and a complete length
  * otherwise. Rejected set (zero) must never license Cut or replace ownership. */
+#ifndef SPREADSHEET_HOST_EXTERNAL_CLIPBOARD
 static unsigned local_clipboard_generation;
 __attribute__((weak)) unsigned spreadsheet_clipboard_set(const char *text, unsigned length) {
     (void)text; (void)length;
@@ -69,6 +82,7 @@ __attribute__((weak)) unsigned spreadsheet_clipboard_set(const char *text, unsig
 __attribute__((weak)) int spreadsheet_clipboard_get(char *text, unsigned capacity, unsigned *generation) {
     (void)text; (void)capacity; *generation = local_clipboard_generation; return -2;
 }
+#endif
 static void copy_bytes(void *out, const void *in, unsigned length) {
     unsigned char *d = out; const unsigned char *s = in;
     for (unsigned i = 0; i < length; i++) { d[i] = s[i]; if ((i & 4095u) == 4095u) platform_poll(); }
@@ -153,15 +167,31 @@ static void move_to(unsigned row, unsigned col, int extend) {
     if (!extend) snapshot()->anchor = snapshot()->caret;
     state.click_valid = 0; reveal();
 }
-static void accept_staging(void) {
+static int allocate_revision(DocumentRevision *revision) {
+    if (document_revision_next(&state.next_revision, revision)) return 1;
+    status("Revision capacity exhausted. Current work is retained."); return 0;
+}
+/* Metadata controls may commit an edit and then add a second history state.
+ * Preflight both identities so exhaustion cannot half-apply that action. */
+static int revisions_available(unsigned count) {
+    DocumentRevision last = state.next_revision, revision;
+    while (count--) if (!document_revision_next(&last, &revision)) {
+        status("Revision capacity exhausted. Current work is retained."); return 0;
+    }
+    return 1;
+}
+static int accept_staging(void) {
+    DocumentRevision revision;
+    if (!allocate_revision(&revision)) return 0;
     unsigned old = (state.first + state.current) % HISTORY;
     state.count = state.current + 1;
     if (state.count == HISTORY) { state.first = (state.first + 1) % HISTORY; state.current--; state.count--; }
     unsigned caret = ARENA->history[old].caret, anchor = ARENA->history[old].anchor;
     state.current++; state.count++;
     Snapshot *s = snapshot(); copy_bytes(&s->doc, &ARENA->staging, sizeof(SheetDoc));
-    s->caret = caret; s->anchor = anchor; s->revision = ++state.next_revision;
+    s->caret = caret; s->anchor = anchor; s->revision = revision;
     status("Edited. Ctrl+S saves .bsh; Ctrl+Shift+E exports calculated CSV values.");
+    return 1;
 }
 static int same_source(const SheetCell *a, const SheetCell *b) {
     if (a->kind != b->kind || a->length != b->length) return 0;
@@ -188,7 +218,7 @@ static int commit_edit(void) {
         }
         if (!same_source(&ARENA->staging.cells[at], &document()->cells[at])) {
             if (sheet_recalculate(&ARENA->staging)) { status("Cannot calculate this document; edit retained."); return 0; }
-            accept_staging();
+            if (!accept_staging()) return 0;
         }
     }
     state.mode = state.edit_changed = 0; return 1;
@@ -214,6 +244,7 @@ static int undo(int redo) {
     return SPREADSHEET_CHANGED;
 }
 static int format_selection(SheetFormat format) {
+    if (!revisions_available(state.mode == 1 && state.edit_changed ? 2u : 1u)) return SPREADSHEET_CHANGED;
     if (!commit_edit()) return SPREADSHEET_CHANGED;
     state.mode = 0; state.click_valid = 0;
     unsigned r0, c0, r1, c1; selection(&r0, &c0, &r1, &c1); int changed = 0;
@@ -225,7 +256,7 @@ static int format_selection(SheetFormat format) {
         }
         platform_poll();
     }
-    if (changed) accept_staging();
+    if (changed && !accept_staging()) return SPREADSHEET_CHANGED;
     static const char *messages[] = {
         "General format. Original source and calculation precision are retained.",
         "Fixed2: two decimal places. Display rounding does not change the stored value.",
@@ -235,6 +266,7 @@ static int format_selection(SheetFormat format) {
     status(messages[format]); return SPREADSHEET_CHANGED;
 }
 static int resize_columns(int delta) {
+    if (!revisions_available(state.mode == 1 && state.edit_changed ? 2u : 1u)) return SPREADSHEET_CHANGED;
     if (!commit_edit()) return SPREADSHEET_CHANGED;
     state.mode = 0; state.click_valid = 0;
     unsigned r0, c0, r1, c1; selection(&r0, &c0, &r1, &c1); int changed = 0;
@@ -244,7 +276,7 @@ static int resize_columns(int delta) {
         unsigned width = delta ? (unsigned)clamp((int)old + delta, SHEET_COLUMN_WIDTH_MIN, SHEET_COLUMN_WIDTH_MAX) : SHEET_COLUMN_WIDTH_DEFAULT;
         if (old != width) { sheet_set_column_width(&ARENA->staging, c, width); changed = 1; }
     }
-    if (changed) { accept_staging(); geometry(state.width, state.height); reveal(); }
+    if (changed) { if (!accept_staging()) return SPREADSHEET_CHANGED; geometry(state.width, state.height); reveal(); }
     status(delta ? "Selected columns resized. Width 48-320px; Ctrl+- / Ctrl+= adjusts; Ctrl+0 resets." :
                    "Selected column widths reset to 104px.");
     return SPREADSHEET_CHANGED;
@@ -375,7 +407,7 @@ static void paste(void) {
     } else if ((unsigned)n >= SPREADSHEET_CLIPBOARD_CAPACITY || !paste_tsv(ARENA->output, (unsigned)n, row, col, &rows, &cols)) {
         status("Paste rejected: 95 ASCII bytes per cell, quoted TSV, and no cells beyond Z128."); return;
     }
-    sheet_recalculate(&ARENA->staging); accept_staging();
+    sheet_recalculate(&ARENA->staging); if (!accept_staging()) return;
     snapshot()->anchor = row * SHEET_COLS + col;
     snapshot()->caret = (row + rows - 1) * SHEET_COLS + col + cols - 1; reveal();
     status(own ? "Pasted exact sources, kinds and formats. Formula references were not adjusted." : "Pasted TSV values. Formula-like fields are literal text.");
@@ -387,10 +419,13 @@ static void reset_view(void) {
 }
 void spreadsheet_new(void) {
     if (!state.initialized) { spreadsheet_init(); return; }
+    DocumentRevision revision;
+    if (!allocate_revision(&revision)) return;
+    document_save_detach(&state.save); state.export_retry.valid = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); sheet_init(&s->doc); s->caret = s->anchor = 0;
-    s->revision = ++state.next_revision; state.saved_revision = s->revision;
-    state.file = -1; state.identity = 0; state.failed_save = state.has_binding = state.binding_conflict = 0;
+    s->revision = revision; state.saved_revision = s->revision;
+    state.file = -1; state.identity = state.incarnation = 0; state.failed_save = state.has_binding = state.binding_conflict = 0;
     reset_view(); text_copy(state.title, sizeof state.title, "Untitled sheet");
     status("A1:Z128 | 95 bytes/cell | numbers -2147483.648 to 2147483.647 | 3 decimal places.");
 }
@@ -411,7 +446,9 @@ static int extension(const char *name, const char *suffix) {
 }
 static int binding_valid(void) {
     return state.file >= 0 && fs_valid(state.file) && !fs_is_dir(state.file) && !fs_is_app(state.file) &&
-           extension(fs_name(state.file), "bsh") && fs_identity(state.file) == state.identity;
+           state.identity && state.incarnation && state.incarnation == fs_incarnation() &&
+           fs_content_revision(state.file) && extension(fs_name(state.file), "bsh") &&
+           fs_identity(state.file) == state.identity;
 }
 static void fingerprint(const unsigned char *data, unsigned size, SpreadsheetBinding *out) {
     unsigned fnv = 2166136261u, crc = ~0u;
@@ -445,11 +482,15 @@ int spreadsheet_open_file(int id) {
         status(native ? "Invalid/unsupported .bsh. Current sheet and pending edit are unchanged." :
                         "CSV rejected. Use ASCII, 26x128 cells and at most 95 bytes per field."); return 0;
     }
+    DocumentRevision revision;
+    if (!allocate_revision(&revision)) return 0;
+    document_save_detach(&state.save); state.export_retry.valid = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); copy_bytes(&s->doc, &ARENA->staging, sizeof(SheetDoc));
-    s->caret = s->anchor = 0; s->revision = ++state.next_revision;
-    state.saved_revision = native ? s->revision : 0;
+    s->caret = s->anchor = 0; s->revision = revision;
+    state.saved_revision = native ? s->revision : DOCUMENT_REVISION_NONE;
     state.file = native ? id : -1; state.identity = native ? fs_identity(id) : 0;
+    state.incarnation = native ? fs_incarnation() : 0;
     state.has_binding = native; state.failed_save = state.binding_conflict = 0;
     if (native) fingerprint(data, (unsigned)size, &state.binding);
     reset_view(); text_copy(state.title, sizeof state.title, fs_name(id));
@@ -472,87 +513,205 @@ const unsigned char *spreadsheet_snapshot(unsigned *length) {
     if (sheet_native_encode(d, ARENA->output, OUTPUT_CAPACITY, length)) { status("Could not encode this sheet."); return 0; }
     return ARENA->output;
 }
-static int save_to(int id) {
-    unsigned length;
-    if (!spreadsheet_snapshot(&length)) return SPREADSHEET_SAVE_ERROR;
+static void apply_persistence_result(void) {
+    DocumentSave *save = &state.save;
+    if (save->kind == DOCUMENT_SAVE_NATIVE) {
+        if (save->result == BOS_OK && (!binding_valid() || state.file != save->target.file ||
+            state.identity != save->target.identity || !document_target_matches(&save->target)))
+            save->result = BOS_E_STALE;
+        if (save->result == BOS_OK) {
+            state.saved_revision = save->revision; state.failed_save = 0;
+            text_copy(state.title, sizeof state.title, fs_name(state.file));
+            status(spreadsheet_dirty() ? "Saved submitted sheet. Newer edits remain unsaved." : "Saved native .bsh to disk.");
+        } else {
+            state.failed_save = 1; status(document_save_error(save));
+        }
+    } else if (save->kind == DOCUMENT_SAVE_CSV) {
+        if (save->result == BOS_OK) {
+            state.export_retry.valid = 0;
+            status("CSV values exported. Formula-like text may execute in other spreadsheet programs.");
+        } else status(save->result == BOS_E_IO ?
+            "CSV is RAM-only. Retry CSV export with the same name." : document_save_error(save));
+    }
+}
+int spreadsheet_persistence_poll(void) {
+    if (!state.initialized || !document_save_poll(&state.save)) return 0;
+    apply_persistence_result(); return SPREADSHEET_CHANGED;
+}
+void spreadsheet_save_info(DocumentSave *out) { if (out) *out = state.save; }
+static int begin_persistence(unsigned kind, int id, unsigned length) {
+    int result = document_save_begin(&state.save, kind, snapshot()->revision, id, length, 0);
+    if (result == DOCUMENT_SAVE_PENDING) {
+        status(kind == DOCUMENT_SAVE_NATIVE ? "Saving sheet to disk..." : "Exporting CSV to disk...");
+    } else apply_persistence_result();
+    return result;
+}
+static int persistence_active(void) {
+    if (!state.save.pending) return 0;
+    status("A save/export is pending. Retry after it finishes."); return 1;
+}
+static int storage_available(void) {
+    if (!fs_sync_busy()) return 1;
+    status("Disk is saving; retry shortly."); return 0;
+}
+static int version_available(int creating) {
+    if (fs_version_available(creating)) return 1;
+    status("File version capacity exhausted. Current work is retained."); return 0;
+}
+static int persistence_owner(void) {
+    if (document_save_ensure_owner(&state.save)) return 1;
+    status("Save owner capacity exhausted. Current work is retained."); return 0;
+}
+static int valid_parent_name(int parent, const char *name, const char *suffix) {
+    if (!name || !extension(name, suffix) || text_length(name) >= FS_NAME_LEN) {
+        status(suffix[0] == 'b' ? "Native sheets need a valid .bsh filename." : "CSV exports need a valid .csv filename."); return 0;
+    }
+    for (unsigned i = 0; name[i]; i++) if (name[i] == '/') {
+        status("Choose a filename without path separators."); return 0;
+    }
+    if (!fs_valid(parent) || !fs_is_dir(parent) || !fs_identity(parent)) {
+        status("Destination folder is unavailable. Current work is retained."); return 0;
+    }
+    return 1;
+}
+/* Only incomplete new placeholders may be removed. A complete zero-byte CSV
+ * is still an installed output, irrespective of its later durability result. */
+static void rollback_placeholder(int id, unsigned identity, unsigned incarnation) {
+    if (identity && incarnation == fs_incarnation() && fs_valid(id) &&
+        fs_identity(id) == identity && !fs_is_dir(id) && !fs_is_app(id) && fs_size(id) == 0)
+        (void)fs_delete(id);
+}
+static int save_to(int id, unsigned length, int *installed) {
+    *installed = 0;
+    if (!version_available(0)) return SPREADSHEET_SAVE_ERROR;
     int written = fs_write(id, (const char *)ARENA->output, (int)length);
     if (written == FS_ERR_BUSY) { status("Disk is saving; retry shortly."); return SPREADSHEET_SAVE_ERROR; }
-    if (written < 0) {
+    if (written != (int)length) {
         state.failed_save = 1; status("Save failed. The complete sheet remains open."); return SPREADSHEET_SAVE_ERROR;
     }
-    state.file = id; state.identity = fs_identity(id); state.has_binding = 1; state.binding_conflict = 0;
+    *installed = 1;
+    state.file = id; state.identity = fs_identity(id); state.incarnation = fs_incarnation();
+    state.has_binding = 1; state.binding_conflict = 0;
     fingerprint(ARENA->output, length, &state.binding); text_copy(state.title, sizeof state.title, fs_name(id));
-    if (fs_sync() < 0) {
-        state.failed_save = 1; status("Disk sync failed. Unsaved sheet remains open; retry Save."); return SPREADSHEET_SAVE_ERROR;
-    }
-    state.saved_revision = snapshot()->revision; state.failed_save = 0;
-    status("Saved native .bsh and synchronized to disk."); return SPREADSHEET_SAVE_OK;
+    state.failed_save = 1;
+    return begin_persistence(DOCUMENT_SAVE_NATIVE, id, length);
 }
 int spreadsheet_save(void) {
-    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return SPREADSHEET_SAVE_ERROR; }
     if (!state.initialized) spreadsheet_init();
-    if (!commit_edit()) return SPREADSHEET_SAVE_ERROR;
+    if (persistence_active()) return state.save.kind == DOCUMENT_SAVE_NATIVE ? SPREADSHEET_SAVE_PENDING : SPREADSHEET_SAVE_ERROR;
+    if (!storage_available()) return SPREADSHEET_SAVE_ERROR;
     if (!binding_valid()) { status("Choose Save As for a new native .bsh file."); return SPREADSHEET_SAVE_NEEDS_NAME; }
     if (!state.has_binding || !spreadsheet_binding_matches(state.file, &state.binding)) {
         state.binding_conflict = 1;
         status("Source changed outside Spreadsheet. Save As a new .bsh; source was not replaced.");
         return SPREADSHEET_SAVE_NEEDS_NAME;
     }
-    return save_to(state.file);
+    if (!persistence_owner() || !version_available(0) || !commit_edit()) return SPREADSHEET_SAVE_ERROR;
+    unsigned length;
+    if (!spreadsheet_snapshot(&length)) return SPREADSHEET_SAVE_ERROR;
+    int installed;
+    return save_to(state.file, length, &installed);
 }
 int spreadsheet_save_as(int parent, const char *name) {
-    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return SPREADSHEET_SAVE_ERROR; }
     if (!state.initialized) spreadsheet_init();
-    if (!name || !extension(name, "bsh")) { status("Native sheets use the .bsh filename extension."); return SPREADSHEET_SAVE_ERROR; }
+    if (persistence_active() || !storage_available()) return SPREADSHEET_SAVE_ERROR;
+    if (!valid_parent_name(parent, name, "bsh")) return SPREADSHEET_SAVE_ERROR;
     int existing = fs_find_child(parent, name);
     if (existing >= 0) {
         if (binding_valid() && existing == state.file) return spreadsheet_save();
         status("Name already exists. Choose a new name; no file was replaced."); return SPREADSHEET_SAVE_ERROR;
     }
-    if (!commit_edit()) return SPREADSHEET_SAVE_ERROR;
+    if (!persistence_owner() || !version_available(1) || !commit_edit()) return SPREADSHEET_SAVE_ERROR;
     unsigned length;
     if (!spreadsheet_snapshot(&length)) return SPREADSHEET_SAVE_ERROR;
     if (length > fs_file_limit()) { status("Sheet exceeds this volume's file limit; no file was created."); return SPREADSHEET_SAVE_ERROR; }
+    if (!version_available(1)) return SPREADSHEET_SAVE_ERROR;
     int id = fs_create(parent, name);
     if (id < 0) { status("Could not create file. Check filename, free space and disk status."); return SPREADSHEET_SAVE_ERROR; }
-    unsigned identity = fs_identity(id); int result = save_to(id);
-    if (result != SPREADSHEET_SAVE_OK && fs_valid(id) && fs_identity(id) == identity && !fs_size(id)) fs_delete(id);
+    unsigned identity = fs_identity(id), incarnation = fs_incarnation(); int installed;
+    int result = save_to(id, length, &installed);
+    if (!installed) rollback_placeholder(id, identity, incarnation);
     return result;
 }
+int spreadsheet_export_retry_name(char *out, unsigned capacity) {
+    const SpreadsheetExportRetry *retry = &state.export_retry;
+    if (!out || !retry->valid || !document_target_matches(&retry->target) ||
+        !fs_valid(retry->parent) || !fs_is_dir(retry->parent) || !retry->parent_identity ||
+        fs_identity(retry->parent) != retry->parent_identity ||
+        fs_find_child(retry->parent, retry->name) != retry->target.file ||
+        !document_revision_equal(retry->revision, snapshot()->revision) ||
+        (state.mode == 1 && state.edit_changed) || text_length(retry->name) >= capacity) return 0;
+    text_copy(out, capacity, retry->name); return 1;
+}
+static int export_retry_matches(int parent, const char *name, int id) {
+    SpreadsheetExportRetry *retry = &state.export_retry;
+    if (!retry->valid || retry->parent != parent || !retry->parent_identity ||
+        fs_identity(parent) != retry->parent_identity || kstrcmp(retry->name, name) ||
+        retry->target.file != id || !document_target_matches(&retry->target) ||
+        !document_revision_equal(retry->revision, snapshot()->revision) ||
+        (state.mode == 1 && state.edit_changed)) return 0;
+    unsigned length;
+    if (sheet_csv_export(document(), ARENA->output, OUTPUT_CAPACITY, &length) || length != retry->target.length) return 0;
+    const unsigned char *data = (const unsigned char *)fs_data(id);
+    if (length && !data) return 0;
+    for (unsigned i = 0; i < length; i++) {
+        if (data[i] != ARENA->output[i]) return 0;
+        if ((i & 4095u) == 4095u) platform_poll();
+    }
+    return 1;
+}
 int spreadsheet_export_csv(int parent, const char *name) {
-    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return -1; }
     if (!state.initialized) spreadsheet_init();
-    if (!name || !extension(name, "csv")) { status("CSV exports use the .csv filename extension."); return -1; }
-    if (fs_find_child(parent, name) >= 0) { status("Choose a new CSV name; existing files are never replaced."); return -1; }
-    if (!commit_edit()) return -1;
+    if (persistence_active() || !storage_available()) return -1;
+    if (!valid_parent_name(parent, name, "csv")) return -1;
+    int existing = fs_find_child(parent, name);
+    if (existing >= 0) {
+        if (!export_retry_matches(parent, name, existing)) {
+            status("Choose a new CSV name; existing files are never replaced."); return -1;
+        }
+        if (!persistence_owner()) return -1;
+        int result = begin_persistence(DOCUMENT_SAVE_CSV, existing, state.export_retry.target.length);
+        return result == DOCUMENT_SAVE_PENDING ? SPREADSHEET_EXPORT_PENDING : result == DOCUMENT_SAVE_OK ? existing : -1;
+    }
+    if (!persistence_owner() || !version_available(1) || !commit_edit()) return -1;
     unsigned length;
     if (sheet_csv_export(document(), ARENA->output, OUTPUT_CAPACITY, &length)) { status("CSV export failed; native sheet is unchanged."); return -1; }
     if (length > fs_file_limit()) { status("CSV exceeds this volume's file limit; no export was created."); return -1; }
+    if (!version_available(1)) return -1;
     int id = fs_create(parent, name);
     if (id < 0) { status("Could not create CSV export."); return -1; }
-    unsigned identity = fs_identity(id);
-    if (fs_write(id, (const char *)ARENA->output, (int)length) < 0) {
-        if (fs_valid(id) && fs_identity(id) == identity && !fs_size(id)) fs_delete(id);
+    unsigned identity = fs_identity(id), incarnation = fs_incarnation();
+    if (!version_available(0)) { rollback_placeholder(id, identity, incarnation); return -1; }
+    if (fs_write(id, (const char *)ARENA->output, (int)length) != (int)length) {
+        rollback_placeholder(id, identity, incarnation);
         status("CSV write failed. Native sheet remains open."); return -1;
     }
-    if (fs_sync() < 0) { status("CSV exists in memory but disk sync failed. Native save state is unchanged."); return -1; }
-    status("CSV values exported. Formula-like text may execute in other spreadsheet programs."); return id;
+    SpreadsheetExportRetry retry = {0};
+    retry.valid = document_target_capture(id, length, &retry.target);
+    retry.parent = parent; retry.parent_identity = fs_identity(parent); retry.revision = snapshot()->revision;
+    text_copy(retry.name, sizeof retry.name, name); state.export_retry = retry;
+    int result = begin_persistence(DOCUMENT_SAVE_CSV, id, length);
+    return result == DOCUMENT_SAVE_PENDING ? SPREADSHEET_EXPORT_PENDING : result == DOCUMENT_SAVE_OK ? id : -1;
 }
 int spreadsheet_restore(const unsigned char *data, unsigned length, int file, unsigned identity,
                         int dirty, unsigned caret, unsigned anchor) {
     if (!state.initialized) spreadsheet_init();
     if (sheet_native_decode(&ARENA->staging, data, length)) { status("Invalid recovery sheet. Current work is unchanged."); return 0; }
+    DocumentRevision revision;
+    if (!allocate_revision(&revision)) return 0;
+    document_save_detach(&state.save); state.export_retry.valid = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); copy_bytes(&s->doc, &ARENA->staging, sizeof(SheetDoc));
     s->caret = min_u(caret, SHEET_CELLS - 1); s->anchor = min_u(anchor, SHEET_CELLS - 1);
-    s->revision = ++state.next_revision;
-    state.file = file; state.identity = identity; state.has_binding = state.binding_conflict = state.failed_save = 0;
+    s->revision = revision;
+    state.file = file; state.identity = identity; state.incarnation = fs_incarnation();
+    state.has_binding = state.binding_conflict = state.failed_save = 0;
     int size = binding_valid() ? fs_size(file) : -1;
     const unsigned char *source = size >= 0 ? (const unsigned char *)fs_data(file) : 0;
     if (size < (int)SHEET_NATIVE_HEADER_SIZE || (unsigned)size > SHEET_NATIVE_MAX_SIZE || !source) {
-        state.file = -1; state.identity = 0; dirty = 1;
+        state.file = -1; state.identity = state.incarnation = 0; dirty = 1;
     } else { fingerprint(source, (unsigned)size, &state.binding); state.has_binding = 1; }
-    state.saved_revision = dirty ? 0 : s->revision;
+    state.saved_revision = dirty ? DOCUMENT_REVISION_NONE : s->revision;
     text_copy(state.title, sizeof state.title, state.file >= 0 ? fs_name(state.file) : "Recovered sheet");
     reset_view(); reveal(); status("Recovered sheet draft."); return 1;
 }
@@ -560,7 +719,7 @@ const char *spreadsheet_title(void) { return state.initialized ? state.title : "
 const char *spreadsheet_status(void) { return state.status; }
 int spreadsheet_dirty(void) {
     return state.initialized && (state.failed_save || state.binding_conflict || (state.mode == 1 && state.edit_changed) ||
-           snapshot()->revision != state.saved_revision || (state.file >= 0 && !binding_valid()));
+           !document_revision_equal(snapshot()->revision, state.saved_revision) || (state.file >= 0 && !binding_valid()));
 }
 int spreadsheet_file(void) { return state.initialized && binding_valid() ? state.file : -1; }
 unsigned spreadsheet_file_identity(void) { return state.initialized && binding_valid() ? state.identity : 0; }
@@ -570,7 +729,12 @@ const SheetDoc *spreadsheet_document(void) { if (!state.initialized) spreadsheet
 int spreadsheet_editing(void) { return state.mode == 1; }
 unsigned spreadsheet_first_row(void) { return state.first_row; }
 unsigned spreadsheet_first_col(void) { return state.first_col; }
-void spreadsheet_close(void) { if (state.initialized) spreadsheet_new(); }
+void spreadsheet_close(void) {
+    if (state.initialized) spreadsheet_new();
+    /* A closed window never retains interest, even if revision exhaustion
+     * prevented replacing its private model with a fresh blank sheet. */
+    document_save_detach(&state.save); state.export_retry.valid = 0;
+}
 void spreadsheet_release(void) { state.dragging = 0; }
 int spreadsheet_scroll(int lines) {
     if (!state.initialized) spreadsheet_init();
@@ -931,7 +1095,9 @@ void spreadsheet_draw(int x, int y, int w, int h) {
     Clip foot = intersect(all, (Clip){x + 8, y + h - FOOT_H + 5, w - 16, 18});
     label(foot, range, foot.x, foot.y, COLOR_BLUE);
     int sx = foot.x + ui_string_w(range) + 14;
-    label(foot, state.status, sx, foot.y, COLOR_DKGRAY);
+    const char *message = state.save.pending ?
+        (state.save.kind == DOCUMENT_SAVE_NATIVE ? "Saving sheet to disk..." : "Exporting CSV to disk...") : state.status;
+    label(foot, message, sx, foot.y, COLOR_DKGRAY);
 }
 
 static unsigned hit_cell(int w, int h, int mx, int my) {

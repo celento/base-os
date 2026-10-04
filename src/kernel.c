@@ -1619,13 +1619,15 @@ static int name_dlg = 0;
 static int name_failed;
 static const char *name_failure_message;
 /* A close request owns a window incarnation, never whichever app draws last. */
-static int edit_close_owner = -1, edit_close_seq;
+static int edit_close_owner = -1, edit_close_seq, edit_close_kind;
 static int edit_close_dlg, edit_close_focus, edit_close_failed;
 enum { DOCUMENT_CLOSE, DOCUMENT_NEW, DOCUMENT_OPEN };
 static int document_action, document_target = -1;
-static unsigned document_target_identity;
+static unsigned document_target_identity, document_target_incarnation, document_target_version;
+static unsigned document_pending_owner, document_pending_handle;
 static void edit_close_cancel(void) {
     edit_close_owner = -1;
+    document_pending_owner = document_pending_handle = 0;
     document_action = DOCUMENT_CLOSE;
     document_target = -1;
     edit_close_dlg = edit_close_failed = 0;
@@ -1636,7 +1638,7 @@ static int edit_close_valid(void) {
         wins[edit_close_owner].open &&
         (wins[edit_close_owner].kind == WK_EDIT || wins[edit_close_owner].kind == WK_WRITER ||
          wins[edit_close_owner].kind == WK_SPREADSHEET) &&
-        wins[edit_close_owner].seq == edit_close_seq;
+        wins[edit_close_owner].seq == edit_close_seq && wins[edit_close_owner].kind == edit_close_kind;
 }
 static int pick_cwd = 0;
 static int pick_focus, pick_first;
@@ -1675,6 +1677,9 @@ static void do_shutdown(void) {
         dirty = 1;
         return;
     }
+    /* Collect owned save outcomes after the first drain, before session_save
+     * captures latest private edits. Never execute deferred navigation here. */
+    (void)writer_persistence_poll(); (void)spreadsheet_persistence_poll();
     if (todo_prepare_shutdown() < 0) {
         if (win_open(WK_TODO) < 0)
             session_status="Shutdown paused. Open Todo after closing a window.";
@@ -1909,10 +1914,13 @@ static void document_request(int i, int action, int target) {
     if (!needs_save) { document_finish(i, action, target, identity); return; }
     win_focus(i);
     edit_close_owner = i;
-    edit_close_seq = wins[i].seq;
+    edit_close_seq = wins[i].seq; edit_close_kind = wins[i].kind;
+    document_pending_owner = document_pending_handle = 0;
     document_action = action;
     document_target = target;
     document_target_identity = identity;
+    document_target_incarnation = fs_incarnation();
+    document_target_version = fs_content_revision(target);
     edit_close_dlg = 1;
     edit_close_focus = 2; /* Enter starts on Cancel, never Discard. */
     edit_close_failed = 0;
@@ -2456,7 +2464,7 @@ static int writer_save_document(void) {
         if (had_binding) name_failed = 1; /* Explain a changed-file conflict. */
     }
     dirty = 1;
-    return result == WRITER_SAVE_OK;
+    return result;
 }
 static void writer_result(int result) {
     if (result & WRITER_CHANGED) dirty = 1;
@@ -2473,7 +2481,7 @@ static int spreadsheet_save_document(void) {
         if (had_binding) name_failed = 1;
     }
     dirty = 1;
-    return result == SPREADSHEET_SAVE_OK;
+    return result;
 }
 static void spreadsheet_result(int result) {
     if (result & SPREADSHEET_CHANGED) dirty = 1;
@@ -2481,23 +2489,70 @@ static void spreadsheet_result(int result) {
     if (result & SPREADSHEET_REQUEST_SAVE_AS) namedlg_open(4, "untitled.bsh");
     if (result & SPREADSHEET_REQUEST_EXPORT) namedlg_open(5, "spreadsheet.csv");
 }
+/* These metadata hooks run only at desktop boundaries, not from storage
+ * polling. One exact request can finish one guarded navigation action. */
+static void document_save_info(int kind, DocumentSave *out) {
+    if (kind == WK_WRITER) writer_save_info(out);
+    else if (kind == WK_SPREADSHEET) spreadsheet_save_info(out);
+    else *out = (DocumentSave){0};
+}
+static int document_destination_valid(void) {
+    return document_action != DOCUMENT_OPEN ||
+        (document_target_identity && document_target_version && document_target_incarnation &&
+         fs_incarnation() == document_target_incarnation && fs_valid(document_target) &&
+         fs_identity(document_target) == document_target_identity &&
+         fs_content_revision(document_target) == document_target_version);
+}
+static int document_wait_for_save(void) {
+    if (!edit_close_valid()) return 0;
+    DocumentSave save; document_save_info(edit_close_kind, &save);
+    if (!save.owner || !save.handle || !save.pending || save.kind != DOCUMENT_SAVE_NATIVE) return 0;
+    document_pending_owner = save.owner; document_pending_handle = save.handle;
+    edit_close_dlg = 1; edit_close_failed = 0; edit_close_focus = 2; dirty = 1;
+    return 1;
+}
+static void document_persistence_poll(void) {
+    int changed = writer_persistence_poll();
+    changed |= spreadsheet_persistence_poll();
+    if (changed) dirty = 1;
+    if (!document_pending_owner) return;
+    if (!edit_close_valid()) { edit_close_cancel(); return; }
+    DocumentSave save; document_save_info(edit_close_kind, &save);
+    if (save.owner != document_pending_owner || save.handle != document_pending_handle || save.kind != DOCUMENT_SAVE_NATIVE) {
+        document_pending_owner = document_pending_handle = 0;
+        edit_close_failed = 1; edit_close_dlg = 1; edit_close_focus = 2; dirty = 1; return;
+    }
+    if (save.pending) return;
+    document_pending_owner = document_pending_handle = 0;
+    if (save.result != 0 || !document_destination_valid()) {
+        edit_close_failed = save.result != 0 ? 1 : 3;
+        edit_close_dlg = 1; edit_close_focus = 2; dirty = 1; return;
+    }
+    if (edit_close_kind == WK_WRITER ? writer_dirty() : spreadsheet_dirty()) {
+        edit_close_failed = 2; edit_close_dlg = 1; edit_close_focus = 2; dirty = 1; return;
+    }
+    int owner = edit_close_owner, action = document_action, target = document_target;
+    unsigned identity = document_target_identity;
+    edit_close_cancel(); document_finish(owner, action, target, identity);
+}
 static void edit_close_choose(int choice) {
     if (!edit_close_valid()) { edit_close_cancel(); return; }
     int owner = edit_close_owner, action = document_action, target = document_target;
     unsigned identity = document_target_identity;
     if (choice == 2) { edit_close_cancel(); return; }
+    if (document_pending_owner) return; /* Cancel navigation, never the commit. */
+    if (!document_destination_valid()) { edit_close_failed = 3; edit_close_focus = 2; dirty = 1; return; }
     if (choice == 1) { edit_close_cancel(); document_finish(owner, action, target, identity); return; }
     context_set(owner);
-    if (wins[owner].kind == WK_SPREADSHEET ? spreadsheet_save_document() :
-        wins[owner].kind == WK_WRITER ? writer_save_document() : edit_save()) {
-        edit_close_cancel();
-        document_finish(owner, action, target, identity);
+    int result = wins[owner].kind == WK_SPREADSHEET ? spreadsheet_save_document() :
+                 wins[owner].kind == WK_WRITER ? writer_save_document() : edit_save();
+    if (result == 1) {
+        edit_close_cancel(); document_finish(owner, action, target, identity);
+    } else if (result == DOCUMENT_SAVE_PENDING && document_wait_for_save()) {
+        /* Exact owned boundary retained until the top-level completion hook. */
     } else if (name_dlg) {
         edit_close_dlg = 0; /* Retain the owner while Save As is pending. */
-    } else {
-        edit_close_failed = 1;
-        edit_close_focus = 2;
-    }
+    } else { edit_close_failed = 1; edit_close_focus = 2; }
     dirty = 1;
 }
 
@@ -6326,11 +6381,16 @@ static void namedlg_open(int target, const char *initial) {
     for (int i = 0; initial && initial[i] && i < FS_NAME_LEN - 1; i++)
         name_buf[name_len++] = initial[i];
     name_buf[name_len] = 0;
+    if (target == 3 || target == 6) {
+        if (writer_export_retry_name(target == 6 ? DOCUMENT_SAVE_PDF : DOCUMENT_SAVE_RTF,
+                                     name_buf, sizeof name_buf, &name_pdf_paper)) name_len = kstrlen(name_buf);
+    } else if (target == 5 && spreadsheet_export_retry_name(name_buf, sizeof name_buf)) name_len = kstrlen(name_buf);
     dirty = 1;
 }
 
+static void namedlg_hide(void) { name_dlg = 0; dirty = 1; }
 static void namedlg_close(void) {
-    name_dlg = 0;
+    namedlg_hide();
     edit_close_cancel(); /* Canceling Save As also cancels the close request. */
     dirty = 1;
 }
@@ -6359,17 +6419,27 @@ static void namedlg_commit(void) {
     int action = document_action, target = document_target;
     unsigned identity = document_target_identity;
     int parent = fm_checked_cwd();
-    int ok = name_target == 0 ? edit_write_named(name_buf) :
-             name_target == 1 ? paint_write_named(name_buf) :
-             name_target == 2 ? writer_save_as(parent, name_buf) == WRITER_SAVE_OK :
-             name_target == 3 ? writer_export_rtf(parent, name_buf) >= 0 :
-             name_target == 6 ? writer_export_pdf(parent, name_buf, name_pdf_paper) >= 0 :
-             name_target == 4 ? spreadsheet_save_as(parent, name_buf) == SPREADSHEET_SAVE_OK :
-                                spreadsheet_export_csv(parent, name_buf) >= 0;
-    if (ok) {
+    int result = name_target == 0 ? edit_write_named(name_buf) :
+                 name_target == 1 ? paint_write_named(name_buf) :
+                 name_target == 2 ? writer_save_as(parent, name_buf) :
+                 name_target == 3 ? writer_export_rtf(parent, name_buf) :
+                 name_target == 6 ? writer_export_pdf(parent, name_buf, name_pdf_paper) :
+                 name_target == 4 ? spreadsheet_save_as(parent, name_buf) :
+                                    spreadsheet_export_csv(parent, name_buf);
+    int exporting = name_target == 3 || name_target == 5 || name_target == 6;
+    int pending = exporting ? result == DOCUMENT_EXPORT_PENDING :
+                  (name_target == 2 || name_target == 4) && result == DOCUMENT_SAVE_PENDING;
+    int ok = exporting ? result >= 0 : result == 1;
+    if (pending || ok) {
         int owner = name_owner;
-        namedlg_close();
-        if (close_after) document_finish(owner, action, target, identity);
+        namedlg_hide(); /* Acceptance is distinct from canceling the intent. */
+        if (close_after && !exporting) {
+            if (pending) {
+                if (!document_wait_for_save()) { edit_close_failed = 1; edit_close_dlg = 1; edit_close_focus = 2; }
+            } else if (document_destination_valid()) {
+                edit_close_cancel(); document_finish(owner, action, target, identity);
+            } else { edit_close_failed = 3; edit_close_dlg = 1; edit_close_focus = 2; }
+        }
     } else { name_failed = 1; dirty = 1; }
 }
 
@@ -6386,7 +6456,7 @@ static void draw_edit_close(void) {
     draw_shadow(x, y, 460, 184);
     draw_round_rect(x - 1, y - 1, 462, 186, 11, ui_border);
     draw_round_rect(x, y, 460, 184, 10, COLOR_WHITE);
-    draw_string_bold(document_action == DOCUMENT_CLOSE ? "Save changes before closing?"
+    draw_string_bold(document_pending_owner ? "Saving changes..." : document_action == DOCUMENT_CLOSE ? "Save changes before closing?"
         : "Save changes before replacing?", x + 22, y + 20, ui_text);
     const Document *doc = &window_state[edit_close_owner].doc;
     const char *name = wins[edit_close_owner].kind == WK_SPREADSHEET ? spreadsheet_title() :
@@ -6395,11 +6465,15 @@ static void draw_edit_close(void) {
                      ? fs_name(doc->file) : "untitled";
     draw_string_clip(name, x + 22, y + 50, ui_text, x + 438);
     draw_string(edit_close_failed && fs_sync_busy() ? "Disk saving. Retry Save shortly."
+                : document_pending_owner ? "Saving to disk. Cancel keeps this document open."
+                : edit_close_failed == 3 ? "Requested file changed. Cancel and choose it again."
+                : edit_close_failed == 2 ? "Newer changes still need saving."
                 : edit_close_failed ? "Save failed. Your document is still open."
                                  : "Your unsaved changes will be lost if discarded.",
                 x + 22, y + 82, ui_text_dim);
     const char *labels[] = {"Save", "Discard", "Cancel"};
     for (int i = 0; i < 3; i++) {
+        if ((document_pending_owner || edit_close_failed == 3) && i != 2) continue;
         int bx = x + 126 + 106 * i;
         if (i == edit_close_focus) draw_default_button(bx, y + 132, 96, BTN_H, labels[i]);
         else draw_button(bx, y + 132, 96, BTN_H, labels[i]);
@@ -6419,7 +6493,7 @@ static void edit_close_click(void) {
 static void edit_close_key(void) {
     if (key_sc == KEY_ESC) edit_close_cancel();
     else if (key_sc == KEY_TAB) {
-        edit_close_focus = (edit_close_focus + (shift_down ? 2 : 1)) % 3;
+        edit_close_focus = document_pending_owner || edit_close_failed == 3 ? 2 : (edit_close_focus + (shift_down ? 2 : 1)) % 3;
         dirty = 1;
     } else if (key_sc == KEY_ENTER) edit_close_choose(edit_close_focus);
 }
@@ -8453,6 +8527,7 @@ void kmain(void) {
 
     while (1) {
         storage_poll();
+        document_persistence_poll();
         preferences_tick();
         if(todo_tick()&&find_open_kind(WK_TODO)>=0)dirty=1;
         if(cal_agenda_tick()&&find_open_kind(WK_CAL)>=0)dirty=1;
