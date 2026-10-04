@@ -48,9 +48,10 @@ class AppViewTests(unittest.TestCase):
             self.assertEqual(sizes, {
                 'measured_terminal_text': 27432,
                 'measured_app_canvas': 64032,
-                'measured_view_metadata': 72,
-                'measured_app_view': 64104,
-                'measured_app_storage': 732288,
+                'measured_view_metadata': 112,
+                'measured_app_view': 64144,
+                'measured_app_storage': 763808,
+                'measured_app_log': 3900,
                 'measured_view_offset': 219456,
                 'measured_published_pixels': 512000,
             })
