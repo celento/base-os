@@ -24,16 +24,12 @@ def run(build):
         print('Screenshots and serial log:', session.directory, flush=True)
         session.boot()
         session.launch('Files')
-        # Fresh root order is docs, Documents, Pictures, Media, Programs.
-        for _ in range(4):
-            session.key('down')
-        session.key('ret')
+        # Use the public name filter rather than an obsolete insertion-order
+        # row index. Files now sorts names and starts with no selected row.
+        session.key('ctrl-f'); session.text('Programs'); session.key('down'); session.key('ret')
         time.sleep(.25)
         session.screenshot('native-files.png')
-        # Programs starts at its parent row; counter.bex is the fourth child.
-        for _ in range(4):
-            session.key('down')
-        session.key('ret')
+        session.key('ctrl-f'); session.text('counter.bex'); session.key('down'); session.key('ret')
         time.sleep(3.2)
         session.key('s')
         session.key('ctrl-spc')
