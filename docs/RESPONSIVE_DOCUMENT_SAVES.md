@@ -67,6 +67,17 @@ Failure keeps the desktop and drafts available. Existing recovery wire formats
 are unchanged. Writer's source-only sidecar pairing limitation is separate work;
 this change does not claim to solve it.
 
+## Open/reopen boundary
+
+Successful native Open retains the existing RAM-filesystem semantics: it starts
+clean relative to the current RAM file bytes. If a user explicitly discards or
+closes a model with a RAM-only replacement and reopens that file, the new lifetime
+does not inherit the old model's completion receipt. Its initial clean state is
+not a new per-file durability proof. This milestone does not add filesystem-wide
+durable-version tracking across reopen. The strict owned-completion rule applies
+to Save/Save As within their logical document lifetime. Complete RAM files remain
+available and shutdown still refuses a failed final synchronization.
+
 ## Verification scope
 
 Ordinary sanitized host suites cover the real adapter/coordinator/FS, both real
@@ -88,3 +99,13 @@ and reboot checks on default/large IDE plus explicit floppy compatibility.
 Host success alone does not establish guest responsiveness or reboot durability.
 No guest-memory observations, debugger sockets, fuzzing or intentional memory
 faults are part of this acceptance.
+
+## Qualified standalone runtime
+
+The exact clean `c2f67df` runtime passed ordinary default IDE, large IDE and floppy
+compatibility/reboot gates. Both IDE runs prove visible private and peer-window
+input during the same accepted durability boundary, and independently distinguish
+submitted native bytes from recovered newer drafts. The final expanded host suite
+passed 264 tests. See [qualification and selected screenshots](session-2026-10-04/responsive-documents/README.md)
+for exact profile workloads, hashes, measured upper bounds, retained incomplete
+attempts and the requirement to qualify later combined integrations separately.
