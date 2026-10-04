@@ -6,6 +6,7 @@ the independently executed host decoder.
 """
 import argparse
 import http.server
+import io
 import json
 import pathlib
 import subprocess
@@ -44,7 +45,7 @@ class Server(http.server.BaseHTTPRequestHandler):
             pass
 
 
-def run(build):
+def run(build, pdf=False):
     work = pathlib.Path(tempfile.mkdtemp(prefix='baseos-desktop-workload-data-'))
     print(work, flush=True)
     song = work / 'work.mp3'
@@ -64,7 +65,7 @@ def run(build):
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Server)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    events = []; screenshots = []
+    events = []; screenshots = []; pdf_result = None
     try:
         with WriterSession(build, 'desktop-workload', extra=[
             '-drive', f'file={disk},format=raw,index=0,if=ide', '-nic', 'user,model=rtl8139',
@@ -78,7 +79,7 @@ def run(build):
             session.launch('work.bwr'); writer_slot = files.front()['slot']
             session.key('ctrl-h'); session.text('alpha'); session.key('tab'); session.text('beta')
             session.launch('terminal'); native_slot = files.front()['slot']
-            session.text('start /Programs/docstats.bex'); session.key('ret')
+            session.text('start /Programs/docstats.bex /Documents/bulk.txt'); session.key('ret')
             session.wait(lambda: terminal.ready(native_slot), 'initial complete 2 MiB native scan', 45)
             session.launch('browser'); browser_slot = files.front()['slot']
             type_url(session, f'http://10.0.2.2:{server.server_port}/combined.bin')
@@ -116,6 +117,28 @@ def run(build):
                 return decode_native(n[resolve(n, '/Documents/work.bwr')]['data'])['text'] == expected_writer
             session.wait(writer_saved, 'Writer replacements durably saved', 45)
             event('Writer replaced and synchronized 1000 matches')
+            if pdf:
+                from pypdf import PdfReader
+                session.key('ctrl-shift-p')
+                session.wait(lambda: ui.o.integer('name_dlg') == 1, 'PDF export dialog')
+                ui.name('work.pdf')
+                def pdf_saved():
+                    try:
+                        n = load(disk.read_bytes())[2]
+                        return n[resolve(n, '/Documents/work.pdf')]['data'].startswith(b'%PDF-1.4')
+                    except ValueError:
+                        return False
+                session.wait(pdf_saved, 'complete PDF synchronized during audio playback', 45)
+                n = load(disk.read_bytes())[2]
+                document = n[resolve(n, '/Documents/work.pdf')]['data']
+                reader = PdfReader(io.BytesIO(document), strict=True)
+                extracted = '\n'.join(page.extract_text() for page in reader.pages)
+                assert extracted.count('beta line') == 1000 and 'alpha line' not in extracted
+                assert len(reader.pages) == 26
+                assert all(tuple(map(float, page.mediabox)) == (0., 0., 612., 792.) for page in reader.pages)
+                assert decode_native(n[resolve(n, '/Documents/work.bwr')]['data'])['text'] == expected_writer
+                pdf_result = dict(bytes=len(document), pages=len(reader.pages), exact_lines=1000, paper='Letter')
+                event('26-page PDF synchronized and independently parsed')
             files.focus(native_slot); session.key('s')
             report_path = f'/Documents/stats-{native_slot + 1}.txt'
             def report_ready():
@@ -150,6 +173,7 @@ def run(build):
     finally:
         server.shutdown(); server.server_close()
     result = {'passed': True, 'events': events, 'screenshots': screenshots,
+              'pdf': pdf_result,
               'http_bytes': len(PAYLOAD), 'copied_bytes': len(bulk), 'writer_replacements': 1000,
               'audio': audio, 'checks': ['normal concurrent apps', 'exact large copy and durable Writer edits',
                                        'complete native scan/report', 'real HTTP bytes', 'all captured MP3 samples',
@@ -161,4 +185,6 @@ def run(build):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('build', type=pathlib.Path)
-    run(parser.parse_args().build.resolve())
+    parser.add_argument('--pdf', action='store_true', help='Also export and independently parse a 26-page PDF (requires pypdf)')
+    args = parser.parse_args()
+    run(args.build.resolve(), args.pdf)

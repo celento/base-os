@@ -14,6 +14,8 @@ static unsigned char presented[FB_CAPACITY];
 static unsigned polls, ticks, clipboard_generation, clipboard_length;
 static unsigned char clipboard[WRITER_TEXT_MAX + 1];
 static int write_failure, payload_failure, sync_failure, sync_count, write_count;
+static int create_count, delete_count, node_limit = 20;
+static unsigned storage_limit = 8u * 1024u * 1024u, node_cost;
 static unsigned next_identity = 1;
 static unsigned file_limit = 2097152;
 typedef struct { int valid, folder, size; unsigned identity; char name[FS_NAME_LEN]; unsigned char *data; } File;
@@ -47,6 +49,7 @@ int fs_find_child(int parent, const char *name) {
     return -1;
 }
 int fs_create(int parent, const char *name) {
+    create_count++;
     if (write_failure || parent != 0 || !name || !*name || strlen(name) >= FS_NAME_LEN || strchr(name, '/') || fs_find_child(parent, name) >= 0) return -1;
     for (int i = 1; i < 20; i++) if (!files[i].valid) {
         files[i].valid = 1; files[i].identity = ++next_identity; files[i].size = 0;
@@ -64,10 +67,15 @@ int fs_write(int id, const char *text, int length) {
     return length;
 }
 int fs_delete(int id) {
+    delete_count++;
     if (!fs_valid(id) || files[id].folder) return -1;
     free(files[id].data); memset(&files[id], 0, sizeof files[id]); return 0;
 }
 unsigned fs_file_limit(void) { return file_limit; }
+int fs_node_count(void) { int count = 0; for (int i = 0; i < 20; i++) count += files[i].valid != 0; return count; }
+int fs_node_limit(void) { return node_limit; }
+unsigned fs_capacity_for_nodes(unsigned count) { return count > (unsigned)node_limit || count * node_cost > storage_limit ? 0 : storage_limit - count * node_cost; }
+unsigned fs_used_bytes(void) { unsigned used = 0; for (int i = 0; i < 20; i++) if (files[i].valid) used += (unsigned)files[i].size; return used; }
 int fs_sync(void) { sync_count++; return sync_failure ? -1 : 0; }
 static void key(int sc, int modifiers) { assert(writer_key(sc, 0, modifiers) & WRITER_CHANGED); }
 static void type(const char *s) { while (*s) assert(writer_key(0, *s++, 0) & WRITER_CHANGED); }
@@ -260,6 +268,114 @@ static void test_binding_fingerprints(void) {
     assert(!writer_binding_matches(source, NULL));
     puts("Writer bindings: independent fingerprints, same-ID replacement, cross-node match, sync retry and draft baseline passed");
 }
+static void test_pdf_export(void) {
+    /* Leave previous fixtures intact: exports may never overwrite any of them. */
+    load_fixture("PDF pages\nOriginal printable text (with \\ and parentheses).\n");
+    int source = writer_file(); unsigned identity = writer_file_identity();
+    WriterBinding baseline, after; assert(writer_binding(&baseline));
+    int clean_bound = writer_export_pdf(0, "clean.pdf", WRITER_PDF_LETTER);
+    assert(clean_bound >= 0 && !writer_dirty() && writer_file() == source && writer_file_identity() == identity);
+    assert(writer_binding(&after) && !memcmp(&after, &baseline, sizeof baseline)); fs_delete(clean_bound);
+    key(0x47, WRITER_MOD_CTRL); key(0x02, WRITER_MOD_CTRL); key(0x12, WRITER_MOD_CTRL);
+    key(0x4f, WRITER_MOD_CTRL); type("Unsaved text."); select_range(0, 9);
+    prior = *writer_document(); unsigned caret = writer_caret(), anchor = writer_anchor();
+    int creates = create_count, writes = write_count, syncs = sync_count;
+    const char *bad_names[] = {NULL, "", "wrong.bwr", "bad/name.pdf", "123456789012345678901.pdf"};
+    for (unsigned i = 0; i < sizeof bad_names / sizeof bad_names[0]; i++) assert(writer_export_pdf(0, bad_names[i], WRITER_PDF_LETTER) < 0);
+    assert(writer_export_pdf(-1, "invalid.pdf", WRITER_PDF_LETTER) < 0);
+    assert(writer_export_pdf(source, "invalid.pdf", WRITER_PDF_LETTER) < 0);
+    assert(writer_export_pdf(0, "invalid.pdf", 2) < 0);
+    assert(create_count == creates && write_count == writes && sync_count == syncs);
+    unsigned length, pages; assert(writer_pdf_export(&prior, WRITER_PDF_LETTER, NULL, 0, &length, &pages) == WRITER_PDF_OK);
+    file_limit = length - 1; assert(writer_export_pdf(0, "limited.pdf", WRITER_PDF_LETTER) < 0);
+    assert(strstr(writer_status(), "per-file")); file_limit = 2097152;
+    node_limit = fs_node_count(); assert(writer_export_pdf(0, "slots.pdf", WRITER_PDF_LETTER) < 0);
+    assert(strstr(writer_status(), "slots")); node_limit = 20;
+    /* New filesystem records consume capacity; include the projected record. */
+    node_cost = 40; storage_limit = fs_used_bytes() + length + (unsigned)fs_node_count() * node_cost;
+    assert(writer_export_pdf(0, "space.pdf", WRITER_PDF_LETTER) < 0); assert(strstr(writer_status(), "space"));
+    storage_limit = fs_used_bytes() - 1; assert(writer_export_pdf(0, "space.pdf", WRITER_PDF_LETTER) < 0);
+    storage_limit = 8u * 1024u * 1024u; node_cost = 0;
+    assert(create_count == creates && write_count == writes && sync_count == syncs);
+    write_failure = 1; assert(writer_export_pdf(0, "create.pdf", WRITER_PDF_LETTER) < 0); write_failure = 0;
+    int deletes = delete_count; payload_failure = 1;
+    assert(writer_export_pdf(0, "write.pdf", WRITER_PDF_LETTER) < 0); payload_failure = 0;
+    assert(fs_find_child(0, "write.pdf") < 0 && delete_count == deletes + 1);
+    file_limit = length; /* Exact per-file and destination byte capacity succeed. */
+    storage_limit = fs_used_bytes() + length;
+    int letter = writer_export_pdf(0, "letter.PDF", WRITER_PDF_LETTER);
+    assert(letter >= 0 && fs_size(letter) == (int)length && !memcmp(fs_data(letter), "%PDF-1.4", 8));
+    storage_limit = 8u * 1024u * 1024u; file_limit = 2097152;
+    assert(writer_file() == source && writer_file_identity() == identity && writer_dirty());
+    assert(writer_binding(&after) && !memcmp(&after, &baseline, sizeof baseline));
+    assert(writer_caret() == caret && writer_anchor() == anchor); compare_docs(&prior, writer_document());
+    writes = write_count; creates = create_count; syncs = sync_count;
+    assert(writer_export_pdf(0, "letter.PDF", WRITER_PDF_LETTER) < 0);
+    assert(create_count == creates && write_count == writes && sync_count == syncs);
+    /* PDF extension and signature never become plain-text import. */
+    assert(!writer_open_file(letter)); assert(strstr(writer_status(), "export-only")); compare_docs(&prior, writer_document());
+    strcpy(files[letter].name, "signature.txt"); assert(!writer_open_file(letter)); assert(strstr(writer_status(), "PDF"));
+    strcpy(files[letter].name, "letter.PDF");
+    sync_failure = 1; assert(writer_export_pdf(0, "pending.pdf", WRITER_PDF_A4) < 0);
+    int pending = fs_find_child(0, "pending.pdf"); assert(pending >= 0 && fs_size(pending) > 0);
+    assert(strstr(writer_status(), "RAM") && strstr(writer_status(), "Retry"));
+    writes = write_count; creates = create_count; syncs = sync_count;
+    assert(writer_export_pdf(0, "pending.pdf", WRITER_PDF_LETTER) < 0);
+    assert(sync_count == syncs && write_count == writes && create_count == creates);
+    assert(writer_export_pdf(0, "pending.pdf", WRITER_PDF_A4) < 0); assert(sync_count == syncs + 1);
+    assert(write_count == writes && create_count == creates); /* Sync retry never rewrites. */
+    key(0x4f, WRITER_MOD_CTRL); type(" changed");
+    assert(writer_export_pdf(0, "pending.pdf", WRITER_PDF_A4) < 0); assert(strstr(writer_status(), "differs"));
+    key(0x2c, WRITER_MOD_CTRL); compare_docs(&prior, writer_document());
+    unsigned char saved_byte = files[pending].data[9]; files[pending].data[9] ^= 1;
+    assert(writer_export_pdf(0, "pending.pdf", WRITER_PDF_A4) < 0); assert(strstr(writer_status(), "outside"));
+    assert(sync_count == syncs + 1 && write_count == writes); files[pending].data[9] = saved_byte;
+    files[pending].size--; assert(writer_export_pdf(0, "pending.pdf", WRITER_PDF_A4) < 0); files[pending].size++;
+    sync_failure = 0; assert(writer_export_pdf(0, "pending.pdf", WRITER_PDF_A4) == pending);
+    assert(write_count == writes && create_count == creates && sync_count == syncs + 2);
+    assert(writer_file() == source && writer_file_identity() == identity && writer_dirty());
+    assert(writer_binding(&after) && !memcmp(&after, &baseline, sizeof baseline));
+    /* A deleted target's reused ID does not carry pending-export ownership. */
+    sync_failure = 1; assert(writer_export_pdf(0, "reused.pdf", WRITER_PDF_A4) < 0);
+    int reused = fs_find_child(0, "reused.pdf"); assert(fs_delete(reused) == 0);
+    assert(fs_create(0, "reused.pdf") == reused); assert(fs_write(reused, "external", 8) == 8);
+    writes = write_count; syncs = sync_count;
+    assert(writer_export_pdf(0, "reused.pdf", WRITER_PDF_A4) < 0);
+    assert(fs_size(reused) == 8 && !memcmp(fs_data(reused), "external", 8));
+    assert(write_count == writes && sync_count == syncs); sync_failure = 0;
+    fs_delete(letter); fs_delete(pending); fs_delete(reused);
+    sync_failure = 1; assert(writer_export_pdf(0, "orphan.pdf", WRITER_PDF_LETTER) < 0);
+    int orphan = fs_find_child(0, "orphan.pdf"); assert(orphan >= 0);
+    writer_new(); sync_failure = 0; writes = write_count; syncs = sync_count;
+    assert(writer_export_pdf(0, "orphan.pdf", WRITER_PDF_LETTER) < 0);
+    assert(write_count == writes && sync_count == syncs && fs_size(orphan) > 0); fs_delete(orphan);
+    /* Dense styles exceed the arena while the ordinary document stays valid. */
+    writer_doc_init(&fixture); fixture.length = WRITER_TEXT_MAX;
+    for (unsigned i = 0; i < fixture.length; i++) { fixture.text[i] = 'W'; fixture.style[i] = (unsigned char)(i & 7); }
+    fixture.paragraph[0] = WRITER_PARAGRAPH_HEADING;
+    unsigned bytes; assert(!writer_native_encode(&fixture, encoded, sizeof encoded, &bytes));
+    assert(writer_restore(encoded, bytes, -1, 0, 1, 8, 3)); prior = *writer_document(); creates = create_count; writes = write_count;
+    assert(writer_export_pdf(0, "large.pdf", WRITER_PDF_A4) < 0); assert(strstr(writer_status(), "512 KiB"));
+    assert(create_count == creates && write_count == writes); compare_docs(&prior, writer_document());
+    assert(writer_dirty() && writer_caret() == 8 && writer_anchor() == 3);
+    writer_doc_init(&fixture); fixture.length = WRITER_TEXT_MAX;
+    for (unsigned i = 0; i <= fixture.length; i++) {
+        if (i < fixture.length) fixture.text[i] = '\n';
+        fixture.paragraph[i] = WRITER_PARAGRAPH_HEADING;
+    }
+    assert(!writer_native_encode(&fixture, encoded, sizeof encoded, &bytes));
+    assert(writer_restore(encoded, bytes, -1, 0, 1, 8, 3)); prior = *writer_document();
+    assert(writer_pdf_export(&prior, WRITER_PDF_LETTER, NULL, 0, &length, &pages) == WRITER_PDF_OK && pages == 1214);
+    int maximum = writer_export_pdf(0, "1214-pages.pdf", WRITER_PDF_LETTER);
+    assert(maximum >= 0 && fs_size(maximum) == (int)length && writer_dirty());
+    compare_docs(&prior, writer_document()); fs_delete(maximum);
+    /* Export never inserts history or consumes redo. */
+    writer_new(); type("first"); ticks += 71; type(" second"); key(0x2c, WRITER_MOD_CTRL); check_text("first");
+    int clean = writer_export_pdf(0, "history.pdf", WRITER_PDF_LETTER); assert(clean >= 0 && writer_dirty());
+    key(0x15, WRITER_MOD_CTRL); check_text("first second"); fs_delete(clean);
+    writer_new(); int empty = writer_export_pdf(0, "empty.pdf", WRITER_PDF_LETTER); assert(empty >= 0 && !writer_dirty() && writer_file() == -1); fs_delete(empty);
+    puts("Writer PDF: exact storage preflight, safe failures, identity/content sync-only retry, native/history preservation passed");
+}
 static void test_layout(void) {
     load_fixture("iiii WWWW and words\ncenter\nright\n");
     writer_layout(90); assert(writer_line_count() > 4);
@@ -431,6 +547,22 @@ static void test_drawing(const char *path) {
     unsigned anchor = writer_anchor(); assert(writer_drag(30,20,720,520,180,130) & WRITER_CHANGED);
     assert(writer_anchor() == anchor && writer_caret() != anchor); writer_release();
     assert(!writer_drag(30,20,720,520,200,180));
+    for (int width = WRITER_MIN_W; width <= WRITER_W; width += WRITER_W - WRITER_MIN_W) {
+        assert(ui_string_w("Tab: focus   Arrows/Space: paper   Esc: cancel") <= 376);
+        assert(ui_string_w("RTF") + 8 <= 42 && ui_string_w("PDF") + 8 <= 42);
+        assert(writer_click(30,20,width,260,30+270,20+35,0) == WRITER_REQUEST_EXPORT);
+        assert(writer_click(30,20,width,260,30+311,20+59,0) == WRITER_REQUEST_EXPORT);
+        assert(writer_click(30,20,width,260,30+316,20+35,0) == WRITER_REQUEST_PDF);
+        assert(writer_click(30,20,width,260,30+357,20+59,0) == WRITER_REQUEST_PDF);
+        assert(writer_click(30,20,width,260,30+314,20+40,0) == 0);
+    }
+    assert(writer_key(0x19, 0, WRITER_MOD_CTRL | WRITER_MOD_SHIFT) == WRITER_REQUEST_PDF);
+    assert(writer_key(0x19, 0, WRITER_MOD_CTRL) == 0);
+    assert(writer_key(0x19, 0, WRITER_MOD_CTRL | WRITER_MOD_SHIFT | WRITER_MOD_ALT) == 0);
+    key(0x21, WRITER_MOD_CTRL);
+    assert(writer_key(0x19, 0, WRITER_MOD_CTRL | WRITER_MOD_SHIFT) == WRITER_REQUEST_PDF);
+    assert(writer_key(0x12, 0, WRITER_MOD_CTRL | WRITER_MOD_SHIFT) == WRITER_REQUEST_EXPORT);
+    key(0x01, 0);
     if (path) {
         select_range(17,31); writer_draw(30,20,720,520); write_ppm(path);
         char search_path[256]; snprintf(search_path, sizeof(search_path), "%s-search.ppm", path);
@@ -442,8 +574,9 @@ static void test_drawing(const char *path) {
 int main(int argc, char **argv) {
     files[0].valid = files[0].folder = 1; files[0].identity = 1;
     gfx_init(back, linear, 800, 600, 32, 3200);
-    test_editing(); test_history(); test_files(); test_binding_fingerprints(); test_layout(); test_search(); test_viewport_reveal(); test_heading_coverage(); test_drawing(argc > 1 ? argv[1] : NULL);
+    test_editing(); test_history(); test_files(); test_binding_fingerprints(); test_pdf_export(); test_layout(); test_search(); test_viewport_reveal(); test_heading_coverage(); test_drawing(argc > 1 ? argv[1] : NULL);
     assert(polls > 100); assert(sync_count >= 4);
     for (int i = 1; i < 20; i++) if (files[i].valid) free(files[i].data);
     puts("All Writer host functional checks passed.");
+    return 0;
 }

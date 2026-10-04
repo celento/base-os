@@ -12,6 +12,7 @@ typedef struct {
     unsigned cwd_identity;
     int task_dirty;
     char task_name[TERM_TASK_NAME_LEN];
+    char task_document[TERM_TASK_NAME_LEN];
     unsigned task_started, task_instance;
     int canvas_width,canvas_height;
     unsigned char canvas[PROGRAM_CANVAS_MAX_WIDTH*PROGRAM_CANVAS_MAX_HEIGHT];
@@ -68,7 +69,7 @@ static const Manual commands[]={
     {"download","download HTTP_URL PATH","Download a complete HTTP response to a new file in the background.","download http://10.0.2.2:8000/song.wav /song.wav","Up to 2 MiB on the data disk. Never overwrites. HTTP only, no redirects."},
     {"downloads","downloads [status|cancel]","Show the current download, byte progress and disk save status.","downloads","The download survives closing Terminal. One network request at a time."},
     {"cancel","cancel [download]","Cancel the background download without creating a partial file.","cancel","Only the download is stopped; another app's network request is untouched."},
-    {"start","start FILE","Start a protected BEX1 app alongside the desktop.","start /Programs/counter.bex","One task per terminal. Ctrl+C stops; closing this window stops it."},
+    {"start","start FILE [DOCUMENT]","Start a protected BEX1 app, optionally with a document path.","start /Programs/docstats.bex /Documents/stats-sample.txt","Quote paths with spaces. Ctrl+C stops; closing this window stops it."},
     {"stop","stop","Stop this terminal's native task.","stop","Ctrl+C also stops a task without waiting for the program."},
     {"tasks","tasks","List the running native task slots.","tasks","Sleeping and minimized tasks remain alive; closing a terminal stops it."},
     {"exec","exec FILE","Run a BEX1 native x86 program in protected memory.","exec /Programs/hello.bex","64 KB memory; two-second limit. Faults return to the terminal."}
@@ -163,6 +164,10 @@ int term_task_running(int slot){
     return state==PROCESS_TASK_READY||state==PROCESS_TASK_SLEEPING;
 }
 int term_task_start_file(int slot,int file,unsigned identity){
+    return term_task_start_file_with_arg(slot,file,identity,0,0);
+}
+int term_task_start_file_with_arg(int slot,int file,unsigned identity,
+                                   const char *argument,unsigned argument_length){
     if(slot<0||slot>=PROCESS_TASKS)return -1;
     int previous=selected;term_select(slot);
     int result=-1;
@@ -170,13 +175,22 @@ int term_task_start_file(int slot,int file,unsigned identity){
         push("Cannot start: the selected program changed or is no longer a file.");
     else if(term_task_running(slot))
         push("Cannot start: this terminal already has a native task.");
+    else if(argument_length>PROCESS_ARGUMENT_MAX||
+            (argument_length&&(!argument||argument[0]!='/')))
+        push("Cannot start: use an absolute document path of at most 128 bytes.");
     else {
         ProgramIO io={push,plot,0,0,canvas_resize};
         /* No task runs between this identity check and the loader's owned copy. */
-        if(process_task_start(slot,fs_data(file),fs_size(file),&io))
+        if(process_task_start_with_arg(slot,fs_data(file),fs_size(file),&io,argument,argument_length))
             push("Cannot start: not a supported BEX1 program (maximum 49152 bytes).");
         else {
             kstrcpy(T.task_name,fs_name(file));T.task_started=timer_ticks();
+            unsigned first=0;
+            for(unsigned i=0;i<argument_length;i++)if(argument[i]=='/')first=i+1;
+            unsigned n=argument_length-first;
+            if(n>=sizeof T.task_document)n=sizeof T.task_document-1;
+            if(n)kmemcpy(T.task_document,argument+first,n);
+            T.task_document[n]=0;
             if(!++next_task_instance)++next_task_instance;
             T.task_instance=next_task_instance;
             canvas_reset();T.scroll=0;
@@ -195,14 +209,25 @@ int term_task_info(int slot,TermTaskInfo *out){
     if(state!=PROCESS_TASK_READY&&state!=PROCESS_TASK_SLEEPING)return 0;
     const Terminal *t=&terms[slot];
     kstrcpy(out->name,t->task_name[0]?t->task_name:"Native task");
+    kstrcpy(out->document,t->task_document);
     out->owner=slot;out->state=state;
     out->started_ticks=t->task_started;out->instance=t->task_instance;
     out->elapsed_sec=t->task_instance?(unsigned)(timer_ticks()-t->task_started)/TIMER_HZ:0;
     return 1;
 }
+int term_task_title(int slot,char *out,int capacity){
+    if(!out||capacity<=0)return 0;
+    out[0]=0;TermTaskInfo info;
+    if(!term_task_info(slot,&info))return 0;
+    const char *parts[3]={info.name,info.document[0]?" - ":"",info.document};
+    int used=0;
+    for(int p=0;p<3;p++)for(int i=0;parts[p][i]&&used<capacity-1;i++)out[used++]=parts[p][i];
+    out[used]=0;return 1;
+}
 static void task_metadata_clear(int slot){
     if(slot<0||slot>=PROCESS_TASKS)return;
     kmemset(terms[slot].task_name,0,sizeof terms[slot].task_name);
+    kmemset(terms[slot].task_document,0,sizeof terms[slot].task_document);
     terms[slot].task_started=terms[slot].task_instance=0;
 }
 int term_task_key(int slot,int key){return process_task_key(slot,key);}
@@ -235,6 +260,25 @@ int term_task_poll(void){
     return changed;
 }
 static int execute(const char *,int,int *);
+static int start_command(int file,const char *remaining,int quoted){
+    if(quoted)remaining++;
+    if(*remaining&&*remaining!=' ')return -1;
+    while(*remaining==' ')remaining++;
+    if(!*remaining)return term_task_start_file(selected,file,fs_identity(file));
+    char input[TERM_COLS+1];unsigned n=0;char quote=*remaining=='"'?*remaining++:0;
+    while(*remaining&&(quote?*remaining!=quote:*remaining!=' ')&&n<TERM_COLS)
+        input[n++]=*remaining++;
+    input[n]=0;
+    if(quote){if(*remaining!='"')return -1;remaining++;}
+    while(*remaining==' ')remaining++;
+    if(!n||*remaining){push("Usage: start FILE [DOCUMENT] (quote paths with spaces)");return -1;}
+    int document=fs_resolve(term_cwd(),input);
+    if(!fs_valid(document)||fs_is_dir(document)||fs_is_app(document)){
+        push("Cannot start: the document is not an ordinary file.");return -1;
+    }
+    char path[FS_PATH_LEN];fs_path(document,path,sizeof path);
+    return term_task_start_file_with_arg(selected,file,fs_identity(file),path,(unsigned)kstrlen(path));
+}
 static int script(int id,int depth,int *budget){
     if(depth>=4||!fs_valid(id)||fs_is_dir(id))return -1;
     /* Copy each script so deleting its source cannot change the running program. */
@@ -285,13 +329,14 @@ static int execute(const char *s,int depth,int *budget){
         int found=0;
         for(int slot=0;slot<PROCESS_TASKS;slot++)if(term_task_running(slot)){
             print_number(process_task_status(slot)==PROCESS_TASK_SLEEPING?"Sleeping, terminal slot ":"Running, terminal slot ",(unsigned)slot+1);found=1;
+            char title[TERM_TASK_TITLE_LEN];term_task_title(slot,title,sizeof title);push(title);
         }
         if(!found)push("No native tasks are running.");
     }
     else if(!kstrcmp(cmd,"stop")){if(!term_task_running(selected))push("No native task in this terminal.");else term_task_stop(selected);}
     else if(!kstrcmp(cmd,"start")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
-        return term_task_start_file(selected,id,fs_identity(id));
+        return start_command(id,p,quote!=0);
     }
     else if(!kstrcmp(cmd,"basic")||!kstrcmp(cmd,"exec")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;

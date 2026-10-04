@@ -7,14 +7,22 @@ static unsigned char terminal_arena[0x100000];
 #include "../src/term.c"
 static int states[PROCESS_TASKS],exit_next[PROCESS_TASKS],steps[PROCESS_TASKS];
 static ProgramIO callbacks[PROCESS_TASKS];
+static char arguments[PROCESS_TASKS][PROCESS_ARGUMENT_MAX+1];
 int basic_run(const char *s,int n,const ProgramIO *io){(void)s;(void)n;(void)io;return 0;}
 int program_key(void){return 0;}
 void program_present(void){}
 int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;return 0;}
 int process_task_start(int owner,const void *p,unsigned n,const ProgramIO *io){
+    return process_task_start_with_arg(owner,p,n,io,0,0);
+}
+int process_task_start_with_arg(int owner,const void *p,unsigned n,const ProgramIO *io,
+                                const char *argument,unsigned length){
     assert(owner>=0&&owner<8&&p&&n>=16&&io);
+    assert(length<=PROCESS_ARGUMENT_MAX&&(!length||(argument&&argument[0]=='/')));
     if(states[owner]==PROCESS_TASK_READY||states[owner]==PROCESS_TASK_SLEEPING)return -1;
-    states[owner]=PROCESS_TASK_READY;callbacks[owner]=*io;return 0;
+    states[owner]=PROCESS_TASK_READY;callbacks[owner]=*io;
+    if(length)memcpy(arguments[owner],argument,length);
+    arguments[owner][length]=0;return 0;
 }
 int process_task_step(int owner){
     if(states[owner]!=PROCESS_TASK_READY)return 0;
