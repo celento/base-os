@@ -44,5 +44,7 @@ int input_pop(InputIngress *in, InputSample *sample);
 /* Fence pending pointer samples before autonomous scene/lifetime changes.
  * Keyboard samples keep their order. No dispatch or callbacks occur here. */
 void input_pointer_fence(InputIngress *in);
+/* End an exclusive synchronous input owner without replaying its backlog. */
+void input_discard(InputIngress *in);
 void input_resize(InputIngress *in, int width, int height);
 #endif

@@ -36,6 +36,8 @@ const char *term_input(void);
 void term_char(char c);
 void term_backspace(void);
 void term_enter(void);
+/* Desktop input ownership around synchronous BASIC/exec only. */
+void term_set_program_input(void (*hook)(int active));
 
 /* Desktop-owned task integration. Poll once per desktop turn, never in IRQs. */
 #define TERM_TASK_NAME_LEN 24

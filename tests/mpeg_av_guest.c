@@ -67,8 +67,7 @@ static int av_poll(void){
 #endif
     unsigned ticks=timer_ticks()-before;if(ticks>max_poll_ticks)max_poll_ticks=ticks;
     drain_8042();
-    while(kqn){uint8_t sc=kq[0];for(int i=1;i<kqn;++i)kq[i-1]=kq[i];--kqn;
-        key_pressed=key_char=key_sc=0;keyboard_handle_byte(sc);if(key_pressed)handle_key();}
+    desktop_input_turn();
     uint16_t cw;__asm__ volatile("fnstcw %0":"=m"(cw));require_av(cw==0x0b7f,"MPEG changed x87 control");
     require_av(video_status()->state!=VIDEO_ERROR,video_error_string(video_status()->error));
     require_av(audio_status()->state!=AUDIO_ERROR,media_error_string(audio_status()->error));

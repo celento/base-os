@@ -23,10 +23,7 @@ static void video_pump(void) {
     unsigned elapsed=timer_ticks()-start;
     if(elapsed>video_max_poll_ticks)video_max_poll_ticks=elapsed;
     audio_poll();drain_8042();
-    while(kqn>0){
-        uint8_t sc=kq[0];for(int j=1;j<kqn;++j)kq[j-1]=kq[j];--kqn;
-        key_pressed=key_char=key_sc=0;keyboard_handle_byte(sc);if(key_pressed)handle_key();
-    }
+    desktop_input_turn();
     uint16_t control;
     __asm__ volatile("fnstcw %0":"=m"(control));
     require_video(control==0x0b7f,"video altered x87 control word");

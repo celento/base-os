@@ -35,8 +35,8 @@ class FileViewKernelTests(unittest.TestCase):
                          'fm_select_id', 'fm_new_file', 'fm_rename_begin', 'fm_rename_commit',
                          'do_duplicate', 'files_clipboard_action', 'do_new_folder', 'fm_go_up',
                          'fm_open_selected', 'files_filter_y', 'files_list_y', 'files_rows',
-                         'files_scroll', 'double_click', 'handle_files_click', 'files_drop'):
-                operations += function(source, name)
+                         'files_scroll', 'input_gesture_ticks', 'double_click', 'handle_files_click', 'files_drop'):
+                operations += function(source, name).replace('input_routing ? input_sample_ticks : frame_count', 'frame_count')
             (directory / 'files_kernel_ops.inc').write_text(operations)
             executable = directory / 'files-kernel-host'
             compiler = shutil.which('clang') or shutil.which('cc')
