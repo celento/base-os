@@ -156,6 +156,13 @@ static void lifetimes(void){
     start(2);old=current_task->owner_id;
     if(!setjmp(leave_target))finish(-3);
     assert(current_task->state==PROCESS_TASK_DONE&&!current_task->owner_id&&stub_last_released==old);
+    /* Direct allocator boundary, no runtime fault or malformed app involved. */
+    owner_serial=BOS_HANDLE_SERIAL_MAX-1;
+    assert(allocate_owner()==(BOS_HANDLE_TYPE_PROCESS|BOS_HANDLE_SERIAL_MAX));
+    assert(allocate_owner()==BOS_HANDLE_INVALID&&allocate_owner()==BOS_HANDLE_INVALID);
+    active=0;
+    assert(process_task_start_with_arg(2,program,sizeof program,&io,0,0)==-2);
+    assert(current_task->state==PROCESS_TASK_DONE&&!current_task->owner_id);
     puts("Native platform dispatcher: negotiation, bounded copy, wait/timeout, context support and owner cleanup passed.");
 }
 int main(void){query();file_dispatch();waits();lifetimes();return 0;}
