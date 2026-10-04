@@ -4,7 +4,7 @@
 static void task_check(int ok,const char *why){if(!ok)panic(why);}
 static void task_print(const char *text){(void)text;}
 static void task_pixel(int x,int y,int color){(void)x;(void)y;(void)color;}
-static ProgramIO task_io={task_print,task_pixel,0,0};
+static ProgramIO task_io={task_print,task_pixel,0,0,0};
 typedef struct {unsigned owner,value,steps,keys,last_key,checksum;} TaskRecord;
 static TaskRecord record(int owner){
     char path[]="/Documents/task-1.dat";path[16]=(char)('0'+owner);

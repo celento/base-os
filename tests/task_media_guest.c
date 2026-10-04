@@ -33,7 +33,7 @@ void feature_test(void){
     wins[second].x=22;wins[second].y=385;wins[second].w=580;wins[second].h=285;
     check(first==0&&second==1&&term_task_running(first)&&term_task_running(second),"counter owners");
     term_task_key(first,'+');term_task_key(first,'+');term_task_key(second,'+');
-    ProgramIO io={quiet,pixel,0,0};
+    ProgramIO io={quiet,pixel,0,0,0};
     check(!process_task_start(6,task_fpu_a,sizeof task_fpu_a,&io),"media FPU task A");
     check(!process_task_start(7,task_fpu_b,sizeof task_fpu_b,&io),"media FPU task B");
     browser_init();browser_open(TASK_ORIGIN "/slow");

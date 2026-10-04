@@ -9,7 +9,7 @@ SECTIONS {
     .data : { *(.data .data.*) } :data
     __file_end = .;
     .bss (NOLOAD) : { *(.bss .bss.*) *(COMMON) } :data
-    ASSERT(__file_end <= 16383, "BEX1 executable exceeds 16383-byte image limit")
+    ASSERT(__file_end <= 49152, "BEX1 executable exceeds 49152-byte image limit")
     ASSERT(. <= 49152, "application needs to leave 16 KiB for its stack")
     /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
 }

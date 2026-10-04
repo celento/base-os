@@ -35,5 +35,26 @@ static inline int bos_yield(void) { return bos_call(10,0,0,0,0,0); }
 static inline int bos_sleep(unsigned milliseconds) { return bos_call(11,milliseconds,0,0,0,0); }
 /* One-based terminal slot for a task; 0 for synchronous exec. */
 static inline unsigned bos_task_id(void) { return (unsigned)bos_call(12,0,0,0,0,0); }
+/* Offset is a byte offset, not a pointer. A bounded read returns 0 at/beyond EOF.
+ * Each call resolves the path again: files edited between chunks are not snapshots. */
+static inline int bos_read_file_at(const char *path,void *out,unsigned capacity,unsigned offset) {
+    return bos_call(13,(unsigned)path,bos_strlen(path),(unsigned)out,capacity,offset);
+}
+/* Exactly 160x100 (default) or 320x200. Success clears every canvas pixel.
+ * A new program always starts at 160x100, even in a reused Terminal. */
+static inline int bos_canvas_size(unsigned width,unsigned height) {
+    return bos_call(14,width,height,0,0,0);
+}
+/* Replace one /Documents file in RAM, atomically, with up to 32 KiB.
+ * IDE storage is required above 16383 bytes. Call bos_sync for durable storage. */
+static inline int bos_replace_file(const char *path,const void *data,unsigned bytes) {
+    return bos_call(15,(unsigned)path,bos_strlen(path),(unsigned)data,bytes,0);
+}
+/* Flush the filesystem snapshot: 0 is durable success; -1 leaves RAM pending.
+ * This flushes other applications' pending files too and can delay scheduling. */
+static inline int bos_sync(void) { return bos_call(16,0,0,0,0,0); }
+#define BOS_DOCUMENT_MAX 32768u
+#define BOS_FILE_CHUNK_MAX 4096u
+#define BOS_IMAGE_MAX 49152u
 #define BOS_TICKS_PER_SECOND 70u
 #endif
