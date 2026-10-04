@@ -200,6 +200,16 @@ def focus_client(session, font, target, clients, item, timeout):
     raise AssertionError('Could not acknowledge foreground ' + identity(target))
 
 
+def require_adjacent_durable_path(visible, path):
+    # Separate ordinary PRINT calls occupy separate production Terminal lines.
+    # Keep the exact owner/generation/round path immediately below its label;
+    # matching unrelated text elsewhere in the screenshot is insufficient.
+    labels = visible['lines'].get('Durable', [])
+    paths = visible['lines'].get(path, [])
+    if not any(px == x and py == y + 19 for x, y in labels for px, py in paths):
+        raise AssertionError('Durable label and exact owner report path are not adjacent')
+
+
 def verify_client(session, font, client, plan, item, saved, timeout, label):
     client['round'] += 1
     session.key('v')
@@ -208,8 +218,9 @@ def verify_client(session, font, client, plan, item, saved, timeout, label):
              f"Generation: {client['generation']}", f"Task: {client['task']}", f"Round: {client['round']}",
              f'Workspace bytes: {WORKSPACE}', f'Zero bytes: {WORKSPACE}',
              f"Checksum: {plan['checksum']}", f"Mapped pages: {plan['mapped_pages']}",
-             f"Owned pages: {plan['owned_pages']}", 'Table pages: 2', 'Durable ' + path]
-    desktop.wait_visible(session, font, fixed, label, timeout)
+             f"Owned pages: {plan['owned_pages']}", 'Table pages: 2', 'Durable', path]
+    visible = desktop.wait_visible(session, font, fixed, label, timeout)
+    require_adjacent_durable_path(visible, path)
     pixels = np.asarray(Image.open(session.directory / (label + '.png')).convert('RGB'))
     counts = {key: read_decimal(font, pixels, prefix) for key, prefix in zip(SDK_FIELDS, SDK_LABELS)}
     check_memory_counts(counts, plan, item['serial_boot_baseline'], item['live_owned_pages'])

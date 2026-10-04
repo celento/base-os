@@ -291,6 +291,19 @@ class LargerMemoryInputTests(unittest.TestCase):
                              ["AssertionError('not foreground')", "AssertionError('later miss')"])
             self.assertEqual(session.keys, ['ctrl-tab', 'ctrl-tab'])
 
+    def test_durable_label_and_owner_path_require_adjacent_separate_lines(self):
+        path = '/Documents/mem-v2-g1-t3-r1.txt'
+        good = dict(lines={'Durable': [[15, 577]], path: [[15, 596]]})
+        gate.require_adjacent_durable_path(good, path)
+        for locations in ([], [[15, 577]], [[23, 596]], [[15, 615]]):
+            with self.assertRaisesRegex(AssertionError, 'not adjacent'):
+                gate.require_adjacent_durable_path(dict(lines={'Durable': [[15, 577]], path: locations}), path)
+        with self.assertRaises(AssertionError):
+            gate.require_adjacent_durable_path(good, '/Documents/mem-v1-g1-t2-r1.txt')
+        source = (ROOT / 'tools/larger_memory_input_test.py').read_text()
+        self.assertIn("'Table pages: 2', 'Durable', path]", source)
+        self.assertNotIn("'Durable ' + path]", source)
+
     def test_generations_keep_relaunch_reports_distinct_even_with_reused_slot(self):
         first = dict(variant=2, generation=1, task=3, round=1)
         replacement = dict(first, generation=2)
