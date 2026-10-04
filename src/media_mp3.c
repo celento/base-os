@@ -69,6 +69,10 @@ static int frame_info(const uint8_t *h, unsigned *rate, unsigned *channels,
     return 1;
 }
 int media_mp3_open(MediaMp3 *mp3, const void *file, uint32_t bytes) {
+    return media_mp3_open_polled(mp3, file, bytes, 0);
+}
+int media_mp3_open_polled(MediaMp3 *mp3, const void *file, uint32_t bytes,
+                          void (*poll)(void)) {
     if (!mp3 || !file || bytes < 4) return MEDIA_BAD_FILE;
 #ifndef MEDIA_MP3_HOST_TEST
     if (!have_fpu()) return MEDIA_UNSUPPORTED;
@@ -87,7 +91,7 @@ int media_mp3_open(MediaMp3 *mp3, const void *file, uint32_t bytes) {
     }
     uint32_t first = cursor, end = bytes;
     if (end >= 128 && p[end-128]=='T' && p[end-127]=='A' && p[end-126]=='G') end -= 128;
-    unsigned initial_rate = 0, initial_channels = 0;
+    unsigned initial_rate = 0, initial_channels = 0, scanned = 0;
     while (cursor < end) {
         unsigned rate, channels, frames, frame_bytes;
         if (end - cursor < 4 || !frame_info(p + cursor, &rate, &channels, &frames, &frame_bytes) ||
@@ -96,6 +100,7 @@ int media_mp3_open(MediaMp3 *mp3, const void *file, uint32_t bytes) {
         if (rate != initial_rate || channels != initial_channels) return MEDIA_UNSUPPORTED;
         if (UINT32_MAX - total < frames) return MEDIA_TOO_LARGE;
         total += frames; cursor += frame_bytes;
+        if (!(++scanned & 63u) && poll) poll();
     }
     if (!total) return MEDIA_BAD_FILE;
     mp3_zero(mp3, 0, sizeof(*mp3));

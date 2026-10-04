@@ -40,6 +40,9 @@
 #define SHEET_CAPACITY 0x2E0000
 #define AUDIO_WORK_BASE 0x1700000
 #define AUDIO_WORK_CAPACITY 0x200000
+/* Reuses legacy FS pool/staging only after a high-arena large-volume mount. */
+#define AUDIO_LARGE_WORK_BASE 0x2000000
+#define AUDIO_LARGE_WORK_CAPACITY 0x1000000
 #define FS_IMG_BASE 0x2800000
 #define FS_IMG_CAPACITY 0x800000
 #define DESK_CACHE 0xA00000

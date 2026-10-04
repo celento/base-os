@@ -15,6 +15,7 @@
 #define RING_BYTES 65536u
 #define HALF_BYTES (RING_BYTES / 2)
 #define PCM_SAMPLES_PER_POLL 4096u
+#define SOURCE_COPY_BYTES_PER_POLL 16384u
 #define SB_BASE 0x220
 #define DSP_WRITE (SB_BASE + 0x0c)
 #define DSP_STATUS (SB_BASE + 0x0e)
@@ -32,15 +33,20 @@ static inline void audio_out(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0,%1" :: "a"(value), "Nd"(port) : "memory");
 }
 #define DMA_BUFFER ((uint8_t *)AUDIO_DMA_BASE)
-#define SOURCE_BUFFER ((uint8_t *)AUDIO_WORK_BASE)
+#define DEFAULT_SOURCE_BUFFER ((uint8_t *)AUDIO_WORK_BASE)
+#define LARGE_SOURCE_BUFFER ((uint8_t *)AUDIO_LARGE_WORK_BASE)
 #else
 extern uint8_t audio_in(uint16_t port);
 extern void audio_out(uint16_t port, uint8_t value);
 extern uint8_t audio_test_dma[RING_BYTES], audio_test_source[AUDIO_WORK_CAPACITY];
+extern uint8_t audio_test_large_source[AUDIO_LARGE_WORK_CAPACITY];
 #define DMA_BUFFER audio_test_dma
-#define SOURCE_BUFFER audio_test_source
+#define DEFAULT_SOURCE_BUFFER audio_test_source
+#define LARGE_SOURCE_BUFFER audio_test_large_source
 #endif
 
+static uint8_t *source_buffer = DEFAULT_SOURCE_BUFFER;
+static uint32_t source_capacity = AUDIO_WORK_CAPACITY;
 static AudioStatus status;
 static MediaWave wave;
 static MediaMp3 mp3;
@@ -154,17 +160,37 @@ void audio_stop(void) {
     hardware_stop(); clear_pcm_stream(); status.state = AUDIO_STOPPED; status.error = MEDIA_OK;
     status.played_frames = 0; ready_mask = loading_paused = 0;
 }
+int audio_configure_source_workspace(int large_profile_active, int large_arenas_available) {
+    if (status.state != AUDIO_STOPPED) return 0;
+    unsigned large = large_profile_active && large_arenas_available;
+    source_buffer = large ? LARGE_SOURCE_BUFFER : DEFAULT_SOURCE_BUFFER;
+    source_capacity = large ? AUDIO_LARGE_WORK_CAPACITY : AUDIO_WORK_CAPACITY;
+    return 1;
+}
+static void own_source(const uint8_t *source, uint32_t bytes) {
+    /* Validation has succeeded. Stop before overwriting even one source byte;
+     * device polls below must not decode partially replaced WAV/MP3 state.
+     * platform_poll collects input and services devices, never dispatches apps
+     * or filesystem mutations, so a borrowed input remains valid for the copy. */
+    audio_stop();
+    for (uint32_t offset = 0; offset < bytes;) {
+        uint32_t count = bytes - offset;
+        if (count > SOURCE_COPY_BYTES_PER_POLL) count = SOURCE_COPY_BYTES_PER_POLL;
+        for (uint32_t i = 0; i < count; ++i) source_buffer[offset + i] = source[offset + i];
+        offset += count;
+        platform_poll();
+    }
+}
 int audio_play_wav(const void *data, uint32_t bytes) {
     MediaWave parsed;
     if (!status.available) { status.error = MEDIA_NO_DEVICE; return MEDIA_NO_DEVICE; }
-    if (bytes > AUDIO_WORK_CAPACITY) { status.error = MEDIA_TOO_LARGE; return MEDIA_TOO_LARGE; }
+    if (bytes > source_capacity) { status.error = MEDIA_TOO_LARGE; return MEDIA_TOO_LARGE; }
     int error = media_wave_open(&parsed, data, bytes);
     if (error) { status.error = error; return error; }
-    hardware_stop(); clear_pcm_stream();
-    const uint8_t *source = data;
-    for (uint32_t i = 0; i < bytes; ++i) SOURCE_BUFFER[i] = source[i];
-    error = media_wave_open(&wave, SOURCE_BUFFER, bytes);
-    if (error) { fail(error); return error; }
+    own_source(data, bytes);
+    /* Rebase the already validated metadata rather than rescanning the file. */
+    wave = parsed;
+    wave.data = source_buffer + (parsed.data - (const uint8_t *)data);
     status.state = AUDIO_LOADING; status.error = MEDIA_OK;
     status.format = AUDIO_FORMAT_WAVE; status.sample_rate = wave.sample_rate;
     status.channels = wave.channels; status.bits_per_sample = wave.bits_per_sample;
@@ -178,12 +204,14 @@ int audio_play(const void *data, uint32_t bytes) {
     if (p && bytes >= 4 && p[0] == 'R' && p[1] == 'I' && p[2] == 'F' && p[3] == 'F')
         return audio_play_wav(data, bytes);
     if (!status.available) { status.error = MEDIA_NO_DEVICE; return MEDIA_NO_DEVICE; }
-    if (bytes > AUDIO_WORK_CAPACITY) { status.error = MEDIA_TOO_LARGE; return MEDIA_TOO_LARGE; }
-    int error = media_mp3_open(&mp3, data, bytes);
+    if (bytes > source_capacity) { status.error = MEDIA_TOO_LARGE; return MEDIA_TOO_LARGE; }
+    /* Polled validation leaves mp3 untouched until every header is accepted.
+     * The old transport may therefore keep playing during a long scan. There
+     * is no poll between committing the new decoder metadata and stopping. */
+    int error = media_mp3_open_polled(&mp3, data, bytes, platform_poll);
     if (error) { status.error = error; return error; }
-    hardware_stop(); clear_pcm_stream();
-    for (uint32_t i = 0; i < bytes; ++i) SOURCE_BUFFER[i] = p[i];
-    mp3.data = SOURCE_BUFFER;
+    own_source(p, bytes);
+    mp3.data = source_buffer;
     status.state = AUDIO_LOADING; status.error = MEDIA_OK;
     status.format = AUDIO_FORMAT_MP3; status.sample_rate = mp3.sample_rate;
     status.channels = mp3.channels; status.bits_per_sample = 16;
@@ -356,7 +384,7 @@ void audio_set_volume(unsigned percent) {
     status.volume = percent > 100 ? 100 : percent;
     if (status.available) hardware_volume();
 }
-uint32_t audio_capacity_bytes(void) { return AUDIO_WORK_CAPACITY; }
+uint32_t audio_capacity_bytes(void) { return source_capacity; }
 void audio_clear_error(void) {
     if (status.state == AUDIO_ERROR) audio_stop();
     else status.error = MEDIA_OK;
@@ -375,3 +403,8 @@ _Static_assert(AUDIO_DMA_BASE % 65536 == 0 && AUDIO_DMA_CAPACITY >= RING_BYTES &
 _Static_assert(DMA_BASE + DMA_CAPACITY <= AUDIO_DMA_BASE, "floppy/audio DMA overlap");
 _Static_assert(AUDIO_DMA_BASE + AUDIO_DMA_CAPACITY <= AUDIO_WORK_BASE &&
                AUDIO_WORK_BASE + AUDIO_WORK_CAPACITY <= FS_IMG_BASE, "audio arena overlap");
+
+_Static_assert(AUDIO_LARGE_WORK_BASE == FS_POOL_BASE &&
+               AUDIO_LARGE_WORK_BASE + AUDIO_LARGE_WORK_CAPACITY == FS_IMG_BASE + FS_IMG_CAPACITY &&
+               AUDIO_LARGE_WORK_BASE + AUDIO_LARGE_WORK_CAPACITY <= TASK_BASE,
+               "large audio must exactly reuse the inactive legacy filesystem arenas");

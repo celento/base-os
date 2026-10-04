@@ -19,6 +19,13 @@ typedef struct {
 /* QEMU SB16 at 0x220, IRQ5 masked/polled, high DMA5. No heap or IRQ changes.
  * Initialize once after platform memory validation. Missing hardware is safe. */
 int audio_init(void);
+/* After fs_load_disk(), select owned input space using BOTH active backend and
+ * verified high-arena availability. Only an active high-arena filesystem frees
+ * the legacy 32--48 MiB region. Extra RAM with a default/legacy mount does not.
+ * Returns 1 on success, 0 unless AUDIO_STOPPED; never changes a live transport.
+ * Stop and release the large workspace before any filesystem reinitialization
+ * or mount reconfiguration. Ordinary playback/file mutations need no release. */
+int audio_configure_source_workspace(int large_profile_active, int large_arenas_available);
 /* Validates and takes an owned copy; caller can edit/delete the source file.
  * Work is scheduled by audio_poll, not by a blocking playback loop. */
 int audio_play(const void *data, uint32_t bytes);
