@@ -1,6 +1,7 @@
 /* Exact desktop dispatch with real Terminal/FS; process execution is guest-tested. */
 #define TERM_TASK_FIXTURE_ONLY
 #include "term_task_info_host.c"
+#include "file_view.h"
 #define MAX_WIN 8
 #define EDIT_BUF_SIZE 65536
 #define ICON_TRASH 2
@@ -10,7 +11,8 @@ enum { WK_NONE=-1, WK_TERM, WK_EDIT, WK_CLOCK, WK_CAL, WK_MINES, WK_2048,
        WK_VIEW, WK_BROWSER, WK_PLAYER };
 static struct {int open,kind,seq;} wins[MAX_WIN];
 static int context_slot,open_dlg,dirty,properties_id,launch_n,launch_len,launch_sel,launcher_on;
-static int fm_cwd,fm_count,fm_selected,fm_ids[FS_MAX_NODES];
+static int fm_cwd,fm_count,fm_total,fm_selected,fm_ids[FS_MAX_NODES];
+static FileViewOptions fm_view;
 static unsigned fm_ids_identity[FS_MAX_NODES];
 static int pick_count,pick_selected,pick_cwd,pick_writer,pick_sheet,pick_pics_only;
 static int pick_owner=-1,pick_owner_seq,pick_ids[FS_MAX_NODES],trash_id=-1,prefs_id=-1;
@@ -28,6 +30,7 @@ static int win_open(int kind){
     }return -1;
 }
 static void fm_set_cwd(int id){fm_cwd=id;}
+static int fm_cwd_valid(void){return fs_is_dir(fm_cwd);}
 static void fm_checked_cwd(void){if(!fs_is_dir(fm_cwd))fm_cwd=fs_root();}
 static int fm_has_parent(void){return fs_parent(fm_cwd)>=0;}
 static void fm_go_up(void){fm_cwd=fs_parent(fm_cwd);}
@@ -102,7 +105,8 @@ int main(void){
     launcher_run(0);assert(windows()==1&&term_task_running(0));close_all();
     /* A cached Files row and Open dialog likewise cannot activate a reused id. */
     select_file(replacement);assert(!fs_delete(replacement));first=executable("native one.bex");
-    assert(first==replacement);fm_open_selected();assert(!windows());fm_open_selected();assert(windows()==1);
+    assert(first==replacement);fm_open_selected();assert(!windows()&&fm_selected==-1);
+    fm_open_selected();assert(!windows());select_file(first);fm_open_selected();assert(windows()==1);
     close_all();pick_cwd=fs_root();od_refresh();
     for(int i=0;i<pick_count;i++)if(pick_ids[i]==first)pick_selected=i;
     assert(!fs_delete(first));replacement=executable("native one.bex");assert(replacement==first);

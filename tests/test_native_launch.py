@@ -35,7 +35,7 @@ class NativeLaunchTests(unittest.TestCase):
                      'str_has', 'launcher_refresh', 'launcher_close', 'launcher_run')
             (directory / 'native_launch_ops.inc').write_text(''.join(function(source, name) for name in names))
             self.compile_run('native_launch_host', directory,
-                             [ROOT / 'tests/net_stub.c', ROOT / 'src/download.c', '-DDOWNLOAD_HOST_TEST'])
+                             [ROOT / 'tests/net_stub.c', ROOT / 'src/download.c', ROOT / 'src/file_view.c', '-DDOWNLOAD_HOST_TEST'])
 
     def test_example_save_feedback(self):
         with tempfile.TemporaryDirectory(prefix='baseos-native-save-host-') as tmp:

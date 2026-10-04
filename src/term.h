@@ -33,8 +33,10 @@ void term_enter(void);
 
 /* Desktop-owned task integration. Poll once per desktop turn, never in IRQs. */
 #define TERM_TASK_NAME_LEN 24
+#define TERM_TASK_TITLE_LEN (TERM_TASK_NAME_LEN*2+3)
 typedef struct {
     char name[TERM_TASK_NAME_LEN]; /* Copied basename, not a mutable filesystem pointer. */
+    char document[TERM_TASK_NAME_LEN]; /* Copied startup basename, or empty. */
     int owner;                   /* Zero-based terminal/window slot. */
     int state;                   /* PROCESS_TASK_READY or PROCESS_TASK_SLEEPING. */
     unsigned started_ticks;      /* PIT time at the accepted start. */
@@ -43,10 +45,15 @@ typedef struct {
 } TermTaskInfo;
 /* Returns 1 for a live task, otherwise 0 and a cleared output. No selection change. */
 int term_task_info(int slot, TermTaskInfo *out);
+/* Copies the live program name, optionally followed by " - document". Returns
+ * 1 if live; otherwise clears out and returns 0. Does not change selection. */
+int term_task_title(int slot, char *out, int capacity);
 /* Start from an identity-matching ordinary file, copying its image and name.
  * Returns 0 on success, -1 on failure; preserves selected terminal and rejects
  * live owners without clearing their canvas, input or metadata. */
 int term_task_start_file(int slot, int file, unsigned identity);
+int term_task_start_file_with_arg(int slot, int file, unsigned identity,
+                                   const char *argument, unsigned argument_length);
 int term_task_poll(void);
 int term_task_running(int slot);
 int term_task_key(int slot, int key);

@@ -5,6 +5,7 @@
 #define PROCESS_IMAGE_LIMIT 49152u
 #define PROCESS_FILE_CHUNK_MAX 4096u
 #define PROCESS_DOCUMENT_MAX 32768u
+#define PROCESS_ARGUMENT_MAX 128u
 #define PROGRAM_CANVAS_DEFAULT_WIDTH 160u
 #define PROGRAM_CANVAS_DEFAULT_HEIGHT 100u
 #define PROGRAM_CANVAS_MAX_WIDTH 320u
@@ -29,6 +30,11 @@ int process_interrupt(uint32_t *registers);
 #define PROCESS_TASK_DONE 3
 #define PROCESS_TASK_STOPPED (-4)
 int process_task_start(int owner, const void *file, unsigned bytes, const ProgramIO *io);
+/* One optional absolute printable-ASCII path, copied before returning. A zero
+ * length means no argument. BEX1 images, entry points and stack ABI are unchanged. */
+int process_task_start_with_arg(int owner, const void *file, unsigned bytes,
+                                const ProgramIO *io, const char *argument,
+                                unsigned argument_length);
 /* Run at most one PIT tick of user code. Returns 1 if a slice ran. */
 int process_task_step(int owner);
 int process_task_status(int owner);

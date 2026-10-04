@@ -54,6 +54,14 @@ static inline int bos_replace_file(const char *path,const void *data,unsigned by
 /* Flush the filesystem snapshot: 0 is durable success; -1 leaves RAM pending.
  * This flushes other applications' pending files too and can delay scheduling. */
 static inline int bos_sync(void) { return bos_call(16,0,0,0,0,0); }
+/* Copy the optional startup document path, including a trailing NUL. Returns
+ * its byte length (not counting NUL), 0 if absent, or -1 without a partial copy
+ * if capacity is too small. With capacity 0, only query the length. Legacy exec
+ * has no argument. The immutable source belongs to this task, not the filesystem. */
+static inline int bos_argument(char *out,unsigned capacity) {
+    return bos_call(17,(unsigned)out,capacity,0,0,0);
+}
+#define BOS_ARGUMENT_MAX 128u
 #define BOS_DOCUMENT_MAX 32768u
 #define BOS_FILE_CHUNK_MAX 4096u
 #define BOS_IMAGE_MAX 49152u
