@@ -10,7 +10,7 @@ enum {
 };
 
 enum {
-    FILE_CLIPBOARD_ERROR = -1, /* No new filesystem mutation. */
+    FILE_CLIPBOARD_ERROR = -1, /* No new file or move retained. */
     FILE_CLIPBOARD_NOOP = 0,   /* Same-folder Cut; clipboard consumed. */
     FILE_CLIPBOARD_SYNCED = 1, /* Completed operation, disk sync confirmed. */
     FILE_CLIPBOARD_RAM_ONLY = 2 /* Completed in RAM; disk sync failed. */
@@ -35,6 +35,8 @@ int file_clipboard_can_paste(int directory);
 /* Always initializes *result_node when non-NULL. It identifies a completed
  * result in this directory, including RAM_ONLY, or -1 if none is selectable.
  * Cut is consumed after its RAM move, even when sync fails. Copy stays live.
+ * Copy keeps the source name if unused in the destination; otherwise it uses
+ * fs_copy's collision-safe name. Same-folder Copy keeps Duplicate naming.
  * After Copy returns RAM_ONLY, the next Paste only retries that completed
  * operation's sync, even if autosync succeeded meanwhile. No duplicate copy is
  * made. A fresh Copy/Cut or clear explicitly ends this retry guard.

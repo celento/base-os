@@ -148,12 +148,31 @@ int file_clipboard_paste(int directory, int *result_node) {
         return FILE_CLIPBOARD_NOOP;
     }
 
+    char original_name[FS_NAME_LEN];
+    int preserve_name = operation == FILE_CLIPBOARD_COPY &&
+                        fs_find_child(directory, fs_name(node)) < 0;
+    if (preserve_name) kstrcpy(original_name, fs_name(node));
     int result = operation == FILE_CLIPBOARD_COPY ? fs_copy(node, directory)
                                                   : fs_move(node, directory);
     if (result < 0) {
         status(operation == FILE_CLIPBOARD_COPY
             ? "Copy did not fit; check free slots, free bytes and folder depth."
             : "Move did not fit; destination path is too deep.");
+        return FILE_CLIPBOARD_ERROR;
+    }
+    /* fs_copy is also Duplicate, so it always chooses a " copy" name. A normal
+     * cross-folder Paste can restore the unused original name before our one
+     * disk sync. This rename cannot fail for the current valid-volume contract:
+     * the original name is valid, fs_copy already proved subtree depth fits,
+     * every legal-depth path fits FS_PATH_LEN, and fs_background_poll cannot
+     * mutate the destination during the copy. Keep a defensive rollback if a
+     * future filesystem contract changes; never retain an unexpected copy or
+     * overwrite any pre-existing node. */
+    _Static_assert(FS_MAX_DEPTH * FS_NAME_LEN < FS_PATH_LEN,
+                   "legal-depth paths must fit after restoring the original name");
+    if (preserve_name && fs_rename(result, original_name) < 0) {
+        fs_delete(result);
+        status("Copy cancelled; original name could not be used. No copy retained.");
         return FILE_CLIPBOARD_ERROR;
     }
     completed_node = operation == FILE_CLIPBOARD_COPY ? result : node;
