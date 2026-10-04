@@ -21,6 +21,10 @@ def validate(c):
         stage + sectors * sector > limit or limit > 0xA0000 or
         limit > load or load < 0x100000):
         raise ValueError('invalid BIOS staging/relocated kernel layout')
+    if (c['KERNEL_BOOTSTRAP_BYTES'] != 4096 or c['KERNEL_PACK_HEADER_BYTES'] != 32 or
+        c['KERNEL_BOOT_STACK_BOTTOM'] < 0x8400 or
+        not c['KERNEL_BOOT_STACK_BOTTOM'] < c['KERNEL_BOOT_STACK_TOP'] <= stage):
+        raise ValueError('invalid packed bootstrap layout')
     if (not load < c['STACK_BOTTOM'] or
         c['STACK_TOP'] - c['STACK_BOTTOM'] != 0x10000 or
         c['STACK_TOP'] > c['FB_BASE']):
