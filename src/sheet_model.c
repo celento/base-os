@@ -69,6 +69,8 @@ void sheet_init(SheetDoc *doc) {
         p[i] = 0;
         if (!(i & 4095u)) platform_poll();
     }
+    for (unsigned col = 0; col < SHEET_COLS; ++col)
+        doc->column_widths[col] = SHEET_COLUMN_WIDTH_DEFAULT;
 }
 static int cell_valid(const SheetCell *c) {
     if (c->length > SHEET_TEXT_MAX || c->kind > SHEET_FORMULA ||
@@ -84,8 +86,12 @@ int sheet_validate(const SheetDoc *doc) {
     if (!doc) return -1;
     for (unsigned i = 0; i < SHEET_CELLS; ++i) {
         if (!(i & 127u)) platform_poll();
-        if (!cell_valid(&doc->cells[i])) return -1;
+        if (!cell_valid(&doc->cells[i]) || doc->formats[i] > SHEET_FORMAT_PERCENT)
+            return -1;
     }
+    for (unsigned col = 0; col < SHEET_COLS; ++col)
+        if (doc->column_widths[col] < SHEET_COLUMN_WIDTH_MIN ||
+            doc->column_widths[col] > SHEET_COLUMN_WIDTH_MAX) return -1;
     return 0;
 }
 int sheet_set(SheetDoc *doc, unsigned row, unsigned col, SheetKind kind,
@@ -111,6 +117,35 @@ int sheet_set(SheetDoc *doc, unsigned row, unsigned col, SheetKind kind,
 const SheetCell *sheet_cell(const SheetDoc *doc, unsigned row, unsigned col) {
     return doc && row < SHEET_ROWS && col < SHEET_COLS
         ? &doc->cells[row * SHEET_COLS + col] : (const SheetCell *)0;
+}
+
+int sheet_get_format(const SheetDoc *doc, unsigned row, unsigned col,
+                     SheetFormat *format) {
+    if (!doc || row >= SHEET_ROWS || col >= SHEET_COLS || !format ||
+        overlaps(doc, sizeof(*doc), format, sizeof(*format)) ||
+        doc->formats[row * SHEET_COLS + col] > SHEET_FORMAT_PERCENT) return -1;
+    *format = (SheetFormat)doc->formats[row * SHEET_COLS + col];
+    return 0;
+}
+int sheet_set_format(SheetDoc *doc, unsigned row, unsigned col, SheetFormat format) {
+    if (!doc || row >= SHEET_ROWS || col >= SHEET_COLS ||
+        (int)format < 0 || format > SHEET_FORMAT_PERCENT) return -1;
+    doc->formats[row * SHEET_COLS + col] = (uint8_t)format;
+    return 0;
+}
+int sheet_get_column_width(const SheetDoc *doc, unsigned col, unsigned *width) {
+    if (!doc || col >= SHEET_COLS || !width ||
+        overlaps(doc, sizeof(*doc), width, sizeof(*width)) ||
+        doc->column_widths[col] < SHEET_COLUMN_WIDTH_MIN ||
+        doc->column_widths[col] > SHEET_COLUMN_WIDTH_MAX) return -1;
+    *width = doc->column_widths[col];
+    return 0;
+}
+int sheet_set_column_width(SheetDoc *doc, unsigned col, unsigned width) {
+    if (!doc || col >= SHEET_COLS || width < SHEET_COLUMN_WIDTH_MIN ||
+        width > SHEET_COLUMN_WIDTH_MAX) return -1;
+    doc->column_widths[col] = (uint16_t)width;
+    return 0;
 }
 
 int sheet_reference(const char *text, unsigned length, unsigned *row, unsigned *col) {
@@ -433,6 +468,54 @@ int sheet_format(const SheetCell *cell, char *out, unsigned capacity, unsigned *
     if (out) {
         if (capacity <= n) return -1;
         for (unsigned i = 0; i < n; ++i) out[i] = s[i];
+        out[n] = 0;
+    }
+    *written = n;
+    return 0;
+}
+
+int sheet_format_display(const SheetDoc *doc, unsigned row, unsigned col,
+                         char *out, unsigned capacity, unsigned *written) {
+    const SheetCell *cell = sheet_cell(doc, row, col);
+    SheetFormat format;
+    char number[16], reversed[10];
+    unsigned n = 0, digits = 0;
+    uint32_t magnitude, whole, fraction;
+    if (!cell || !written || (!out && capacity) || !cell_valid(cell) ||
+        overlaps(doc, sizeof(*doc), out, capacity) ||
+        overlaps(doc, sizeof(*doc), written, sizeof(*written)) ||
+        overlaps(out, capacity, written, sizeof(*written)) ||
+        sheet_get_format(doc, row, col, &format)) return -1;
+    if (format == SHEET_FORMAT_GENERAL || cell->error ||
+        cell->kind == SHEET_TEXT || cell->kind == SHEET_EMPTY)
+        return sheet_format(cell, out, capacity, written);
+
+    /* Unsigned subtraction handles INT32_MIN without signed overflow. Rounded
+     * cents fit in 32 bits. Percent is split before scaling, avoiding a 64-bit
+     * multiply/divide (and preserving both decimal digits at the extrema). */
+    magnitude = cell->value < 0 ? 0u - (uint32_t)cell->value : (uint32_t)cell->value;
+    if (format == SHEET_FORMAT_PERCENT) {
+        whole = magnitude / 10u;
+        fraction = magnitude % 10u * 10u;
+    } else {
+        uint32_t cents = (magnitude + 5u) / 10u;
+        whole = cents / 100u;
+        fraction = cents % 100u;
+    }
+    if (cell->value < 0 && (whole || fraction)) number[n++] = '-';
+    if (format == SHEET_FORMAT_CURRENCY) number[n++] = '$';
+    do {
+        reversed[digits++] = (char)('0' + whole % 10u);
+        whole /= 10u;
+    } while (whole);
+    while (digits) number[n++] = reversed[--digits];
+    number[n++] = '.';
+    number[n++] = (char)('0' + fraction / 10u);
+    number[n++] = (char)('0' + fraction % 10u);
+    if (format == SHEET_FORMAT_PERCENT) number[n++] = '%';
+    if (out) {
+        if (capacity <= n) return -1;
+        for (unsigned i = 0; i < n; ++i) out[i] = number[i];
         out[n] = 0;
     }
     *written = n;

@@ -153,7 +153,7 @@ static void atomic_edits_and_output(void) {
     doc.cells[3].length=96;before=doc;CHECK(sheet_recalculate(&doc)==-1);CHECK(!memcmp(&doc,&before,sizeof(doc)));
 }
 int main(void) {
-    CHECK(sizeof(SheetCell)==104u);CHECK(sizeof(SheetDoc)==352768u);
+    CHECK(sizeof(SheetCell)==104u);CHECK(sizeof(SheetDoc)==356148u);
     budget();references_and_text();arithmetic();cycles_and_depth();atomic_edits_and_output();
     CHECK(polls>0);puts("Sheet model tests passed: budget, arithmetic, complete dependency chains, cycles, atomicity");
     return 0;

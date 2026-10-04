@@ -66,41 +66,62 @@ static void write_le32(unsigned char *p, unsigned value) {
 }
 
 int sheet_native_decode(SheetDoc *doc, const unsigned char *data, unsigned length) {
-    unsigned count, position, record, prior = 0;
+    unsigned count, position, record, prior = 0, version, prefix, start;
     if (!doc || !data || length < SHEET_NATIVE_HEADER_SIZE ||
         length > SHEET_NATIVE_MAX_SIZE || overlaps(doc, sizeof(*doc), data, length))
         return -1;
+    version = read_le16(data + 4);
     if (data[0] != 'B' || data[1] != 'S' || data[2] != 'H' || data[3] != '1' ||
-        read_le16(data + 4) != 1u || read_le16(data + 6) != 0u ||
+        (version != 1u && version != 2u) || read_le16(data + 6) != 0u ||
         read_le16(data + 8) != SHEET_ROWS || read_le16(data + 10) != SHEET_COLS)
         return -1;
     count = read_le32(data + 12);
     if (count > SHEET_CELLS) return -1;
     position = SHEET_NATIVE_HEADER_SIZE;
+    prefix = version == 1u ? 4u : 5u;
+    if (version == 2u) {
+        if (length - position < SHEET_NATIVE_WIDTH_TABLE_SIZE) return -1;
+        for (unsigned col = 0; col < SHEET_COLS; ++col) {
+            unsigned width = read_le16(data + position + 2u * col);
+            if (width < SHEET_COLUMN_WIDTH_MIN || width > SHEET_COLUMN_WIDTH_MAX)
+                return -1;
+        }
+        position += SHEET_NATIVE_WIDTH_TABLE_SIZE;
+    }
+    start = position;
     for (record = 0; record < count; ++record) {
-        unsigned index, kind, size;
+        unsigned index, kind, size, format;
         if (!(record & 31u)) platform_poll();
-        if (length - position < 4u) return -1;
+        if (length - position < prefix) return -1;
         index = read_le16(data + position);
         kind = data[position + 2u];
         size = data[position + 3u];
-        position += 4u;
+        format = version == 1u ? SHEET_FORMAT_GENERAL : data[position + 4u];
+        position += prefix;
         if (index >= SHEET_CELLS || (record && index <= prior) ||
-            size > length - position || !valid_source(kind, data + position, size))
-            return -1;
+            size > length - position || format > SHEET_FORMAT_PERCENT) return -1;
+        if (kind == SHEET_EMPTY) {
+            /* Version 1 never stores EMPTY. Version 2 needs an EMPTY record
+             * only when there is a nondefault format to preserve. */
+            if (version == 1u || size || format == SHEET_FORMAT_GENERAL) return -1;
+        } else if (!valid_source(kind, data + position, size)) return -1;
         position += size;
         prior = index;
     }
     if (position != length) return -1;
 
-    /* Every sheet_set below is guaranteed by the complete validation pass. */
+    /* Every setter below is guaranteed by the complete validation pass. */
     sheet_init(doc);
-    position = SHEET_NATIVE_HEADER_SIZE;
+    if (version == 2u)
+        for (unsigned col = 0; col < SHEET_COLS; ++col)
+            doc->column_widths[col] = (uint16_t)read_le16(data + SHEET_NATIVE_HEADER_SIZE + 2u * col);
+    position = start;
     for (record = 0; record < count; ++record) {
         unsigned index = read_le16(data + position);
         unsigned kind = data[position + 2u], size = data[position + 3u];
         if (!(record & 31u)) platform_poll();
-        position += 4u;
+        if (version == 2u) doc->formats[index] = data[position + 4u];
+        position += prefix;
         (void)sheet_set(doc, index / SHEET_COLS, index % SHEET_COLS,
                         (SheetKind)kind, (const char *)data + position, size);
         position += size;
@@ -120,34 +141,47 @@ static int output_valid(const SheetDoc *doc, unsigned char *out,
 int sheet_native_encode(const SheetDoc *doc, unsigned char *out,
                         unsigned capacity, unsigned *written) {
     unsigned i, j, count = 0, needed = SHEET_NATIVE_HEADER_SIZE, position;
+    unsigned version = 1u, prefix;
     if (!output_valid(doc, out, capacity, written) || sheet_validate(doc)) return -1;
+    for (i = 0; i < SHEET_COLS; ++i)
+        if (doc->column_widths[i] != SHEET_COLUMN_WIDTH_DEFAULT) version = 2u;
     for (i = 0; i < SHEET_CELLS; ++i) {
         if (!(i & 31u)) platform_poll();
-        if (doc->cells[i].kind != SHEET_EMPTY) {
-            needed += 4u + doc->cells[i].length;
+        if (doc->formats[i] != SHEET_FORMAT_GENERAL) version = 2u;
+        if (doc->cells[i].kind != SHEET_EMPTY || doc->formats[i] != SHEET_FORMAT_GENERAL) {
+            needed += doc->cells[i].length;
             ++count;
         }
     }
+    prefix = version == 1u ? 4u : 5u;
+    needed += prefix * count;
+    if (version == 2u) needed += SHEET_NATIVE_WIDTH_TABLE_SIZE;
     if (!out) {
         *written = needed;
         return 0;
     }
     if (capacity < needed) return -1;
     out[0] = 'B'; out[1] = 'S'; out[2] = 'H'; out[3] = '1';
-    write_le16(out + 4, 1u);
+    write_le16(out + 4, version);
     write_le16(out + 6, 0u);
     write_le16(out + 8, SHEET_ROWS);
     write_le16(out + 10, SHEET_COLS);
     write_le32(out + 12, count);
     position = SHEET_NATIVE_HEADER_SIZE;
+    if (version == 2u) {
+        for (i = 0; i < SHEET_COLS; ++i)
+            write_le16(out + position + 2u * i, doc->column_widths[i]);
+        position += SHEET_NATIVE_WIDTH_TABLE_SIZE;
+    }
     for (i = 0; i < SHEET_CELLS; ++i) {
         const SheetCell *cell = &doc->cells[i];
         if (!(i & 31u)) platform_poll();
-        if (cell->kind == SHEET_EMPTY) continue;
+        if (cell->kind == SHEET_EMPTY && doc->formats[i] == SHEET_FORMAT_GENERAL) continue;
         write_le16(out + position, i);
         out[position + 2u] = cell->kind;
         out[position + 3u] = cell->length;
-        position += 4u;
+        if (version == 2u) out[position + 4u] = doc->formats[i];
+        position += prefix;
         for (j = 0; j < cell->length; ++j) out[position++] = (unsigned char)cell->text[j];
     }
     *written = needed;

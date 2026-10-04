@@ -340,7 +340,7 @@ static void test_maximum(void) {
         assert(!sheet_set(&doc, i / SHEET_COLS, i % SHEET_COLS, SHEET_TEXT,
                           text, SHEET_TEXT_MAX));
     assert(!sheet_recalculate(&doc));
-    assert(!sheet_native_encode(&doc, NULL, 0, &needed) && needed == SHEET_NATIVE_MAX_SIZE);
+    assert(!sheet_native_encode(&doc, NULL, 0, &needed) && needed == SHEET_NATIVE_V1_MAX_SIZE);
     memset(native, 0xa5, sizeof(native));
     assert(!sheet_native_encode(&doc, native, needed, &written) && written == needed);
     assert(native[needed] == 0xa5 && native[12] == 0 && native[13] == 13);
@@ -355,8 +355,8 @@ static void test_maximum(void) {
     assert(csv[needed] == 0xa5);
     assert(!sheet_csv_import(&decoded, csv, written));
     equal_source(&doc, &decoded);
-    printf("Maximum spreadsheet native: %u bytes; CSV: %u bytes\n",
-           (unsigned)SHEET_NATIVE_MAX_SIZE, written);
+    printf("Maximum spreadsheet native v1: %u bytes; CSV: %u bytes\n",
+           (unsigned)SHEET_NATIVE_V1_MAX_SIZE, written);
     /* The furthest populated cell preserves all preceding empty fields/rows. */
     sheet_init(&doc); set(127, 25, SHEET_TEXT, "end");
     assert(!sheet_recalculate(&doc));
