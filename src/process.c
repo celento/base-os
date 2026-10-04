@@ -41,7 +41,11 @@ static void fpu_enter(NativeTask *task) {
     __asm__ volatile("mov %0,%%cr0"::"r"(enabled):"memory");
     __asm__ volatile("fnsave %0":"=m"(kernel_fpu)::"memory");
     if(task&&task->fpu_ready)__asm__ volatile("frstor %0"::"m"(task->fpu):"memory");
-    else __asm__ volatile("fninit":::"memory");
+    else {
+        /* FNINIT alone marks registers empty but leaves their old bits readable
+         * through FNSAVE. Zero all eight slots before exposing a fresh context. */
+        __asm__ volatile("fninit\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfninit":::"memory");
+    }
 }
 static void fpu_leave(NativeTask *task) {
     if(!have_fpu)return;

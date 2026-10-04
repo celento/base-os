@@ -50,10 +50,18 @@ The legacy synchronous `process_run` still has its two-second watchdog, checked 
 `python3 tools/task_test.py build` creates a disposable disk and boots an actual 64 MiB QEMU guest. It checks:
 
 - Two native C apps progress independently for more than three seconds
-- Sleep/yield resumes preserve data, isolated keys, and per-owner file effects
+- Sleep deadlines, yield, isolated keys, queue overflow/wrap, and per-owner file effects
 - An uncooperative CPU-bound loop returns at a PIT slice and does not starve the two apps
-- Two different live x87 stacks plus the kernel's x87 state survive interleaving
+- Two different live x87 stacks plus the kernel's x87 state survive interleaving; a fresh task gets cleared x87 register storage
 - Graceful exit, cancellation, restart, terminal selection, close and reset
 - A legacy synchronous C app still reads/writes its persistent document
 
 The test does not use intentional invalid instructions, privilege violations, malformed executables, or memory-fault probes. Those are separate from normal runtime/lifecycle coverage.
+
+`python3 tools/task_media_test.py build` additionally creates an original four-second
+MP3 fixture with ffmpeg, serves a loopback HTTP page, and boots QEMU with real
+RTL8139 and SB16 devices. Two counter apps and two x87 probes run while the browser
+cancels a slow request, loads its replacement, and the desktop redraws. It checks
+independent counter saves, complete MP3 playback with no underruns, and captures
+both a screenshot and non-silent PCM output. This is a focused subsystem smoke;
+the main desktop must still wire its real focus/close/poll events as described above.
