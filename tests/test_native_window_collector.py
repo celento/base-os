@@ -67,6 +67,10 @@ class NativeWindowCollectorTests(unittest.TestCase):
             self.assertEqual(header[10:14], (0, 16384, 1, 2))
             self.assertGreater(collector.declared_pages(image), 6)
             self.assertLess(collector.declared_pages(image), 32)
+            hosted = Path(temporary)/'hosted.bex'
+            collector.build_app(ROOT/'tests/native_window_document_app.c', hosted)
+            self.assertEqual(hosted.read_bytes()[:4], b'BEX1')
+            self.assertLessEqual(hosted.stat().st_size, 49152)
             expected = collector.document_bytes()
             self.assertEqual(len(expected), 16384)
             self.assertTrue(all(expected[i] == 10 for i in range(79, len(expected), 80)))

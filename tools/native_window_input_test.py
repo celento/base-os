@@ -106,8 +106,15 @@ class NativeFont(Font):
         state.pop('scale')
         return state
 
-    def document(self, image, window):
+    def document(self, image, window, hosted=False):
         viewport = native_viewport(window)
+        if hosted:
+            x, y, w, h = window
+            vh = min(200 if h > 360 else 100, h-32-2-24-38-8)
+            vw = 160*vh//100
+            if vw > w-26:
+                vw = w-26; vh = 100*vw//160
+            viewport = (x+13, y+45, vw, vh)
         pixels = reconstruct(image, viewport, (160, 100))
         rows = [self.line(pixels, (0, 0), 1, y, color, 38)
                 for y, color in ((2, 8), (9, 7), (16, 7), (23, 7), (30, 6), (37, 8))]
@@ -268,13 +275,16 @@ def prepare(build, output, hosted_pointer, profiles=('default', 'large'), old_ke
                   window='native-v1', workspace_bytes=0, stack_bytes=16384)
         build_app(ROOT/'tests/native_window_document_app.c', output/'window-document.bex', format='bex2',
                   window='native-v1', workspace_bytes=0, stack_bytes=16384)
+        build_app(ROOT/'tests/native_window_document_app.c', output/'window-probe.bex')
         apps = {name: (output/name).read_bytes() for name in
-                ('counter.bex', 'pointer.bex', 'pointer-window.bex', 'window-document.bex')}
+                ('counter.bex', 'pointer.bex', 'pointer-window.bex', 'window-document.bex', 'window-probe.bex')}
         for name, data in apps.items():
             manifest['apps'][name] = file_record(output/name)
             if data[:4] == b'BEX2':
                 require(struct.unpack_from('<I', data, 12)[0] == 1, 'GUI app must require flag 1')
                 manifest['apps'][name]['owned_pages'] = declared_pages(data)
+            elif data[:4] == b'BEX1':
+                manifest['apps'][name]['owned_pages'] = 16
         manifest['frozen_counter'] = frozen
         manifest['expected_document'] = dict(path=DOCUMENT, bytes=DOCUMENT_BYTES, sha256=sha256(document_bytes()))
         manifest['document_keys'] = {'s': 'versioned replace + owned async sync', 'a': 'sleep 2s then save while minimized',
@@ -340,6 +350,11 @@ class Evidence:
     def document(self, name):
         self.session.move(1275, 670)
         image = self.frame(name); state = self.font.document(image, arranged_window(image))
+        self.report['states'].append(dict(name=name, **state)); self.save(); return state
+
+    def hosted_document(self, name):
+        self.session.move(1275, 670)
+        image = self.frame(name); state = self.font.document(image, arranged_window(image), hosted=True)
         self.report['states'].append(dict(name=name, **state)); self.save(); return state
 
     def cycle(self, decoder, name):
@@ -583,12 +598,22 @@ def run(output):
             old = Path(manifest['old_kernel_directory']); disk = output/'old-refusal.img'
             require(file_record(disk)['sha256'] == manifest['old_refusal_volume']['sha256'], 'Old-refusal fixture changed before boot')
             def refusal(s, e):
-                s.boot(); s.origin(); s.move(1275, 670); s.launch('pointer-window.bex'); s.key('alt-ret')
+                s.boot(); s.origin(); s.move(1275, 670)
+                s.launch('window-probe.bex'); s.key('alt-ret'); baseline = e.hosted_document('hosted-page-probe-baseline')
+                e.check('ordinary BEX1 probe reports its16 owned pages', baseline['owned'] == 16, state=baseline)
+                s.launch('pointer-window.bex'); s.key('alt-ret')
                 image = e.frame('required-gui-refused')
                 e.check('preceding kernel visibly refuses required GUI executable', e.shell.contains(image,
                     (0, 36, image.shape[1], image.shape[0]-80), 'format or ABI is not enabled.'))
+                e.cycle(e.hosted_document, 'hosted-page-probe-restored'); s.key('m')
+                after = e.hosted_document('hosted-page-probe-after-refusal')
+                e.check('required GUI refusal leaves public free-page count unchanged',
+                        after['free'] == baseline['free'] and after['owned'] == baseline['owned'] == 16,
+                        before=baseline, after=after)
+                s.key('q')
             phase_run(old, disk, 64, output, 'old-refusal', refusal, manifest); verify_inputs(manifest)
-            manifest['lanes']['old-kernel-refusal'] = 'PASSED VISIBLE REFUSAL; NO PROCESS/PAGE COUNTER CLAIM'
+            manifest['old_refusal_stopped_volume'] = stopped_volume(disk, manifest, False)
+            manifest['lanes']['old-kernel-refusal'] = 'PASSED VISIBLE REFUSAL AND PUBLIC FREE-PAGE BASELINE; NO PRIVATE PROCESS COUNTERS'
         manifest['status'] = 'IMPLEMENTED COLLECTOR LANES PASSED; SEPARATE GATES REMAIN'
     except Exception as error:
         manifest['status'] = 'FAILED; ALL EVIDENCE RETAINED'; manifest['failure'] = repr(error); raise
