@@ -125,6 +125,18 @@ static void lifetimes(void) {
     assert(!writer_dirty());
     puts("Writer async lifecycle: rejected replacement preserves interest, accepted New detaches without canceling storage passed");
 }
+static void pending_history_truncation(void) {
+    reset_files(); type("Q"); assert(writer_save_as(0, "history.bwr") == WRITER_SAVE_PENDING);
+    DocumentSave submitted; writer_save_info(&submitted);
+    for (unsigned i = 0; i < 13; ++i) { ticks += 71; type("x"); }
+    assert(writer_length() == 14 && writer_dirty()); complete(BOS_OK);
+    DocumentSave completed; writer_save_info(&completed);
+    assert(document_revision_equal(submitted.revision, completed.revision) && writer_dirty());
+    for (unsigned i = 0; i < 8; ++i) key(0x2c, WRITER_MOD_CTRL);
+    assert(writer_length() > 1 && writer_dirty());
+    assert(writer_save() == WRITER_SAVE_PENDING); complete(BOS_OK); assert(!writer_dirty());
+    puts("Writer history truncation: dropped submitted snapshot cannot alias a retained revision or clean newer work passed");
+}
 static void unavailable_file_tokens(void) {
     reset_files(); type("Keep private"); assert(writer_save_as(0, "known.bwr") == WRITER_SAVE_PENDING); complete(BOS_OK);
     int id = writer_file(), writes = write_count, creates = create_count;
@@ -177,7 +189,7 @@ static void revision_boundaries(void) {
 int main(void) {
     files[0].valid = files[0].folder = 1; files[0].identity = 1;
     gfx_init(back, linear, 800, 600, 32, 3200); writer_init(); async_mode = 1;
-    rejected_requests_preserve_group(); submitted_revisions(); model_failures(); exports(); lifetimes(); unavailable_file_tokens(); revision_boundaries();
+    rejected_requests_preserve_group(); submitted_revisions(); model_failures(); exports(); lifetimes(); pending_history_truncation(); unavailable_file_tokens(); revision_boundaries();
     for (int i = 1; i < 20; ++i) if (files[i].valid) free(files[i].data);
     puts("All Writer async model checks passed."); return 0;
 }
