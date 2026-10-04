@@ -115,9 +115,9 @@ int main(int argc,char **argv){
         si.tasks[i].state=i%2?PROCESS_TASK_SLEEPING:PROCESS_TASK_READY;
         si.tasks[i].elapsed_sec=(unsigned)(i+1)*3711;
     }
-    /* Valid 8 MiB capacity cases that overflowed signed i386 width * bytes. */
+    /* Default and large-profile capacities exceed i386 width * byte products. */
     int widths[]={1,7,488,1000,1248};
-    int capacities[]={64,1032129,8385024};
+    int capacities[]={64,1032129,8385024,33550848,33543168};
     for(unsigned w=0;w<sizeof widths/sizeof *widths;w++)for(unsigned c=0;c<sizeof capacities/sizeof *capacities;c++){
         int cap=capacities[c],used[]={0,1,cap/4,cap/2,cap-1,cap};
         for(unsigned i=0;i<sizeof used/sizeof *used;i++)
@@ -138,5 +138,5 @@ int main(int argc,char **argv){
     bx=11;by=13;bw=520;bh=439;si.win_n=si.task_n=0;
     tab(&si,SYSMON_TAB_TASKS);assert(!drawn_task_n&&!stop_labels&&!show_labels);
     tab(&si,SYSMON_TAB_WINDOWS);assert(!drawn_win_n&&!close_labels);
-    puts("monitor: three tabs, eight bounded rows, resized hit targets, task identity, empty states and 8 MiB bars passed");
+    puts("monitor: three tabs, eight bounded rows, resized hit targets, task identity, empty states and 8/32 MiB bars passed");
 }
