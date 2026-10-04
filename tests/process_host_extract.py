@@ -15,7 +15,7 @@ FUNCTIONS = (
     'process_status', 'process_get_result', 'process_counts', 'task_wake',
     'process_key', 'process_request_stop', 'process_reap',
     'output_print', 'output_plot', 'output_present', 'output_resize', 'output_rect',
-    'task_suspend', 'finish', 'user_range', 'user_path', 'abi_query',
+    'task_suspend', 'finish', 'user_extent', 'user_span', 'user_path', 'abi_query',
     'native_file_call', 'process_interrupt',
 )
 

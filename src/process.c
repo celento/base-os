@@ -141,20 +141,23 @@ static void fpu_leave(NativeTask *task) {
 static unsigned char *const kernel_stack=(unsigned char *)TASK_INTERRUPT_STACK_BASE;
 /* 32-bit TSS; I/O bitmap offset equals descriptor size, denying all ports. */
 static unsigned char tss[104] __attribute__((aligned(4)));
+_Static_assert(PAGING_CAPACITY==3*PHYS_PAGE_BYTES,"reserve compatibility PD/PT and kernel PD");
+_Static_assert(KERNEL_DIRECTORY_BASE==PAGING_BASE+2*PHYS_PAGE_BYTES,"kernel root follows compatibility tables");
 static int paging_ready;
 static void protect_memory(void){
     if(paging_ready)return;
     uint32_t *directory=(uint32_t *)PAGING_BASE,*user=(uint32_t *)(PAGING_BASE+4096);
+    uint32_t *kernel=(uint32_t *)KERNEL_DIRECTORY_BASE;
     /* Identity-map the kernel and devices as supervisor-only 4MB pages.
      * The user region uses 4KB pages, with only its 64KB marked accessible. */
-    for(unsigned i=0;i<1024;i++){directory[i]=(i<<22)|0x83;user[i]=0;}
+    for(unsigned i=0;i<1024;i++){kernel[i]=directory[i]=(i<<22)|0x83;user[i]=0;}
     for(unsigned i=0;i<USER_CAPACITY/4096;i++)user[i]=(USER_BASE+i*4096)|7;
     directory[USER_BASE>>22]=(PAGING_BASE+4096)|7;
     unsigned cr4,cr0;
     __asm__ volatile("mov %%cr4,%0":"=r"(cr4));
     cr4|=0x10; /* PSE: Pentium or newer. */
     __asm__ volatile("mov %0,%%cr4"::"r"(cr4):"memory");
-    __asm__ volatile("mov %0,%%cr3"::"r"(PAGING_BASE):"memory");
+    __asm__ volatile("mov %0,%%cr3"::"r"(KERNEL_DIRECTORY_BASE):"memory");
     __asm__ volatile("mov %%cr0,%0":"=r"(cr0));
     cr0|=0x80010000u;
     __asm__ volatile("mov %0,%%cr0"::"r"(cr0):"memory");
@@ -163,6 +166,20 @@ static void protect_memory(void){
 static void descriptor(unsigned char *p,unsigned base,unsigned limit,unsigned access,unsigned flags){
     p[0]=limit;p[1]=limit>>8;p[2]=base;p[3]=base>>8;p[4]=base>>16;
     p[5]=access;p[6]=((limit>>16)&15)|flags;p[7]=base>>24;
+}
+/* A named inactive context is restored before x87 handling, backing copies or
+ * owner release. Kernel code/stacks/devices stay supervisor identity-mapped in
+ * every root. IRQs cannot dispatch user work while this serialized path runs. */
+static void process_kernel_context(void) {
+    __asm__ volatile("mov %0,%%cr3"::"r"(KERNEL_DIRECTORY_BASE):"memory");
+    descriptor(gdt_user_code,USER_BASE,USER_CAPACITY-1,0xfa,0x40);
+    descriptor(gdt_user_data,USER_BASE,USER_CAPACITY-1,0xf2,0x40);
+}
+static void process_user_context(const NativeTask *task) {
+    (void)task;
+    descriptor(gdt_user_code,USER_BASE,USER_CAPACITY-1,0xfa,0x40);
+    descriptor(gdt_user_data,USER_BASE,USER_CAPACITY-1,0xf2,0x40);
+    __asm__ volatile("mov %0,%%cr3"::"r"(PAGING_BASE):"memory");
 }
 void process_init(void){
     if(active)return;
@@ -198,8 +215,10 @@ int process_run(const void *file,unsigned bytes,const ProgramIO *io){
     output=io;process_result=0;began=timer_ticks();current_task=0;active=1;
     int resume_audio=audio_status()->state==AUDIO_PLAYING;
     if(resume_audio)audio_pause(1);
+    process_user_context(0);
     fpu_enter(0);
     int result=process_enter(h[1]);
+    process_kernel_context();
     fpu_leave(0);active=0;
     release_owner(synchronous_owner);synchronous_owner=0;output=0;
     if(resume_audio)audio_pause(0);
@@ -313,8 +332,10 @@ int process_step(ProcessHandle process) {
     task_image_read(task,(void *)USER_BASE);
     canvas_width=task->canvas_width;canvas_height=task->canvas_height;
     output=0;current_task=task;active=1;process_result=0;
+    process_user_context(task);
     fpu_enter(task);
     process_resume(task->frame);
+    process_kernel_context();
     /* First return to the kernel context, then save or release owned backing.
      * A completed image is never copied through a future freed page list. */
     fpu_leave(task);active=0;current_task=0;
@@ -398,11 +419,12 @@ static void finish(int result,unsigned reason) {
     /* Synchronous and desktop owners remain live through process_leave. */
     process_leave();
 }
-static int user_range(unsigned offset, unsigned bytes) {
-    return offset <= USER_CAPACITY && bytes <= USER_CAPACITY-offset;
+static unsigned user_extent(void) { return USER_CAPACITY; }
+static int user_span(unsigned offset,unsigned bytes,enum UserAccess access) {
+    return address_space_span(0,user_extent(),offset,bytes,access);
 }
 static int user_path(unsigned offset, unsigned length, char path[129]) {
-    if (!length || length > 128 || !user_range(offset,length)) return 0;
+    if (!length || length > 128 || !user_span(offset,length,USER_READ)) return 0;
     const char *source=(const char *)(USER_BASE+offset);
     for(unsigned i=0;i<length;i++) {
         if(source[i]<32 || source[i]>126) return 0;
@@ -425,7 +447,8 @@ static int file_call(unsigned call,unsigned path_offset,unsigned path_length,
     char path[129];
     if(!user_path(path_offset,path_length,path)) return -1;
     unsigned limit=call==BOS_CALL_REPLACE_FILE?PROCESS_DOCUMENT_MAX:PROCESS_FILE_CHUNK_MAX;
-    if(call!=8 && (length>limit || !user_range(buffer,length))) return -1;
+    enum UserAccess access=(call==BOS_CALL_READ_FILE||call==BOS_CALL_READ_FILE_AT)?USER_WRITE:USER_READ;
+    if(call!=BOS_CALL_FILE_SIZE && (length>limit || !user_span(buffer,length,access))) return -1;
     int id=fs_resolve(fs_root(),path);
     if(call==BOS_CALL_READ_FILE || call==BOS_CALL_FILE_SIZE || call==BOS_CALL_READ_FILE_AT) {
         if(!fs_valid(id)||fs_is_dir(id)||fs_is_app(id)) return -1;
@@ -450,7 +473,7 @@ static int file_call(unsigned call,unsigned path_offset,unsigned path_length,
  * arenas, terminal slots, raw filesystem ids or implementation tickets. */
 static int abi_query(unsigned buffer,unsigned capacity,unsigned major,unsigned reserved0,unsigned reserved1) {
     if(major!=BOS_ABI_MAJOR)return BOS_E_UNSUPPORTED;
-    if(reserved0||reserved1||capacity<BOS_ABI_QUERY_MIN_SIZE||!user_range(buffer,capacity))
+    if(reserved0||reserved1||capacity<BOS_ABI_QUERY_MIN_SIZE||!user_span(buffer,capacity,USER_WRITE))
         return BOS_E_INVALID;
     BosAbiInfo info;
     kmemset(&info,0,sizeof(info));
@@ -479,23 +502,23 @@ static int native_file_call(unsigned call,unsigned a,unsigned b,unsigned c,unsig
     BosHandle owner=current_owner();
     if(call==BOS_CALL_FILE_OPEN){
         char path[NATIVE_FILE_PATH_MAX+1];
-        if(e<sizeof(info)||!user_range(d,e)||!user_path(a,b,path))return BOS_E_INVALID;
+        if(e<sizeof(info)||!user_span(d,e,USER_WRITE)||!user_path(a,b,path))return BOS_E_INVALID;
         result=native_file_open(owner,path,c,&info);
         if(result==BOS_OK)kmemcpy((void *)(USER_BASE+d),&info,sizeof(info));
         return result;
     }
     if(call==BOS_CALL_FILE_INFO){
-        if(d||e||c<sizeof(info)||!user_range(b,c))return BOS_E_INVALID;
+        if(d||e||c<sizeof(info)||!user_span(b,c,USER_WRITE))return BOS_E_INVALID;
         result=native_file_info(owner,a,&info);
         if(result==BOS_OK)kmemcpy((void *)(USER_BASE+b),&info,sizeof(info));
         return result;
     }
     if(call==BOS_CALL_FILE_READ_AT){
-        if(e||c>NATIVE_FILE_READ_MAX||!user_range(b,c))return BOS_E_INVALID;
+        if(e||c>NATIVE_FILE_READ_MAX||!user_span(b,c,USER_WRITE))return BOS_E_INVALID;
         return native_file_read_at(owner,a,d,(void *)(USER_BASE+b),c);
     }
     if(call==BOS_CALL_FILE_REPLACE){
-        if(c>NATIVE_FILE_REPLACE_MAX||!user_range(b,c)||e<sizeof(info)||!user_range(d,e))
+        if(c>NATIVE_FILE_REPLACE_MAX||!user_span(b,c,USER_READ)||e<sizeof(info)||!user_span(d,e,USER_WRITE))
             return BOS_E_INVALID;
         result=native_file_replace(owner,a,(const void *)(USER_BASE+b),c,&info);
         if(result==BOS_OK)kmemcpy((void *)(USER_BASE+d),&info,sizeof(info));
@@ -523,7 +546,7 @@ int process_interrupt(uint32_t *r){
         finish((int)a,PROCESS_EXIT_APP);
     }
     if(call==BOS_CALL_WRITE){
-        if(a>=USER_CAPACITY||b>4096||b>USER_CAPACITY-a){r[7]=(unsigned)-1;return 1;}
+        if(a>=user_extent()||b>4096||!user_span(a,b,USER_READ)){r[7]=(unsigned)-1;return 1;}
         char line[81];unsigned n=0;
         for(unsigned i=0;i<b;i++){
             char ch=*(char *)(USER_BASE+a+i);
@@ -591,7 +614,7 @@ int process_interrupt(uint32_t *r){
         unsigned length=current_task?current_task->argument_length:0;
         /* A zero-capacity query never touches a user pointer. No partial copies:
          * even the terminator must fit in a completely checked user range. */
-        if(b&&(!user_range(a,b)||b<=length)){r[7]=(unsigned)-1;return 1;}
+        if(b&&(!user_span(a,b,USER_WRITE)||b<=length)){r[7]=(unsigned)-1;return 1;}
         if(b){
             if(length)kmemcpy((void *)(USER_BASE+a),current_task->argument,length);
             *(char *)(USER_BASE+a+length)=0;
@@ -606,7 +629,7 @@ int process_interrupt(uint32_t *r){
             r[7]=(unsigned)BOS_E_INVALID;return 1;
         }
         if(call==BOS_CALL_SYNC_BEGIN){
-            if(!user_range(a,sizeof(BosHandle))){r[7]=(unsigned)BOS_E_INVALID;return 1;}
+            if(!user_span(a,sizeof(BosHandle),USER_WRITE)){r[7]=(unsigned)BOS_E_INVALID;return 1;}
             BosHandle operation;
             int result=native_sync_begin(current_owner(),&operation);
             if(result==BOS_OK)kmemcpy((void *)(USER_BASE+a),&operation,sizeof(operation));

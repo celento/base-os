@@ -5,7 +5,7 @@ path initializes page metadata and prints its initial counts. C2b now backs each
 desktop process's fixed 64 KiB saved image with sixteen owned frames; see
 [PROCESS_BACKING.md](PROCESS_BACKING.md) for its lifecycle and remaining gates.
 There is no new syscall, app-visible physical address, page handle, disk format,
-SDK ABI, image size, or change to the compatibility page tables.
+SDK ABI, image size, or change to the compatibility page tables and the separate inactive kernel root.
 
 ## Eligibility and fixed reservations
 
@@ -14,7 +14,7 @@ inventory. Each named entry uses the owning `src/layout.h` base/capacity rather
 than a hand-maintained free-hole list. Entire arenas and their slack stay
 reserved: low boot/kernel/stacks, software framebuffer, filesystem nodes,
 Writer, Paint, published native canvases, disk/audio DMA, Sheet, desktop cache,
-APPS and all its subarenas, compatibility page tables, the whole 16–20 MiB user
+APPS and all its subarenas, compatibility page tables and the separate inactive kernel root, the whole 16–20 MiB user
 aperture alias, drag/presentation/network/browser storage, both audio source
 locations, image decoder, both filesystem profiles, TASK, editor and video.
 
@@ -39,20 +39,20 @@ enabled overflowing interval invalidates the map. No physical memory is probed.
 The required-RAM admission checks in `platform_validate_memory` are unchanged.
 
 The explicit initial ceiling is 256 MiB (65,536 PFNs). Before E820/LFB filtering,
-the four holes below 127 MiB contain 798 pages:
+the four holes below 127 MiB contain 797 pages:
 
 | Start | Exclusive end | Pages |
 |---|---|---:|
 | `0x00510000` | `0x00600000` | 240 |
 | `0x00680000` | `0x00700000` | 128 |
-| `0x00F02000` | `0x01000000` | 254 |
+| `0x00F03000` | `0x01000000` | 253 |
 | `0x01650000` | `0x01700000` | 176 |
 
 Fully eligible pages in `[127 MiB, 256 MiB)` are additional candidates. Synthetic
-fully usable PC-style 64/128/256 MiB maps therefore have 798/1,054/33,822 pages;
+fully usable PC-style 64/128/256 MiB maps therefore have 797/1,053/33,821 pages;
 firmware reservations may reduce real guest counts. A RAM-size display estimate
-is never used for eligibility. Increasing `PAGING_CAPACITY` for a later root
-automatically extends its reservation and requires updating the expected count.
+is never used for eligibility. C3a reserves the extra root explicitly at `KERNEL_DIRECTORY_BASE`; the total
+`PAGING_CAPACITY` is 12 KiB. That removes one former free candidate page.
 
 ## Metadata and boot order
 
