@@ -52,14 +52,22 @@ are allowed and explicit EOF must match that count. The caller owns the reader
 context until stop, replacement, error or completion. Callback code must not
 reenter the audio driver. A fixed 8 KiB staging buffer handles resampling.
 
-Every poll is bounded;
-playback does not wait in a busy loop. WAV needs eight polls to prefill the ring;
-MP3 takes additional bounded frame-decode polls. At 44.1 kHz stereo, each half holds
-about 186 ms. Callers should service audio every 70 ms or better. A missed refill
-or a delay longer than the complete ring stops playback with an explicit
-underrun error instead of silently repeating stale music. Legacy `exec` pauses and resumes audio around its synchronous two-second
-execution. Long-running `start` applications yield or return after one PIT tick;
-the desktop continues polling media between those bounded slices. Do not run `audio_poll()` from an IRQ handler.
+Every poll is bounded; playback does not wait in a busy loop. WAV needs eight
+polls to prefill the ring; compressed audio takes additional frame-decode polls.
+At 44.1 kHz stereo, each half holds about 186 ms. Service audio at the normal
+70-Hz PIT cadence and from bounded rendering/I/O hooks. A 1,152-sample MPEG frame
+at 48 kHz provides only 24 ms of audio: a brief 70 ms service gap is a tolerance,
+not a sustainable polling interval. Refill service must not depend on which
+screen rows happen to change or whether a modal obscures the video.
+
+A missed refill or a delay longer than the complete ring stops playback with an
+explicit underrun error rather than repeating stale music. Host overload,
+including competing emulators or expensive synchronous capture work, can cause
+this safe stop even with a valid file. Run timing-sensitive QEMU checks in an
+isolated emulator. The legacy synchronous `exec` path pauses audio around its
+up-to-two-second run; asynchronous `start` tasks use bounded slices alongside
+media, as verified in [NATIVE_TASKS.md](NATIVE_TASKS.md) and [VIDEO.md](VIDEO.md).
+Do not run `audio_poll()` from an IRQ handler.
 
 A 50 ms zero-filled drain preserves the end of the clip before deactivating the
 QEMU voice. Pause/resume retains the DMA cursor. Missing devices, busy DSP ports,

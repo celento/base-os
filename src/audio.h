@@ -34,8 +34,10 @@ int audio_play_pcm_stream(unsigned rate, unsigned channels, uint32_t total_frame
 /* Run from main loop and platform_poll. Never call from an interrupt handler.
  * Every call reads at most 4096 source PCM samples, decodes one MP3 frame, or
  * calls the PCM reader once for at most 4096 samples. Resampling also writes
- * at most 4096 output samples using fixed staging. Poll every <= 70 ms while
- * playing; the 64 KiB ring also tolerates ordinary framebuffer/disk work. */
+ * at most 4096 output samples using fixed staging. Service at the normal
+ * 70-Hz PIT cadence, plus hooks during long rendering/I/O. A 48-kHz MPEG
+ * frame supplies only 24 ms of PCM; a brief 70-ms gap is not a steady cadence.
+ * The 64 KiB ring tolerates ordinary bounded framebuffer/disk work. */
 void audio_poll(void);
 /* Pausing also suspends initial prefill; resume continues that loading phase. */
 void audio_pause(int paused);
