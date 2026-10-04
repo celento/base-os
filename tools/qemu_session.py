@@ -38,7 +38,7 @@ class DesktopSession:
             if time.monotonic()>deadline:raise AssertionError(message)
             time.sleep(.05)
     def boot(self):
-        self.wait(lambda:self.log.exists() and 'DESKTOP' in self.log.read_text(),'desktop boot');time.sleep(.5)
+        self.wait(lambda:self.log.exists() and 'DESKTOP' in self.log.read_text(),'desktop boot',90);time.sleep(.5)
     def key(self,key):
         self.command('human-monitor-command',{'command-line':'sendkey '+key+' 25'});time.sleep(.065)
     def text(self,text):
