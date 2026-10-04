@@ -33,11 +33,11 @@ in shutdown preparation before session save and final disk synchronization.
 
 Fresh QEMU checks verify REP sector transfers, default/large payload persistence,
 reboots, native input and every reference audio sample. Guarded rendering reduced
-one matched7MiB run from61.24s to27.97s and28MiB from147.49s to75.53s. These heavy
-benchmarks used128MiB RAM for both disk profiles and are single-run observations.
+one matched 7 MiB run from 61.24 s to 27.97 s and 28 MiB from 147.49 s to 75.53 s. These heavy
+benchmarks used 128 MiB RAM for both disk profiles and are single-run observations.
 The final stable-frame publication change repeated the default-disk workload at
-29.286s with complete frames and exact audio/data; no new large timing result is
-claimed for that final change. Default64MiB and large128MiB staged frame tests
+29.286 s with complete frames and exact audio/data; no new large timing result is
+claimed for that final change. Default 64 MiB and large 128 MiB staged frame tests
 and packaged boots are distinct. Full-volume latency remains substantial.
 
 See `docs/SNAPSHOT_RESPONSIVENESS.md` and the checkpoint evidence for exact source
