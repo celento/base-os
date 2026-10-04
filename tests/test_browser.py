@@ -16,7 +16,8 @@ class BrowserTests(unittest.TestCase):
             executable = pathlib.Path(temporary) / 'browser'
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-fsanitize=address,undefined', '-I', str(ROOT / 'src'),
-                            str(ROOT / 'tests/browser_host.c'), '-o', str(executable)], check=True)
+                            '-DDOWNLOAD_HOST_TEST', str(ROOT / 'tests/browser_host.c'),
+                            str(ROOT / 'src/download.c'), '-o', str(executable)], check=True)
             subprocess.run([str(executable)], check=True)
 
 

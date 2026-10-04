@@ -3,6 +3,7 @@
  * All document storage lives in one fixed arena, never in the kernel stack. */
 #include "app.h"
 #include "browser.h"
+#include "download.h"
 #include "fs.h"
 #include "layout.h"
 #include "net.h"
@@ -22,7 +23,7 @@
 #define TITLE_MAX 96
 #define STATUS_MAX 160
 #define ROW_H 22
-#define TOOL_H 78
+#define TOOL_H 112
 #define FOOT_H 28
 #define PAD 14
 #define STYLE_BOLD 1
@@ -45,6 +46,14 @@ typedef struct {
     int link_count, anchor_count, line_count, history_count, history_pos;
     int scroll, rows, width, focus, cursor, selected, address_start, focused_link;
     int loading, request_state, redirects, truncated, html, body_complete;
+    /* Only an accepted request ID grants control over the download service.
+     * This small presentation snapshot never contains response bytes. */
+    unsigned download_id, download_received, download_limit;
+    int download_state, download_http, download_visible, download_scroll;
+    int download_line_count, pick_link;
+    char download_path[64], download_url[NET_URL_MAX];
+    char download_message[160], download_notice[160], download_text[896];
+    BrowserLine download_lines[48];
 } BrowserState;
 
 #ifdef BROWSER_HOST_TEST
@@ -72,7 +81,8 @@ static const char home_html[] =
     "Do not enter passwords or private information. CSS, JavaScript, forms, "
     "images are not supported. Pages are limited to 32 KB.</p>"
     "<p>Save or Ctrl+S keeps the complete original page in /Downloads. "
-    "Terminal download can save HTTP files up to 2 MiB in the background.</p>"
+    "Download or Ctrl+D saves an HTTP address or selected link in the background. "
+    "Pick link selects a link with the mouse without opening it.</p>"
     "<p>Local HTML and text files can be opened with file:///path.</p>";
 
 static void zero(void *p, unsigned n) { unsigned char *d=p; while(n--) *d++=0; }
@@ -402,6 +412,7 @@ static int local_open(void) {
 }
 static int open_internal(const char *input,int add_history) {
     char url[NET_URL_MAX];
+    B.download_visible=0;B.pick_link=0;
     if(!normalize(url,input)){set_status("Enter an address shorter than 256 characters.");return 1;}
     if(starts(url,"http://")&&net_busy()&&!(B.loading&&net_http_busy()&&net_http_result()->request_id==B.request_id)) {
         set_status("Network is busy in another app. Try Go again when it finishes.");return 1;
@@ -430,7 +441,7 @@ int browser_open_file(int id) {
     fs_path(id,path,sizeof path);if(len(path)+7>=NET_URL_MAX){set_status("The local file path is too long for Browser.");return 1;}
     copy(url,sizeof url,"file://");append(url,sizeof url,path);return open_internal(url,1);
 }
-void browser_close(void){if(!browser_ready)return;stop_request();set_status("Stopped | HTTP only browser");}
+void browser_close(void){if(!browser_ready)return;stop_request();B.pick_link=0;set_status("Page stopped | Background download continues, if active");}
 const char *browser_title(void){browser_init();return B.title;}
 const char *browser_url(void){browser_init();return B.url;}
 const char *browser_status(void){browser_init();return B.status;}
@@ -463,6 +474,115 @@ static int save_page(void){
     set_status("No unused page file name is available in /Downloads.");return 1;
 }
 
+/* Build a safe bounded basename from the path only. Percent escapes stay
+ * literal/sanitized; query strings and fragments never become file names. */
+static void download_basename(const char *url,char stem[FS_NAME_LEN],char extension[8]) {
+    const char *p=url+7;while(*p&&*p!='/'&&*p!='?'&&*p!='#')p++;
+    const char *base=p,*end=p;
+    while(*end&&*end!='?'&&*end!='#'){if(*end=='/')base=end+1;end++;}
+    const char *dot=end;while(dot>base&&dot[-1]!='.')dot--;
+    extension[0]=0;
+    if(dot>base&&dot<end&&end-dot<=5) {
+        char ext[8];unsigned n=0;ext[n++]='.';
+        for(const char *q=dot;q<end;q++)ext[n++]=(char)lower(*q);
+        ext[n]=0;
+        static const char *const known[]={".wav",".mp3",".mpg",".mpeg",".png",".jpg",".jpeg",".gif",".bmp",".html",".htm",".txt",".pdf",".zip",".bin",".bex",".bas",".sh"};
+        for(unsigned i=0;i<sizeof known/sizeof known[0];i++)if(equal(ext,known[i])){copy(extension,8,ext);end=dot-1;break;}
+    }
+    unsigned n=0;
+    for(const char *q=base;q<end&&n<FS_NAME_LEN-1;q++) {
+        int c=(unsigned char)*q;
+        if(c=='.'&&!n)continue;
+        stem[n++]=(char)((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='-'||c=='_'||c=='.'?c:'_');
+    }
+    while(n&&stem[n-1]=='.')n--;
+    stem[n]=0;if(!n)copy(stem,FS_NAME_LEN,"download");
+}
+static void download_summary(void) {
+    char digits[12];B.download_text[0]=0;
+    if(B.download_notice[0]){append(B.download_text,sizeof B.download_text,B.download_notice);append(B.download_text,sizeof B.download_text,"\n\n");}
+    if(B.download_path[0]) {
+        append(B.download_text,sizeof B.download_text,B.download_path);append(B.download_text,sizeof B.download_text,"\n");
+        append(B.download_text,sizeof B.download_text,B.download_state==DOWNLOAD_ACTIVE?"Downloading: ":B.download_state==DOWNLOAD_DONE?"Complete: ":B.download_state==DOWNLOAD_CANCELLED?"Cancelled: ":"Error: ");
+        number(digits,B.download_received);append(B.download_text,sizeof B.download_text,digits);append(B.download_text,sizeof B.download_text," bytes");
+        if(B.download_http){append(B.download_text,sizeof B.download_text," | HTTP ");number(digits,(unsigned)B.download_http);append(B.download_text,sizeof B.download_text,digits);}
+        append(B.download_text,sizeof B.download_text,"\n");
+        if(B.download_state==DOWNLOAD_ACTIVE)append(B.download_text,sizeof B.download_text,"Cancel stops only this Browser download. Closing Browser leaves it running.");
+        else append(B.download_text,sizeof B.download_text,B.download_message);
+        append(B.download_text,sizeof B.download_text,"\nFile limit: ");number(digits,B.download_limit);append(B.download_text,sizeof B.download_text,digits);
+        append(B.download_text,sizeof B.download_text," bytes\n");append(B.download_text,sizeof B.download_text,B.download_url);
+    } else if(!B.download_notice[0])copy(B.download_text,sizeof B.download_text,"No Browser download yet.\nType an HTTP address, then Download or Ctrl+D.\nTab or Pick link selects a link to download.\nHTTP is unencrypted. HTTPS is unsupported.");
+}
+static int refresh_download(void) {
+    if(!B.download_id)return 0;
+    const DownloadStatus *d=download_status();
+    if(d->request_id!=B.download_id) {
+        B.download_id=0;
+        if(B.download_state==DOWNLOAD_ACTIVE){B.download_state=DOWNLOAD_ERROR;copy(B.download_message,sizeof B.download_message,"Another app replaced the transfer status. Check /Downloads for the last result.");download_summary();return 1;}
+        return 0;
+    }
+    if(B.download_state==d->state&&B.download_received==d->received&&B.download_http==d->http_status&&equal(B.download_message,d->message))return 0;
+    B.download_state=d->state;B.download_received=d->received;B.download_http=d->http_status;
+    copy(B.download_message,sizeof B.download_message,d->message);download_summary();return 1;
+}
+static int own_download_active(void) {
+    if(!B.download_id)return 0;
+    const DownloadStatus *d=download_status();return d->request_id==B.download_id&&d->state==DOWNLOAD_ACTIVE;
+}
+static int download_problem(const char *message) {
+    copy(B.download_notice,sizeof B.download_notice,message);set_status(message);B.download_visible=1;B.download_scroll=0;download_summary();return 1;
+}
+static int start_download(void) {
+    char url[NET_URL_MAX],stem[FS_NAME_LEN],extension[8],name[FS_NAME_LEN],path[64],suffix[12];
+    const char *target=!B.focus&&B.focused_link?B.links[B.focused_link-1]:B.address;
+    if(!normalize(url,target))return download_problem("Enter an HTTP address shorter than 256 characters.");
+    if(!starts(url,"http://"))return download_problem("Only HTTP downloads are supported. HTTPS is never downgraded; local files and other schemes are not downloaded.");
+    /* Do not send credentials, even accidentally through an address. */
+    for(int i=7;url[i]&&url[i]!='/'&&url[i]!='?'&&url[i]!='#';i++)if(url[i]=='@')return download_problem("Addresses containing credentials are not supported.");
+    if(download_active())return download_problem(own_download_active()?"This Browser download is already running. Cancel it or wait before starting another.":"A download is already running in another app. Wait for it to finish; Browser cannot cancel it.");
+    if(net_busy())return download_problem(B.loading?"A page is loading. Use Stop, then Download, or wait for the page to finish.":"Network is busy in another app. Wait for it to finish.");
+    int parent=fs_find_child(fs_root(),"Downloads");if(parent<0)parent=fs_mkdir(fs_root(),"Downloads");
+    if(!fs_is_dir(parent))return download_problem("Cannot create /Downloads. Check that it is a folder and space is available.");
+    download_basename(url,stem,extension);
+    for(unsigned n=1;n<=FS_MAX_NODES+1;n++) {
+        suffix[0]=0;if(n>1){suffix[0]='-';number(suffix+1,n);}
+        unsigned room=FS_NAME_LEN-1-(unsigned)len(extension)-(unsigned)len(suffix);copy(name,room+1,stem);
+        append(name,sizeof name,suffix);append(name,sizeof name,extension);
+        if(fs_find_child(parent,name)>=0)continue;
+        copy(path,sizeof path,"/Downloads/");append(path,sizeof path,name);
+        if(download_start(fs_root(),url,path)<0)return download_problem(download_last_error());
+        const DownloadStatus *d=download_status();B.download_id=d->request_id;B.download_state=-1;
+        B.download_limit=d->limit;copy(B.download_path,sizeof B.download_path,path);copy(B.download_url,sizeof B.download_url,url);
+        B.download_notice[0]=0;B.download_visible=1;B.download_scroll=0;B.pick_link=0;B.focus=0;
+        refresh_download();set_status("Download started | Page returns to reading | Scroll for details");return 1;
+    }
+    return download_problem("No unused download name is available in /Downloads.");
+}
+static int cancel_download(void) {
+    if(!own_download_active())return download_problem("No active download owned by Browser. Other apps' transfers are left alone.");
+    download_cancel();B.download_notice[0]=0;refresh_download();B.download_visible=1;B.download_scroll=0;
+    set_status("Download cancelled | No file was saved");return 1;
+}
+static void download_reflow(int width) {
+    if(width<40)width=40;
+    B.download_line_count=0;unsigned p=0;
+    while(B.download_text[p]&&B.download_line_count<48) {
+        unsigned start=p,end=p,last_space=p;int pixels=0;
+        while(B.download_text[p]&&B.download_text[p]!='\n') {
+            int step=ui_advance(B.download_text[p]);if(pixels+step>width&&p>start)break;
+            if(B.download_text[p]==' ')last_space=p;
+            pixels+=step;p++;
+        }
+        end=p;
+        if(B.download_text[p]=='\n')p++;
+        else if(B.download_text[p]&&last_space>start){end=last_space;p=last_space+1;}
+        BrowserLine *line=&B.download_lines[B.download_line_count++];line->start=(unsigned short)start;line->length=(unsigned short)(end-start);
+    }
+    int max=B.download_line_count-B.rows;if(max<0)max=0;
+    if(B.download_scroll>max)B.download_scroll=max;
+    if(B.download_scroll<0)B.download_scroll=0;
+}
+
 static void completion_status(const NetHttpResult *result) {
     char digits[12];copy(B.status,sizeof B.status,"HTTP ");number(digits,(unsigned)result->status);append(B.status,sizeof B.status,digits);
     append(B.status,sizeof B.status," | ");number(digits,result->length);append(B.status,sizeof B.status,digits);append(B.status,sizeof B.status," bytes");
@@ -470,7 +590,9 @@ static void completion_status(const NetHttpResult *result) {
     else append(B.status,sizeof B.status," | HTTP only");
 }
 int browser_tick(void) {
-    if(!browser_ready||!B.loading)return 0;
+    if(!browser_ready)return 0;
+    int changed=refresh_download();
+    if(!B.loading)return changed;
     const NetHttpResult *r=net_http_result();
     if(r->request_id!=B.request_id){B.loading=0;set_status("Another app replaced this request. Reload to try again.");return 1;}
     if(r->state==NET_HTTP_DONE) {
@@ -490,7 +612,7 @@ int browser_tick(void) {
         B.body_len=r->length<sizeof B.body?r->length:sizeof B.body-1;B.body[B.body_len]=0;
         B.body_complete=!r->truncated&&r->length<sizeof B.body;
         B.html=!r->content_type[0]||starts(r->content_type,"text/html")||starts(r->content_type,"application/xhtml+xml");
-        if(r->content_type[0]&&!B.html&&!starts(r->content_type,"text/")){error_document("Content type not supported","This browser displays HTML and plain text. Use Terminal download to save image or document bytes.");return 1;}
+        if(r->content_type[0]&&!B.html&&!starts(r->content_type,"text/")){error_document("Content type not supported","This browser displays HTML and plain text. Use Download or Ctrl+D to save this address to /Downloads.");return 1;}
         parse_document(B.body,B.body_len,B.html);completion_status(r);
         if(B.history_pos>=0)B.scroll=B.history_scroll[B.history_pos];
         jump_fragment(B.url);return 1;
@@ -503,10 +625,10 @@ int browser_tick(void) {
         else {char digits[12];number(digits,r->length);copy(B.status,sizeof B.status,"Loading ");append(B.status,sizeof B.status,digits);append(B.status,sizeof B.status," bytes... | Stop cancels");}
         return 1;
     }
-    return 0;
+    return changed;
 }
 
-int browser_scroll(int lines){browser_init();int old=B.scroll;B.scroll+=lines;clamp_scroll();return old!=B.scroll;}
+int browser_scroll(int lines){browser_init();if(B.download_visible){int old=B.download_scroll;B.download_scroll+=lines;download_reflow(B.width);return old!=B.download_scroll;}int old=B.scroll;B.scroll+=lines;clamp_scroll();return old!=B.scroll;}
 static int history_step(int direction) {
     int next=B.history_pos+direction;if(next<0||next>=B.history_count)return 0;
     /* Do not move the history cursor if another app owns the network. */
@@ -517,7 +639,7 @@ static int reload(void){save_scroll();return open_internal(B.url,0);}
 static int stop(void){if(!B.loading)return 0;stop_request();set_status("Stopped | Reload to try again");return 1;}
 static void select_link(int direction) {
     if(!B.link_count){B.focus=1;B.selected=1;return;}
-    B.focus=0;B.focused_link+=direction;
+    B.focus=0;B.download_visible=0;B.focused_link+=direction;
     if(B.focused_link<1)B.focused_link=B.link_count;
     if(B.focused_link>B.link_count)B.focused_link=1;
     for(int i=0;i<B.line_count;i++){BrowserLine line=B.lines[i];int found=0;
@@ -527,11 +649,12 @@ static void select_link(int direction) {
 }
 int browser_key(int sc,char ch,int modifiers) {
     browser_init();
+    if((modifiers&BROWSER_MOD_CTRL)&&(sc==0x20||lower(ch)=='d'))return start_download();
     if((modifiers&BROWSER_MOD_CTRL)&&(sc==0x1f||lower(ch)=='s'))return save_page();
     if((modifiers&BROWSER_MOD_CTRL)&&(sc==0x26||lower(ch)=='l')){B.focus=1;B.selected=1;B.cursor=len(B.address);return 1;}
     if(((modifiers&BROWSER_MOD_CTRL)&&(sc==0x13||lower(ch)=='r'))||sc==0x3f)return reload();
     if(modifiers&BROWSER_MOD_ALT){if(sc==KEY_LEFT)return history_step(-1);if(sc==KEY_RIGHT)return history_step(1);if(sc==0x47)return open_internal("about:home",1);}
-    if(sc==KEY_ESC){if(B.loading)return stop();B.focus=0;B.selected=0;B.focused_link=0;return 1;}
+    if(sc==KEY_ESC){if(B.loading)return stop();if(B.download_visible&&own_download_active())return cancel_download();B.download_visible=0;B.pick_link=0;B.focus=0;B.selected=0;B.focused_link=0;return 1;}
     if(sc==KEY_TAB){if(B.focus){B.focus=0;B.focused_link=0;}select_link(modifiers&BROWSER_MOD_SHIFT?-1:1);return 1;}
     if(B.focus) {
         int n=len(B.address);
@@ -562,6 +685,7 @@ int browser_key(int sc,char ch,int modifiers) {
     if(sc==KEY_DOWN)return browser_scroll(1);
     if(sc==0x49)return browser_scroll(-(B.rows>1?B.rows-1:1));
     if(sc==0x51||sc==KEY_SPACE)return browser_scroll(B.rows>1?B.rows-1:1);
+    if(B.download_visible&&(sc==0x47||sc==0x4f))return browser_scroll(sc==0x47?-48:48);
     if(sc==0x47){int old=B.scroll;B.scroll=0;return old!=0;}
     if(sc==0x4f){int old=B.scroll;B.scroll=B.line_count;clamp_scroll();return old!=B.scroll;}
     return 0;
@@ -571,6 +695,10 @@ static const char *const button_labels[]={"Back","Forward","Reload","Stop","Home
 static const int button_widths[]={46,64,58,46,50,50};
 static int button_x(int x,int index){int pos=x+8;for(int i=0;i<index;i++)pos+=button_widths[i]+4;return pos;}
 static int button_enabled(int index){return index==0?B.history_pos>0:index==1?B.history_pos+1<B.history_count:index==3?B.loading:index==5?browser_can_save():1;}
+static const int download_button_widths[]={88,58,78,80};
+static int download_button_x(int x,int index){int pos=x+8;for(int i=0;i<index;i++)pos+=download_button_widths[i]+4;return pos;}
+static int download_button_enabled(int index){return index==1?own_download_active():index==2?B.link_count>0:1;}
+static const char *download_button_label(int index){return index==0?"Download":index==1?"Cancel":index==2?(B.pick_link?"Pick: ON":"Pick link"):(B.download_visible?"Page":"Progress");}
 static int address_left(int x){return x+10;}
 static int address_width(int w){return w-64;}
 static void fit_address(int w) {
@@ -585,6 +713,9 @@ void browser_draw(int x,int y,int w,int h) {
     draw_rect(x,y,w,h,paper);draw_rect(x,y,w,TOOL_H,app_chrome);draw_hline(x,y+TOOL_H-1,w,border);
     for(int i=0;i<6;i++){int bx=button_x(x,i),enabled=button_enabled(i);draw_round_rect(bx,y+7,button_widths[i],26,4,enabled?paper:app_chrome);
         draw_round_frame(bx,y+7,button_widths[i],26,4,border);draw_string(button_labels[i],bx+(button_widths[i]-ui_string_w(button_labels[i]))/2,y+11,enabled?app_text:muted);}
+    for(int i=0;i<4;i++){int bx=download_button_x(x,i),bw=download_button_widths[i],enabled=download_button_enabled(i);const char *label=download_button_label(i);
+        draw_round_rect(bx,y+77,bw,26,4,i==2&&B.pick_link?app_accent:enabled?paper:app_chrome);draw_round_frame(bx,y+77,bw,26,4,border);
+        draw_string(label,bx+(bw-ui_string_w(label))/2,y+81,i==2&&B.pick_link?COLOR_WHITE:enabled?app_text:muted);}
     int ax=address_left(x),aw=address_width(w);draw_round_rect(ax,y+41,aw,28,4,paper);draw_round_frame(ax,y+41,aw,28,4,B.focus?app_accent:border);
     fit_address(aw);int tx=ax+7,limit=ax+aw-8;
     if(B.focus&&B.selected)draw_rect(tx,y+46,aw-14,18,gfx_rgb(205,226,251));
@@ -592,7 +723,11 @@ void browser_draw(int x,int y,int w,int h) {
     if(B.focus&&!B.selected){int cursor=tx;for(int i=B.address_start;i<B.cursor;i++)cursor+=ui_advance(B.address[i]);if(cursor<limit)draw_vline(cursor,y+46,18,app_accent);}
     int go=x+w-46;draw_round_rect(go,y+41,36,28,4,app_accent);draw_string("Go",go+(36-ui_string_w("Go"))/2,y+46,COLOR_WHITE);
     int cy=y+TOOL_H+8,content_right=x+w-PAD-14;
-    for(int row=0;row<B.rows;row++) {
+    if(B.download_visible){
+        download_summary();download_reflow(w-2*PAD-14);
+        for(int row=0;row<B.rows;row++){int index=B.download_scroll+row;if(index>=B.download_line_count)break;BrowserLine line=B.download_lines[index];int px=x+PAD;
+            for(unsigned p=line.start;p<(unsigned)line.start+line.length;p++){draw_char(B.download_text[p],px,cy+row*ROW_H,ink);px+=ui_advance(B.download_text[p]);}}
+    } else for(int row=0;row<B.rows;row++) {
         int index=B.scroll+row;if(index>=B.line_count)break;BrowserLine line=B.lines[index];int px=x+PAD,py=cy+row*ROW_H;
         unsigned end=(unsigned)line.start+line.length;
         for(unsigned p=line.start;p<end;p++) {
@@ -606,8 +741,9 @@ void browser_draw(int x,int y,int w,int h) {
             px+=step;
         }
     }
-    if(B.line_count>B.rows){int sy=cy,sh=B.rows*ROW_H;draw_round_rect(x+w-10,sy,4,sh,2,gfx_gray(237));int thumb=sh*B.rows/B.line_count;if(thumb<16)thumb=16;if(thumb>sh)thumb=sh;
-        int ty=sy+(sh-thumb)*B.scroll/(B.line_count-B.rows);draw_round_rect(x+w-10,ty,4,thumb,2,gfx_gray(170));}
+    int line_count=B.download_visible?B.download_line_count:B.line_count,scroll=B.download_visible?B.download_scroll:B.scroll;
+    if(line_count>B.rows){int sy=cy,sh=B.rows*ROW_H;draw_round_rect(x+w-10,sy,4,sh,2,gfx_gray(237));int thumb=sh*B.rows/line_count;if(thumb<16)thumb=16;if(thumb>sh)thumb=sh;
+        int ty=sy+(sh-thumb)*scroll/(line_count-B.rows);draw_round_rect(x+w-10,ty,4,thumb,2,gfx_gray(170));}
     int fy=y+h-FOOT_H;draw_rect(x,fy,w,FOOT_H,app_chrome);draw_hline(x,fy,w,border);draw_string_clip(B.status,x+10,fy+5,app_text_dim,x+w-10);
 }
 int browser_click(int x,int y,int w,int h,int mx,int my) {
@@ -616,6 +752,13 @@ int browser_click(int x,int y,int w,int h,int mx,int my) {
         if(!button_enabled(i))return 0;
         return i==0?history_step(-1):i==1?history_step(1):i==2?reload():i==3?stop():i==4?open_internal("about:home",1):save_page();
     }
+    for(int i=0;i<4;i++)if(hit(mx,my,download_button_x(x,i),y+77,download_button_widths[i],26)) {
+        if(!download_button_enabled(i))return 0;
+        if(i==0)return start_download();
+        if(i==1)return cancel_download();
+        if(i==2){B.pick_link=!B.pick_link;B.download_visible=0;B.focus=0;set_status(B.pick_link?"Click a link to select it, then Download | Escape exits picking":"Link picking off | Click a link to open it");return 1;}
+        B.download_visible=!B.download_visible;B.pick_link=0;B.focus=0;download_summary();return 1;
+    }
     if(hit(mx,my,x+w-46,y+41,36,28))return open_internal(B.address,1);
     if(hit(mx,my,address_left(x),y+41,address_width(w),28)) {
         B.focus=1;B.selected=0;fit_address(address_width(w));int px=address_left(x)+7;B.cursor=B.address_start;
@@ -623,13 +766,14 @@ int browser_click(int x,int y,int w,int h,int mx,int my) {
         return 1;
     }
     int cy=y+TOOL_H+8;
+    if(B.download_visible){download_reflow(w-2*PAD-14);if(hit(mx,my,x+w-15,cy,15,B.rows*ROW_H)&&B.download_line_count>B.rows){B.download_scroll=(my-cy)*B.download_line_count/(B.rows*ROW_H);download_reflow(w-2*PAD-14);return 1;}return 0;}
     if(hit(mx,my,x+w-15,cy,15,B.rows*ROW_H)&&B.line_count>B.rows) {
         int old=B.scroll;B.scroll=(my-cy)*B.line_count/(B.rows*ROW_H);clamp_scroll();B.focus=0;return old!=B.scroll;
     }
     if(hit(mx,my,x+PAD,cy,w-2*PAD-14,B.rows*ROW_H)) {
         B.focus=0;B.selected=0;int row=B.scroll+(my-cy)/ROW_H;
         if(row<B.line_count){BrowserLine line=B.lines[row];int px=x+PAD;
-            for(unsigned p=line.start;p<(unsigned)line.start+line.length;p++){int step=advance(p);if(mx>=px&&mx<px+step&&B.link[p])return open_internal(B.links[B.link[p]-1],1);px+=step;}}
+            for(unsigned p=line.start;p<(unsigned)line.start+line.length;p++){int step=advance(p);if(mx>=px&&mx<px+step&&B.link[p]){if(B.pick_link){B.focused_link=B.link[p];B.pick_link=0;set_status("Selected link | Download or Ctrl+D saves it");return 1;}return open_internal(B.links[B.link[p]-1],1);}px+=step;}}
         B.focused_link=0;return 1;
     }
     return 0;
