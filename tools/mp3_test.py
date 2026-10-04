@@ -2,6 +2,7 @@
 import argparse
 import array
 import math
+import json
 import os
 import pathlib
 import shutil
@@ -45,11 +46,11 @@ def host_decode(encoded,directory):
     subprocess.run([str(decoder),str(encoded),str(output)],env=env,check=True)
     return output
 
-def guest_capture(build,directory):
+def guest_capture(build,directory,fixture="mp3_guest.c",expected="AUDIO-MP3-PASS",screenshot_marker=None):
     subprocess.run([tool('gcc'),'-Os','-ffreestanding','-m32','-fno-pie',
         '-fno-stack-protector','-fno-builtin','-mno-sse','-mno-mmx','-msoft-float',
         '-I',str(ROOT),'-I',str(ROOT/'src'),'-I',str(build),'-I',str(directory),
-        '-c',str(ROOT/'tests/mp3_guest.c'),'-o',str(directory/'kernel.o')],check=True)
+        '-c',str(ROOT/'tests'/fixture),'-o',str(directory/'kernel.o')],check=True)
     objects=[str(p) for p in build.glob('*.o') if p.name!='kernel.o']
     subprocess.run([tool('ld'),'-T',str(build/'linker.ld'),'-nostdlib','-m','elf_i386',
         '-z','noexecstack','-o',str(directory/'kernel.elf'),str(directory/'kernel.o'),*objects],check=True)
@@ -63,12 +64,23 @@ def guest_capture(build,directory):
             '-drive',f'file={image},format=raw,index=0,if=floppy',
             '-serial',f'file:{log}','-display','none','-monitor','none','-no-reboot',
             '-audiodev',f'wav,id=test,path={capture},out.frequency=44100,out.channels=2,out.format=s16',
-            '-device','sb16,audiodev=test'],stderr=errors)
+            '-device','sb16,audiodev=test','-qmp','stdio'],stderr=errors,stdin=subprocess.PIPE,stdout=subprocess.PIPE)
+        json.loads(proc.stdout.readline())
+        def qmp(command,arguments=None):
+            proc.stdin.write(json.dumps({'execute':command,'arguments':arguments or {}}).encode()+b'\n');proc.stdin.flush()
+            while True:
+                reply=json.loads(proc.stdout.readline())
+                if 'error' in reply:raise AssertionError(reply)
+                if 'return' in reply:return reply['return']
+        qmp('qmp_capabilities')
+        screenshot_done=False
         try:
             end=time.monotonic()+45
             while time.monotonic()<end:
                 text=log.read_text()
-                if 'AUDIO-MP3-PASS' in text:time.sleep(.25);break
+                if screenshot_marker and screenshot_marker in text and not screenshot_done:
+                    qmp('screendump',{'filename':str(directory/'player.png'),'format':'png'});screenshot_done=True
+                if expected in text:time.sleep(.25);break
                 if 'PANIC:' in text or proc.poll() is not None:raise AssertionError(text)
                 time.sleep(.1)
             else:raise AssertionError('MP3 timeout:\n'+log.read_text())
