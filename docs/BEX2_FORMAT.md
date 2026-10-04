@@ -167,7 +167,7 @@ The eight tests compile the production parser with ASan/UBSan; cover fixed
 fields, exact and excessive ordinary capacity, large BSS, optional empty
 regions, 16/64/256 KiB stacks, maximum virtual commitment, and ELF-symbol/header
 agreement. They compile and run both real example algorithms against a bounded
-host service model at 1 and 3 MiB, including a normal busy retry and sync wait.
+host service model at 1 and 3 MiB, including normal busy creation/replacement retries and a sync wait.
 They rebuild all five BEX1 examples and compare every byte and SHA-256 with the
 frozen `tests/fixtures/bex1-hour05` files. The parser also compiles as freestanding
 i386 without undefined runtime helper symbols.

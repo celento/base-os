@@ -37,6 +37,6 @@ int main(void) {
     n=append_number(report,n,lines);n=append_text(report,n,"\nOffset checksum: ");
     n=append_number(report,n,checksum);n=append_text(report,n,"\n");
     bos_write(report,n);
-    if(save_report("workspace-index",report,n)!=BOS_OK){bos_print("Report remains unsaved.\n");return 8;}
+    if(save_report("workspace-index",report,n)!=BOS_OK){bos_print("Report was not confirmed durable.\n");return 8;}
     return 0;
 }

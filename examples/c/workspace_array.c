@@ -32,6 +32,6 @@ int main(void) {
     n=append_number(report,n,seed);n=append_text(report,n,"\nChecksum: ");
     n=append_number(report,n,checksum);n=append_text(report,n,"\n");
     bos_write(report,n);
-    if(save_report("workspace-array",report,n)!=BOS_OK){bos_print("Report remains unsaved.\n");return 7;}
+    if(save_report("workspace-array",report,n)!=BOS_OK){bos_print("Report was not confirmed durable.\n");return 7;}
     return 0;
 }
