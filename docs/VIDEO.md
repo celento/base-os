@@ -51,8 +51,10 @@ consume up to 16 small pack/system/PES units within a 32,768-byte budget,
 or one larger legal PES unit (at most 65,535 payload bytes), scan at most
 32,768 video bytes, or inspect one bounded batch of MP2 frames. Batching tiny
 PES packets avoids spending one desktop tick on every 2 KiB packet. Every sequence
-header is validated before decoder construction. No playback loop waits for an
-entire clip to decode.
+header is validated before decoder construction, including the actual presence
+and full length of optional quantization matrices in the original stream.
+Complete tiny single-frame clips do not need maximum-header-size padding.
+No playback loop waits for an entire clip to decode.
 
 Each video poll produces at most one display-order frame. The initial result
 may need two reference pictures because MPEG reorders I/P/B pictures. Audio's
@@ -137,8 +139,9 @@ https://raw.githubusercontent.com/qemu/qemu/master/hw/audio/sb16.c
 ## Decoder provenance
 
 `third_party/pl_mpeg/README.md` records its pinned revision, untouched upstream
-hash, MIT license and exact local patch. Two tested fixes preserve fixed-memory
-EOF accounting and flush the final delayed reference after a B picture. A
+hash, MIT license and exact local patch. Three tested fixes preserve fixed-memory
+EOF accounting, flush the final delayed reference after a B picture, and require
+only the sequence-header matrices actually present with checked bounds. A
 local elementary-stream terminator/zero guard supplies final VLC lookahead;
 the original MPEG-PS bytes remain unchanged.
 
@@ -173,6 +176,11 @@ Host tests use ASan/UBSan, ordinary valid media and deterministic controls, with
 no malformed corpus or intentional memory-fault probes. `detect_leaks=0` handles
 the execution environment's unsupported LeakSanitizer/ptrace combination; address
 and undefined-behavior checks remain enabled.
+
+The tiny-stream regression includes valid 16x16 one-frame solid-color clips
+with 41-byte elementary streams, plus custom intra-only, non-intra-only and
+both-matrix variants (105, 105 and 169 bytes). Every decoded Y/Cb/Cr sample is
+compared with FFmpeg; all four sequence-header flag combinations are checked.
 
 The video reference suite covers every Y/Cb/Cr plane and final block, I/P/B,
 fractional rates over 40 seconds, PIT wrap, VGA, padded dimensions, single frames,

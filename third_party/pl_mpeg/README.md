@@ -6,7 +6,7 @@ Author: Dominic Szablewski / https://phoboslab.org
 License: MIT, as declared by the upstream header's SPDX identifier and README.
 The standard license text is reproduced in `LICENSE`.
 
-`pl_mpeg.h` is the upstream header with exactly two local changes, recorded in
+`pl_mpeg.h` is the upstream header with exactly three local changes, recorded in
 `BASEOS-PATCHES.diff`:
 
 1. Do not discard/memmove bytes from a fixed-memory buffer. The upstream video
@@ -14,6 +14,13 @@ The standard license text is reproduced in `LICENSE`.
    copying the remaining elementary stream on every decoded frame.
 2. Flush the delayed reference picture at EOF even when the last coded picture
    was a B picture. The original condition lost the final presentation frame.
+3. Check the actual sequence-header length: eight base bytes and each optional
+   64-byte quantization matrix only when its flag is set. The original maximum
+   header requirement rejected complete tiny single-frame streams. Each flag
+   and matrix is checked before access, without consuming the header on failure.
+
+The BaseOS adapter independently validates these header lengths against the
+original elementary-stream bytes before appending its decoder-local EOF guard.
 
 The wrapper also appends a decoder-local sequence-end code plus four zero guard
 bytes to a complete extracted elementary stream. Ordinary MPEG-PS files may
@@ -38,6 +45,7 @@ instead uses the already-pinned minimp3 scalar Layer II implementation, which
 matched FFmpeg within two signed-16 sample levels in normal reference fixtures.
 
 Verification: `tests/test_video.py` compares all Y/Cb/Cr planes in every output
-frame against independently decoded FFmpeg references. `tools/video_test.py`
-checks all guest frames, real keyboard transport, x87 preservation, responsive
-desktop input, and screenshot capture in QEMU.
+frame against independently decoded FFmpeg references, including complete 16x16
+single-frame clips with neither, either, or both custom quantization matrices.
+`tools/video_test.py` checks all guest frames, real keyboard transport, x87
+preservation, responsive desktop input, and screenshot capture in QEMU.
