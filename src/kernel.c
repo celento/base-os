@@ -9,6 +9,7 @@
 #include "display.h"
 #include "audio.h"
 #include "net.h"
+#include "download.h"
 #include "browser.h"
 #include "player.h"
 #include "video.h"
@@ -789,10 +790,8 @@ static void draw_app_symbol(int id,int x,int y,uint8_t ink) {
     default: symbol_box(x+5,y+4,22,24,4,ink);break;
     }
 }
-static void draw_app_tile(int x, int y, const char *art, uint32_t color, int size) {
+static void draw_app_tile(int x, int y, int id, uint32_t color, int size) {
     draw_round_rect(x, y, size, size, size / 4, idx24(color));
-    int id=0;
-    for(int i=0;i<ICON_COUNT;i++)if(icons[i].art==art){id=i;break;}
     draw_app_symbol(id,x+(size-32)/2,y+(size-32)/2,COLOR_WHITE);
 }
 
@@ -812,7 +811,7 @@ static void draw_desktop_icons(int selected) {
             draw_round_rect(x0, y0, x1 - x0, ly + CHAR_H + 6 - y0, 8, gfx_mix(get_pixel(x0, y0), COLOR_WHITE, 60));
             draw_round_frame(x0, y0, x1 - x0, ly + CHAR_H + 6 - y0, 8, idx24(rgb_lighten(themes[theme_id].desk_top, 55)));
         }
-        draw_app_tile(icons[i].x, icons[i].y, icons[i].art, icons[i].color, TILE_S);
+        draw_app_tile(icons[i].x, icons[i].y, i, icons[i].color, TILE_S);
         draw_string(icons[i].label, lx, ly, COLOR_WHITE);
     }
 }
@@ -5894,7 +5893,7 @@ static void handle_key(void) {
         if(edit_search.open&&(edit_search.focus||key_sc==KEY_ESC)&&!app_shortcut){edit_search_key();return;}
     }
     if(front_kind()==WK_BROWSER&&!name_dlg&&!open_dlg&&!launcher_on&&open_menu<0&&
-       ((ctrl_down&&(key_sc==0x26||key_sc==0x13||key_sc==0x1e))||
+       ((ctrl_down&&(key_sc==0x26||key_sc==0x13||key_sc==0x1e||key_sc==KEY_S))||
         (alt_down&&(key_sc==KEY_LEFT||key_sc==KEY_RIGHT)))){
         if(browser_key(key_sc,key_char,(ctrl_down?BROWSER_MOD_CTRL:0)|
            (shift_down?BROWSER_MOD_SHIFT:0)|(alt_down?BROWSER_MOD_ALT:0)))dirty=1;
@@ -6510,6 +6509,11 @@ static void boot_splash(void) {
         poll_time();
         audio_poll();
         net_poll();
+        if(download_tick()){
+            int original=context_slot;
+            for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&wins[i].kind==WK_FILES){context_set(i);fm_refresh();}
+            context_set(original);dirty=1;
+        }
         if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
         if(player_tick()&&find_open_kind(WK_PLAYER)>=0)dirty=1;
         if(term_task_poll())dirty=1;
@@ -6792,6 +6796,11 @@ void kmain(void) {
         poll_time();
         audio_poll();
         net_poll();
+        if(download_tick()){
+            int original=context_slot;
+            for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&wins[i].kind==WK_FILES){context_set(i);fm_refresh();}
+            context_set(original);dirty=1;
+        }
         if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
         if(player_tick()&&find_open_kind(WK_PLAYER)>=0)dirty=1;
         if(term_task_poll())dirty=1;
