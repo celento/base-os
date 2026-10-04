@@ -1358,8 +1358,13 @@ enum WinKind {
     WK_BROWSER,
     WK_PLAYER,
     WK_WRITER,
-    WK_SPREADSHEET
+    WK_SPREADSHEET,
+    WK_NATIVE /* Ephemeral owned native primary window; never persisted. */
 };
+_Static_assert(WK_TERM==11&&WK_SPREADSHEET==23,"persisted built-in kinds must not move");
+static int session_window_kind(int kind){
+    return kind>=WK_HELLO&&kind<=WK_SPREADSHEET&&kind!=WK_PROPERTIES;
+}
 
 /* Max 8 windows: kind, x, y, w, h, z. seq is taskbar creation order. */
 typedef struct {
@@ -1376,6 +1381,7 @@ static Win wins[MAX_WIN];
 static Win display_saved_windows[MAX_WIN];
 static int wm_z;
 static int wm_seq;
+static int native_output_scroll[MAX_WIN];
 static int dragging_win = -1;
 static int drag_active;
 static int drag_from_x;
@@ -1778,6 +1784,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h);
 
 static void win_minimum(Win *w, int *mw, int *mh) {
     if (w->kind == WK_EDIT || w->kind == WK_FILES || w->kind == WK_TERM) { *mw = 360; *mh = 200; }
+    else if(w->kind==WK_NATIVE){*mw=240;*mh=180;}
     else if(w->kind==WK_VIEW){*mw=IMAGE_VIEWER_MIN_W+2;*mh=IMAGE_VIEWER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_BROWSER){*mw=BROWSER_MIN_W+2;*mh=BROWSER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_PLAYER){*mw=PLAYER_MIN_W+2;*mh=PLAYER_MIN_H+TITLE_H+2;}
@@ -1828,6 +1835,9 @@ static void win_resize_tick(void) {
 }
 
 static int win_open(int kind) {
+    /* Owned native windows require the pre-start transaction, never this
+     * built-in factory's immediate focus/reset side effects. */
+    if(kind==WK_NATIVE)return -1;
     int i = find_open_kind(kind);
     if (i >= 0 && kind != WK_EDIT && kind != WK_FILES && kind != WK_TERM) {
         win_focus(i);
@@ -1875,6 +1885,7 @@ static void win_close(int i) {
     }
     if(wins[i].kind==WK_VIEW)image_viewer_close();
     if(wins[i].kind==WK_TERM&&!term_task_close(i))return;
+    if(wins[i].kind==WK_NATIVE&&!app_view_close(i))return;
     if(wins[i].kind==WK_BROWSER)browser_close();
     if(wins[i].kind==WK_PLAYER)player_close();
     if(wins[i].kind==WK_WRITER)writer_close();
@@ -1887,6 +1898,12 @@ static void win_close(int i) {
         drag_active = 0;
     }
     dirty = 1;
+}
+
+static void native_window_complete(AppViewUpdate update){
+    int slot=update.slot;
+    if((update.flags&APP_VIEW_AUTO_CLOSE)&&slot>=0&&slot<MAX_WIN&&
+       wins[slot].open&&wins[slot].kind==WK_NATIVE)win_close(slot);
 }
 
 /* An action owns its window and source-file incarnations throughout Save As. */
@@ -3909,21 +3926,108 @@ static int term_canvas_geometry(int ww,int wh,int source_w,int source_h,
     *target_w=view.viewport_w;*target_h=view.viewport_h;
     return occupied;
 }
+/* Blit a stable published snapshot. Polling here only acquires device input;
+ * it never schedules an app or publishes a partially drawn frame. */
+static void draw_app_canvas(AppCanvasFrame frame,const CanvasView *view){
+    if(!frame.pixels||view->viewport_w<=0||view->viewport_h<=0)return;
+    for(int y=0;y<view->viewport_h;y++){
+        int source_row=(y*frame.height/view->viewport_h)*frame.width;
+        for(int x=0;x<view->viewport_w;x++)
+            put_pixel(view->x+x,view->y+y,frame.pixels[source_row+x*frame.width/view->viewport_w]);
+        if(!(y&31))platform_poll();
+    }
+}
 static int draw_term_canvas(int wx,int wy,int ww,int wh) {
     const unsigned char *canvas=term_canvas();
     if(!canvas)return 0;
     int source_w=term_canvas_width(),source_h=term_canvas_height();
     CanvasView view;
     int occupied=canvas_view_layout(&view,wx,wy,ww,wh,source_w,source_h,TITLE_H,TERM_PAD,EDIT_LINE_H);
-    int target_w=view.viewport_w,target_h=view.viewport_h;
-    int ax=view.x,ay=view.y;
-    for(int y=0;y<target_h;y++){
-        int source_row=(y*source_h/target_h)*source_w;
-        for(int x=0;x<target_w;x++)
-            put_pixel(ax+x,ay+y,canvas[source_row+x*source_w/target_w]);
-        if(!(y&31))platform_poll();
-    }
+    draw_app_canvas((AppCanvasFrame){canvas,source_w,source_h},&view);
     return occupied;
+}
+
+#define NATIVE_TOOLBAR_H 30
+#define NATIVE_CLIENT_PAD 8
+/* Sole per-backend geometry resolver, shared by drawing, snapshots and hit
+ * testing. Owned Output preserves the published transform but blocks input. */
+static CanvasView native_canvas_geometry(int slot){
+    const Win *w=&wins[slot];AppCanvasFrame frame=app_view_frame(slot);CanvasView view;
+    if(!frame.pixels)frame.width=frame.height=0;
+    if(w->kind==WK_NATIVE)
+        canvas_view_native_layout(&view,w->x+1+NATIVE_CLIENT_PAD,
+            w->y+TITLE_H+1+NATIVE_TOOLBAR_H+NATIVE_CLIENT_PAD,
+            w->w-2-2*NATIVE_CLIENT_PAD,w->h-TITLE_H-2-NATIVE_TOOLBAR_H-2*NATIVE_CLIENT_PAD,
+            frame.width,frame.height);
+    else canvas_view_layout(&view,w->x,w->y,w->w,w->h,frame.width,frame.height,TITLE_H,TERM_PAD,EDIT_LINE_H);
+    return view;
+}
+static int native_output_rows(const Win *w){
+    int rows=(w->h-TITLE_H-2-NATIVE_TOOLBAR_H-2*NATIVE_CLIENT_PAD)/EDIT_LINE_H;
+    return rows>0?rows:1;
+}
+static int native_output_columns(const Win *w){
+    int cols=(w->w-2-2*NATIVE_CLIENT_PAD)/EDIT_CHAR_W;
+    return cols>0?cols:1;
+}
+static int native_output_total(int slot){
+    int cols=native_output_columns(&wins[slot]),total=0;
+    for(int i=0;i<app_view_output_count(slot);i++){
+        int len=kstrlen(app_view_output_line(slot,i));
+        total+=len?(len+cols-1)/cols:1;
+    }
+    return total;
+}
+static void native_output_scroll_by(int slot,int delta){
+    if(!app_view_output_visible(slot))return;
+    int max=native_output_total(slot)-native_output_rows(&wins[slot]);
+    if(max<0)max=0;
+    int offset=native_output_scroll[slot]+delta;
+    native_output_scroll[slot]=offset<0?0:offset>max?max:offset;dirty=1;
+}
+static void native_output_toggle(int slot){
+    app_view_output_show(slot,!app_view_output_visible(slot));
+    native_output_scroll[slot]=0;
+    /* Capture cancellation and held-button suppression use the same engine
+     * as modal/geometry changes; the toggling click cannot reach the canvas. */
+    native_ui_refresh(timer_ticks(),device_input.buttons);dirty=1;
+}
+static void draw_native_window(int slot,int inactive){
+    Win *w=&wins[slot];char title[APP_VIEW_TITLE_LEN];
+    gui_draw_window(w->x,w->y,w->w,w->h,win_display_title(slot,title),0,inactive?WIN_INACTIVE:0);
+    int top=w->y+TITLE_H+1;
+    draw_rect(w->x+1,top,w->w-2,w->h-TITLE_H-2,gfx_gray(0x20));
+    draw_rect(w->x+1,top,w->w-2,NATIVE_TOOLBAR_H,ui_chrome_dk);
+    int output=app_view_output_visible(slot);
+    draw_round_rect(w->x+8,top+3,72,NATIVE_TOOLBAR_H-6,4,output?ui_accent:ui_chrome);
+    draw_string(app_view_output_dropped(slot)?"Output*":"Output",w->x+16,top+7,output?COLOR_WHITE:ui_text);
+    AppViewResult result;
+    const char *status=app_view_result(slot,&result)?
+        (result.reason==PROCESS_EXIT_STOP?"Stopped":"Ended; see Output"):
+        "Ctrl+C stops; Close ends task";
+    if(output&&app_view_output_dropped(slot))status="Older output discarded";
+    draw_string_clip(status,w->x+90,top+7,ui_text_dim,w->x+w->w-12);
+    if(output){
+        int rows=native_output_rows(w),count=app_view_output_count(slot);
+        int total=native_output_total(slot),max=total>rows?total-rows:0;
+        if(native_output_scroll[slot]>max)native_output_scroll[slot]=max;
+        int first=total>rows?total-rows-native_output_scroll[slot]:0;
+        int cols=native_output_columns(w),visual=0;
+        int x=w->x+1+NATIVE_CLIENT_PAD,y=top+NATIVE_TOOLBAR_H+NATIVE_CLIENT_PAD;
+        for(int i=0;i<count;i++){
+            const char *text=app_view_output_line(slot,i);int len=kstrlen(text);
+            int chunks=len?(len+cols-1)/cols:1;
+            for(int chunk=0;chunk<chunks;chunk++,visual++){
+                int row=visual-first;
+                if(row>=0&&row<rows)term_text(text+chunk*cols,x,y+row*EDIT_LINE_H,0,cols);
+            }
+        }
+        if(!count)term_text("No output yet.",x,y,0,cols);
+    }else{
+        AppCanvasFrame frame=app_view_frame(slot);CanvasView view=native_canvas_geometry(slot);
+        if(frame.pixels)draw_app_canvas(frame,&view);
+        else draw_string_clip("Starting...",w->x+16,top+NATIVE_TOOLBAR_H+16,TERM_FG,w->x+w->w-16);
+    }
 }
 
 static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
@@ -4122,17 +4226,69 @@ static void open_spreadsheet(int file) {
     }
     dirty = 1;
 }
-/* Direct launches allocate a fresh owner; never replace a live Terminal task. */
+enum { NATIVE_LAUNCH_WINDOW=-40,NATIVE_LAUNCH_SERVICE=-41,NATIVE_LAUNCH_ORDER=-42 };
+static const char *native_launch_error(int result){
+    switch(result){
+    case NATIVE_LAUNCH_WINDOW:return "Cannot start: close a window to run this app.";
+    case NATIVE_LAUNCH_SERVICE:return "Cannot start: native window input is unavailable.";
+    case NATIVE_LAUNCH_ORDER:return "Cannot start: window identities are exhausted.";
+    case PROCESS_CREATE_MEMORY:return "Cannot start: native backing memory is unavailable.";
+    case -1:return "Cannot start: all native process records are in use.";
+    case PROCESS_CREATE_UNSUPPORTED:return "Cannot start: this executable format or ABI is not enabled.";
+    case PROCESS_CREATE_LAYOUT:return "Cannot start: executable exceeds file or memory policy.";
+    case APP_VIEW_START_INVALID:return "Cannot start: the selected program changed or is unavailable.";
+    case APP_VIEW_START_BUSY:return "Cannot start: the native view is still in use.";
+    case APP_VIEW_START_ARGUMENT:return "Cannot start: use an absolute document path of at most 128 bytes.";
+    case APP_VIEW_START_GENERATION:return "Cannot start: this view's binding identities are exhausted.";
+    case APP_VIEW_START_ATTACHMENT:return "Cannot start: native output attachment is unavailable.";
+    case APP_VIEW_START_UNAVAILABLE:return "Cannot start: the native process is unavailable.";
+    default:return "Cannot start: invalid native executable header or layout.";
+    }
+}
+/* Invisible reservation -> CREATED/bound process -> committed WM, with no
+ * polling or callbacks in between. No Terminal is selected or initialized. */
+static int native_window_start(int id,unsigned identity,const char *argument,unsigned length){
+    if(!native_ui_available())return NATIVE_LAUNCH_SERVICE;
+    if(wm_seq==0x7fffffff||wm_z==0x7fffffff)return NATIVE_LAUNCH_ORDER;
+    int slot=-1;
+    for(int i=0;i<MAX_WIN;i++)if(!wins[i].open){slot=i;break;}
+    if(slot<0)return NATIVE_LAUNCH_WINDOW;
+    Win prepared={0};prepared.kind=WK_NATIVE;
+    layout_window(WK_NATIVE,&prepared.x,&prepared.y,&prepared.w,&prepared.h);
+    prepared.x+=slot*18;prepared.y+=slot*14;win_clamp(&prepared);
+    int result=app_view_start_owned_file(slot,id,identity,argument,length);
+    if(result)return result;
+    /* START invokes no output, and no scheduler can run before publication. */
+    kmemset(&window_state[slot],0,sizeof window_state[slot]);
+    native_output_scroll[slot]=0;
+    prepared.open=1;prepared.seq=++wm_seq;wins[slot]=prepared;
+    win_focus(slot);return 0;
+}
+static int native_file_mode(int id,unsigned identity,unsigned *mode){
+    if(!identity||!fs_valid(id)||fs_is_dir(id)||fs_is_app(id)||fs_identity(id)!=identity)
+        return APP_VIEW_START_INVALID;
+    return process_probe_launch(fs_data(id),fs_size(id),mode);
+}
+static int terminal_native_launch(int caller,int id,unsigned identity,const char *argument,unsigned length){
+    unsigned mode=0;int result=native_file_mode(id,identity,&mode);
+    if(!result&&mode==PROCESS_LAUNCH_HOSTED)
+        return term_task_start_file_with_arg(caller,id,identity,argument,length);
+    if(!result)result=native_window_start(id,identity,argument,length);
+    if(result){term_write_at(caller,native_launch_error(result));return TERM_COMMAND_REPORTED;}
+    native_launch_status="";return 0;
+}
+/* Files and Launcher share the same checked launch, including early refusal. */
 static void open_native_file(int id) {
-    unsigned identity=fs_identity(id);
-    int parent=fs_parent(id);
-    if(!identity||fs_is_dir(id)||fs_is_app(id))return;
-    int slot=win_open(WK_TERM);
-    if(slot<0){native_launch_status="Close a window to run this app.";dirty=1;return;}
-    native_launch_status="";
-    open_dlg=0;
-    term_set_cwd(parent);
-    term_task_start_file(slot,id,identity); /* Failure remains visible in its Terminal. */
+    unsigned identity=fs_identity(id),mode=0;
+    int result=native_file_mode(id,identity,&mode);
+    if(!result&&mode==PROCESS_LAUNCH_OWNED_WINDOW)result=native_window_start(id,identity,0,0);
+    else if(!result){
+        int parent=fs_parent(id),slot=win_open(WK_TERM);
+        if(slot<0)result=NATIVE_LAUNCH_WINDOW;
+        else {term_set_cwd(parent);term_task_start_file(slot,id,identity);}
+    }
+    native_launch_status=result?native_launch_error(result):"";
+    if(!result)open_dlg=0;
     dirty=1;
 }
 
@@ -4231,6 +4387,8 @@ static void open_fs_file(int id) {
 
 static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     switch (kind) {
+    case WK_NATIVE:
+        *w=640;*h=480;break;
     case WK_SPREADSHEET:
         *w=SPREADSHEET_W+2;*h=SPREADSHEET_H+TITLE_H+2;break;
     case WK_WRITER:
@@ -5259,6 +5417,7 @@ static const char *win_app_name(int kind) {
     case WK_SNAKE: return "Snake";
     case WK_WORDLE: return "Wordle";
     case WK_TERM: return "Terminal";
+    case WK_NATIVE: return "Native app";
     case WK_TODO: return "Todo";
     case WK_CLOCK: return "Clock";
     case WK_CAL: return "Calendar";
@@ -5277,7 +5436,8 @@ static const char *win_app_name(int kind) {
 
 static const char *win_display_title(int slot, char *buffer) {
     if (slot < 0 || slot >= MAX_WIN) return "App";
-    if (wins[slot].kind == WK_TERM && term_task_title(slot, buffer, TERM_TASK_TITLE_LEN))
+    if ((wins[slot].kind == WK_TERM || wins[slot].kind == WK_NATIVE) &&
+        app_view_title(slot, buffer, APP_VIEW_TITLE_LEN))
         return buffer;
     return win_app_name(wins[slot].kind);
 }
@@ -5538,6 +5698,8 @@ static void draw_window_contents(Win *w, int inactive) {
         wordle_draw(wx, wy + TITLE_H);
     } else if (w->kind == WK_TERM) {
         draw_term(wx, wy, ww, wh, inactive);
+    } else if (w->kind == WK_NATIVE) {
+        draw_native_window((int)(w-wins),inactive);
     } else if (w->kind == WK_TODO) {
         draw_todo(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_CLOCK) {
@@ -6326,7 +6488,8 @@ static void sysinfo_fill(SysInfo *si) {
     si->frames = redraw_count;
     si->task_n = 0;
     for(int i=0;i<MAX_WIN&&si->task_n<SYSMON_MAX_TASKS;i++)
-        if(wins[i].open&&wins[i].kind==WK_TERM&&term_task_info(i,&si->tasks[si->task_n]))si->task_n++;
+        if(wins[i].open&&(wins[i].kind==WK_TERM||wins[i].kind==WK_NATIVE)&&
+           app_view_info(i,&si->tasks[si->task_n]))si->task_n++;
     si->win_n = 0;
     int order[MAX_WIN];
     int n = 0;
@@ -6342,8 +6505,9 @@ static void sysinfo_fill(SysInfo *si) {
             }
     for (int k = 0; k < n && k < SYSMON_MAX_WIN; k++) {
         int i = order[k];
-        si->win_name[k] = win_app_name(wins[i].kind);
+        si->win_name[k] = win_display_title(i,si->win_title[k]);
         si->win_id[k] = i;
+        si->win_instance[k] = (unsigned)wins[i].seq;
         si->win_min[k] = wins[i].min;
         si->win_n++;
     }
@@ -6745,7 +6909,9 @@ static void handle_click(void) {
             fm_drag_active = 0;
             return;
         }
-        if (w->kind == WK_FILES)
+        if (w->kind == WK_NATIVE){
+            if(hit(mouse_x,mouse_y,w->x+8,w->y+TITLE_H+4,72,NATIVE_TOOLBAR_H-6))native_output_toggle(i);
+        }else if (w->kind == WK_FILES)
             handle_files_click(w->x, w->y, w->w, w->h);
         else if (w->kind == WK_EDIT)
             handle_edit_click(w->x, w->y, w->w, w->h);
@@ -6789,13 +6955,18 @@ static void handle_click(void) {
             sysinfo_fill(&si);
             SysmonAction action=sysmon_click(w->x,w->y+TITLE_H+1,w->w,w->h-TITLE_H-1,mouse_x,mouse_y,&si);
             if(action.kind==SYSMON_ACTION_REDRAW)dirty=1;
-            else if(action.kind==SYSMON_ACTION_CLOSE_WINDOW)win_request_close(action.owner);
+            else if(action.kind==SYSMON_ACTION_CLOSE_WINDOW){
+                int owner=action.owner;
+                if(owner>=0&&owner<MAX_WIN&&wins[owner].open&&
+                   (unsigned)wins[owner].seq==action.task_instance)win_request_close(owner);
+            }
             else if(action.kind==SYSMON_ACTION_SHOW_TERMINAL||action.kind==SYSMON_ACTION_STOP_TASK){
                 int owner=action.owner;TermTaskInfo live;
-                if(owner>=0&&owner<MAX_WIN&&wins[owner].open&&wins[owner].kind==WK_TERM&&
-                   term_task_info(owner,&live)&&live.instance==action.task_instance){
+                if(owner>=0&&owner<MAX_WIN&&wins[owner].open&&
+                   (wins[owner].kind==WK_TERM||wins[owner].kind==WK_NATIVE)&&
+                   app_view_info(owner,&live)&&live.instance==action.task_instance){
                     if(action.kind==SYSMON_ACTION_SHOW_TERMINAL)win_focus(owner);
-                    else {term_task_stop(owner);dirty=1;}
+                    else {app_view_stop(owner);dirty=1;}
                 }
             }
         }
@@ -6832,6 +7003,7 @@ static void handle_wheel(int amount) {
     else if(w->kind==WK_BROWSER)browser_scroll(amount*3);
     else if(w->kind==WK_VIEW)image_viewer_scroll(amount*3);
     else if(w->kind==WK_TERM)term_scroll(-amount*3);
+    else if(w->kind==WK_NATIVE)native_output_scroll_by(target,-amount*3);
     else if(w->kind==WK_EDIT){
         int ax,ay,aw,ah,row,col,old=edit_caret;edit_area(w->x,w->y,w->w,w->h,&ax,&ay,&aw,&ah);
         int cols=aw/EDIT_CHAR_W;if(cols<1)cols=1;edit_caret=edit_len;edit_caret_cell(cols,&row,&col);edit_caret=old;
@@ -6842,6 +7014,25 @@ static void handle_wheel(int amount) {
 }
 
 static void launcher_key(void);
+
+/* Shared legacy byte-key policy for both process-backed desktop views. Shell
+ * accelerators/modal routing run first; GUI Escape belongs to the app. */
+static int native_task_key_dispatch(int slot,int owned){
+    int running=app_view_running(slot);
+    if(!running&&!owned)return 0;
+    if(ctrl_down&&key_sc==0x2e){if(running)app_view_stop(slot);dirty=1;return 1;}
+    if(key_sc==0x49||key_sc==0x51){
+        if(owned)native_output_scroll_by(slot,key_sc==0x49?8:-8);
+        else {term_scroll(key_sc==0x49?8:-8);dirty=1;}
+        return 1;
+    }
+    if(running){
+        int input=key_sc==KEY_ENTER?13:key_sc==KEY_BACKSPACE?8:key_sc==KEY_ESC?27:
+                  (!ctrl_down&&!alt_down?(unsigned char)key_char:0);
+        if(input)app_view_key(slot,input);
+    }
+    return 1;
+}
 
 static void handle_key(void) {
     if (display_pending) {
@@ -7212,14 +7403,7 @@ static void handle_key(void) {
     }
 
     if (fk == WK_TERM) {
-        if(term_task_running(context_slot)){
-            if(ctrl_down&&key_sc==0x2e){term_task_stop(context_slot);dirty=1;return;}
-            if(key_sc==0x49||key_sc==0x51){term_scroll(key_sc==0x49?8:-8);dirty=1;return;}
-            int input=key_sc==KEY_ENTER?13:key_sc==KEY_BACKSPACE?8:key_sc==KEY_ESC?27:
-                      (!ctrl_down&&!alt_down?(unsigned char)key_char:0);
-            if(input)term_task_key(context_slot,input);
-            return;
-        }
+        if(native_task_key_dispatch(context_slot,0))return;
         if(key_sc==0x49||key_sc==0x51){term_scroll(key_sc==0x49?8:-8);dirty=1;return;}
         if(key_sc==KEY_UP||key_sc==KEY_DOWN){term_history(key_sc==KEY_UP?-1:1);dirty=1;return;}
         if(key_sc==KEY_TAB){term_complete();dirty=1;return;}
@@ -7236,6 +7420,11 @@ static void handle_key(void) {
             dirty = 1;
         }
         return;
+    }
+
+    if(fk==WK_NATIVE){
+        native_task_key_dispatch(context_slot,1);
+        return; /* Escape never falls through to shell Close for a live GUI. */
     }
 
     if (key_sc == KEY_ESC)
@@ -7613,7 +7802,9 @@ static void boot_splash(void) {
         }
         if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
         if(player_tick()&&find_open_kind(WK_PLAYER)>=0)dirty=1;
-        if(app_view_poll())dirty=1;
+        AppViewUpdate update=app_view_poll_update();
+        native_window_complete(update);
+        if(update.flags)dirty=1;
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();
@@ -7731,7 +7922,7 @@ static void session_save(void){
     SavedSession snap;kmemset(&snap,0,sizeof snap);snap.magic=0x53534542;snap.version=1;
     for(int i=0;i<MAX_WIN;i++){
         Win *w=&wins[i];SavedWindow *v=&snap.win[i];
-        if(!w->open||w->kind==WK_PROPERTIES)continue;
+        if(!w->open||!session_window_kind(w->kind))continue;
         context_set(i);v->open=1;v->kind=w->kind;v->x=w->x;v->y=w->y;v->w=w->w;v->h=w->h;v->min=w->min;v->z=w->z;
         int id=w->kind==WK_EDIT?edit_file:w->kind==WK_SPREADSHEET?spreadsheet_file():w->kind==WK_WRITER?writer_file():w->kind==WK_FILES?fm_cwd:w->kind==WK_TERM?term_cwd():-1;
         if(w->kind==WK_EDIT && !edit_binding_valid())id=-1;
@@ -7795,7 +7986,7 @@ static void session_restore(void){
         }
         if(snap.magic==0x53534542&&snap.version==1)for(int i=0;i<MAX_WIN;i++){
             SavedWindow *v=&snap.win[i];v->path[FS_PATH_LEN-1]=0;
-            if(!v->open||v->kind<0||v->kind>WK_SPREADSHEET||v->kind==WK_PROPERTIES||v->w<1||v->h<1||v->w>4096||v->h>4096||v->x<0||v->x>4096||v->y<0||v->y>4096)continue;
+            if(!v->open||!session_window_kind(v->kind)||v->w<1||v->h<1||v->w>4096||v->h>4096||v->x<0||v->x>4096||v->y<0||v->y>4096)continue;
             int slot=win_open(v->kind);if(slot<0)break;Win *w=&wins[slot];w->x=v->x;w->y=v->y;w->w=v->w;w->h=v->h;w->min=!!v->min;w->z=v->z>=0&&v->z<100000?v->z:slot;win_clamp(w);
             if(w->z>wm_z)wm_z=w->z;
             int target=v->path[0]?fs_resolve(fs_root(),v->path):-1;
@@ -7913,6 +8104,7 @@ static void install_examples(void){
     if(fs_find_child(dir,"counter.bex")<0){int id=fs_create(dir,"counter.bex");if(id>=0)fs_write(id,(const char *)sdk_counter,sizeof sdk_counter);}
     if(fs_find_child(dir,"docstats.bex")<0){int id=fs_create(dir,"docstats.bex");if(id>=0)fs_write(id,(const char *)sdk_docstats,sizeof sdk_docstats);}
     if(fs_find_child(dir,"pointer.bex")<0){int id=fs_create(dir,"pointer.bex");if(id>=0)fs_write(id,(const char *)sdk_pointer,sizeof sdk_pointer);}
+    if(fs_find_child(dir,"pointer-window.bex")<0){int id=fs_create(dir,"pointer-window.bex");if(id>=0)fs_write(id,(const char *)sdk_pointer_window,sizeof sdk_pointer_window);}
     if(docs>=0&&fs_find_child(docs,"stats-sample.txt")<0){
         unsigned length=example_stats_document(edit_scratch,EDIT_BUF_SIZE);
         if(length&&length<=fs_file_limit()){
@@ -8101,8 +8293,15 @@ static int term_canvas_hidden(int slot) {
 enum { TERM_RENDER_NONE, TERM_RENDER_FULL, TERM_RENDER_CANVAS };
 static int term_task_render_action(TermTaskUpdate update) {
     int slot=update.slot;
-    if(!update.flags||slot<0||slot>=MAX_WIN||!wins[slot].open||wins[slot].kind!=WK_TERM)
+    if(!update.flags||slot<0||slot>=MAX_WIN||!wins[slot].open)
         return TERM_RENDER_NONE;
+    if(wins[slot].kind==WK_NATIVE){
+        if(update.flags&APP_VIEW_LIFECYCLE)return TERM_RENDER_FULL;
+        if(window_content_hidden(slot))return TERM_RENDER_NONE;
+        if(update.flags==APP_VIEW_OUTPUT&&!app_view_output_visible(slot))return TERM_RENDER_NONE;
+        return TERM_RENDER_FULL; /* Owned updates initially use full composition. */
+    }
+    if(wins[slot].kind!=WK_TERM)return TERM_RENDER_NONE;
     /* A hidden task can still change its visible taskbar label on exit. */
     if(update.flags&TERM_TASK_LIFECYCLE)return TERM_RENDER_FULL;
     if(window_content_hidden(slot))return TERM_RENDER_NONE;
@@ -8115,16 +8314,20 @@ static int term_task_render_action(TermTaskUpdate update) {
 /* Trusted native-host adapter. Every snapshot independently checks process,
  * Terminal incarnation and published geometry; it never changes selection. */
 static int native_host_snapshot(const ProcessBinding *binding,NativeUiHost *out) {
-    if(!binding||binding->slot>=MAX_WIN||!process_binding_live(binding)||!term_binding_matches(binding))return 0;
+    if(!binding||binding->slot>=MAX_WIN||!process_binding_live(binding)||!app_view_binding_matches(binding))return 0;
     const Win *w=&wins[binding->slot];
-    if(!w->open||w->kind!=WK_TERM)return 0;
-    int width=0,height=0;term_canvas_size((int)binding->slot,&width,&height);
+    if(!w->open||(w->kind!=WK_TERM&&w->kind!=WK_NATIVE))return 0;
+    int owned=w->kind==WK_NATIVE;
+    if(owned!=app_view_owned_binding(binding))return 0;
     *out=(NativeUiHost){0};
-    canvas_view_layout(&out->view,w->x,w->y,w->w,w->h,width,height,TITLE_H,TERM_PAD,EDIT_LINE_H);
+    out->kind=owned?BOS_UI_KIND_OWNED_WINDOW:BOS_UI_KIND_HOSTED_CANVAS;
+    out->capabilities=owned?NATIVE_UI_CAPABILITIES_OWNED:NATIVE_UI_CAPABILITIES_HOSTED;
+    out->view=native_canvas_geometry((int)binding->slot);
+    int output=owned&&app_view_output_visible((int)binding->slot);
     if(w->min)out->state|=BOS_UI_STATE_MINIMIZED;
-    if(desktop_input_blocked())out->state|=BOS_UI_STATE_BLOCKED;
-    if(!w->min&&out->view.viewport_w>0&&out->view.viewport_h>0)out->state|=BOS_UI_STATE_AVAILABLE;
-    if(!w->min&&!desktop_input_blocked()&&(int)binding->slot==win_front())out->state|=BOS_UI_STATE_FOCUSED;
+    if(desktop_input_blocked()||output)out->state|=BOS_UI_STATE_BLOCKED;
+    if(!w->min&&!output&&out->view.viewport_w>0&&out->view.viewport_h>0)out->state|=BOS_UI_STATE_AVAILABLE;
+    if(!w->min&&!output&&!desktop_input_blocked()&&(int)binding->slot==win_front())out->state|=BOS_UI_STATE_FOCUSED;
     return 1;
 }
 static void native_host_acquired(NativeUiAcquired *out) {
@@ -8149,11 +8352,9 @@ static unsigned desktop_native_pointer(const InputSample *sample) {
         for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&!wins[i].min&&
            hit(sample->x,sample->y,wins[i].x,wins[i].y,wins[i].w,wins[i].h)&&
            (slot<0||wins[i].z>wins[slot].z))slot=i;
-        if(slot>=0&&wins[slot].kind==WK_TERM){
-            int width=0,height=0;CanvasView view;
-            term_canvas_size(slot,&width,&height);
-            canvas_view_layout(&view,wins[slot].x,wins[slot].y,wins[slot].w,wins[slot].h,
-                               width,height,TITLE_H,TERM_PAD,EDIT_LINE_H);
+        if(slot>=0&&(wins[slot].kind==WK_TERM||wins[slot].kind==WK_NATIVE)&&
+           !(wins[slot].kind==WK_NATIVE&&app_view_output_visible(slot))){
+            CanvasView view=native_canvas_geometry(slot);
             if(canvas_view_contains(&view,sample->x,sample->y))target=native_ui_target_at((unsigned)slot);
         }
     }
@@ -8494,6 +8695,7 @@ void kmain(void) {
     theme_apply();
     term_reset();
     term_set_program_input(desktop_program_input);
+    term_set_native_launch(terminal_native_launch);
     kprint_debug("FS ready\n");
 
     menu_bar_init();
@@ -8547,6 +8749,7 @@ void kmain(void) {
         int player_slot=find_open_kind(WK_PLAYER);
         if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
         TermTaskUpdate term_update=app_view_poll_update();
+        native_window_complete(term_update);
         /* Publication/clear changes become visible to input before the next
          * routed sample, including when rendering is occluded or deferred. */
         native_ui_refresh(timer_ticks(),device_input.buttons);

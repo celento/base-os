@@ -23,7 +23,7 @@ class NativeUiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='baseos-native-ui-desktop-') as temporary:
             directory=Path(temporary)
             names=('input_gesture_ticks','double_click','win_resize_tick','saver_start',
-                'native_host_snapshot','native_host_acquired','native_host_focus','desktop_native_pointer')
+                'native_canvas_geometry','native_host_snapshot','native_host_acquired','native_host_focus','desktop_native_pointer')
             code=''.join(function(source,name) for name in names)
             start=source.index('/* Desktop-only compatibility adapter')
             code+=source[start:source.index('void kmain(void)',start)]

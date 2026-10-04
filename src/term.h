@@ -42,6 +42,11 @@ void term_input_lost(int slot);
 void term_enter(void);
 /* Desktop input ownership around synchronous BASIC/exec only. */
 void term_set_program_input(void (*hook)(int active));
+/* Fixed desktop dispatcher, called only for an explicit shell start command.
+ * It may launch an owned window without rebinding/resetting this Terminal. */
+void term_set_native_launch(int (*hook)(int slot,int file,unsigned identity,
+                                       const char *argument,unsigned length));
+#define TERM_COMMAND_REPORTED (-30) /* Error already shown by trusted dispatch. */
 
 /* Desktop-owned task integration. Poll once per desktop turn, never in IRQs. */
 #define TERM_TASK_NAME_LEN APP_VIEW_NAME_LEN

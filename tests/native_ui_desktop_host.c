@@ -2,21 +2,22 @@
  * window/Terminal fixtures instead of device hardware or guest execution. */
 #define NATIVE_UI_DESKTOP_REAL
 #include "native_ui.h"
+#include "app_view.h"
+#define NATIVE_TOOLBAR_H 30
+#define NATIVE_CLIENT_PAD 8
 static int fb_h=600;
 #define TERM_PAD 12
 #define EDIT_LINE_H 10
 #define TASKBAR_Y (fb_h-44)
 static uint32_t timer_ticks(void);
 static void win_focus(int slot);
-static int term_binding_matches(const ProcessBinding *binding);
-static int term_canvas_size(int slot,int *width,int *height);
 static int hit(int x,int y,int ax,int ay,int w,int h);
 static int desktop_input_blocked(void);
 #define main legacy_adapter_fixture_main
 #include "desktop_input_host.c"
 #undef main
 static ProcessBinding native_bindings[8];
-static int native_live[8],published_w[8],published_h[8];
+static int native_live[8],published_w[8],published_h[8],output_visible[8];
 static uint32_t timer_ticks(void){return frame_count;}
 static void win_focus(int slot){wins[slot].z=wins[win_front()].z+1;context_slot=slot;}
 static int hit(int x,int y,int ax,int ay,int w,int h){return x>=ax&&y>=ay&&x-ax<w&&y-ay<h;}
@@ -24,22 +25,24 @@ int process_binding_live(const ProcessBinding *binding){
     return binding&&binding->slot<8&&native_live[binding->slot]&&
         !memcmp(binding,native_bindings+binding->slot,sizeof *binding);
 }
-static int term_binding_matches(const ProcessBinding *binding){return process_binding_live(binding);}
-static int term_canvas_size(int slot,int *width,int *height){
-    *width=published_w[slot];*height=published_h[slot];return *width&&*height;
-}
+int app_view_binding_matches(const ProcessBinding *binding){return process_binding_live(binding);}
+int app_view_owned_binding(const ProcessBinding *binding){return binding&&binding->slot<8&&wins[binding->slot].kind==WK_NATIVE;}
+int app_view_output_visible(int slot){return output_visible[slot];}
+AppCanvasFrame app_view_frame(int slot){return (AppCanvasFrame){(const unsigned char *)1,published_w[slot],published_h[slot]};}
 static BosHandle ui_open(int slot){
     BosUiTargetInfoV1 info;assert(native_ui_open(native_bindings+slot,7,&info)==BOS_OK);
     return info.target;
 }
 static BosUiEventV1 event(int slot,BosHandle target,unsigned type){
-    BosUiEventV1 e;assert(native_ui_read(native_bindings+slot,target,&e)==BOS_OK);
+    BosUiEventV1 e;int rc=native_ui_read(native_bindings+slot,target,&e);
+    if(rc!=BOS_OK)fprintf(stderr,"missing event type %u at frame %u (rc %d)\n",type,frame_count,rc);
+    assert(rc==BOS_OK);
     if(e.type!=type)fprintf(stderr,"expected %u got %u seq %u\n",type,e.type,e.sequence_lo);
     assert(e.type==type);return e;
 }
 static void no_event(int slot,BosHandle target){BosUiEventV1 e;assert(native_ui_read(native_bindings+slot,target,&e)==BOS_PENDING);}
 static void fixture(void){
-    fresh();memset(native_live,0,sizeof native_live);memset(published_w,0,sizeof published_w);memset(published_h,0,sizeof published_h);
+    fresh();memset(output_visible,0,sizeof output_visible);memset(native_live,0,sizeof native_live);memset(published_w,0,sizeof published_w);memset(published_h,0,sizeof published_h);
     for(int i=0;i<2;i++){
         wins[i]=(Win){.open=1,.seq=i+1,.kind=WK_TERM,.x=50+i*360,.y=80,.w=320,.h=300,.z=2-i};
         native_bindings[i]=(ProcessBinding){BOS_HANDLE_TYPE_PROCESS|(unsigned)(i+1),(unsigned)i,1};
@@ -132,6 +135,28 @@ int main(void){
     input_mouse_byte(&device_input,0,130);input_mouse_byte(&device_input,0,130);input_mouse_byte(&device_input,0,130);
     desktop_input_turn();assert(!records);move(760,540,1,0,131);assert(!records);
     move(760,540,0,0,132);assert(!records);
+    /* Owned and hosted backends use the exact same engine but their own
+     * published transforms. Output blocks the surface and cancels capture. */
+    fixture();wins[0].kind=WK_NATIVE;desktop_input_remember_scene();
+    BosUiTargetInfoV1 owned_info;assert(native_ui_adopt(native_bindings,7,&owned_info)==BOS_OK);
+    a=owned_info.target;assert(owned_info.kind==BOS_UI_KIND_OWNED_WINDOW);
+    event(0,a,BOS_UI_STATE_RESET);CanvasView owned=native_canvas_geometry(0);
+    assert(owned.viewport_w==302&&owned.viewport_h==188);
+    int px=owned.x+10,py=owned.y+10;
+    move(px,py,1,0,140);event(0,a,BOS_UI_POINTER_MOVE);event(0,a,BOS_UI_POINTER_BUTTON);
+    output_visible[0]=1;native_ui_refresh(141,1);
+    event(0,a,BOS_UI_CANCEL);event(0,a,BOS_UI_FOCUS);event(0,a,BOS_UI_AVAILABILITY);event(0,a,BOS_UI_GEOMETRY);
+    NativeUiHost output_host;assert(native_host_snapshot(native_bindings,&output_host));
+    assert((output_host.state&BOS_UI_STATE_BLOCKED)&&!(output_host.state&BOS_UI_STATE_AVAILABLE));
+    move(px,py,0,0,142);no_event(0,a);output_visible[0]=0;native_ui_refresh(143,0);
+    event(0,a,BOS_UI_FOCUS);event(0,a,BOS_UI_AVAILABILITY);event(0,a,BOS_UI_GEOMETRY);
+    move(px,py,1,0,144);event(0,a,BOS_UI_POINTER_MOVE);event(0,a,BOS_UI_POINTER_BUTTON);
+    move(px,py,0,0,145);event(0,a,BOS_UI_POINTER_BUTTON);
+    published_w[0]=320;published_h[0]=200;native_ui_refresh(146,0);
+    event(0,a,BOS_UI_GEOMETRY);assert(native_canvas_geometry(0).viewport_w==owned.viewport_w);
+    wins[0].min=1;native_ui_refresh(147,0);
+    event(0,a,BOS_UI_FOCUS);event(0,a,BOS_UI_AVAILABILITY);event(0,a,BOS_UI_GEOMETRY);
+    assert(native_live[0]);
     puts("Native UI desktop adapter: real point ownership, focus/capture, overlays, publication geometry, legacy exclusion and input-loss recovery passed.");
     return 0;
 }
