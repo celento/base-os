@@ -137,6 +137,27 @@ The 256-entry palette is laid out as 16 fixed base colors, a 32-step gray ramp, 
 
 Window drags cache the unchanged desktop behind the moving window. The presenter compares RAM buffers and transfers only changed horizontal spans to video memory. Palette lookups and rounded-corner coverage are cached; bulk fills/copies use x86 word operations. Background app visuals refresh when the drag finishes, while the dragged app is repainted during movement. The idle desktop sleeps until the next timer tick instead of continuously polling. Normal QEMU runs use 64 MiB; all fixed reservations, including file data and staging, require RAM through 63 MiB.
 
+Native task polling reports the changed terminal slot and separate pixel, text,
+layout and lifecycle flags. A stable frontmost Terminal can redraw just its
+canvas using the same geometry and nearest-neighbor drawing helper as a full
+frame. First activation, canvas resize/reset, output text and task start/end
+retain full composition. Menus, launcher, dialogs, display confirmation, screen
+saver, file rename/drag overlays, mouse-held interactions, moving/resizing windows, a retained drag cache
+or any other dirty work also retain the full path. Exposed background windows
+are never painted through. Minimized buffer updates are suppressed; covered
+buffers are suppressed only when the entire Terminal and border fit inside a
+higher window's opaque client area, excluding its rounded corners. Lifecycle
+changes still update the taskbar even when the terminal is hidden.
+
+Canvas and media fast paths share these eligibility guards and the existing
+cursor restore/save and `gfx_present` sequence. The presenter itself is unchanged.
+`ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p 'test_native_render.py'` checks task transitions and slot selection, every
+eligibility guard, geometry thresholds, hidden-window handling and exact
+partial-versus-full framebuffer output with real window controls, corner masks,
+fonts, moving cursors and 16/24/32-bit presentation. This is host equivalence
+coverage; ordinary guest visual and unchanged-workload timing comparisons are
+still required before claiming a measured speedup.
+
 Fonts use four bits per pixel (16 coverage levels), and window masks preserve the background at all four corners. The heavy layered shadows are removed. Font generation uses the included licensed font files and requires Python with Pillow; normal builds use the checked-in generated header.
 
 Terminal opens with a help hint. Use `help` for the command index, `help NAME` or `man NAME` for usage and examples, and Page Up/Page Down to scroll. Output wraps to the window width.

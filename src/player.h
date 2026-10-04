@@ -4,7 +4,7 @@
 #define PLAYER_H 614
 #define PLAYER_MIN_W 420
 #define PLAYER_MIN_H 414
-enum { PLAYER_CHANGED=1, PLAYER_VIDEO_FRAME=2 };
+enum { PLAYER_CHANGED=1, PLAYER_VIDEO_FRAME=2, PLAYER_AUDIO_PROGRESS=3 };
 
 /* Singleton client-area module. All drawing/input coordinates include the
  * caller-supplied client origin; the desktop owns the surrounding window. */
@@ -14,10 +14,15 @@ void player_draw(int x, int y, int w, int h);
 /* Optional compositor fast path for PLAYER_VIDEO_FRAME only. Caller must
  * guarantee an unobscured frontmost player and handle cursor save/restore. */
 void player_draw_playback(int x, int y, int w, int h);
+/* Optional compositor fast path for PLAYER_AUDIO_PROGRESS only, with the same
+ * unobscured/frontmost and cursor guarantees as player_draw_playback. Restores
+ * the opaque audio progress/time strip before drawing antialiased content. */
+void player_draw_audio_progress(int x, int y, int w, int h);
 int player_click(int x, int y, int w, int h, int mouse_x, int mouse_y);
 int player_key(int scancode, char character);
-/* Services video. Returns 0, PLAYER_CHANGED (full client redraw), or
- * PLAYER_VIDEO_FRAME (viewport/progress-only redraw is safe).
+/* Services video. Returns 0, PLAYER_CHANGED (full client redraw),
+ * PLAYER_VIDEO_FRAME (viewport/progress-only redraw is safe), or
+ * PLAYER_AUDIO_PROGRESS (only audio progress/time changed).
  * Does not service the audio engine; audio_poll must also run when the player window is not visible. */
 int player_tick(void);
 void player_refresh(void);

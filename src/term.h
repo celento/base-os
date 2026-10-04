@@ -54,6 +54,17 @@ int term_task_title(int slot, char *out, int capacity);
 int term_task_start_file(int slot, int file, unsigned identity);
 int term_task_start_file_with_arg(int slot, int file, unsigned identity,
                                    const char *argument, unsigned argument_length);
+enum {
+    TERM_TASK_CANVAS = 1,    /* Pixels only; the existing canvas layout is stable. */
+    TERM_TASK_TEXT = 2,      /* Scrollback/live-row content. */
+    TERM_TASK_LAYOUT = 4,    /* First canvas activation, reset or resize. */
+    TERM_TASK_LIFECYCLE = 8  /* Start/end changes the window/taskbar title. */
+};
+typedef struct { int slot; unsigned flags; } TermTaskUpdate;
+/* Runs at most one ready task slice, preserving the selected terminal. Pending
+ * changes are consumed for that slot; slot is -1 when no task ran. */
+TermTaskUpdate term_task_poll_update(void);
+/* Compatibility for callers which always redraw the entire desktop. */
 int term_task_poll(void);
 int term_task_running(int slot);
 int term_task_key(int slot, int key);

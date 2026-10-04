@@ -13,6 +13,9 @@ static unsigned source_identity;
 static char title[FS_NAME_LEN], message[96];
 static unsigned refresh_time, last_position, last_volume;
 static int last_state, last_error, initialized, video_mode;
+static int redraw_pending;
+static AudioStatus last_audio;
+static unsigned last_audio_capacity;
 
 static void copy_text(char *to, const char *from, unsigned size) {
     if (!size) return;
@@ -51,6 +54,7 @@ static void keep_selection_visible(void) {
     if (first_visible < 0) first_visible = 0;
 }
 void player_refresh(void) {
+    redraw_pending = 1;
     int old_id = selected >= 0 && selected < file_count ? files[selected] : -1;
     unsigned old_identity = selected >= 0 && selected < file_count ? identities[selected] : 0;
     file_count = 0; selected = -1;
@@ -91,6 +95,7 @@ void player_init(void) {
 }
 int player_open_file(int id) {
     player_init();
+    redraw_pending = 1;
     if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id)) {
         copy_text(message, "This media file is no longer available.", sizeof message);
         return MEDIA_BAD_FILE;
@@ -113,6 +118,7 @@ int player_open_file(int id) {
     keep_selection_visible(); return MEDIA_OK;
 }
 static int open_selected(void) {
+    redraw_pending = 1;
     if (selected < 0 || selected >= file_count) {
         copy_text(message, "Add a WAV, MP3 or MPEG-1 file, then choose Play.", sizeof message); return 1;
     }
@@ -135,6 +141,7 @@ static int play_pause(void) {
     if (source_id >= 0 && fs_valid(source_id) && fs_identity(source_id) == source_identity) {
         player_open_file(source_id); return 1;
     }
+    redraw_pending=1;
     copy_text(message, "Choose a media file from the list below.", sizeof message); return 1;
 }
 static void time_string(char *out, unsigned milliseconds) {
@@ -167,6 +174,22 @@ static void video_geometry(int h, int *viewport_height, int *buttons_y, int *lib
     if (*viewport_height < 68) *viewport_height = 68;
     *buttons_y = 76 + *viewport_height + 46;
     *library_y = *buttons_y + 62;
+}
+void player_draw_audio_progress(int x, int y, int w, int h) {
+    if (video_mode || w < 420 || h < 362) return;
+    char text[32];
+    int bar_width = w-60;
+    /* Both rounded corners and glyphs blend with their background. Clear the
+     * entire strip, including old text and a shrinking/reset progress fill. */
+    draw_rect(x+30, y+114, bar_width, 16+UI_FONT_H, app_chrome);
+    draw_round_rect(x+30, y+114, bar_width, 6, 3, app_chrome_dk);
+    unsigned position = audio_position_ms(), duration = audio_duration_ms();
+    unsigned scale = duration / 65535u + 1;
+    unsigned progress = duration ? (position/scale)*(unsigned)bar_width/(duration/scale) : 0;
+    if (progress > (unsigned)bar_width) progress = (unsigned)bar_width;
+    if (progress) draw_rect(x+30, y+114, (int)progress, 6, app_accent);
+    time_string(text, position); draw_string(text, x+30, y+130, app_text_dim);
+    time_string(text, duration); draw_string(text, x+w-30-ui_string_w(text), y+130, app_text_dim);
 }
 static void draw_video_progress(int x,int y,int w,int viewport_h) {
     char text[32];
@@ -268,15 +291,7 @@ void player_draw(int x, int y, int w, int h) {
         fmt_uint(number, status->sample_rate); append(text, number, sizeof text); append(text, " Hz", sizeof text);
     } else copy_text(text, "Your music, played directly by BaseOS.", sizeof text);
     draw_string_clip(text, x+30, y+84, app_text_dim, x+w-30);
-    int bar_width = w-60;
-    draw_round_rect(x+30, y+114, bar_width, 6, 3, app_chrome_dk);
-    unsigned position = audio_position_ms(), duration = audio_duration_ms();
-    unsigned scale = duration / 65535u + 1;
-    unsigned progress = duration ? (position/scale)*(unsigned)bar_width/(duration/scale) : 0;
-    if (progress > (unsigned)bar_width) progress = (unsigned)bar_width;
-    if (progress) draw_rect(x+30, y+114, (int)progress, 6, app_accent);
-    time_string(text, position); draw_string(text, x+30, y+130, app_text_dim);
-    time_string(text, duration); draw_string(text, x+w-30-ui_string_w(text), y+130, app_text_dim);
+    player_draw_audio_progress(x,y,w,h);
     const char *play = status->state==AUDIO_PLAYING ? "Pause" : status->state==AUDIO_LOADING ? "Loading" : "Play";
     button(x+16, y+170, 96, play, 1);
     button(x+120, y+170, 76, "Stop", 0);
@@ -330,7 +345,7 @@ int player_click(int x, int y, int w, int h, int mx, int my) {
         video_geometry(h,&viewport_h,&buttons_y,&library_y);
         if (hit(mx,my,x+16,y+buttons_y,96,32)) return play_pause();
         if (hit(mx,my,x+120,y+buttons_y,76,32)) { video_stop(); return 1; }
-        if (hit(mx,my,x+204,y+buttons_y,96,32)) { message[0]=0;video_clear_error();return 1; }
+        if (hit(mx,my,x+204,y+buttons_y,96,32)) { redraw_pending=1;message[0]=0;video_clear_error();return 1; }
         if (hit(mx,my,x+w-96,y+buttons_y,80,32)) { player_refresh();return 1; }
         if (video_status()->audio_enabled && w>=600) {
             if (hit(mx,my,x+w-316,y+buttons_y,28,32)) return player_key(0,'-');
@@ -341,13 +356,13 @@ int player_click(int x, int y, int w, int h, int mx, int my) {
         int list_y=library_y+24;
         if (hit(mx,my,x+16,y+list_y,w-32,h-list_y-30)) {
             int row=(my-(y+list_y))/PLAYER_ROW;
-            if (row<visible_rows && first_visible+row<file_count) { selected=first_visible+row;return 1; }
+            if (row<visible_rows && first_visible+row<file_count) { redraw_pending=1;selected=first_visible+row;return 1; }
         }
         return 0;
     }
     if (hit(mx,my,x+16,y+170,96,32)) return play_pause();
     if (hit(mx,my,x+120,y+170,76,32)) { audio_stop(); return 1; }
-    if (hit(mx,my,x+204,y+170,96,32)) { message[0]=0; audio_clear_error(); return 1; }
+    if (hit(mx,my,x+204,y+170,96,32)) { redraw_pending=1;message[0]=0; audio_clear_error(); return 1; }
     if (hit(mx,my,x+w-96,y+170,80,32)) { player_refresh(); return 1; }
     if (hit(mx,my,x+91,y+210,w-166,30)) {
         int volume = (mx-(x+96))*100/(w-176);
@@ -358,7 +373,7 @@ int player_click(int x, int y, int w, int h, int mx, int my) {
     if (hit(mx,my,x+16,y+298,w-32,h-334)) {
         int row = (my-(y+298))/PLAYER_ROW;
         if (row<visible_rows && first_visible+row<file_count) {
-            selected=first_visible+row; return 1;
+            redraw_pending=1;selected=first_visible+row; return 1;
         }
     }
     return 0;
@@ -367,8 +382,8 @@ int player_key(int scancode, char character) {
     player_init();
     if (scancode==KEY_SPACE || character==' ') return play_pause();
     if (scancode==KEY_ENTER || character=='\n') return open_selected();
-    if (scancode==KEY_UP && selected>0) { --selected;keep_selection_visible();return 1; }
-    if (scancode==KEY_DOWN && selected+1<file_count) { ++selected;keep_selection_visible();return 1; }
+    if (scancode==KEY_UP && selected>0) { redraw_pending=1;--selected;keep_selection_visible();return 1; }
+    if (scancode==KEY_DOWN && selected+1<file_count) { redraw_pending=1;++selected;keep_selection_visible();return 1; }
     if (character=='+' || character=='=') { audio_set_volume(audio_status()->volume+5);return 1; }
     if (character=='-') { unsigned volume=audio_status()->volume;audio_set_volume(volume>5?volume-5:0);return 1; }
     if (character=='r' || character=='R') { player_refresh();return 1; }
@@ -382,18 +397,30 @@ int player_tick(void) {
     int state=video_mode?video_status()->state:status->state;
     int error=video_mode?video_status()->error:status->error;
     unsigned position=(video_mode?video_position_ms():audio_position_ms())/100;
-    int changed=state!=last_state || error!=last_error || (!video_mode && position!=last_position) || status->volume!=last_volume;
+    int audio_progress=!video_mode && position!=last_position;
+    int changed=redraw_pending || state!=last_state || error!=last_error || status->volume!=last_volume;
+    /* A position-only result must not conceal new decoder/device metadata or
+     * a different duration/capacity. played_frames is the only audio field
+     * permitted to change without a full client redraw. */
+    unsigned capacity=audio_capacity_bytes();
+    if (!video_mode && (status->available!=last_audio.available || status->format!=last_audio.format ||
+        status->sample_rate!=last_audio.sample_rate || status->channels!=last_audio.channels ||
+        status->bits_per_sample!=last_audio.bits_per_sample || status->output_rate!=last_audio.output_rate ||
+        status->total_frames!=last_audio.total_frames || status->underruns!=last_audio.underruns ||
+        capacity!=last_audio_capacity)) changed=1;
     if (frame_changed && (!video_mode || state!=VIDEO_PLAYING)) changed=1;
     if (error && error!=last_error)
         copy_text(message,video_mode?video_error_string(error):media_error_string(error),sizeof message);
     last_state=state;last_error=error;last_position=position;last_volume=status->volume;
+    last_audio=*status;last_audio_capacity=capacity;
     if (timer_ticks()-refresh_time>=TIMER_HZ) {
         player_refresh();
         /* Renames and size changes can keep the same file identity. */
         changed=1;
     }
-    return changed?PLAYER_CHANGED:frame_changed?PLAYER_VIDEO_FRAME:0;
+    redraw_pending=0;
+    return changed?PLAYER_CHANGED:audio_progress?PLAYER_AUDIO_PROGRESS:frame_changed?PLAYER_VIDEO_FRAME:0;
 }
 const char *player_title(void) { return title; }
 
-void player_close(void) { audio_stop();video_stop(); }
+void player_close(void) { redraw_pending=1;audio_stop();video_stop(); }
