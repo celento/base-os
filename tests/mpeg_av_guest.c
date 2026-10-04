@@ -5,13 +5,67 @@
 #include "../src/kernel.c"
 #include "../src/video.h"
 #include "mpeg_av_metadata.h"
+#ifndef MPEG_NATIVE_TASKS
+#define MPEG_NATIVE_TASKS 0
+#endif
+#if MPEG_NATIVE_TASKS
+#include "mpeg_native_examples.h"
+static int native_first,native_second,native_saved;
+static void native_quiet(const char *text){(void)text;}
+static void native_pixel(int x,int y,int c){(void)x;(void)y;(void)c;}
+#endif
 #ifndef MPEG_AV_CONTROLS
 #define MPEG_AV_CONTROLS 0
 #endif
 static unsigned max_poll_ticks,max_sync_lag;
 static void require_av(int ok,const char *message){if(!ok)panic(message);}
+#if MPEG_NATIVE_TASKS
+static void native_command(const char *text){while(*text)term_char(*text++);term_enter();}
+static unsigned native_saved_value(int owner){
+    char path[]="/Documents/counter-1.txt";path[19]=(char)('1'+owner);
+    int id=fs_resolve(fs_root(),path);require_av(id>=0,"MPEG native counter save missing");
+    const char *p=fs_data(id);unsigned value=0;while(*p>='0'&&*p<='9')value=value*10+(unsigned)(*p++-'0');return value;
+}
+static void native_begin(int first){
+    if(fs_find_child(fs_root(),"Documents")<0)require_av(fs_mkdir(fs_root(),"Documents")>=0,"MPEG native documents");
+    native_first=first;native_command("start /Programs/counter.bex");
+    wins[first].x=28;wins[first].y=74;wins[first].w=450;wins[first].h=278;
+    open_term();native_second=win_front();native_command("start /Programs/counter.bex");
+    wins[native_second].x=28;wins[native_second].y=374;wins[native_second].w=450;wins[native_second].h=278;
+    require_av(term_task_running(native_first)&&term_task_running(native_second),"MPEG native counters did not start");
+    term_task_key(native_first,'+');term_task_key(native_first,'+');term_task_key(native_second,'+');
+    ProgramIO io={native_quiet,native_pixel,0,0};
+    require_av(!process_task_start(6,mpeg_fpu_a,sizeof mpeg_fpu_a,&io),"MPEG x87 task A");
+    require_av(!process_task_start(7,mpeg_fpu_b,sizeof mpeg_fpu_b,&io),"MPEG x87 task B");
+}
+static int native_poll(void){
+    int changed=term_task_poll();
+    require_av(term_task_running(native_first)&&term_task_running(native_second),"MPEG native counter ended");
+    require_av(process_task_status(6)==PROCESS_TASK_READY&&process_task_status(7)==PROCESS_TASK_READY,"MPEG changed native x87 state");
+    if(!native_saved&&audio_position_ms()>=1500){
+        term_task_key(native_first,' ');term_task_key(native_second,' ');
+        term_task_key(native_first,'s');term_task_key(native_second,'s');native_saved=1;
+    }
+    return changed;
+}
+static void native_finish(void){
+    unsigned one=native_saved_value(native_first),two=native_saved_value(native_second);
+    require_av(native_saved&&one>=23&&two>=13&&one>two&&one-two>=8&&one-two<=12,"MPEG native counters did not progress independently");
+    term_task_close(native_first);require_av(!term_task_running(native_first)&&term_task_running(native_second),"MPEG native close isolation");
+    term_task_stop(native_second);require_av(!term_task_running(native_second),"MPEG native stop");
+    process_task_key(6,'q');process_task_key(7,'q');
+    for(int i=0;i<5;++i){process_task_step(6);process_task_step(7);}
+    require_av(process_task_status(6)==PROCESS_TASK_DONE&&!process_task_result(6)&&process_task_status(7)==PROCESS_TASK_DONE&&!process_task_result(7),"MPEG x87 tasks did not exit cleanly");
+    process_task_clear(6);process_task_clear(7);
+    platform_log("MPEG-NATIVE-COUNTERS ");kprint_uint(one);serial_write(' ');kprint_uint(two);serial_write('\n');
+    platform_log("MPEG-NATIVE-X87-PASS\n");
+}
+#endif
 static int av_poll(void){
     unsigned before=timer_ticks();audio_poll();int changed=player_tick();
+#if MPEG_NATIVE_TASKS
+    if(native_poll()) changed=PLAYER_CHANGED;
+#endif
     unsigned ticks=timer_ticks()-before;if(ticks>max_poll_ticks)max_poll_ticks=ticks;
     drain_8042();
     while(kqn){uint8_t sc=kq[0];for(int i=1;i<kqn;++i)kq[i-1]=kq[i];--kqn;
@@ -34,12 +88,15 @@ void feature_test(void){
     int id=fs_resolve(fs_root(),"/Video/frame-study.mpg");require_av(id>=0,"MPEG fixture missing");
     require_av(audio_status()->available,"MPEG requires SB16");audio_set_volume(100);
     open_term();int terminal=win_front();wins[terminal].x=28;wins[terminal].y=138;wins[terminal].w=450;wins[terminal].h=380;
+#if MPEG_NATIVE_TASKS
+    native_begin(terminal);
+#endif
     int player=win_open(WK_PLAYER);require_av(player>=0,"MPEG player window");
     wins[player].x=510;wins[player].y=46;wins[player].w=PLAYER_W;wins[player].h=PLAYER_H;
     uint16_t control=0x0b7f;const uint32_t value[2]={0,0x3ff80000};
     __asm__ volatile("fninit\n\tfldcw %0\n\tfldl %1"::"m"(control),"m"(value):"memory");
     require_av(!player_open_file(id),"MPEG open");
-    unsigned start=timer_ticks(),last=0,typed=0,paused=0,stopped=0;
+    unsigned start=timer_ticks(),last=0,typed=MPEG_NATIVE_TASKS,paused=0,stopped=0;
     platform_log("MPEG-AV-START\n");
     while(video_status()->state!=VIDEO_FINISHED){
         int changed=av_poll();const VideoStatus *v=video_status();
@@ -90,6 +147,9 @@ void feature_test(void){
     require_av(audio_status()->state==AUDIO_FINISHED&&audio_status()->played_frames==AV_AUDIO_FRAMES+AV_LEAD,"MPEG audio tail lost");
     require_av(!audio_status()->underruns,"MPEG audio underrun");
     require_av(video_position_ms()==video_duration_ms(),"MPEG completion position");
+#if MPEG_NATIVE_TASKS
+    native_finish();
+#endif
     uint32_t after[2];__asm__ volatile("fstpl %0\n\tfninit":"=m"(after)::"memory");
     require_av(after[0]==value[0]&&after[1]==value[1],"MPEG changed x87 register");
     av_show();platform_log("MPEG-FINISHED-SCREEN\n");

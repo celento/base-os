@@ -161,6 +161,7 @@ python3 tools/mpeg_av_test.py build
 python3 tools/mpeg_av_test.py build --controls
 python3 tools/mpeg_av_test.py build --rate 48000
 python3 tools/mpeg_av_test.py build --rate 32000 --channels 1
+python3 tools/mpeg_av_test.py build --rate 48000 --native
 ```
 
 All fixtures are original locally generated content. FFmpeg encodes them and
@@ -186,6 +187,16 @@ screenshots. In the 48 kHz run, all 137,592 output frames matched the linear
 44.1 kHz reference with RMS 0.0143 and peak 1 LSB; duration was 3.120000 seconds
 and the original 271 Hz tone remained 271 Hz. The build's persistent disks are
 never opened by these tests.
+
+`--native` additionally runs two independent C counter applications and two
+separate live-x87 context probes through the same A/V loop. It checks counter
+progress and separate saved documents, clean x87 task exit, one-terminal close
+isolation, task stop, full audio/video completion and unchanged decoder output.
+On integrated commit `c14d0a8`, the 48 kHz run saved counter values 31 and 21,
+verified every 137,592 output PCM frame and all 75 video frames, and observed
+75 ms maximum DMA-clock-to-presented-frame lag with no audio underrun. The guest
+fixture uses the real scheduler, system calls, filesystem and compositor APIs;
+production keyboard/compositor routing is checked separately.
 
 ## Generate and import an original sample
 
