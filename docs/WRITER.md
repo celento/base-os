@@ -17,6 +17,7 @@ character styles are turned on consistently by the corresponding button.
 - Ctrl+B / Ctrl+I / Ctrl+U: bold / italic / underline
 - Ctrl+1 / Ctrl+0: heading / body
 - Ctrl+L / Ctrl+E / Ctrl+R: left / center / right
+- Ctrl+F / Ctrl+H: find / replace; F3 / Shift+F3: next / previous
 - Ctrl+A / Ctrl+C / Ctrl+X / Ctrl+V: select all / copy / cut / paste
 - Ctrl+Z / Ctrl+Y or Ctrl+Shift+Z: undo / redo
 - Ctrl+S / Ctrl+Shift+S: Save / Save As
@@ -40,6 +41,26 @@ paragraph break. Undo
 restores text, formatting, caret and selection. A new edit after undo discards
 redo. History is in RAM; it is not serialized into a document or recovery draft.
 Undo back to a successfully saved revision removes the unsaved marker.
+
+## Find and replace
+
+The Find toolbar button or Ctrl+F opens a one-line query bar. Ctrl+H adds a
+replacement field. Enter/F3 finds the next match; Shift+Enter/F3 searches backward,
+and both wrap through the document. Aa toggles ASCII case sensitivity. Tab moves
+between fields; Ctrl+A/C/X/V and Shift+arrows work within the focused field.
+Escape closes the bar without changing document text.
+
+Replace or Ctrl+Enter replaces the selected match and selects the following
+match when one exists. All or Ctrl+Shift+Enter replaces every non-overlapping
+match as **one undo operation**. Replacement text inherits each match's first
+character style; all untouched text and paragraph properties are preserved.
+Fields accept up to 63 printable ASCII characters; multiline queries and
+replacements are not supported. Overlong or unsupported clipboard input is
+rejected without changing a field. Replace All preflights the full resulting
+length and changes nothing when the document limit would be exceeded.
+
+The status bar reports whitespace-delimited word count and text byte count.
+These counts refer to the entire document, not only the current selection.
 
 ## Import, save and export
 
@@ -129,7 +150,8 @@ ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p 'test_write
 The tests cover formatting, paragraph edits/joins, native round trips and complete
 input validation, clipboard generation ownership, capacity rejection, all possible
 line slots, proportional wrapping and alignment, headings, navigation, selection,
-undo/redo branching, file identity/reuse, failed save/sync, recovery, and drawing
+undo/redo branching, style-preserving find/replace and atomic capacity failures,
+file identity/reuse, failed save/sync, recovery, and drawing
 outside-client preservation at normal/minimum/offscreen sizes. Codec tests verify
 all 64 inline-style transition pairs in the independent Pandoc reader when it is
 available. Guest integration tests are separate from these host-module checks.
