@@ -50,7 +50,12 @@ Idle close/reset stops and reaps before releasing the Terminal attachment.
 An unexpected active close records a deferred stop and returns false; the caller
 must not erase/reuse the Terminal or window. No process is recursively dispatched.
 The next inactive scheduler turn handles a pending stop before its sleep/wait
-can delay cleanup. These guards do not add kernel preemption.
+can delay cleanup. The stop request itself never publishes. An explicit
+present/yield/sleep/exit already occurring in that active slice still publishes
+under the existing contract; an explicit APP exit recorded before return keeps
+its result rather than being replaced by STOP. No further slice follows the
+pending stop. The normal desktop cannot issue Stop during a slice, so these are
+internal deferred-request semantics. These guards do not add kernel preemption.
 
 ## Verification and remaining gates
 
