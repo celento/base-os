@@ -24,7 +24,7 @@ BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data p
 
 BaseOS is an educational custom BIOS/i386 OS, not a Linux distribution or a POSIX environment. Built-ins cooperate inside the kernel; each native task has a protected 64 KiB region and a bounded execution slice. Browser is HTTP-only: no TLS/HTTPS, JavaScript, CSS layout, forms, authentication or embedded web images. There is one network request at a time. Real network tests use controlled QEMU host fixtures; public upstream DNS did not respond in the development environment, so unrestricted internet access is not claimed. UEFI and general-purpose virtual-memory processes are not implemented.
 
-Detailed guides: [Files](docs/FILES.md), [Spreadsheet](docs/SHEET.md), [Writer](docs/WRITER.md), [Browser](docs/BROWSER.md), [networking](docs/NETWORK.md), [downloads](docs/DOWNLOADS.md), [native SDK](docs/NATIVE_SDK.md), [image formats](docs/IMAGE_FORMATS.md), [Editor safety](docs/EDITOR_SAFETY.md), [task management](docs/SYSTEM_MONITOR.md), [audio](docs/MEDIA.md), [video](docs/VIDEO.md), and the [technical reference](docs/TECHNICAL.md).
+Detailed guides: [Files](docs/FILES.md), [Spreadsheet](docs/SHEET.md), [Writer](docs/WRITER.md), [PDF export](docs/WRITER_PDF.md), [Browser](docs/BROWSER.md), [networking](docs/NETWORK.md), [downloads](docs/DOWNLOADS.md), [native SDK](docs/NATIVE_SDK.md), [image formats](docs/IMAGE_FORMATS.md), [Editor safety](docs/EDITOR_SAFETY.md), [task management](docs/SYSTEM_MONITOR.md), [audio](docs/MEDIA.md), [video](docs/VIDEO.md), and the [technical reference](docs/TECHNICAL.md).
 
 ## Screenshots
 
@@ -99,7 +99,7 @@ The build keeps the exact linked `kernel.bin` and derives a deterministic `kerne
 
 Normal rebuilds preserve the filesystem area and back up an existing image before changing it. `make clean` keeps both disk images and backups. Shut QEMU down before rebuilding its disk or using the host file exchange tool. Use **System → Shutdown** to flush pending saves before closing the emulator.
 
-Host and reference-media tests additionally need Clang, FFmpeg and Pillow (`python3-pil` on Debian). The [original Harbor examples](assets/examples/) provide 18 seconds of music and a nine-second animation; release data disks include both. The normal build uses checked-in font data. Regenerating it with `python3 tools/gen_font.py` additionally requires Pillow.
+Host and reference-media tests additionally need Clang, FFmpeg and Pillow (`python3-pil` on Debian). Independent PDF checks use pypdf, ReportLab, PyMuPDF and Poppler; missing optional readers are explicitly reported as skipped. None is a kernel runtime dependency. The [original Harbor examples](assets/examples/) provide 18 seconds of music and a nine-second animation; release data disks include both. The normal build uses checked-in font data. Regenerating it with `python3 tools/gen_font.py` additionally requires Pillow.
 
 ## Start exploring
 
