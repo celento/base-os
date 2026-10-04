@@ -164,6 +164,7 @@ python3 tools/mpeg_av_test.py build --controls
 python3 tools/mpeg_av_test.py build --rate 48000
 python3 tools/mpeg_av_test.py build --rate 32000 --channels 1
 python3 tools/mpeg_av_test.py build --rate 48000 --native
+python3 tools/video_input_test.py build
 ```
 
 All fixtures are original locally generated content. FFmpeg encodes them and
@@ -199,6 +200,44 @@ verified every 137,592 output PCM frame and all 75 video frames, and observed
 75 ms maximum DMA-clock-to-presented-frame lag with no audio underrun. The guest
 fixture uses the real scheduler, system calls, filesystem and compositor APIs;
 production keyboard/compositor routing is checked separately.
+
+## Production desktop input regression
+
+`tools/video_input_test.py` boots the unmodified production kernel and performs
+all actions through real PS/2 keyboard/mouse input. Bounded reads of named ELF
+data symbols observe state; no test kernel, guest function calls or memory
+writes are injected. It records the kernel/ELF/boot hashes, build identity,
+original fixture metadata, input events, screenshots and a JSON result. It
+never opens the build's persistent boot/data disks.
+
+On production revision `82dd0f1`, the final run passed 14 checks with no audio
+underruns and 19 real framebuffer captures. A valid 1.60 MiB, 15-second MPEG
+started in 3.678 seconds. Coverage includes app/file launch, visible frame/audio
+progress, pause/resume, maximization, File-menu/launcher/Open-dialog pixel
+preservation, minimized background playback, physical taskbar restore, close
+clearing both transports and callback/frame state, MPEG stop/replay, MP3/WAV
+selection and audio-only close. The build artifacts remained byte-identical
+throughout the run.
+
+Two production regressions explain specific assertions:
+
+1. Before packet batching, the same ordinary 1.60 MiB stream remained in
+   `VIDEO_LOADING` after 15 seconds, with no decoder/device error. Bounded
+   32 KiB batching fixed startup; both host loading-poll and production-time
+   assertions retain that coverage.
+2. Before unconditional compositor servicing, an isolated Open-dialog run
+   stopped at frame 121 with one audio underrun. Its visible moving video rows
+   were 157–188, with none divisible by 64. The old hook ran only through
+   changed framebuffer writes at 64-row boundaries, starving PCM refills.
+   The fixed compositor services its existing hook at entry and while scanning,
+   independently of changed rows. The same modal test now advances audio/video
+   without an underrun or overwriting the modal's pixels.
+
+The test takes raw PPM screendumps and encodes PNG on the host afterward to
+minimize observer-induced emulator stalls. It uses typed QMP PS/2 key events
+with explicit hold times. Earlier short HMP-key/capture attempts are not counted
+as completed production checks. The evidence directory printed by each run
+retains its result even when a test fails.
 
 ## Generate and import an original sample
 
