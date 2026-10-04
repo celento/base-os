@@ -291,7 +291,13 @@ static void test_search(void) {
     select_range(8, 11); key(0x17, WRITER_MOD_CTRL); key(0x02, WRITER_MOD_CTRL); key(0x13, WRITER_MOD_CTRL);
     prior = *writer_document();
     assert(writer_word_count() == 5);
-    search_fields("cat", "dogs"); key(0x1c, WRITER_MOD_CTRL | WRITER_MOD_SHIFT);
+    search_fields("cat", "dogs");
+    assert(writer_key(0x12,0,WRITER_MOD_CTRL|WRITER_MOD_SHIFT) == WRITER_REQUEST_EXPORT);
+    compare_docs(&prior,writer_document());
+    assert(writer_key(0x1f,0,WRITER_MOD_CTRL) == WRITER_REQUEST_SAVE);
+    assert(writer_key(0x1f,0,WRITER_MOD_CTRL|WRITER_MOD_SHIFT) == WRITER_REQUEST_SAVE_AS);
+    key(0x12,WRITER_MOD_CTRL); compare_docs(&prior,writer_document());
+    key(0x1c, WRITER_MOD_CTRL | WRITER_MOD_SHIFT);
     check_text("dogs dogs\ndogs\nend dogs");
     const WriterDoc *d = writer_document();
     for (int i = 0; i < 4; i++) assert(d->style[i] == WRITER_STYLE_BOLD);

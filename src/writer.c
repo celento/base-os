@@ -758,7 +758,7 @@ int writer_key(int sc, char ch, int modifiers) {
     if (control && (sc == 0x21 || sc == 0x23)) { search_open(sc == 0x23); return WRITER_CHANGED; }
     if (sc == 0x3d) { if (!state.search.open) search_open(0); search_find(extend ? -1 : 1); return WRITER_CHANGED; }
     if (state.search.open && sc == 0x01) { state.search.open = state.search.focus = 0; return WRITER_CHANGED; }
-    if (state.search.open && state.search.focus && !(control && (sc == 0x1f || sc == 0x2c || sc == 0x15)))
+    if (state.search.open && state.search.focus && !(control && (sc == 0x1f || sc == 0x2c || sc == 0x15 || (sc == 0x12 && extend))))
         return search_key(sc, ch, modifiers);
     if (control) {
         switch (sc) {

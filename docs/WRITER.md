@@ -48,7 +48,8 @@ The Find toolbar button or Ctrl+F opens a one-line query bar. Ctrl+H adds a
 replacement field. Enter/F3 finds the next match; Shift+Enter/F3 searches backward,
 and both wrap through the document. Aa toggles ASCII case sensitivity. Tab moves
 between fields; Ctrl+A/C/X/V and Shift+arrows work within the focused field.
-Escape closes the bar without changing document text.
+Escape closes the bar without changing document text. Save, Save As, Export RTF
+and document undo/redo remain available while a search field is focused.
 
 Replace or Ctrl+Enter replaces the selected match and selects the following
 match when one exists. All or Ctrl+Shift+Enter replaces every non-overlapping
