@@ -57,7 +57,11 @@ static void pm_step(unsigned slot){unsigned began=timer_ticks();process_step(pm_
 static void pm_report_until(unsigned slot,unsigned field,unsigned wanted){
     unsigned began=timer_ticks();
     while(pm_reports[slot][field]<wanted){
-        pm_check(process_status(pm_handles[slot])!=PROCESS_TASK_DONE,"PM client exited before report");
+        if(process_status(pm_handles[slot])==PROCESS_TASK_DONE){
+            ProcessResult result;pm_check(process_get_result(pm_handles[slot],&result),"PM missing unexpected completion");
+            kprint_debug("PM-EARLY-EXIT slot=");kprint_uint(slot);kprint_debug(" value=");kprint_uint((unsigned)result.value);
+            kprint_debug(" reason=");kprint_uint(result.reason);serial_write('\n');panic("PM client exited before report");
+        }
         pm_check(timer_ticks()-began<5*TIMER_HZ,"PM client report deadline");pm_step(slot);
     }
 }
