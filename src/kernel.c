@@ -8,6 +8,9 @@
 #include "display.h"
 #include "audio.h"
 #include "net.h"
+#include "browser.h"
+#include "player.h"
+#include "audio_example.h"
 #include "platform.h"
 #include "history.h"
 #include "program.h"
@@ -614,6 +617,8 @@ enum {
     ICON_BREAKOUT,
     ICON_SYSMON,
     ICON_SETTINGS,
+    ICON_BROWSER,
+    ICON_PLAYER,
     ICON_TRASH,
     ICON_COUNT
 };
@@ -659,6 +664,8 @@ static void icons_init(void) {
     icon_set(ICON_BREAKOUT, "Breakout", icon_brick16, 0xA855F7);
     icon_set(ICON_SYSMON, "Monitor", icon_mon16, 0x10B981);
     icon_set(ICON_SETTINGS, "Settings", icon_gear16, 0x7C8494);
+    icon_set(ICON_BROWSER, "Browser", icon_clock16, 0x2476C9);
+    icon_set(ICON_PLAYER, "Media Player", icon_view16, 0xDC587A);
     icon_set(ICON_TRASH, "Trash", icon_trash, 0x9CA3AF);
 
     int col_w = 96;
@@ -727,6 +734,14 @@ static void draw_app_symbol(int id,int x,int y,uint8_t ink) {
         symbol_box(x+2,y+4,28,24,3,ink);draw_round_rect(x+20,y+9,4,4,2,ink);
         symbol_line(x,y,6,23,13,15,ink);symbol_line(x,y,13,15,19,22,ink);
         symbol_line(x,y,19,22,24,17,ink);break;
+    case ICON_BROWSER:
+        symbol_box(x+2,y+2,28,28,14,ink);
+        symbol_box(x+10,y+2,12,28,6,ink);
+        draw_rect(x+3,y+10,26,2,ink);draw_rect(x+3,y+21,26,2,ink);break;
+    case ICON_PLAYER:
+        symbol_box(x+2,y+4,28,24,4,ink);
+        for(int j=0;j<12;j++)draw_vline(x+11+j,y+10+j/2,14-j,ink);
+        break;
     case ICON_CLOCK:
         symbol_box(x+2,y+2,28,28,14,ink);
         symbol_line(x,y,16,7,16,16,ink);symbol_line(x,y,16,16,22,19,ink);break;
@@ -1319,7 +1334,9 @@ enum WinKind {
     WK_2048,
     WK_BREAKOUT,
     WK_SYSMON,
-    WK_PROPERTIES
+    WK_PROPERTIES,
+    WK_BROWSER,
+    WK_PLAYER
 };
 
 /* Max 8 windows: kind, x, y, w, h, z. seq is taskbar creation order. */
@@ -1567,6 +1584,8 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h);
 
 static void win_minimum(Win *w, int *mw, int *mh) {
     if (w->kind == WK_EDIT || w->kind == WK_FILES || w->kind == WK_TERM) { *mw = 360; *mh = 200; }
+    else if(w->kind==WK_BROWSER){*mw=BROWSER_MIN_W+2;*mh=BROWSER_MIN_H+TITLE_H+2;}
+    else if(w->kind==WK_PLAYER){*mw=PLAYER_MIN_W+2;*mh=PLAYER_MIN_H+TITLE_H+2;}
     else { int x, y; layout_window(w->kind, &x, &y, mw, mh); }
 }
 static void win_clamp(Win *w) {
@@ -1633,6 +1652,8 @@ static int win_open(int kind) {
     fm_last_click_item = -1;
     window_state[slot].history = (History){0, 0, 8, sizeof(Document), (unsigned char *)window_state[slot].undo};
     if (kind == WK_TERM) term_reset();
+    if (kind == WK_BROWSER) browser_init();
+    if (kind == WK_PLAYER) player_init();
     wins[slot].kind = kind;
     wins[slot].open = 1;
     wins[slot].min = 0;
@@ -1647,6 +1668,8 @@ static int win_open(int kind) {
 static void win_close(int i) {
     if (i < 0 || i >= MAX_WIN || !wins[i].open)
         return;
+    if(wins[i].kind==WK_BROWSER)browser_close();
+    if(wins[i].kind==WK_PLAYER)audio_stop();
     wins[i].open = 0;
     context_set(win_front());
     if (dragging_win == i) {
@@ -3469,10 +3492,32 @@ static void open_todo(void) {
     dirty = 1;
 }
 
+static int file_extension(const char *name,const char *suffix) {
+    int n=kstrlen(name),m=kstrlen(suffix);if(n<m)return 0;
+    for(int i=0;i<m;i++){char c=name[n-m+i];if(c>='A'&&c<='Z')c+=32;if(c!=suffix[i])return 0;}
+    return 1;
+}
+static void open_browser(int file) {
+    if(win_open(WK_BROWSER)<0)return;
+    if(file>=0)browser_open_file(file);
+    dirty=1;
+}
+static void open_player(int file) {
+    if(win_open(WK_PLAYER)<0)return;
+    player_refresh();if(file>=0)player_open_file(file);
+    dirty=1;
+}
+
 static void open_fs_file(int id) {
     if (!fs_valid(id))
         return;
     const char *n = fs_name(id);
+    if(fs_is_app(id)&&!kstrcmp(n,"Browser")){open_browser(-1);return;}
+    if(fs_is_app(id)&&!kstrcmp(n,"Media Player")){open_player(-1);return;}
+    if(!fs_is_dir(id)&&!fs_is_app(id)){
+        if(file_extension(n,".html")||file_extension(n,".htm")){open_browser(id);return;}
+        if(file_extension(n,".wav")||file_extension(n,".wave")||file_extension(n,".mp3")){open_player(id);return;}
+    }
     if (kstrcmp(n, "Calculator") == 0) {
         open_calc();
         return;
@@ -3553,6 +3598,10 @@ static void open_fs_file(int id) {
 
 static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     switch (kind) {
+    case WK_BROWSER:
+        *w=BROWSER_W+2;*h=BROWSER_H+TITLE_H+2;break;
+    case WK_PLAYER:
+        *w=PLAYER_W+2;*h=PLAYER_H+TITLE_H+2;break;
     case WK_PROPERTIES:
         *x=300;*y=140;*w=500;*h=330;break;
     case WK_HELLO:
@@ -4426,6 +4475,8 @@ static const char *win_app_name(int kind) {
     case WK_BREAKOUT: return "Breakout";
     case WK_SYSMON: return "Monitor";
     case WK_PROPERTIES: return "Properties";
+    case WK_BROWSER: return "Browser";
+    case WK_PLAYER: return "Media Player";
     default: return "App";
     }
 }
@@ -4561,7 +4612,11 @@ static const char icon_todo16[] =
     "################";
 
 static void draw_tb_icon(int kind, int x, int y, uint8_t invert) {
-    if (kind == WK_FILES)
+    if (kind == WK_BROWSER)
+        draw_icon16(x,y,icon_clock16,invert);
+    else if(kind == WK_PLAYER)
+        draw_icon16(x,y,icon_view16,invert);
+    else if (kind == WK_FILES)
         draw_icon16(x, y, icon_folder16, invert);
     else if (kind == WK_CLOCK)
         draw_icon16(x, y, icon_clock16, invert);
@@ -4693,6 +4748,12 @@ static void draw_window_contents(Win *w, int inactive) {
     } else if (w->kind == WK_BREAKOUT) {
         gui_draw_window(wx, wy, ww, wh, "Breakout", 0, fl);
         bo_draw(wx, wy + TITLE_H + 1);
+    } else if (w->kind == WK_BROWSER) {
+        gui_draw_window(wx,wy,ww,wh,"Browser",0,fl);
+        browser_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
+    } else if (w->kind == WK_PLAYER) {
+        gui_draw_window(wx,wy,ww,wh,"Media Player",0,fl);
+        player_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
     } else if (w->kind == WK_SYSMON) {
         gui_draw_window(wx, wy, ww, wh, "System Monitor", 0, fl);
         SysInfo si;
@@ -5056,6 +5117,8 @@ static void icon_open(int id) {
     case ICON_2048: win_open(WK_2048); break;
     case ICON_BREAKOUT: win_open(WK_BREAKOUT); break;
     case ICON_SYSMON: win_open(WK_SYSMON); break;
+    case ICON_BROWSER: open_browser(-1); break;
+    case ICON_PLAYER: open_player(-1); break;
     case ICON_TRASH: open_files(trash_id >= 0 ? trash_id : fs_root()); break;
     default: break;
     }
@@ -5678,6 +5741,11 @@ static void handle_click(void) {
             if (wordle_click(w->x, w->y + TITLE_H, mouse_x, mouse_y))
                 dirty = 1;
         }
+        else if(w->kind==WK_BROWSER){
+            if(browser_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
+        }else if(w->kind==WK_PLAYER){
+            if(player_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
+        }
         else if (w->kind == WK_TODO)
             handle_todo_click(w->x, w->y, w->w, w->h);
         else if (w->kind == WK_CAL) {
@@ -5725,6 +5793,13 @@ static void handle_key(void) {
         return;
     }
     context_set(win_front());
+    if(front_kind()==WK_BROWSER&&!name_dlg&&!open_dlg&&!launcher_on&&open_menu<0&&
+       ((ctrl_down&&(key_sc==0x26||key_sc==0x13||key_sc==0x1e))||
+        (alt_down&&(key_sc==KEY_LEFT||key_sc==KEY_RIGHT)))){
+        if(browser_key(key_sc,key_char,(ctrl_down?BROWSER_MOD_CTRL:0)|
+           (shift_down?BROWSER_MOD_SHIFT:0)|(alt_down?BROWSER_MOD_ALT:0)))dirty=1;
+        return;
+    }
     if (!name_dlg && !open_dlg && alt_down && key_sc == KEY_TAB) { win_cycle(); return; }
     if (!name_dlg && !open_dlg && alt_down && key_sc == KEY_ENTER) { win_arrange(win_front(),0); return; }
     if (!name_dlg && !open_dlg && alt_down && (key_sc == KEY_LEFT || key_sc == KEY_RIGHT)) {
@@ -5823,6 +5898,16 @@ static void handle_key(void) {
         dirty=1;return;
     }
 
+    if(fk==WK_BROWSER){
+        if(browser_key(key_sc,key_char,(ctrl_down?BROWSER_MOD_CTRL:0)|
+           (shift_down?BROWSER_MOD_SHIFT:0)|(alt_down?BROWSER_MOD_ALT:0)))dirty=1;
+        return;
+    }
+    if(fk==WK_PLAYER){
+        if(key_sc==KEY_ESC)close_front();
+        else if(player_key(key_sc,key_char))dirty=1;
+        return;
+    }
     if (fk == WK_FILES) {
         if (fm_renaming) {
             if (key_sc == KEY_ESC) {
@@ -6302,6 +6387,8 @@ static void boot_splash(void) {
         poll_time();
         audio_poll();
         net_poll();
+        if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
+        if(player_tick()&&find_open_kind(WK_PLAYER)>=0)dirty=1;
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();
@@ -6368,7 +6455,7 @@ static void session_restore(void){
     if(id>=0 && fs_size(id)==sizeof snap){kmemcpy(&snap,fs_data(id),sizeof snap);
         if(snap.magic==0x53534542&&snap.version==1)for(int i=0;i<MAX_WIN;i++){
             SavedWindow *v=&snap.win[i];v->path[FS_PATH_LEN-1]=0;
-            if(!v->open||v->kind<0||v->kind>WK_SYSMON||v->w<1||v->h<1||v->w>4096||v->h>4096||v->x<0||v->x>4096||v->y<0||v->y>4096)continue;
+            if(!v->open||v->kind<0||v->kind>WK_PLAYER||v->kind==WK_PROPERTIES||v->w<1||v->h<1||v->w>4096||v->h>4096||v->x<0||v->x>4096||v->y<0||v->y>4096)continue;
             int slot=win_open(v->kind);if(slot<0)break;Win *w=&wins[slot];w->x=v->x;w->y=v->y;w->w=v->w;w->h=v->h;w->min=!!v->min;w->z=v->z>=0&&v->z<100000?v->z:slot;win_clamp(w);
             if(w->z>wm_z)wm_z=w->z;
             int target=v->path[0]?fs_resolve(fs_root(),v->path):-1;
@@ -6391,6 +6478,15 @@ int program_key(void){
 }
 void program_present(void){cursor_restore();draw_ui();flip_vga();cursor_on=0;dirty=1;}
 static void install_examples(void){
+    if(fs_find_child(fs_root(),"Browser")<0)fs_create_app(fs_root(),"Browser");
+    if(fs_find_child(fs_root(),"Media Player")<0)fs_create_app(fs_root(),"Media Player");
+    int media=fs_find_child(fs_root(),"Media");if(media<0)media=fs_mkdir(fs_root(),"Media");
+    if(media>=0&&fs_find_child(media,"chime.wav")<0){int id=fs_create(media,"chime.wav");if(id>=0)fs_write(id,(const char *)audio_example,sizeof audio_example);}
+    int docs=fs_find_child(fs_root(),"Documents");
+    if(docs>=0&&fs_find_child(docs,"welcome.html")<0){
+        const char *page="<title>BaseOS guide</title><h1>BaseOS guide</h1><p>Open several apps from the desktop or Ctrl+Space. Alt+Tab changes windows.</p><h2>Browser</h2><p>Use HTTP addresses or file:///Documents/welcome.html. HTTPS, JavaScript and CSS layout are not supported. Never enter passwords over HTTP.</p><h2>Media Player</h2><p>Open /Media/chime.wav. WAV PCM and MP3 playback use the QEMU Sound Blaster 16.</p><h2>Make an app</h2><p>Terminal can run exec /Programs/hello-c.bex and exec /Programs/notebook.bex. The host C SDK is in the source archive.</p>";
+        int id=fs_create(docs,"welcome.html");if(id>=0)fs_write(id,page,kstrlen(page));
+    }
     int dir=fs_find_child(fs_root(),"Programs");if(dir<0)dir=fs_mkdir(fs_root(),"Programs");if(dir<0)return;
     if(fs_find_child(dir,"hello.bex")<0){int id=fs_create(dir,"hello.bex");if(id>=0)fs_write(id,(const char *)native_example,sizeof native_example);}
     if(fs_find_child(dir,"hello-c.bex")<0){int id=fs_create(dir,"hello-c.bex");if(id>=0)fs_write(id,(const char *)sdk_hello,sizeof sdk_hello);}
@@ -6571,6 +6667,8 @@ void kmain(void) {
         poll_time();
         audio_poll();
         net_poll();
+        if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
+        if(player_tick()&&find_open_kind(WK_PLAYER)>=0)dirty=1;
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();
