@@ -7523,6 +7523,7 @@ void kmain(void) {
 
     fs_init();
     int mounted = fs_load_disk();
+    audio_configure_source_workspace(fs_large_profile(), fs_large_arenas_available());
     if (mounted == 0)
         kprint_debug("FS loaded from disk\n");
     else if (mounted == FS_LOAD_BLANK)
