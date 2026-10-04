@@ -8,6 +8,9 @@
 static int stream_result(void) { return fs_resolve(0, "/Documents/large-stream.bin"); }
 void feature_test(void) {
     check_ui(fs_large_profile() && fs_file_limit() == FS_LARGE_FILE_MAX, "large desktop profile");
+    SysInfo info; sysinfo_fill(&info);
+    check_ui(info.fs_cap == (int)fs_capacity() && info.fs_bytes == (int)fs_used_bytes() &&
+             info.fs_bytes >= FS_LARGE_FILE_MAX, "large monitor capacity values");
     int rebooted = stream_result() >= 0;
     base_desktop_test();
     if (!rebooted) {
