@@ -229,8 +229,10 @@ Selected-Terminal renderer helpers `term_canvas_width()` and
 tightly packed stride. Explicit-owner input and occlusion helpers coexist:
 `term_canvas_size(slot, ...)` reads published geometry without changing selection.
 `ProcessIO.present` is bounded and must not dispatch other applications;
-Terminal supplies the copy-only publication callback. This is hosted Terminal
-integration, not independent native-window support.
+The shared `app_view`/`app_canvas` implementation supplies native ownership and
+copy-only publication through Terminal compatibility wrappers. Terminal retains
+its text and command state. This is still hosted Terminal integration, not
+independent native-window support.
 
 Historical footprint: the complete-input overflow checkpoint measured 91,516
 bytes per Terminal and **732,128 bytes** for eight, leaving 54,304 bytes before
