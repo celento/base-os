@@ -262,12 +262,17 @@ def run(build):
         session.wait(lambda: check.o.integer('name_failed') == 1, 'read-only failed sync reported')
         assert check.owner()['open']; check.expect(0, 'Do not lose this', 1)
         session.key('esc'); session.key('ctrl-w'); check.modal(); check.choose('cancel')
+        # System Shutdown also must retain this work when the disk cannot sync.
+        frame = check.o.integer('frame_count')
+        session.key('f10'); session.key('right'); session.key('right'); session.key('up'); session.key('ret')
+        session.wait(lambda: check.o.integer('open_menu') < 0 and check.o.integer('frame_count') > frame, 'failed shutdown returned to live desktop')
+        assert session.process.poll() is None and check.owner()['open']; check.expect(0, 'Do not lose this', 1)
         pictures.append(str(session.screenshot('spreadsheet-readonly-save.png')))
     assert hashlib.sha256(unknown.read_bytes()).hexdigest() == digest
     result = dict(passed=True, disk=str(disk), screenshots=pictures,
                   checks=['production PS/2 editing/cancel/formulas/range clipboard/undo', 'exact native and quoted CSV bytes',
                           'New/Open/Close guards and rejected names', '800x600 and minimum window', 'live source conflict',
-                          'pending edit paired recovery across four real reboots', 'read-only sync retains work and disk'])
+                          'pending edit paired recovery across four real reboots', 'read-only save and Shutdown retain work and disk'])
     (work / 'results.json').write_text(json.dumps(result, indent=2) + '\n'); print(json.dumps(result, indent=2))
 
 
