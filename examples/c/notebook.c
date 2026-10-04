@@ -10,6 +10,10 @@ int main(void) {
         bos_print("Could not save. Check the Documents folder and free space.\n");
         return 1;
     }
+    if(bos_sync()<0) {
+        bos_print("Note is in RAM only; disk sync failed. Run Notebook again to retry.\n");
+        return 1;
+    }
     bos_print("Saved /Documents/sdk-note.txt\n");
     return 0;
 }

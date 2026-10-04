@@ -25,7 +25,7 @@ static void draw(unsigned id){
 }
 int main(void){
     unsigned id=bos_task_id();
-    if(!id){bos_print("Use start /Programs/counter.bex for a desktop task.\n");return 0;}
+    if(!id){bos_print("Open counter.bex in Files or use start for a desktop task.\n");return 0;}
     char path[]="/Documents/counter-1.txt";path[19]=(char)('0'+id);
     char saved[20];int size=bos_read_file(path,saved,sizeof saved-1);
     if(size>0){saved[size]=0;for(int i=0;i<size&&saved[i]>='0'&&saved[i]<='9';i++)value=value*10+(unsigned)(saved[i]-'0');}
@@ -40,7 +40,10 @@ int main(void){
             if(key==' ')paused=!paused;
             if(key=='s'||key=='S'){
                 unsigned n=number(saved,value);saved[n++]='\n';
-                if(bos_write_file(path,saved,n)>=0){char message[]="Saved /Documents/counter-1.txt\n";message[25]=(char)('0'+id);bos_print(message);}
+                if(bos_write_file(path,saved,n)==(int)n){
+                    if(!bos_sync()){char message[]="Saved /Documents/counter-1.txt\n";message[25]=(char)('0'+id);bos_print(message);}
+                    else bos_print("Counter is in RAM only; disk sync failed. S retries saving.\n");
+                }
                 else bos_print("Save failed.\n");
             }
         }

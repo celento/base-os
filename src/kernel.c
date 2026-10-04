@@ -101,6 +101,7 @@ static const Theme themes[THEME_N] = {
 
 static int theme_id = 0;
 static const char *session_status="";
+static const char *native_launch_status="";
 
 static uint8_t ui_accent;
 static uint8_t ui_accent_dk;
@@ -1088,6 +1089,7 @@ static void draw_menubar(int open_menu, int menu_sel) {
     draw_string(clk, clock_x, label_y, ui_text);
     const char *storage = fs_storage_status();
     if(!storage && session_status[0])storage=session_status;
+    if(!storage && native_launch_status[0])storage=native_launch_status;
     if (storage)
         draw_string_clip(storage, bar_x[MENU_N - 1] + bar_w[MENU_N - 1] + 12,
                          label_y, COLOR_RED, clock_x - 10);
@@ -1513,6 +1515,7 @@ typedef struct {
     int selected;
     int first;
     int ids[FS_MAX_NODES];
+    unsigned ids_identity[FS_MAX_NODES];
     int count;
     uint32_t last_click_frame;
     int last_click_item;
@@ -1531,6 +1534,7 @@ _Static_assert(sizeof(WindowState) * MAX_WIN < EDITOR_CAPACITY - 2 * EDIT_BUF_SI
 #define fm_selected (window_state[context_slot].selected)
 #define fm_first (window_state[context_slot].first)
 #define fm_ids (window_state[context_slot].ids)
+#define fm_ids_identity (window_state[context_slot].ids_identity)
 #define fm_count (window_state[context_slot].count)
 #define fm_last_click_frame (window_state[context_slot].last_click_frame)
 #define fm_last_click_item (window_state[context_slot].last_click_item)
@@ -1699,6 +1703,7 @@ static int edit_close_valid(void) {
 static int pick_cwd = 0;
 static int pick_focus, pick_first;
 static int pick_ids[FS_MAX_NODES];
+static unsigned pick_identity[FS_MAX_NODES];
 static int pick_count = 0;
 static int pick_selected = 0;
 static uint32_t pick_last_click_frame = 0;
@@ -2107,6 +2112,7 @@ static void fm_refresh(void) {
             continue;
         if (fm_cwd == fs_root() && prefs_id >= 0 && raw[i] == prefs_id)
             continue;
+        fm_ids_identity[fm_count] = fs_identity(raw[i]);
         fm_ids[fm_count++] = raw[i];
     }
     int vis = fm_vis_count();
@@ -3962,6 +3968,20 @@ static void open_spreadsheet(int file) {
     }
     dirty = 1;
 }
+/* Direct launches allocate a fresh owner; never replace a live Terminal task. */
+static void open_native_file(int id) {
+    unsigned identity=fs_identity(id);
+    int parent=fs_parent(id);
+    if(!identity||fs_is_dir(id)||fs_is_app(id))return;
+    int slot=win_open(WK_TERM);
+    if(slot<0){native_launch_status="Close a window to run this app.";dirty=1;return;}
+    native_launch_status="";
+    open_dlg=0;
+    term_set_cwd(parent);
+    term_task_start_file(slot,id,identity); /* Failure remains visible in its Terminal. */
+    dirty=1;
+}
+
 static void open_fs_file(int id) {
     if (!fs_valid(id))
         return;
@@ -3971,6 +3991,7 @@ static void open_fs_file(int id) {
     if(fs_is_app(id)&&!kstrcmp(n,"Writer")){open_writer(-1);return;}
     if(fs_is_app(id)&&!kstrcmp(n,"Spreadsheet")){open_spreadsheet(-1);return;}
     if(!fs_is_dir(id)&&!fs_is_app(id)){
+        if(file_extension(n,".bex")){open_native_file(id);return;}
         if(file_extension(n,".bwr")){open_writer(id);return;}
         if(file_extension(n,".bsh")||file_extension(n,".csv")){open_spreadsheet(id);return;}
         if(file_extension(n,".html")||file_extension(n,".htm")){open_browser(id);return;}
@@ -4259,10 +4280,13 @@ static void fm_open_selected(void) {
     if (vis <= 0 || fm_selected < 0 || fm_selected >= vis)
         return;
     int id = fm_row_id(fm_selected);
-    if (id < 0) {
+    if (id == -1) {
         fm_go_up();
         return;
     }
+    if (id < 0) return;
+    int index=fm_selected-(fm_has_parent()?1:0);
+    if(fs_identity(id)!=fm_ids_identity[index]){fm_refresh();dirty=1;return;}
     if (fs_is_dir(id)) {
         fm_set_cwd(id);
         fm_selected = 0;
@@ -4461,6 +4485,7 @@ static void od_refresh(void) {
             continue;
         if (pick_cwd == fs_root() && prefs_id >= 0 && raw[i] == prefs_id)
             continue;
+        pick_identity[pick_count] = fs_identity(raw[i]);
         pick_ids[pick_count++] = raw[i];
     }
     if (pick_selected >= pick_count)
@@ -4494,6 +4519,7 @@ static void od_open_selected(void) {
     if (pick_count <= 0 || pick_selected < 0 || pick_selected >= pick_count)
         return;
     int id = pick_ids[pick_selected];
+    if(fs_identity(id)!=pick_identity[pick_selected]){od_refresh();dirty=1;return;}
     if (!od_row_enabled(id))
         return;
     if (fs_is_dir(id)) {
@@ -4690,6 +4716,8 @@ static void draw_file_row(int x, int y, int w, int id, int sel, int dim) {
             is_app = 7;
         else
             is_app = 1;
+    } else if (!fs_is_dir(id) && file_extension(nm,".bex")) {
+        is_app = 6;
     } else if (is_image_file(id)) {
         is_app = 4;
     }
@@ -5742,9 +5770,10 @@ static void menu_activate(int m, int item) {
 }
 
 typedef struct {
-    const char *name;
+    char name[FS_NAME_LEN]; /* A result owns its display name and node identity. */
     int icon;
     int file;
+    unsigned identity;
 } LaunchItem;
 
 static LaunchItem launch_items[24];
@@ -5774,7 +5803,8 @@ static void launcher_refresh(void) {
     launch_buf[launch_len] = 0;
     for (int i = 0; i < ICON_TRASH && launch_n < 24; i++) {
         if (str_has(icons[i].label, launch_buf)) {
-            launch_items[launch_n].name = icons[i].label;
+            kstrcpy(launch_items[launch_n].name, icons[i].label);
+            launch_items[launch_n].identity = 0;
             launch_items[launch_n].icon = i;
             launch_items[launch_n].file = -1;
             launch_n++;
@@ -5788,7 +5818,8 @@ static void launcher_refresh(void) {
         if (launch_len == 0 && launch_n >= 8)
             break;
         if (str_has(fs_name(ids[i]), launch_buf)) {
-            launch_items[launch_n].name = fs_name(ids[i]);
+            kstrcpy(launch_items[launch_n].name, fs_name(ids[i]));
+            launch_items[launch_n].identity = fs_identity(ids[i]);
             launch_items[launch_n].icon = -1;
             launch_items[launch_n].file = ids[i];
             launch_n++;
@@ -5826,6 +5857,8 @@ static void launcher_run(int i) {
     if (i < 0 || i >= launch_n)
         return;
     LaunchItem it = launch_items[i];
+    if(it.file>=0 && (!it.identity || fs_identity(it.file)!=it.identity ||
+       kstrcmp(fs_name(it.file),it.name))){launcher_refresh();dirty=1;return;}
     launcher_close();
     if (it.file >= 0)
         open_fs_file(it.file);
@@ -5901,9 +5934,12 @@ static void draw_launcher(void) {
             draw_string_clip(launch_items[i].name, fx + 38, ry + 5, ink, fx + fw - 120);
             draw_string("Application", fx + fw - 12 - ui_string_w("Application"), ry + 5, ui_text_dim);
         } else {
-            draw_mini_doc(fx + 12, ry + 8, ink, sel ? ui_chrome : COLOR_WHITE);
+            int native=file_extension(launch_items[i].name,".bex");
+            if(native)draw_mini_term(fx + 12, ry + 8, ink, sel ? ui_chrome : COLOR_WHITE);
+            else draw_mini_doc(fx + 12, ry + 8, ink, sel ? ui_chrome : COLOR_WHITE);
             draw_string_clip(launch_items[i].name, fx + 38, ry + 5, ink, fx + fw - 120);
-            draw_string("File", fx + fw - 12 - ui_string_w("File"), ry + 5, ui_text_dim);
+            const char *kind=native?"Native app":"File";
+            draw_string(kind, fx + fw - 12 - ui_string_w(kind), ry + 5, ui_text_dim);
         }
     }
     if (launch_n == 0)
