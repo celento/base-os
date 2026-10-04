@@ -41,6 +41,16 @@ int writer_dirty(void);
 int writer_read_only(void);
 int writer_file(void);
 unsigned writer_file_identity(void);
+/* Cached baseline bytes for the bound native file; not the current dirty draft.
+ * Persist this compact record in a versioned sidecar with the saved path.
+ * Identity checks remain necessary during a boot. Two noncryptographic hashes
+ * detect ordinary external replacements across reboot; this is not an auth tag.
+ * binding() returns 1 when a cached bound baseline exists, else 0. matches()
+ * returns 1 only for an available native file with identical size/hash bytes.
+ * Both leave output/state unchanged on failure; matches is read-only and polls. */
+typedef struct { unsigned size, hash_a, hash_b; } WriterBinding;
+int writer_binding(WriterBinding *out);
+int writer_binding_matches(int file, const WriterBinding *binding);
 unsigned writer_length(void);
 unsigned writer_word_count(void);
 unsigned writer_caret(void);

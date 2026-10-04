@@ -82,6 +82,9 @@ are rejected. Ordinary Save checks the original filesystem identity, including
 after a `.bwr` rename: a deleted file's reused node ID is never overwritten.
 Renaming away from `.bwr` requires Save As. A clean
 bound document whose file disappears is treated as unsaved and needs Save As.
+Ordinary Save also compares the source's exact byte count, FNV-1a and CRC32
+fingerprints with the baseline captured at Open or the previous RAM write. An
+externally changed same-ID file requires a new Save As; no source bytes change.
 Every successful save requires `fs_sync()` to finish successfully. Failed writes
 or synchronization leave the document open and unsaved. A newly created empty
 target is removed after write failure. A target with a pending in-memory write
@@ -122,7 +125,17 @@ Save/Discard/Cancel guard; it resets document content while retaining clipboard.
 Those bytes are valid until the next Writer operation. Recovery autosaving must
 not mark the document saved. `writer_restore()` validates before publication,
 restores bounded caret/selection and only rebinds an identity-matching native
-file. A missing/reused binding becomes an unsaved recovered document.
+file. Because runtime identities do not survive reboot, the desktop persists a
+versioned binding sidecar: `writer_binding()` returns the cached baseline source
+fingerprint and `writer_binding_matches()` compares a candidate file read-only.
+The desktop must match that record before passing a recovery file to restore;
+missing/mismatched metadata requires an unbound recovery. Restore captures the
+verified current file baseline, not the possibly different unsaved draft. A missing/reused binding becomes an unsaved recovered document. Fingerprints are
+size plus two independent 32-bit noncryptographic checks, for accidental external
+replacement detection rather than authentication. Hashing occurs only on
+open/save/recovery matching, never during drawing or routine dirty queries. A
+successful RAM write updates the baseline even if disk sync then fails, so retry
+can safely recognize its own pending write.
 
 The desktop overrides two weak plain-text clipboard hooks. `writer_clipboard_set`
 returns a generation; `writer_clipboard_get` returns full byte length or -1 for
