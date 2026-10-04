@@ -12,8 +12,9 @@ class AudioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             exe = pathlib.Path(temp) / name
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra',
-                            '-Werror', '-fsanitize=address,undefined', '-I', str(ROOT / 'src'),
-                            str(ROOT / 'tests' / (name + '.c')), str(ROOT / 'src/media.c'),
+                            '-Werror', '-fsanitize=address,undefined', '-DMEDIA_MP3_HOST_TEST',
+                            '-I', str(ROOT / 'src'),
+                            str(ROOT / 'tests' / (name + '.c')), str(ROOT / 'src/media.c'), str(ROOT / 'src/media_mp3.c'),
                             '-o', str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
     def test_wave(self): self.run_host('media_host')

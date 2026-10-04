@@ -1,7 +1,7 @@
 # Audio playback
 
 BaseOS has an original, allocation-free Sound Blaster 16 driver and PCM WAVE
-reader. It targets QEMU's SB16 at port `0x220`, IRQ5, low DMA1/high DMA5. IRQ5
+reader, plus the CC0-licensed minimp3 decoder. It targets QEMU's SB16 at port `0x220`, IRQ5, low DMA1/high DMA5. IRQ5
 remains masked: the cooperative main loop reads the high-DMA position, refills a
 64 KiB double buffer and acknowledges the DSP's interrupt latch. The floppy
 controller continues using its independent DMA2 channel.
@@ -11,11 +11,14 @@ controller continues using its independent DMA2 channel.
 - RIFF/WAVE PCM format 1, unsigned 8-bit or signed little-endian 16-bit
 - Mono or stereo, 5,000 through 48,000 samples/second on QEMU SB16
 - Optional chunks, odd-byte chunk padding, and either fmt/data order
+- MP3: MPEG-1/2/2.5 Layer III CBR/VBR, mono/stereo, with ID3v2/ID3v1 tags
 - Files are validated before replacement of the current playback
 - Playback owns a copy, so changing or deleting the source file is safe
 
-Other codecs, WAVE extensible, floating-point WAVE, recording, MIDI and video are
-not implemented by this initial audio core. Normal BaseOS files still have a
+Other codecs, free-format MP3, WAVE extensible, floating-point WAVE, recording,
+MIDI and video are not implemented. MP3 encoder delay/padding is retained;
+gapless trimming and seeking are not implemented. MP3 streams must keep the
+same sample rate and channel count throughout. Normal BaseOS files still have a
 16,383-byte limit. The playback arena can accept up to 384 KiB from a future
 larger-file source, but that does not enlarge the filesystem or add streaming
 file I/O. Uncompressed CD-rate stereo therefore fits only very short clips in
@@ -38,8 +41,9 @@ Use `audio_play(data, bytes)`, `audio_pause(1/0)`, `audio_stop()` and
 format, rate, channel count, source bit depth, played/total frames and errors.
 Position/duration helpers return milliseconds. Playback and volume are global.
 
-Each poll converts at most 4,096 PCM samples; playback does not wait in a busy
-loop. The first eight polls prefill the ring. At 44.1 kHz stereo, each half holds
+Each poll converts at most 4,096 PCM samples or decodes at most one MP3 frame;
+playback does not wait in a busy loop. WAV needs eight polls to prefill the ring;
+MP3 takes additional bounded frame-decode polls. At 44.1 kHz stereo, each half holds
 about 186 ms. Callers should service audio every 70 ms or better. A missed refill
 or a delay longer than the complete ring stops playback with an explicit
 underrun error instead of silently repeating stale music. Native programs still
@@ -66,6 +70,7 @@ SB16 is detected and the rest of the desktop remains usable.
 ```
 make
 python3 tools/audio_test.py build
+python3 tools/mp3_test.py build  # additionally needs ffmpeg with libmp3lame
 python3 -m unittest discover -s tests -p test_audio.py
 ```
 
@@ -86,5 +91,15 @@ QEMU backend/reference implementation:
 https://www.qemu.org/docs/master/system/invocation.html
 https://gitlab.com/qemu-project/qemu/-/blob/master/hw/audio/sb16.c
 
-The driver and WAV parser are original project code; no third-party source is
-included in this initial implementation.
+The driver and WAV parser are original project code. minimp3 is pinned in
+`third_party/minimp3/` with its complete CC0 1.0 license and source attribution.
+It is compiled scalar/MP3-only in a separate x87 translation unit. Every frame
+saves/restores the complete x87 state and CR0 flags; other kernel code remains
+soft-float. This uses the existing Pentium-or-newer machine contract, without
+requiring SSE or a hosted C runtime.
+
+The MP3 test creates an original short audio fixture through ffmpeg/libmp3lame,
+imports it into the guest filesystem and captures actual SB16 output. It checks
+playback completion, no underruns, x87 environment preservation, and agreement
+with a separately decoded host PCM reference. Normal MPEG-1 stereo 44.1 kHz,
+MPEG-2 stereo 22.05 kHz, and MPEG-2.5 mono 8 kHz fixtures have been verified.
