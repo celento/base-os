@@ -571,6 +571,72 @@ class Session(DesktopSession):
         self.record_admission(generation, started)
         return generation
 
+    def bound_native_save(self, model, guarded=False, before=None):
+        """Associate a native save only after its own visible pending outcome.
+
+        A racing recovery snapshot may reject Ctrl+S. Its generation is retained
+        as background evidence, never admitted as this application's save.
+        """
+        assert model in ('writer', 'sheet')
+        assert not guarded or self.asynchronous
+        pending = ('Saving changes', 'Cancel keeps') if guarded else (
+            ('New edits stay private.',) if model == 'writer' else ('Saving sheet to disk',))
+        busy = ('Disk saving', 'Retry Save shortly') if guarded else ('Disk is saving', 'retry shortly')
+        success = 'Saved to disk.' if model == 'writer' else 'Saved native .bsh to disk.'
+        assert before is not None and not all(self.has_text(before, text) for text in pending), (
+            'Native admission needs a captured nonpending model baseline', before)
+        deadline, attempt = time.monotonic() + self.timeout, 0
+        while True:
+            assert time.monotonic() < deadline, 'Native save remained busy'
+            self.idle()
+            prior = {job['generation'] for job in snapshot_jobs(self.serial())}
+            attempt += 1
+            if guarded:
+                # Both the initial guard and a failed Save restore Cancel focus.
+                # Tab chooses Save; blindly repeating Enter would cancel it.
+                self.key('tab')
+                started = self.key('ret')
+            else:
+                started = self.key('ctrl-s')
+            self.serial()  # Observe a complete begin before image/OCR work.
+            while True:
+                assert time.monotonic() < deadline, 'Native save outcome was not observed'
+                self.keep_awake()
+                event = self.frame(f'{model}-native-submit-{attempt}')
+                def has_all(texts):
+                    return all(self.has_text(event, text) for text in texts)
+                if not has_all(pending) and not has_all(busy) and not self.has_text(event, success):
+                    self.crop_ocr(event, 'modal' if guarded else 'footer')
+                accepted, rejected = has_all(pending), has_all(busy)
+                assert not (accepted and rejected), ('Ambiguous native save outcome', event)
+                if rejected:
+                    self.events.append(dict(kind='native-save-rejected-busy', model=model, guarded=guarded,
+                                            attempt=attempt, submit_key_wall=started,
+                                            prior_generations=sorted(prior),
+                                            background_generations=event['pending_generations'],
+                                            before=before, frame=event))
+                    before = event  # A rejection is an observed nonpending baseline.
+                    self.idle()
+                    if guarded:
+                        before = self.visible('same-close-guard-before-retry', 'Save changes before closing', 'Cancel')
+                    break  # Retry this specific rejected action, with fresh attribution.
+                if accepted:
+                    if not self.asynchronous:
+                        continue  # A legacy save must finish visibly before proceeding.
+                    fresh = set(event['pending_generations']) - prior
+                    assert len(fresh) == 1, ('No unique fresh generation for model pending display', event, prior)
+                    generation = fresh.pop()
+                    self.record_admission(generation, started)
+                    self.last_accepted_native_frame = event
+                    self.events.append(dict(kind='native-save-accepted', model=model, guarded=guarded,
+                                            attempt=attempt, generation=generation, before=before, frame=event))
+                    return generation
+                if self.has_text(event, success):
+                    assert not self.asynchronous, ('Native save completed without a model-specific pending capture', event)
+                    self.last_accepted_native_frame = event
+                    return None
+                time.sleep(.08)
+
     def name_dialog(self, shortcut, title, filename):
         self.idle()
         self.key(shortcut)
@@ -759,13 +825,9 @@ def writer_rest(session, asynchronous):
     session.boot(); session.idle(); session.launch('writer')
     session.visible('writer-recovered', 'ALPHAZ', 'Unsaved')
     session.text('C'); session.idle(); session.key('ctrl-w')
-    session.visible('close-guard-cancel-default', 'Save changes before closing', 'Cancel')
+    guard_before = session.visible('close-guard-cancel-default', 'Save changes before closing', 'Cancel')
     if asynchronous:
-        session.key('tab'); generation = session.submit(lambda: session.key('ret'))
-        # The normal pointer may obscure "this document" in the explanatory
-        # sentence. The title and unoccluded Cancel text identify this guard.
-        session.visible('close-saving-guard', 'Saving changes', 'Cancel keeps',
-                        generation=generation)
+        generation = session.bound_native_save('writer', guarded=True, before=guard_before)
         session.key('esc'); began = session.text('D')
         session.visible('close-cancel-private-edit', 'ALPHAZCD', generation=generation, since=began,
                         absent=('Saving changes...',))
@@ -774,9 +836,9 @@ def writer_rest(session, asynchronous):
         # The synchronous path has no observable pending cancel window. Cancel
         # the initial guard, edit, then exercise an ordinary durable Ctrl+S.
         session.key('esc'); session.text('D'); guarded = None
-    session.idle(); generation = session.submit(lambda: session.key('ctrl-s'))
-    if asynchronous:
-        session.visible('writer-latest-native-accepted', 'ALPHAZCD', 'Saving', generation=generation)
+    native_before = session.visible('writer-before-latest-native', 'ALPHAZCD', 'Unsaved',
+                                    absent=('New edits stay private.', 'Saving changes'))
+    generation = session.bound_native_save('writer', before=native_before)
     native = session.durable(generation)
     session.visible('writer-latest-native-durable', 'ALPHAZCD', 'Saved to disk')
     session.text('E'); session.visible('writer-newer-export-source', 'ALPHAZCDE', 'Unsaved')
@@ -811,10 +873,9 @@ def sheet_first(session, asynchronous):
 
 def sheet_rest(session, asynchronous):
     session.boot(); session.idle(); session.launch('spreadsheet')
-    session.visible('sheet-private-draft-recovered', '27.125')
-    session.idle(); generation = session.submit(lambda: session.key('ctrl-s'))
-    if asynchronous:
-        session.visible('sheet-latest-native-accepted', '27.125', 'Saving sheet', generation=generation)
+    native_before = session.visible('sheet-private-draft-recovered', '27.125', 'Recovered sheet draft',
+                                    absent=('Saving sheet to disk',))
+    generation = session.bound_native_save('sheet', before=native_before)
     second = session.durable(generation)
     session.visible('sheet-latest-native-durable', '27.125', 'Saved native .bsh to disk')
     generation = session.name_dialog('ctrl-shift-e', 'Export values', 'spreadsheet.csv')

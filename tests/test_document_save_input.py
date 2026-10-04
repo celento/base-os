@@ -199,6 +199,65 @@ class DocumentCollectorTest(unittest.TestCase):
         self.assertIsNone(session.submit(lambda: 1.0))
         self.assertTrue(session.durable(None)['synchronous'])
 
+    def native_save_session(self, guarded=False):
+        session = Session.__new__(Session)
+        session.timeout, session.asynchronous, session.events = 10, True, []
+        session.keep_awake = lambda: None
+        session.baseline = dict(ocr='Save changes before closing? Cancel' if guarded else 'Unsaved ALPHAZCD', dumped=0)
+        session.visible = lambda *args: session.baseline
+        session.crop_ocr = lambda *args: None
+        session.idle = lambda: None
+        session.keys, session.recorded = [], []
+        session.key = lambda key: session.keys.append(key) or float(len(session.keys))
+        session.record_admission = lambda generation, started: session.recorded.append((generation, started))
+        log = ['']
+        session.serial = lambda: log[0]
+        frames = iter([
+            dict(ocr='Saving disk snapshot; file changes paused\n' + (
+                'Disk saving. Retry Save shortly.' if guarded else 'Unsaved | Disk is saving; retry shortly.'),
+                 pending_generations=[6]),
+            dict(ocr='Saving changes... Cancel keeps this document open.' if guarded else
+                 'ALPHAZCD\nSaving | New edits stay private.', pending_generations=[7])])
+        def frame(name):
+            event = next(frames)
+            if event['pending_generations'] == [6]:
+                log[0] = ('FS snapshot begin tick=00000001 generation=00000006\n'
+                          'FS snapshot end tick=00000002 generation=00000006 result=durable\n')
+            return event
+        session.frame = frame
+        return session
+
+    def test_bound_save_retries_busy_without_claiming_background_generation(self):
+        session = self.native_save_session()
+        self.assertEqual(session.bound_native_save('writer', before=session.baseline), 7)
+        self.assertEqual(session.keys, ['ctrl-s', 'ctrl-s'])
+        self.assertEqual(session.recorded, [(7, 2.0)])
+        rejected = [e for e in session.events if e['kind'] == 'native-save-rejected-busy']
+        self.assertEqual(rejected[0]['background_generations'], [6])
+        accepted = next(e for e in session.events if e['kind'] == 'native-save-accepted')
+        self.assertIs(accepted['before'], rejected[0]['frame'])
+
+    def test_guard_busy_retry_chooses_save_again_from_cancel_focus(self):
+        session = self.native_save_session(guarded=True)
+        self.assertEqual(session.bound_native_save('writer', guarded=True, before=session.baseline), 7)
+        self.assertEqual(session.keys, ['tab', 'ret', 'tab', 'ret'])
+        self.assertEqual(session.recorded, [(7, 4.0)])
+
+    def test_global_saving_banner_does_not_admit_a_native_save(self):
+        session = self.native_save_session()
+        frames = iter([dict(ocr='Saving disk snapshot; file changes paused\nUnsaved', pending_generations=[6]),
+                       dict(ocr='Saved to disk.', pending_generations=[])])
+        session.frame = lambda name: next(frames)
+        with self.assertRaisesRegex(AssertionError, 'without a model-specific pending capture'):
+            session.bound_native_save('writer', before=session.baseline)
+        self.assertEqual(session.recorded, [])
+
+    def test_prior_pending_pixels_cannot_be_a_native_save_baseline(self):
+        session = self.native_save_session()
+        with self.assertRaisesRegex(AssertionError, 'nonpending model baseline'):
+            session.bound_native_save('writer', before=dict(ocr='Saving | New edits stay private.'))
+        self.assertEqual(session.keys, [])
+
     def test_keep_awake_finishes_shift_release_before_next_action(self):
         session = Session.__new__(Session)
         session.last_key = 0
