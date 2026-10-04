@@ -530,7 +530,7 @@ static int own_download_active(void) {
     const DownloadStatus *d=download_status();return d->request_id==B.download_id&&d->state==DOWNLOAD_ACTIVE;
 }
 static int download_problem(const char *message) {
-    copy(B.download_notice,sizeof B.download_notice,message);set_status(message);B.download_visible=1;B.download_scroll=0;download_summary();return 1;
+    copy(B.download_notice,sizeof B.download_notice,message);set_status(message);B.download_visible=1;B.download_scroll=0;B.focus=0;B.pick_link=0;download_summary();return 1;
 }
 static int start_download(void) {
     char url[NET_URL_MAX],stem[FS_NAME_LEN],extension[8],name[FS_NAME_LEN],path[64],suffix[12];
