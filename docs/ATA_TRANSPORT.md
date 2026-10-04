@@ -75,11 +75,15 @@ Each protocol phase has a two-second deadline based on `timer_ticks()`.
 Submission, command issuance, a completed sector transfer and transition to the
 next command begin new phases. Merely polling, reaching a quota, rejecting an
 overlap or observing hardware waiting never restarts the deadline. Unsigned
-elapsed-tick subtraction handles normal timer wraparound. A phase that has
-expired fails before another transfer or completion is accepted, even if the
-status is ready when observed again. Therefore callers must not leave an active
-request unserviced for two seconds, including repeated zero-budget calls.
-Interrupt-driven timer service must remain available to the caller.
+elapsed-tick subtraction handles normal timer wraparound. Timeout is checked
+only when the observed status requires a hardware wait: BSY, missing data DRQ,
+or unexpected continuing DRQ in an idle/completion phase. Ready data or command
+completion remains valid after a longer caller scheduling gap, including legacy
+application execution. A zero-budget poll of a ready data phase still returns
+MORE without resetting the deadline; if a later observation requires a hardware
+wait after that deadline, it fails. A genuine timeout remains terminal even if
+the hardware later becomes ready. Poll regularly to detect stalls promptly;
+interrupt-driven timer service must remain available to the caller.
 
 `ata_poll` never calls `platform_poll`, dispatches application work, allocates,
 sleeps or changes interrupt enablement. The synchronous compatibility wrappers
@@ -125,6 +129,9 @@ ordinary ATA status/port model. Its sanitizer-enabled host test covers:
 - Eight stalled protocol states, repeated polls at the same tick, exact timeout
   boundaries, rejected requests not refreshing deadlines, progress refreshing
   deadlines and unsigned tick wraparound.
+- Late polls of ready idle/data/command/flush phases, zero-budget ready polls
+  beyond the deadline, genuine unready timeouts and sticky failure after hardware
+  subsequently becomes ready.
 - Zero/FF bus status, ERR and DF before commands and during data/completion/flush
   phases; BSY with ERR/DF; protection until remount.
 - Absent disks, unsupported IDENTIFY flags/signatures, non-512 logical sectors,
@@ -139,7 +146,7 @@ make -j3 build/kernel.bin
 
 On 2026-10-04 the focused host test passed with ASan/UBSan; the 14-test foundation
 suite also passed, and the production kernel linked successfully. With GCC
-14.2.0 and the production i386 flags, `ata.o` grows from 1,163 to 1,992 bytes of
+14.2.0 and the production i386 flags, `ata.o` grows from 1,163 to 2,080 bytes of
 text, and from 8 to 40 bytes of BSS. The request itself is 32 bytes on i386, has
 no allocated buffer, and is guarded by a fixed-size compile-time assertion.
 
