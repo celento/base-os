@@ -363,6 +363,12 @@ def run(build, profile='default', scenario='all'):
         with session_for(disk, 'reboot') as session:
             session.boot(); check = CalendarCheck(session, build); check.open()
             assert check.snapshot() == expected
+            # An invalid recovered date leaves the view at today's date. Use
+            # the real next-month arrow to see a saved event without changing
+            # the unfinished draft or relying on view state being persisted.
+            check.body(check.owner()['w'] // 2 - 32, 27)
+            assert check.date() == (2028, 2, 29) and check.integer('selected') == late
+            assert check.snapshot() == expected
             pictures.append(str(session.screenshot('calendar-draft-and-appointments-after-reboot.png')))
             # Finish the recovered partial entry using the real All-day control.
             check.field(0, '2028-03-01')
@@ -390,6 +396,11 @@ def run(build, profile='default', scenario='all'):
             assert check.integer('ca_pending') and check.items()[0]['id'] == ident
             pictures.append(str(session.screenshot('calendar-path-collision-preserved.png')))
             check.close(); check.open(); assert check.items()[0]['id'] == ident
+            before = check.snapshot(); frame = check.o.integer('frame_count')
+            session.shutdown_keys()
+            session.wait(lambda: check.o.integer('open_menu') < 0 and check.o.integer('frame_count') > frame,
+                         'Occupied-path Shutdown returns to live desktop')
+            assert session.process.poll() is None and check.snapshot() == before
             # /prefs is intentionally hidden in Files. The ordinary Terminal
             # move command preserves the complete collision folder and child.
             # Nothing is deleted and no live disk image is read or changed.
