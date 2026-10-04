@@ -8,7 +8,12 @@ PHDRS {
 SECTIONS {
     . = KERNEL_LOAD_ADDR;
     .text : { KEEP(*(.text.entry)) *(.text .text.*) } :text
-    .rodata : { *(.rodata .rodata.*) } :text
+    __text_end = .;
+    .rodata : {
+        __rodata_start = .;
+        *(.rodata .rodata.*)
+        __rodata_end = .;
+    } :text
     . = ALIGN(16);
     .data : { *(.data .data.*) } :data
     __load_end = .;
