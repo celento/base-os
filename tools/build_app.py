@@ -1,4 +1,4 @@
-"""Build a freestanding C application: BEX1 by default, opt-in BEX2 format."""
+"""Build a freestanding C application: BEX1 by default, explicit BEX2/GUI modes."""
 import argparse
 import os
 import pathlib
@@ -33,6 +33,8 @@ def _build_bex1(source, output):
 BEX2_PAGE = 4096
 BEX2_EXTENT = 4 * 1024 * 1024
 BEX2_FILE_MAX = 256 * 1024
+BEX2_FLAG_NATIVE_WINDOW_V1 = 0x1
+BEX2_NATIVE_WINDOW_ABI_MINOR = 2
 
 
 def _bex2_header(data):
@@ -41,8 +43,11 @@ def _bex2_header(data):
         raise ValueError('BEX2 output lacks its 64-byte header')
     h = struct.unpack_from('<16I', data)
     magic, header, version, flags, size, entry, text, start, initialized, memory, workspace, stack, major, minor, r0, r1 = h
-    if (magic, header, version, flags, major, r0, r1) != (0x32584542, 64, 1, 0, 1, 0, 0):
+    if ((magic, header, version, major, r0, r1) != (0x32584542, 64, 1, 1, 0, 0)
+            or flags & ~BEX2_FLAG_NATIVE_WINDOW_V1):
         raise ValueError('BEX2 output has unsupported header fields')
+    if flags & BEX2_FLAG_NATIVE_WINDOW_V1 and minor < BEX2_NATIVE_WINDOW_ABI_MINOR:
+        raise ValueError('BEX2 native-v1 windows require ABI minor 2 or newer')
     align = lambda n: (n + BEX2_PAGE - 1) & -BEX2_PAGE
     if not (text and 4096 <= entry < 4096 + text and start == align(4096 + text)
             and initialized <= memory and size == start + initialized
@@ -96,7 +101,7 @@ def _validate_bex2_elf(path, header):
             raise ValueError('BEX2 does not support a dynamic linker or interpreter')
 
 
-def _build_bex2(source, output, workspace_bytes, stack_bytes, required_abi_minor, elf_output):
+def _build_bex2(source, output, workspace_bytes, stack_bytes, required_abi_minor, elf_output, flags):
     for name, value in (('workspace', workspace_bytes), ('stack', stack_bytes)):
         if not isinstance(value, int) or value < 0 or value > BEX2_EXTENT or value % BEX2_PAGE:
             raise ValueError(f'BEX2 {name} must be a nonnegative page multiple within 4 MiB')
@@ -113,24 +118,28 @@ def _build_bex2(source, output, workspace_bytes, stack_bytes, required_abi_minor
     with tempfile.TemporaryDirectory(prefix='baseos-app2-') as temporary:
         temp = pathlib.Path(temporary)
         objects = []
+        defines = ['-DBOS_APP_NATIVE_WINDOW_V1=1'] if flags & BEX2_FLAG_NATIVE_WINDOW_V1 else []
         for i, path in enumerate((ROOT / 'sdk/start2.c', source)):
             obj = temp / f'{i}.o'
             objects.append(str(obj))
             subprocess.run([tool('gcc'), '-std=c11', '-Os', '-Wall', '-Wextra', '-Werror', '-m32',
                 '-ffreestanding', '-fno-pie', '-fno-pic', '-fno-stack-protector', '-fno-builtin',
-                '-mno-sse', '-mno-mmx', '-msoft-float', '-I', str(ROOT / 'sdk'),
+                '-mno-sse', '-mno-mmx', '-msoft-float', *defines, '-I', str(ROOT / 'sdk'),
                 '-c', str(path), '-o', str(obj)], check=True)
         elf = temp / 'app.elf'
         subprocess.run([tool('ld'), '-m', 'elf_i386',
             '--defsym=__bex2_workspace_bytes=' + str(workspace_bytes),
             '--defsym=__bex2_stack_bytes=' + str(stack_bytes),
             '--defsym=__bex2_required_abi_minor=' + str(required_abi_minor),
+            '--defsym=__bex2_flags=' + str(flags),
             '-T', str(ROOT / 'sdk/app2.ld'), '-nostdlib', '-z', 'noexecstack',
             '-o', str(elf), *objects], check=True)
         binary = temp / 'app.bex'
         subprocess.run([tool('objcopy'), '-O', 'binary', str(elf), str(binary)], check=True)
         data = binary.read_bytes()
         header = _bex2_header(data)
+        if header[3] != flags or header[13] != required_abi_minor:
+            raise ValueError('BEX2 linker header disagrees with the requested launch mode or ABI minor')
         _validate_bex2_elf(elf, header)
         if header[8] and len(data) != header[4]:
             raise ValueError('BEX2 initialized data payload is truncated')
@@ -144,21 +153,28 @@ def _build_bex2(source, output, workspace_bytes, stack_bytes, required_abi_minor
             shutil.copyfile(elf, elf_output)
     print(f'{output}: {len(data)} bytes, BEX2 entry 0x{header[5]:x}, '
           f'workspace {workspace_bytes} bytes, stack {stack_bytes} bytes'
+          + ('; native-v1 window' if flags & BEX2_FLAG_NATIVE_WINDOW_V1 else '')
           + (' (IDE data disk required for files over 16383 bytes)' if len(data) > 16383 else ''))
 
 
 def build(source, output, *, format='bex1', workspace_bytes=None, stack_bytes=None,
-          required_abi_minor=None, elf_output=None):
+          required_abi_minor=None, elf_output=None, window=None):
     if format == 'bex1':
-        if any(value is not None for value in (workspace_bytes, stack_bytes, required_abi_minor, elf_output)):
+        if any(value is not None for value in (workspace_bytes, stack_bytes, required_abi_minor, elf_output, window)):
             raise ValueError('BEX2 options require --format bex2; the default BEX1 builder is unchanged')
         return _build_bex1(source, output)
     if format != 'bex2':
         raise ValueError('format must be bex1 or bex2')
+    if window not in (None, 'native-v1'):
+        raise ValueError('window must be native-v1 when specified')
+    if window is not None and required_abi_minor is not None:
+        if not isinstance(required_abi_minor, int) or required_abi_minor < BEX2_NATIVE_WINDOW_ABI_MINOR:
+            raise ValueError('BEX2 native-v1 windows require ABI minor 2 or newer')
+    minor = (BEX2_NATIVE_WINDOW_ABI_MINOR if window is not None else 1) if required_abi_minor is None else required_abi_minor
     return _build_bex2(source, output,
         1048576 if workspace_bytes is None else workspace_bytes,
         65536 if stack_bytes is None else stack_bytes,
-        1 if required_abi_minor is None else required_abi_minor, elf_output)
+        minor, elf_output, BEX2_FLAG_NATIVE_WINDOW_V1 if window is not None else 0)
 
 
 if __name__ == '__main__':
@@ -166,6 +182,8 @@ if __name__ == '__main__':
     parser.add_argument('source', type=pathlib.Path)
     parser.add_argument('output', type=pathlib.Path)
     parser.add_argument('--format', choices=('bex1', 'bex2'), default='bex1')
+    parser.add_argument('--window', choices=('native-v1',),
+                        help='require an owned native window (requires --format bex2 and ABI minor >=2)')
     parser.add_argument('--workspace-bytes', type=lambda s: int(s, 0))
     parser.add_argument('--stack-bytes', type=lambda s: int(s, 0))
     parser.add_argument('--required-abi-minor', type=lambda s: int(s, 0))
@@ -174,6 +192,6 @@ if __name__ == '__main__':
     try:
         build(args.source, args.output, format=args.format, workspace_bytes=args.workspace_bytes,
               stack_bytes=args.stack_bytes, required_abi_minor=args.required_abi_minor,
-              elf_output=args.elf_output)
+              elf_output=args.elf_output, window=args.window)
     except ValueError as error:
         parser.error(str(error))

@@ -79,15 +79,19 @@ $(OUT)/counter.bex: examples/c/counter.c sdk/baseos.h sdk/baseos_abi.h sdk/start
 $(OUT)/docstats.bex: examples/c/docstats.c sdk/baseos.h sdk/baseos_abi.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
 	$(PYTHON) tools/build_app.py $< $@
 
-$(OUT)/pointer.bex: examples/c/pointer.c sdk/baseos.h sdk/baseos_abi.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
+$(OUT)/pointer.bex: examples/c/pointer.c examples/c/pointer_backend.h sdk/baseos.h sdk/baseos_abi.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
 	$(PYTHON) tools/build_app.py $< $@
 
-$(OUT)/sdk_examples.h: $(OUT)/hello-c.bex $(OUT)/notebook.bex $(OUT)/counter.bex $(OUT)/docstats.bex $(OUT)/pointer.bex tools/bin2c.py Makefile
+$(OUT)/pointer-window.bex: examples/c/pointer.c examples/c/pointer_backend.h sdk/baseos.h sdk/baseos_abi.h sdk/start2.c sdk/app2.ld tools/build_app.py | $(OUT)
+	$(PYTHON) tools/build_app.py $< $@ --format bex2 --window native-v1 --workspace-bytes 0 --stack-bytes 16384
+
+$(OUT)/sdk_examples.h: $(OUT)/hello-c.bex $(OUT)/notebook.bex $(OUT)/counter.bex $(OUT)/docstats.bex $(OUT)/pointer.bex $(OUT)/pointer-window.bex tools/bin2c.py Makefile
 	$(PYTHON) tools/bin2c.py $(OUT)/hello-c.bex sdk_hello > $@
 	$(PYTHON) tools/bin2c.py $(OUT)/notebook.bex sdk_notebook >> $@
 	$(PYTHON) tools/bin2c.py $(OUT)/counter.bex sdk_counter >> $@
 	$(PYTHON) tools/bin2c.py $(OUT)/docstats.bex sdk_docstats >> $@
 	$(PYTHON) tools/bin2c.py $(OUT)/pointer.bex sdk_pointer >> $@
+	$(PYTHON) tools/bin2c.py $(OUT)/pointer-window.bex sdk_pointer_window >> $@
 
 $(OUT)/chime.wav: tools/make_audio_example.py | $(OUT)
 	$(PYTHON) tools/make_audio_example.py $@
