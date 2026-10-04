@@ -29,7 +29,10 @@ Complete downloads retain owned bodies during leases; their durability messages
 track node identity, original path and non-wrapping runtime content revision.
 Editor/Paint/Files report retry without losing private edits or names. Settings
 coalesces choices and Todo retains accepted changes while closed; both participate
-in shutdown preparation before session save and final disk synchronization.
+in shutdown preparation before session save and final disk synchronization. Calendar
+also stages accepted appointments and its exact unfinished entry while closed;
+its status distinguishes queued, filesystem-RAM and durable disk state. See
+`docs/CALENDAR.md`.
 
 Fresh QEMU checks verify REP sector transfers, default/large payload persistence,
 reboots, native input and every reference audio sample. Guarded rendering reduced
