@@ -13,10 +13,6 @@ static uint32_t began;
 static const ProgramIO *output;
 /* Only ring-3 execution is preempted. Syscalls finish atomically on the kernel
  * stack before the desktop regains control. Task images never overlap USER_BASE. */
-#ifndef TASK_BASE
-#define TASK_BASE 0x3000000
-#define TASK_CAPACITY 0x100000
-#endif
 #define TASK_KEYS 32
 #define FRAME_WORDS 19
 #define TASK_MAX_SLEEP_MS 60000u
@@ -37,6 +33,7 @@ static int tasks_ready, have_fpu;
 static FpuState kernel_fpu, sync_fpu;
 static unsigned kernel_cr0;
 _Static_assert(sizeof(NativeTask)*PROCESS_TASKS<=TASK_CAPACITY,"native task arena overflow");
+_Static_assert(TASK_BASE+TASK_CAPACITY<=RAM_REQUIRED_END,"native task arena must be boot-validated");
 static void fpu_enter(NativeTask *task) {
     if(!have_fpu)return;
     __asm__ volatile("mov %%cr0,%0":"=r"(kernel_cr0));
