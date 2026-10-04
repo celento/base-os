@@ -23,6 +23,7 @@ import time
 import traceback
 
 from PIL import Image
+import numpy as np
 from build_app import build as build_app
 from init_data import initialize
 from layout import constants
@@ -105,6 +106,63 @@ def pending_generations(serial):
 
 def normalized(text):
     return re.sub(r'\s+', '', text).upper()
+
+
+class WhiteUiText:
+    """Exact solid-white production UI glyph cores in screenshot pixels only.
+
+    Proportional glyph advances and all 18 rows, including zero pixels, must
+    match. This is reserved for the selected white-on-blue Cancel button that
+    OCR commonly omits; it never reads the guest model or window state.
+    """
+    def __init__(self, font_path):
+        raw = pathlib.Path(font_path).read_bytes()
+        source = raw.decode('ascii')
+        advances = re.search(r'ui_font_adv\[95\]\s*=\s*\{(.*?)\n\};', source, re.S)
+        pixels = re.search(r'ui_font_px\[95\]\[144\]\s*=\s*\{(.*?)\n\};', source, re.S)
+        assert advances and pixels, 'Production UI font layout changed'
+        self.advances = [int(value) for value in re.findall(r'\d+', advances[1])]
+        packed = np.array([int(value, 16) for value in re.findall(r'0x([0-9a-fA-F]{2})', pixels[1])],
+                          dtype=np.uint8)
+        assert len(self.advances) == 95 and packed.size == 95 * 144
+        packed = packed.reshape(95, 18, 8)
+        self.glyphs = np.stack((packed >> 4, packed & 15), axis=-1).reshape(95, 18, 16) == 15
+        self.font_sha256 = sha(raw)
+
+    def template(self, text):
+        if not text.strip() or any(not 32 <= ord(char) <= 126 for char in text):
+            raise ValueError('Expected visible printable ASCII text')
+        width = sum(self.advances[ord(char) - 32] for char in text) + 16
+        template = np.zeros((18, width), dtype=bool)
+        position = 0
+        for char in text:
+            index = ord(char) - 32
+            template[:, position:position + 16] |= self.glyphs[index]
+            position += self.advances[index]
+        return template
+
+    def find(self, pixels, text):
+        mask = np.all(np.asarray(pixels)[:, :, :3] == (255, 255, 255), axis=2)
+        template = self.template(text)
+        height, width = mask.shape
+        tw = template.shape[1]
+        if height < 18 or width < tw:
+            return []
+        first = next(index for index, char in enumerate(text) if char != ' ')
+        x0 = sum(self.advances[ord(char) - 32] for char in text[:first])
+        rows = np.zeros((height, width - 15), dtype=np.uint16)
+        expected = np.zeros(18, dtype=np.uint16)
+        for bit in range(16):
+            rows |= mask[:, bit:width - 15 + bit].astype(np.uint16) << (15 - bit)
+            expected |= template[:, x0 + bit].astype(np.uint16) << (15 - bit)
+        candidates = np.ones((height - 17, width - tw + 1), dtype=bool)
+        for row in range(18):
+            candidates &= rows[row:row + height - 17, x0:x0 + width - tw + 1] == expected[row]
+        found = []
+        for y, x in zip(*np.where(candidates)):
+            if np.array_equal(mask[y:y + 18, x:x + tw], template):
+                found.append([int(x), int(y)])
+        return found
 
 
 def native_writer(data):
@@ -403,7 +461,7 @@ class Session(DesktopSession):
         path.with_suffix('.txt').write_text(event['ocr'])
 
     def complete_ocr(self, event, texts):
-        missing = [text for text in texts if normalized(text) not in normalized(event['ocr'])]
+        missing = [text for text in texts if not self.has_text(event, text)]
         if not missing:
             return
         # Footer phrases are common omissions in sparse whole-screen OCR. All
@@ -412,8 +470,28 @@ class Session(DesktopSession):
                                                         'CSVVALUESEXPORTED')) for text in missing)
         for region in (('footer', 'modal') if footer_first else ('modal', 'footer')):
             self.crop_ocr(event, region)
-            if all(normalized(text) in normalized(event['ocr']) for text in texts):
+            if all(self.has_text(event, text) for text in texts):
                 return
+
+    def has_text(self, event, text):
+        if normalized(text) in normalized(event['ocr']):
+            return True
+        if text != 'Cancel':
+            return False
+        matches = event.setdefault('glyph_matches', [])
+        existing = next((item for item in matches if item['text'] == text), None)
+        if existing is None:
+            if not hasattr(self, 'white_ui_text'):
+                self.white_ui_text = WhiteUiText(ROOT / 'src/font.h')
+            path = self.directory / pathlib.Path(event['screenshot']).name
+            with Image.open(path) as image:
+                positions = self.white_ui_text.find(image.convert('RGB'), text)
+            existing = dict(text=text, positions=positions,
+                            font_sha256=self.white_ui_text.font_sha256,
+                            method='exact UI alpha-15 cores against RGB(255,255,255), all zeros included',
+                            template_size=[self.white_ui_text.template(text).shape[1], 18])
+            matches.append(existing)
+        return bool(existing['positions'])
 
     def visible(self, name, *texts, generation=None, since=None, absent=(), seconds=12):
         deadline = time.monotonic() + seconds
@@ -422,7 +500,7 @@ class Session(DesktopSession):
             event = self.frame(name)
             self.complete_ocr(event, texts)
             content = normalized(event['ocr'])
-            okay = all(normalized(t) in content for t in texts)
+            okay = all(self.has_text(event, text) for text in texts)
             okay = okay and all(normalized(t) not in content for t in absent)
             if generation is not None:
                 assert generation in event['pending_generations'], (
@@ -440,7 +518,7 @@ class Session(DesktopSession):
         event = self.last_accepted_name_frame
         self.complete_ocr(event, texts)
         content = normalized(event['ocr'])
-        assert all(normalized(t) in content for t in texts), ('Accepted frame text missing', texts, event)
+        assert all(self.has_text(event, text) for text in texts), ('Accepted frame text missing', texts, event)
         assert all(normalized(t) not in content for t in absent), ('Accepted dialog remained visible', event)
         if generation is not None:
             assert generation in event['pending_generations'], ('Accepted frame was not pending', generation, event)
