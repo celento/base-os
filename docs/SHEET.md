@@ -90,6 +90,8 @@ clipping use the actual column widths, including partly visible columns.
 Native files with display metadata use [BSH1 version 2](SHEET_FORMAT.md);
 default-metadata files keep the original version-1 encoding.
 
+![Number formats and column widths](../screenshots/spreadsheet-formats.png)
+
 ## Clipboard
 
 Ctrl+C copies a selection and Ctrl+X copies then clears it. A failed publication
