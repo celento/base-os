@@ -37,15 +37,21 @@ def host_reference(source,directory,metadata):
     metadata['audio_frames']=count
     return actual
 
-def build_guest(build,directory,metadata,controls):
+def build_guest(build,directory,metadata,controls,native=False):
     out=directory/('controls' if controls else 'playback');out.mkdir()
+    if native:
+        with (out/'mpeg_native_examples.h').open('w') as output:
+            for label,value in [('a',111),('b',222)]:
+                app=out/f'fpu-{label}.bex'
+                subprocess.run(['nasm','-f','bin',f'-DVALUE={value}',str(ROOT/'tests/task_fpu.asm'),'-o',str(app)],check=True)
+                subprocess.run(['python3',str(ROOT/'tools/bin2c.py'),str(app),f'mpeg_fpu_{label}'],stdout=output,check=True)
     values={'RATE':metadata['sample_rate'],'CHANNELS':metadata['source_channels'],
             'OUTPUT_RATE':44100 if metadata['sample_rate']>45000 else metadata['sample_rate'],
             'LEAD':metadata['audio_lead_frames'],'VIDEO_START':metadata['video_start_ms'],
             'FRAMES':metadata['frames'],'AUDIO_FRAMES':metadata['audio_frames']}
     (out/'mpeg_av_metadata.h').write_text(''.join(f'#define AV_{key} {value}u\n' for key,value in values.items()))
     subprocess.run([tool('gcc'),'-Os','-ffreestanding','-m32','-fno-pie','-fno-stack-protector','-fno-builtin',
-        '-mno-sse','-mno-mmx','-msoft-float',f'-DMPEG_AV_CONTROLS={int(controls)}','-I',str(ROOT),'-I',str(ROOT/'src'),
+        '-mno-sse','-mno-mmx','-msoft-float',f'-DMPEG_AV_CONTROLS={int(controls)}',f'-DMPEG_NATIVE_TASKS={int(native)}','-I',str(ROOT),'-I',str(ROOT/'src'),
         '-I',str(build),'-I',str(out),'-c',str(ROOT/'tests/mpeg_av_guest.c'),'-o',str(out/'kernel.o')],check=True)
     objects=[str(p) for p in sorted(build.glob('*.o')) if p.name!='kernel.o']
     subprocess.run([tool('ld'),'-T',str(build/'linker.ld'),'-nostdlib','-m','elf_i386','-z','noexecstack',
@@ -136,13 +142,14 @@ def verify_capture(capture,reference,rate,output_rate):
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('build',type=pathlib.Path)
     parser.add_argument('--rate',type=int,default=44100);parser.add_argument('--channels',type=int,choices=(1,2),default=2)
-    parser.add_argument('--controls',action='store_true');args=parser.parse_args()
+    parser.add_argument('--controls',action='store_true');parser.add_argument('--native',action='store_true');args=parser.parse_args()
     directory=pathlib.Path(tempfile.mkdtemp(prefix='baseos-mpeg-av-qemu-'));print(f'MPEG A/V evidence: {directory}',flush=True)
     source=make_av_fixture(directory,rate=args.rate,channels=args.channels,frames=75,width=320,height=240)
     metadata=probe_av_fixture(source);reference=host_reference(source,directory,metadata)
     (directory/'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
-    disk=data_disk(directory,source);out,boot,output_rate=build_guest(args.build.resolve(),directory,metadata,args.controls)
+    disk=data_disk(directory,source);out,boot,output_rate=build_guest(args.build.resolve(),directory,metadata,args.controls,args.native)
     capture=run_guest(boot,disk,out,output_rate,args.controls)
+    if args.native:assert 'MPEG-NATIVE-X87-PASS' in (out/'serial.log').read_text()
     if not args.controls:
         verify_capture(capture,reference,args.rate,output_rate)
         yuv=pathlib.Path(str(reference)+'.yuv').read_bytes();frame_size=metadata['width']*metadata['height']*3//2
