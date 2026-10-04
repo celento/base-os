@@ -156,6 +156,10 @@ static void coalescing_loss(void){
     e=read_event(0,a,BOS_UI_STATE_RESET);assert(e.reason==BOS_UI_REASON_QUEUE_LOSS&&!e.buttons&&e.dropped==65);
     assert(!(e.state&BOS_UI_STATE_CAPTURED));empty(0,a);
     sample(a,150,150,1,0,0);read_event(0,a,BOS_UI_POINTER_MOVE);read_event(0,a,BOS_UI_POINTER_BUTTON);
+    for(unsigned i=0;i<64;i++)sample(a,150,150,1,1,0);
+    sample(a,155,150,0,0,0);e=read_event(0,a,BOS_UI_STATE_RESET);
+    assert(e.reason==BOS_UI_REASON_QUEUE_LOSS&&!e.buttons);
+    sample(a,150,150,1,0,0);read_event(0,a,BOS_UI_POINTER_MOVE);read_event(0,a,BOS_UI_POINTER_BUTTON);
     native_ui_input_loss(100,1,7);
     /* State while reset is pending remains authoritative and cannot rearm. */
     hosts[0].view.viewport_w=200;native_ui_refresh(101,1);
