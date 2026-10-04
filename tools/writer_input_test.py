@@ -58,6 +58,14 @@ def fixture(directory, files):
 
 
 class WriterSession(ProductionSession):
+    def __exit__(self, kind, error, traceback):
+        if error is not None:
+            try:
+                self.screenshot('failure.png')
+            except Exception:
+                pass  # Preserve the original test failure if QEMU has stopped.
+        return super().__exit__(kind, error, traceback)
+
     def key(self, key):
         self.command('send-key', {'keys': [{'type': 'qcode', 'data': part}
                                           for part in key.split('-')], 'hold-time': 35})

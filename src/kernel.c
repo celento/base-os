@@ -1890,7 +1890,7 @@ static int win_geom_kind(int kind, int *x, int *y, int *w, int *h) {
 
 static int menu_item_enabled(int m, int item) {
     if (m == MENU_EDITM) {
-        if(item>=3)return !open_dlg&&front_kind()==WK_EDIT;
+        if(item>=3)return !open_dlg&&(front_kind()==WK_EDIT||front_kind()==WK_WRITER);
         /* Files keeps Cut/Copy/Paste dim. Calc: Cut dim, Copy/Paste as below. */
         if (open_dlg)
             return 0;
@@ -5479,6 +5479,8 @@ static void menu_activate(int m, int item) {
         if (front_kind() == WK_WRITER) {
             const int keys[] = {0x2d, 0x2e, 0x2f};
             if (item >= 0 && item < 3) writer_result(writer_key(keys[item], 0, WRITER_MOD_CTRL));
+            else if (item == 3 || item == 4)
+                writer_result(writer_key(item == 3 ? 0x21 : 0x23, 0, WRITER_MOD_CTRL));
         } else if (front_kind() == WK_CALC) {
             if (item == 1)
                 calc_copy();
