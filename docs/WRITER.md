@@ -1,0 +1,132 @@
+# Writer: bounded formatted documents
+
+Writer is a separate, single-instance native desktop app. The plain-text Editor
+remains available. Writer stores up to **32,768 ASCII text bytes**, with bold,
+italic, underline, heading/body paragraph styles and left/center/right alignment.
+Tabs and line breaks are supported. There is no Unicode, DOCX, general RTF import,
+image embedding, pagination or printing. RTF is an export format.
+
+## Editing
+
+The toolbar offers B / I / U, Body / Heading, paragraph alignment, Undo / Redo,
+Save and Export RTF. Character buttons affect selected text or subsequent typing.
+Paragraph buttons affect every touched paragraph; a selection ending exactly at
+the next paragraph's start does not include that next paragraph. Mixed selected
+character styles are turned on consistently by the corresponding button.
+
+- Ctrl+B / Ctrl+I / Ctrl+U: bold / italic / underline
+- Ctrl+1 / Ctrl+0: heading / body
+- Ctrl+L / Ctrl+E / Ctrl+R: left / center / right
+- Ctrl+A / Ctrl+C / Ctrl+X / Ctrl+V: select all / copy / cut / paste
+- Ctrl+Z / Ctrl+Y or Ctrl+Shift+Z: undo / redo
+- Ctrl+S / Ctrl+Shift+S: Save / Save As
+- Ctrl+Shift+E: Export RTF
+- Arrows, Home/End, Page Up/Page Down: visual navigation
+- Ctrl+Left/Right: word navigation; Ctrl+Home/End: document boundaries
+- Shift with navigation, Shift-click, or mouse drag: extend the selection
+- Mouse wheel: scroll; click the scrollbar to reposition the view
+
+Wrapping uses the proportional UI font advances, not a character grid. Body text
+uses the bundled 95-glyph ASCII UI font. Headings use a 1.5x rendering of those
+same glyphs, so arbitrary ASCII headings work without relying on the limited
+Logo font. Bold and italic are bounded synthetic treatments. Word wrapping,
+alignment, scaled advances, selection and caret hit testing share the same line
+geometry. A caret at a soft line ending can stay visually on that line.
+
+History retains eight complete prior operations plus the current state. Undo
+restores text, formatting, caret and selection. A new edit after undo discards
+redo. History is in RAM; it is not serialized into a document or recovery draft.
+Undo back to a successfully saved revision removes the unsaved marker.
+
+## Import, save and export
+
+Open `.bwr` files as native documents. Plain-text import accepts printable ASCII,
+tabs, LF and CRLF. **CRLF pairs are normalized to LF in the editable copy**; the
+source file is never changed. Lone CR, NUL, unsupported controls, non-ASCII bytes,
+and normalized text over 32,768 bytes reject the complete import. Raw CRLF input
+may be up to 65,536 bytes. Imported plain text is unbound and needs Save As a new
+`.bwr` file, so formatting can never silently overwrite the source `.txt`.
+
+The native v1 format preserves all supported text and styles exactly. The entire
+input is validated before replacing current work. Unsupported version, malformed
+length, invalid character/paragraph properties and trailing bytes reject the
+whole open. See [WRITER_FORMAT.md](WRITER_FORMAT.md) for the wire format and RTF
+references.
+
+Native Save As requires `.bwr`; export requires `.rtf`. Existing unrelated names
+are rejected. Ordinary Save checks the original filesystem identity, including
+after rename: a deleted file's reused node ID is never overwritten. A clean
+bound document whose file disappears is treated as unsaved and needs Save As.
+Every successful save requires `fs_sync()` to finish successfully. Failed writes
+or synchronization leave the document open and unsaved. A newly created empty
+target is removed after write failure. A target with a pending in-memory write
+is retained with its known identity after a sync failure so retry is safe.
+Serialized size is checked against the mounted volume's per-file limit before
+creating a new target. Native storage is approximately three times text length;
+the full 32 KiB text limit therefore needs the optional data volume.
+
+RTF export creates a separate file, never rebinds the native document or clears
+its dirty marker. It emits standard ASCII RTF controls for the supported styles,
+alignment, 12pt body / 18pt heading sizes, tabs and paragraph breaks. Syntax
+characters (`\\`, `{`, `}`) are escaped. The export workspace is 512 KiB; unusually
+dense alternating styles/paragraph attributes can exceed it, producing a clear
+error before any file is created. The native document is unaffected.
+
+RTF interoperability is verified with the independent Pandoc reader for text,
+bold, italic and underline. An independent test parser checks paragraph alignment,
+font sizes, empty/final paragraphs and all inline states. This is a deliberately
+small standards-compatible RTF export, not a claim of complete RTF support or
+pixel-identical layout in every external word processor.
+
+## Desktop integration contract
+
+`src/writer.h` exposes one client-area module, default 720x520 and minimum
+420x260. The caller supplies client origin and dimensions to drawing, clicking
+and dragging. Every draw operation is clipped to the appropriate client/page
+rectangle as well as the screen. The desktop owns New/Open/Close confirmation,
+window title decoration, name dialogs, file association and recovery scheduling.
+
+Input returns a bitmask: changed, request Save, request Save As, or request
+Export. Save APIs return `WRITER_SAVE_OK` (1), `WRITER_SAVE_NEEDS_NAME` (0), or
+`WRITER_SAVE_ERROR` (-1). Export returns the new nonnegative filesystem ID on
+success and -1 on failure. `writer_close()` is called **only after** a completed
+Save/Discard/Cancel guard; it resets document content while retaining clipboard.
+`writer_tick()` and release are safe before first initialization.
+
+`writer_snapshot()` returns borrowed native bytes in Writer's output buffer.
+Those bytes are valid until the next Writer operation. Recovery autosaving must
+not mark the document saved. `writer_restore()` validates before publication,
+restores bounded caret/selection and only rebinds an identity-matching native
+file. A missing/reused binding becomes an unsaved recovered document.
+
+The desktop overrides two weak plain-text clipboard hooks. `writer_clipboard_set`
+returns a generation; `writer_clipboard_get` returns full byte length or -1 for
+unavailable/over-capacity data. The desktop generation must advance on **every**
+clipboard write, even identical bytes. Writer retains formatting internally only
+when generation, byte length and all bytes still match its own copied selection.
+External clipboard ownership always pastes as plain text. No shared rich format
+or silent truncation is assumed. The default weak implementation provides local
+Writer copy/paste when there is no desktop integration.
+
+## Bounds and validation
+
+The fixed `WRITER_BASE` arena holds nine document snapshots, a validated staging
+document, a rich clipboard copy, all 32,769 possible line records and a 512 KiB
+serialization buffer. A compile-time assertion ensures the complete structure
+fits `WRITER_CAPACITY` (0x1F0000). No general heap is used. Large data do not live
+in kernel BSS. Long copies, parsing and layout service devices through
+`platform_poll()` only; callbacks must not dispatch applications or mutate files.
+
+Run the deterministic host suites (ASan/UBSan):
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p 'test_writer*.py' -v
+```
+
+The tests cover formatting, paragraph edits/joins, native round trips and complete
+input validation, clipboard generation ownership, capacity rejection, all possible
+line slots, proportional wrapping and alignment, headings, navigation, selection,
+undo/redo branching, file identity/reuse, failed save/sync, recovery, and drawing
+outside-client preservation at normal/minimum/offscreen sizes. Codec tests verify
+all 64 inline-style transition pairs in the independent Pandoc reader when it is
+available. Guest integration tests are separate from these host-module checks.
