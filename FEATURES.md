@@ -95,7 +95,7 @@ Limits: 256 lines, 191 characters after a line number, expression nesting of 16,
 
 A fault returns to the terminal. A PIT watchdog terminates execution after roughly two seconds. Only one native program runs at a time, synchronously; there is no background scheduler or general-purpose process API. The user pages are writable and executable, with no NX/W^X guarantee. This is a small educational boundary, not a claim of production-grade sandbox security.
 
-The file begins with four little-endian 32-bit words: magic `0x31584542` (`BEX1`), entry offset (at least 16), exact file length, and reserved zero. The complete file must fit the filesystem's 16,383-byte limit. Offsets, including the instruction pointer and syscall pointers, are relative to the start of the user region. Initial stack offset is 65,520. Programs must exit through a syscall rather than return.
+The file begins with four little-endian 32-bit words: magic `0x31584542` (`BEX1`), entry offset (at least 16), exact file length, and reserved zero. The complete executable must fit the BEX1 loader's 16,383-byte image limit. Offsets, including the instruction pointer and syscall pointers, are relative to the start of the user region. Initial stack offset is 65,520. Programs must exit through a syscall rather than return.
 
 Use `int 0x80`, with EAX selecting the operation:
 
@@ -106,8 +106,36 @@ Use `int 0x80`, with EAX selecting the operation:
 | 2 | Plot pixel | EBX = x, ECX = y, EDX = palette index | 0; off-canvas pixels are ignored |
 | 3 | Read timer | None | 70 Hz tick count |
 | 4 | Read key | None | ASCII, Escape=27, or 0 |
+| 5 | Present canvas | None | 0 |
+| 6 | Read file | EBX=path offset, ECX=path length, EDX=buffer, ESI=capacity (≤4096) | Bytes copied or -1 |
+| 7 | Write document | EBX=path offset, ECX=path length, EDX=data, ESI=length (≤4096) | Bytes saved or -1 |
+| 8 | File size | EBX=path offset, ECX=path length | File length or -1 |
+| 9 | Filled rectangle | EBX=x, ECX=y, EDX=width≤160, ESI=height≤100, EDI=color | 0 or -1 |
 
-The other general registers are preserved across returning syscalls. Native graphics appear when execution finishes. File/network access is not exposed.
+The other general registers are preserved across returning syscalls. Native graphics
+appear on Present or when execution finishes. Paths must be absolute ASCII, at most
+128 bytes. File writes are confined to `/Documents` and its existing subfolders;
+reads reject folders and applications. Data transfers are capped at 4096 bytes.
+No network API is exposed to native programs. Audio pauses during a synchronous
+native program and resumes afterward to avoid replaying a stale DMA buffer.
+
+### Building a C application
+
+`sdk/baseos.h` supplies checked-call wrappers. The host-side builder uses the same
+freestanding GCC/binutils toolchain as the kernel; it does not require libc. The
+small startup and linker script create the BEX1 header, clear BSS via the loader,
+and leave at least 16 KB for the application stack.
+
+```sh
+python3 tools/build_app.py examples/c/hello.c build/hello-c.bex
+python3 tools/build_app.py examples/c/notebook.c build/notebook.bex
+```
+
+Both examples are installed without replacing existing files. Run
+`exec /Programs/hello-c.bex` for graphics and `exec /Programs/notebook.bex` to read
+and write a persistent document. The compiler runs on the host; native apps still
+have the 64 KB address space and two-second watchdog described above. Test the
+complete C build/run/persistence path with `python3 tools/sdk_test.py build`.
 
 `examples/hello.asm` is assembled during every build and installed as `/Programs/hello.bex` if missing. To assemble another example with the same header and ABI:
 

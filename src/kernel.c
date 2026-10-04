@@ -12,6 +12,7 @@
 #include "history.h"
 #include "program.h"
 #include "native_example.h"
+#include "sdk_examples.h"
 #include "persist.h"
 #include "app.h"
 #include "font.h"
@@ -1355,6 +1356,7 @@ static int icon_sel = -1;
 static int trash_id = -1;
 static int prefs_id = -1;
 static int properties_id=-1;
+static const char *properties_reason="";
 
 typedef struct {
     char buf[EDIT_BUF_SIZE];
@@ -1868,7 +1870,7 @@ static void edit_clear(void) {
 }
 
 static void edit_load(int id) {
-    if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id))
+    if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id) || fs_size(id) >= EDIT_BUF_SIZE)
         return;
     edit_len = fs_read(id, edit_buf, EDIT_BUF_SIZE);
     if (edit_len < 0)
@@ -3535,6 +3537,11 @@ static void open_fs_file(int id) {
     }
     if (fs_is_app(id))
         return;
+    if (fs_size(id) >= EDIT_BUF_SIZE) {
+        properties_id=id;
+        properties_reason="Too large for Editor (maximum 16383 bytes).";
+        win_open(WK_PROPERTIES);dirty=1;return;
+    }
     if (win_open(WK_EDIT) < 0) return;
     fm_cwd = fs_parent(id);
     edit_load(id);
@@ -3547,7 +3554,7 @@ static void open_fs_file(int id) {
 static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     switch (kind) {
     case WK_PROPERTIES:
-        *x=300;*y=140;*w=500;*h=290;break;
+        *x=300;*y=140;*w=500;*h=330;break;
     case WK_HELLO:
         *w = 520;
         *h = 170;
@@ -4618,7 +4625,8 @@ static void draw_window_contents(Win *w, int inactive) {
         }else PROP("File is no longer available.");
         fmt_uint(number,fs_used_bytes());kstrcpy(row,"Volume bytes used: ");kstrcpy(row+19,number);PROP(row);
         fmt_uint(number,FS_MAX_NODES-fs_node_count());kstrcpy(row,"Free file/folder slots: ");kstrcpy(row+kstrlen(row),number);PROP(row);
-        PROP("Maximum file size: 16383 bytes");
+        if(properties_reason[0])PROP(properties_reason);
+        PROP("Editor maximum: 16383 bytes");
         PROP(fs_storage_status()?fs_storage_status():"Disk is synchronized");
         #undef PROP
     } else if (w->kind == WK_HELLO) {
@@ -5105,7 +5113,7 @@ static void menu_activate(int m, int item) {
                 dirty = 1;
             }
         } else if (item == 6) {
-            properties_id=fm_row_id(fm_selected);win_open(WK_PROPERTIES);
+            properties_id=fm_row_id(fm_selected);properties_reason="";win_open(WK_PROPERTIES);
         } else if (item == 5) {
             do_duplicate();
         }
@@ -6385,6 +6393,8 @@ void program_present(void){cursor_restore();draw_ui();flip_vga();cursor_on=0;dir
 static void install_examples(void){
     int dir=fs_find_child(fs_root(),"Programs");if(dir<0)dir=fs_mkdir(fs_root(),"Programs");if(dir<0)return;
     if(fs_find_child(dir,"hello.bex")<0){int id=fs_create(dir,"hello.bex");if(id>=0)fs_write(id,(const char *)native_example,sizeof native_example);}
+    if(fs_find_child(dir,"hello-c.bex")<0){int id=fs_create(dir,"hello-c.bex");if(id>=0)fs_write(id,(const char *)sdk_hello,sizeof sdk_hello);}
+    if(fs_find_child(dir,"notebook.bex")<0){int id=fs_create(dir,"notebook.bex");if(id>=0)fs_write(id,(const char *)sdk_notebook,sizeof sdk_notebook);}
     const char *demo="10 PRINT \"BASIC: press a key while the picture draws\"\n20 LET A=0\n30 RECT A,A/2,8,8,A+32\n40 INKEY B\n50 IF B > 0 THEN 100\n60 WAIT 20\n70 LET A=A+2\n80 IF A < 150 THEN 30\n90 END\n100 PRINT B\n110 END\n";
     if(fs_find_child(dir,"demo.bas")<0){int id=fs_create(dir,"demo.bas");if(id>=0)fs_write(id,demo,kstrlen(demo));}
     const char *script="pwd\nls /\necho Scripts run one command per line.\ndf\n";

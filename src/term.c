@@ -108,7 +108,7 @@ static int execute(const char *,int,int *);
 static int script(int id,int depth,int *budget){
     if(depth>=4||!fs_valid(id)||fs_is_dir(id))return -1;
     /* Copy each script so deleting its source cannot change the running program. */
-    char *source=(char *)(TERM_MEMORY+0xC0000+depth*FS_MAX_SIZE);int size=fs_size(id);kmemcpy(source,fs_data(id),size);int pos=0;
+    char *source=(char *)(TERM_MEMORY+0xC0000+depth*FS_MAX_SIZE);int size=fs_size(id);if(size>=FS_MAX_SIZE)return -1;kmemcpy(source,fs_data(id),size);int pos=0;
     while(pos<size){char line[81];int n=0;while(pos<size&&source[pos]!='\n'){char c=source[pos++];if(c=='\r')continue;if(n==80)return -1;line[n++]=c;}pos++;line[n]=0;if(execute(line,depth+1,budget))return -1;}return 0;
 }
 static int execute(const char *s,int depth,int *budget){
