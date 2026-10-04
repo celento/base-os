@@ -60,6 +60,46 @@ int process_run(const void *file,unsigned bytes,const ProgramIO *io){
     if(resume_audio)audio_pause(0);
     return result;
 }
+static int user_range(unsigned offset, unsigned bytes) {
+    return offset <= USER_CAPACITY && bytes <= USER_CAPACITY-offset;
+}
+static int user_path(unsigned offset, unsigned length, char path[129]) {
+    if (!length || length > 128 || !user_range(offset,length)) return 0;
+    const char *source=(const char *)(USER_BASE+offset);
+    for(unsigned i=0;i<length;i++) {
+        if(source[i]<32 || source[i]>126) return 0;
+        path[i]=source[i];
+    }
+    path[length]=0;
+    return path[0]=='/';
+}
+static int document_parent(int parent) {
+    int documents=fs_find_child(fs_root(),"Documents");
+    if(documents<0 || !fs_is_dir(documents)) return 0;
+    for(int i=0;i<FS_MAX_NODES && parent>=0;i++) {
+        if(parent==documents) return 1;
+        parent=fs_parent(parent);
+    }
+    return 0;
+}
+static int file_call(unsigned call,unsigned path_offset,unsigned path_length,
+                     unsigned buffer,unsigned length) {
+    char path[129];
+    if(!user_path(path_offset,path_length,path)) return -1;
+    if(call!=8 && (length>4096 || !user_range(buffer,length))) return -1;
+    int id=fs_resolve(fs_root(),path);
+    if(call==6 || call==8) {
+        if(!fs_valid(id)||fs_is_dir(id)||fs_is_app(id)) return -1;
+        if(call==8) return fs_size(id);
+        unsigned size=(unsigned)fs_size(id);if(size>length)size=length;
+        kmemcpy((void *)(USER_BASE+buffer),fs_data(id),(int)size);
+        return (int)size;
+    }
+    char name[FS_NAME_LEN];int parent=fs_destination(fs_root(),path,name);
+    if(!document_parent(parent)) return -1;
+    if(id<0)id=fs_create(parent,name);
+    return id<0?-1:fs_write(id,(const char *)(USER_BASE+buffer),(int)length);
+}
 /* Offsets match InterruptFrame: 8 registers, four segment slots, vector/error,
  * then EIP, CS, EFLAGS and the user SS/ESP on a privilege transition. */
 int process_interrupt(uint32_t *r){
@@ -70,7 +110,7 @@ int process_interrupt(uint32_t *r){
         process_result=-3;process_leave();
     }
     if(vector!=128){process_result=-(int)vector-100;process_leave();}
-    unsigned call=r[7],a=r[4],b=r[6],c=r[5]; /* eax, ebx, ecx, edx */
+    unsigned call=r[7],a=r[4],b=r[6],c=r[5],d=r[1],e=r[0]; /* eax, ebx, ecx, edx */
     if(call==0){process_result=(int)a;process_leave();}
     if(call==1){
         if(a>=USER_CAPACITY||b>4096||b>USER_CAPACITY-a){r[7]=(unsigned)-1;return 1;}
@@ -84,6 +124,14 @@ int process_interrupt(uint32_t *r){
     }else if(call==2){output->plot((int)a,(int)b,(int)c);r[7]=0;}
     else if(call==3)r[7]=timer_ticks();
     else if(call==4)r[7]=output->key?output->key():0;
+    else if(call==5){if(output->present)output->present();r[7]=0;}
+    else if(call>=6&&call<=8)r[7]=(unsigned)file_call(call,a,b,c,d);
+    else if(call==9){
+        if(c>160||d>100){r[7]=(unsigned)-1;return 1;}
+        for(unsigned y=0;y<d;y++)for(unsigned x=0;x<c;x++)
+            output->plot((int)(a+x),(int)(b+y),(int)e);
+        r[7]=0;
+    }
     else r[7]=(unsigned)-1;
     return 1;
 }

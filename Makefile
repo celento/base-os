@@ -63,7 +63,17 @@ $(OUT)/hello.bex: examples/hello.asm | $(OUT)
 $(OUT)/native_example.h: $(OUT)/hello.bex tools/bin2c.py
 	$(PYTHON) tools/bin2c.py $< > $@
 
-$(OUT)/kernel.o: $(OUT)/native_example.h
+$(OUT)/hello-c.bex: examples/c/hello.c sdk/baseos.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
+	$(PYTHON) tools/build_app.py $< $@
+
+$(OUT)/notebook.bex: examples/c/notebook.c sdk/baseos.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
+	$(PYTHON) tools/build_app.py $< $@
+
+$(OUT)/sdk_examples.h: $(OUT)/hello-c.bex $(OUT)/notebook.bex tools/bin2c.py
+	$(PYTHON) tools/bin2c.py $(OUT)/hello-c.bex sdk_hello > $@
+	$(PYTHON) tools/bin2c.py $(OUT)/notebook.bex sdk_notebook >> $@
+
+$(OUT)/kernel.o: $(OUT)/native_example.h $(OUT)/sdk_examples.h
 
 # Rendering is the hot path; retain size optimization for the rest of the kernel.
 $(OUT)/gfx.o: CFLAGS := $(filter-out -Os,$(CFLAGS)) -O2
