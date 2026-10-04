@@ -1470,6 +1470,9 @@ typedef struct {
     int sel_b;
     int dragging;
 } Document;
+/* Source versions belong to the live binding, never to an undo snapshot. */
+typedef struct { unsigned size,hash_a,hash_b; } EditorBinding;
+typedef struct { unsigned valid; EditorBinding source; } EditorSource;
 typedef struct {
     int open,replace_mode,focus,field,exact,position[2],selected[2];
     char text[2][64],message[64];
@@ -1486,6 +1489,7 @@ typedef struct {
     uint32_t last_click_frame;
     int last_click_item;
     Document doc, undo[8];
+    EditorSource editor_source;
     EditorSearch search;
     History history;
 } WindowState;
@@ -1513,6 +1517,34 @@ _Static_assert(sizeof(WindowState) * MAX_WIN < EDITOR_CAPACITY - 2 * EDIT_BUF_SI
 #define edit_sel_a (window_state[context_slot].doc.sel_a)
 #define edit_sel_b (window_state[context_slot].doc.sel_b)
 #define edit_dragging (window_state[context_slot].doc.dragging)
+#define edit_source (window_state[context_slot].editor_source)
+static void edit_fingerprint(const void *bytes,unsigned size,EditorBinding *out) {
+    const unsigned char *data=bytes;
+    unsigned fnv=2166136261u,crc=~0u;
+    for(unsigned i=0;i<size;i++){
+        fnv=(fnv^data[i])*16777619u;crc^=data[i];
+        for(unsigned bit=0;bit<8;bit++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));
+        if(!(i&2047u))platform_poll();
+    }
+    out->size=size;out->hash_a=fnv;out->hash_b=~crc;
+}
+static int edit_fingerprint_matches(const void *bytes,unsigned size,const EditorBinding *binding) {
+    if(size!=binding->size)return 0;
+    EditorBinding actual;edit_fingerprint(bytes,size,&actual);
+    return actual.hash_a==binding->hash_a&&actual.hash_b==binding->hash_b;
+}
+static int edit_binding_matches(int id,const EditorBinding *binding) {
+    return fs_valid(id)&&!fs_is_dir(id)&&!fs_is_app(id)&&fs_size(id)<EDIT_BUF_SIZE&&
+        edit_fingerprint_matches(fs_data(id),(unsigned)fs_size(id),binding);
+}
+static int edit_binding_valid(void) {
+    return fs_valid(edit_file)&&!fs_is_dir(edit_file)&&!fs_is_app(edit_file)&&
+        fs_identity(edit_file)==edit_identity;
+}
+static void edit_capture_source(void) {
+    edit_fingerprint(edit_buf,(unsigned)edit_len,&edit_source.source);
+    edit_source.valid=1;
+}
 /* Folder contexts belong to an object incarnation, not a reusable node slot. */
 static void fm_set_cwd(int id) {
     WindowState *state=&window_state[context_slot];
@@ -2100,6 +2132,7 @@ static void edit_clear(void) {
     edit_buf[0] = 0;
     edit_file = -1;
     edit_identity = 0;
+    edit_source.valid = 0;
     edit_saved_ok = 1; /* An untouched empty document has nothing to lose. */
     edit_scroll = 0;
     edit_dragging = 0;
@@ -2116,6 +2149,7 @@ static void edit_load(int id) {
     edit_caret = edit_len;
     edit_file = id;
     edit_identity=fs_identity(id);
+    edit_capture_source();
     edit_saved_ok = 1;
     edit_scroll = 0;
     edit_dragging = 0;
@@ -2260,51 +2294,71 @@ static int edit_search_click(int wx,int wy,int ww,int wh){
 }
 
 static void namedlg_open(int target, const char *initial);
+static const char *edit_conflict_message="Source changed. Save with a new name.";
+
+static int edit_source_unchanged(void) {
+    if(edit_source.valid&&edit_binding_matches(edit_file,&edit_source.source))return 1;
+    edit_saved_ok=0;
+    return 0;
+}
+
+static int edit_write_to(int id) {
+    edit_saved_ok=0;
+    if(fs_write(id,edit_buf,edit_len)!=edit_len)return 0;
+    edit_file=id;edit_identity=fs_identity(id);
+    /* A successful RAM write is ours even if its disk commit fails. Undo must
+     * retain this new baseline, so a later retry never conflicts with itself. */
+    edit_capture_source();
+    if(fs_sync()<0)return 0;
+    edit_saved_ok=1;
+    return 1;
+}
 
 static int edit_write_named(const char *name) {
     name_failure_message=0;
     int parent = fm_checked_cwd();
     int id = fs_find_child(parent, name);
     int created = id < 0;
-    if(!created&&(id!=edit_file||fs_identity(id)!=edit_identity)){
+    if(!created&&(id!=edit_file||!edit_binding_valid())){
         name_failure_message="That name exists. Choose another name.";
         return 0;
     }
+    if(!created&&!edit_source_unchanged()){
+        name_failure_message=edit_conflict_message;
+        return 0;
+    }
+    if(edit_len<0||(unsigned)edit_len>fs_file_limit())return 0;
     if (created)
         id = fs_create(parent, name);
     if (id < 0)
         return 0;
-    if (fs_write(id, edit_buf, edit_len) != edit_len) {
-        if (created) fs_delete(id);
+    if(!edit_write_to(id)){
+        /* Do not remove an owned empty-file write whose disk sync failed. */
+        if(created&&(edit_file!=id||edit_identity!=fs_identity(id)))fs_delete(id);
         return 0;
     }
-    edit_file = id;
-    edit_identity = fs_identity(id);
-    edit_saved_ok = 0;
-    if (fs_sync() < 0)
-        return 0; /* Keep the live document until the disk commit is verified. */
-    edit_saved_ok = 1;
     if (find_open_kind(WK_FILES) >= 0)
         fm_refresh();
     return 1;
 }
 
 static int edit_save(void) {
-    if (edit_file >= 0 && fs_identity(edit_file) != edit_identity) {
+    if (edit_file >= 0 && !edit_binding_valid()) {
         edit_file = -1;
+        edit_identity = 0;
+        edit_source.valid = 0;
         edit_saved_ok = 0;
     }
     if (edit_file < 0) {
         namedlg_open(0, "untitled.txt");
         return 0; /* A pending Save As is not a completed save. */
     }
-    if (fs_write(edit_file, edit_buf, edit_len) != edit_len)
+    if(!edit_source_unchanged()){
+        namedlg_open(0,"untitled.txt");
+        name_failed=1;name_failure_message=edit_conflict_message;
         return 0;
-    edit_saved_ok = 0;
-    if (fs_sync() < 0)
-        return 0;
-    edit_saved_ok = 1;
-    return 1;
+    }
+    return edit_write_to(edit_file);
 }
 
 static int writer_save_document(void) {
@@ -6955,41 +7009,54 @@ typedef struct { unsigned magic,version; SavedWindow win[MAX_WIN]; } SavedSessio
 typedef struct { unsigned magic,version,valid; WriterBinding source; } SavedWriterBinding;
 #define WRITER_BINDING_MAGIC 0x31425257u
 _Static_assert(sizeof(SavedWriterBinding)==24,"Writer recovery binding ABI changed");
+typedef struct { EditorSource binding; EditorBinding draft; } SavedEditorSource;
+typedef struct {
+    unsigned magic,version,count;
+    EditorBinding session;
+    SavedEditorSource win[MAX_WIN];
+} SavedEditorBindings;
+#define EDITOR_BINDING_MAGIC 0x31424445u
+_Static_assert(sizeof(SavedEditorBindings)==248,"Editor recovery binding ABI changed");
 static int session_ready;
 
 static int session_put(int dir,const char *name,const void *data,int size){
+    if(size<0||(unsigned)size>fs_file_limit())return -1;
     int id=fs_find_child(dir,name);
+    if(id>=0&&(fs_is_dir(id)||fs_is_app(id)))return -1;
     if(id>=0&&fs_size(id)==size){const unsigned char *a=(const unsigned char *)fs_data(id),*b=data;int i=0;while(i<size&&a[i]==b[i])i++;if(i==size)return 0;}
     int created=id<0;
     if(created)id=fs_create(dir,name);
     if(id<0)return -1;
     int result=fs_write(id,data,size);
-    if(result<0&&created)fs_delete(id);
-    return result;
+    if(result!=size){if(created)fs_delete(id);return -1;}
+    return 0;
 }
 static void session_save(void){
     if(!session_ready)return;
-    int dir=fs_find_child(fs_root(),"prefs");if(dir<0)dir=fs_mkdir(fs_root(),"prefs");
-    if(dir<0){session_status="Session not saved: no free folder slot.";return;}
+    int dir=fs_find_child(fs_root(),"prefs");
     unsigned writer_size=0;
     const unsigned char *writer_draft=0;
     int writer_slot=find_open_kind(WK_WRITER);
     SavedWriterBinding binding={WRITER_BINDING_MAGIC,1,0,{0,0,0}};
+    SavedEditorBindings editors;kmemset(&editors,0,sizeof editors);
+    editors.magic=EDITOR_BINDING_MAGIC;editors.version=1;editors.count=MAX_WIN;
+    int editor_slot=find_open_kind(WK_EDIT);
     if(writer_slot>=0){
         writer_draft=writer_snapshot(&writer_size);
         if(!writer_draft){session_status="Writer recovery could not be prepared.";return;}
         binding.valid=(unsigned)writer_binding(&binding.source);
     }
-    int needed=0,projected=(int)fs_used_bytes();
-    if(!fs_is_dir(dir))goto failure;
-    for(int i=-4;i<MAX_WIN;i++){
+    int needed=dir<0?1:0,projected=(int)fs_used_bytes();
+    if(dir>=0&&!fs_is_dir(dir))goto failure;
+    for(int i=-5;i<MAX_WIN;i++){
         char draft[]="draft0.txt";const char *name;
-        if(i==-4){if(writer_slot<0)continue;name="writer-binding";}
+        if(i==-5){if(editor_slot<0)continue;name="editor-bindings";}
+        else if(i==-4){if(writer_slot<0)continue;name="writer-binding";}
         else if(i==-3){if(writer_slot<0)continue;name="writer-draft.bwr";}
         else if(i==-2)name="session";
         else if(i==-1){if(!paint_ready)continue;name="paint-draft";}
         else {if(!wins[i].open||wins[i].kind!=WK_EDIT)continue;draft[5]+=(char)i;name=draft;}
-        int size=i==-4?(int)sizeof(binding):i==-3?(int)writer_size:i==-2?(int)sizeof(SavedSession):i==-1?PAINT_W*PAINT_H:window_state[i].doc.len;
+        int size=i==-5?(int)sizeof(editors):i==-4?(int)sizeof(binding):i==-3?(int)writer_size:i==-2?(int)sizeof(SavedSession):i==-1?PAINT_W*PAINT_H:window_state[i].doc.len;
         if(size<0||(unsigned)size>fs_file_limit())goto failure;
         int id=fs_find_child(dir,name);
         if(id<0)needed++;
@@ -6998,40 +7065,50 @@ static void session_save(void){
             int old_size=fs_size(id);
             /* Small metadata is committed last, so do not spend space
              * that an unusually large older metadata file might free later. */
-            projected-=(i==-4||i==-2||i==-1)&&old_size>size?size:old_size;
+            projected-=(i==-5||i==-4||i==-2||i==-1)&&old_size>size?size:old_size;
         }
         projected+=size;
     }
     /* No draft is changed until every new node and replacement byte fits. */
     if(needed>fs_node_limit()-fs_node_count()||projected>(int)fs_capacity_for_nodes((unsigned)(fs_node_count()+needed)))goto failure;
+    if(dir<0){dir=fs_mkdir(fs_root(),"prefs");if(dir<0)goto failure;}
     SavedSession snap;kmemset(&snap,0,sizeof snap);snap.magic=0x53534542;snap.version=1;
     for(int i=0;i<MAX_WIN;i++){
         Win *w=&wins[i];SavedWindow *v=&snap.win[i];
         if(!w->open||w->kind==WK_PROPERTIES)continue;
         context_set(i);v->open=1;v->kind=w->kind;v->x=w->x;v->y=w->y;v->w=w->w;v->h=w->h;v->min=w->min;v->z=w->z;
         int id=w->kind==WK_EDIT?edit_file:w->kind==WK_WRITER?writer_file():w->kind==WK_FILES?fm_cwd:w->kind==WK_TERM?term_cwd():-1;
-        if(w->kind==WK_EDIT && fs_identity(id)!=edit_identity)id=-1;
+        if(w->kind==WK_EDIT && !edit_binding_valid())id=-1;
         if(w->kind==WK_WRITER && fs_identity(id)!=writer_file_identity())id=-1;
         if(fs_valid(id))fs_path(id,v->path,sizeof v->path);
-        if(w->kind==WK_EDIT)v->caret=edit_caret;
+        if(w->kind==WK_EDIT){
+            v->caret=edit_caret;
+            if(id>=0&&edit_source.valid)editors.win[i].binding=edit_source;
+            edit_fingerprint(edit_buf,(unsigned)edit_len,&editors.win[i].draft);
+        }
         else if(w->kind==WK_WRITER)v->caret=(int)writer_caret();
     }
+    /* Pair the sidecar with both v1 metadata and each complete draft. If a
+     * future write failure leaves mixed recovery generations, they cannot
+     * authorize saving another slot's draft over a formerly bound source. */
+    edit_fingerprint(&snap,sizeof snap,&editors.session);
     /* Reclaim smaller drafts first, so the preflight's total-space promise
      * also holds when one document grows while another becomes shorter. */
     for(int growing=0;growing<2;growing++)for(int i=-1;i<MAX_WIN;i++){
         if(i==-1){
             if(writer_slot<0)continue;
             int old=fs_find_child(dir,"writer-draft.bwr"),old_size=old<0?0:fs_size(old);
-            if(((int)writer_size>old_size)!=growing)continue;
+            if((old<0||(int)writer_size>=old_size)!=growing)continue;
             if(session_put(dir,"writer-draft.bwr",writer_draft,(int)writer_size)<0)goto failure;
             continue;
         }
         if(!wins[i].open||wins[i].kind!=WK_EDIT)continue;
         context_set(i);char name[]="draft0.txt";name[5]+=(char)i;
         int old=fs_find_child(dir,name),old_size=old<0?0:fs_size(old);
-        if((edit_len>old_size)!=growing)continue;
+        if((old<0||edit_len>=old_size)!=growing)continue;
         if(session_put(dir,name,edit_buf,edit_len)<0)goto failure;
     }
+    if(editor_slot>=0 && session_put(dir,"editor-bindings",&editors,sizeof editors)<0)goto failure;
     if(writer_slot>=0 && session_put(dir,"writer-binding",&binding,sizeof binding)<0)goto failure;
     if(paint_ready && session_put(dir,"paint-draft",paint_pix,PAINT_W*PAINT_H)<0)goto failure;
     if(session_put(dir,"session",&snap,sizeof snap)<0)goto failure;
@@ -7042,6 +7119,13 @@ failure:
 static void session_restore(void){
     int dir=fs_find_child(fs_root(),"prefs"),id=fs_find_child(dir,"session");SavedSession snap;
     if(id>=0 && fs_size(id)==sizeof snap){kmemcpy(&snap,fs_data(id),sizeof snap);
+        SavedEditorBindings editors;int editor_bindings_valid=0;
+        int metadata=fs_find_child(dir,"editor-bindings");
+        if(metadata>=0&&!fs_is_dir(metadata)&&!fs_is_app(metadata)&&fs_size(metadata)==sizeof editors){
+            kmemcpy(&editors,fs_data(metadata),sizeof editors);
+            editor_bindings_valid=editors.magic==EDITOR_BINDING_MAGIC&&editors.version==1&&editors.count==MAX_WIN&&
+                edit_fingerprint_matches(&snap,sizeof snap,&editors.session);
+        }
         if(snap.magic==0x53534542&&snap.version==1)for(int i=0;i<MAX_WIN;i++){
             SavedWindow *v=&snap.win[i];v->path[FS_PATH_LEN-1]=0;
             if(!v->open||v->kind<0||v->kind>WK_WRITER||v->kind==WK_PROPERTIES||v->w<1||v->h<1||v->w>4096||v->h>4096||v->x<0||v->x>4096||v->y<0||v->y>4096)continue;
@@ -7076,7 +7160,14 @@ static void session_restore(void){
                 char name[]="draft0.txt";name[5]+=(char)i;int draft=fs_find_child(dir,name);
                 if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)){
                     if(fs_size(draft)<EDIT_BUF_SIZE){
-                        edit_len=fs_read(draft,edit_buf,EDIT_BUF_SIZE);edit_buf[edit_len]=0;edit_saved_ok=0;
+                        int length=fs_read(draft,edit_scratch,EDIT_BUF_SIZE);
+                        if(length!=fs_size(draft)){session_status="Editor recovery could not be restored.";continue;}
+                        kmemcpy(edit_buf,edit_scratch,length+1);edit_len=length;edit_saved_ok=0;
+                        if(!editor_bindings_valid||editors.win[i].binding.valid!=1||
+                           !edit_fingerprint_matches(edit_buf,(unsigned)edit_len,&editors.win[i].draft)||
+                           !edit_binding_matches(target,&editors.win[i].binding.source)){
+                            edit_file=-1;edit_identity=0;edit_source.valid=0;
+                        }
                     }else session_status="Recovery draft exceeds the Editor limit.";
                 }
                 edit_caret=v->caret>=0&&v->caret<=edit_len?v->caret:edit_len;edit_sel_a=edit_sel_b=edit_caret;
