@@ -56,6 +56,20 @@ static int nonempty(const CanvasView *view) {
            view->viewport_w > 0 && view->viewport_h > 0;
 }
 
+void canvas_view_native_layout(CanvasView *out,int x,int y,int width,int height,
+                               int source_w,int source_h) {
+    if(!out)return;
+    *out=(CanvasView){x,y,0,0,0,0};
+    if(source_w<=0||source_h<=0)return;
+    out->logical_w=source_w;out->logical_h=source_h;
+    if(width<=0||height<=0)return;
+    uint64_t w=width,h=divide((uint64_t)(unsigned)source_h*(unsigned)width,(unsigned)source_w);
+    if(h>(unsigned)height){h=(unsigned)height;w=divide((uint64_t)(unsigned)source_w*h,(unsigned)source_h);}
+    out->viewport_w=(int)w;out->viewport_h=(int)h;
+    out->x=saturated((int64_t)x+((int64_t)width-(int)w)/2);
+    out->y=saturated((int64_t)y+((int64_t)height-(int)h)/2);
+}
+
 int canvas_view_contains(const CanvasView *view, int x, int y) {
     if (!nonempty(view)) return 0;
     int64_t dx = (int64_t)x - view->x, dy = (int64_t)y - view->y;

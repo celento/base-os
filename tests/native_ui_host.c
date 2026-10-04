@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 #include "native_ui.h"
+#ifdef UI_TEST_OWNED
+#define native_ui_open native_ui_adopt
+#endif
 static ProcessBinding bindings[8];
 static NativeUiHost hosts[8];
 static int live[8],focused;
@@ -22,6 +25,11 @@ static void reset(void){
         bindings[i]=(ProcessBinding){BOS_HANDLE_TYPE_PROCESS|(i+1),i,i+1};live[i]=1;
         hosts[i].view=(CanvasView){100+(int)i*400,100,160,100,213,133};
         hosts[i].state=BOS_UI_STATE_AVAILABLE;
+#ifdef UI_TEST_OWNED
+        hosts[i].kind=BOS_UI_KIND_OWNED_WINDOW;hosts[i].capabilities=NATIVE_UI_CAPABILITIES_OWNED;
+#else
+        hosts[i].kind=BOS_UI_KIND_HOSTED_CANVAS;hosts[i].capabilities=NATIVE_UI_CAPABILITIES_HOSTED;
+#endif
     }
     native_ui_init(&test_hooks);
 }

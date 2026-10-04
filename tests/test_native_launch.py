@@ -28,8 +28,11 @@ class NativeLaunchTests(unittest.TestCase):
             directory = Path(tmp)
             start = source.index('typedef struct {\n    char name[FS_NAME_LEN]; /* A result owns')
             end = source.index('static LaunchItem launch_items', start)
-            (directory / 'native_launch_types.inc').write_text(source[start:end])
+            launch_errors = source[source.index('enum { NATIVE_LAUNCH_WINDOW='):
+                                   source.index('static const char *native_launch_error')]
+            (directory / 'native_launch_types.inc').write_text(source[start:end] + launch_errors)
             names = ('win_close', 'fm_vis_count', 'fm_row_id', 'fm_refresh', 'file_extension',
+                     'native_launch_error', 'native_window_start', 'native_file_mode',
                      'open_native_file', 'open_fs_file', 'fm_open_selected',
                      'od_row_enabled', 'od_next_enabled', 'od_refresh', 'od_open_selected',
                      'str_has', 'launcher_refresh', 'launcher_close', 'launcher_run')
@@ -40,6 +43,24 @@ class NativeLaunchTests(unittest.TestCase):
     def test_example_save_feedback(self):
         with tempfile.TemporaryDirectory(prefix='baseos-native-save-host-') as tmp:
             self.compile_run('native_save_host', Path(tmp))
+
+    def test_owned_window_factory_transaction(self):
+        source = (ROOT / 'src/kernel.c').read_text()
+        process = (ROOT / 'src/process.c').read_text()
+        with tempfile.TemporaryDirectory(prefix='baseos-window-factory-') as tmp:
+            directory = Path(tmp)
+            declarations = source[source.index('enum { NATIVE_LAUNCH_WINDOW='):
+                                  source.index('static const char *native_launch_error')]
+            names = ('native_launch_error', 'native_window_start', 'native_file_mode',
+                     'terminal_native_launch', 'open_native_file')
+            code = declarations + ''.join(function(source, name) for name in names)
+            (directory / 'native_window_factory.inc').write_text(code)
+            process = process.replace('int process_probe_launch(', 'static int process_probe_launch(')
+            code = ''.join(function(process, name) for name in
+                           ('valid_image', 'image_magic', 'image_plan', 'process_probe_launch'))
+            code = code.replace('static int process_probe_launch(', 'int process_probe_launch(')
+            (directory / 'native_window_probe.inc').write_text(code)
+            self.compile_run('native_window_factory_host', directory, [ROOT / 'src/executable.c'])
 
 
 if __name__ == '__main__':

@@ -9,6 +9,10 @@
 typedef TerminalText Terminal;
 static Terminal *terms=((AppStorage *)TERM_MEMORY)->terminals;
 static int selected;
+static int (*native_launch_hook)(int,int,unsigned,const char *,unsigned);
+void term_set_native_launch(int (*hook)(int,int,unsigned,const char *,unsigned)){
+    native_launch_hook=hook;
+}
 #define T (terms[selected])
 void term_select(int slot){if(slot>=0&&slot<PROCESS_TASKS)selected=slot;}
 static void push_at(Terminal *t,const char *s){app_view_mark((int)(t-terms),TERM_TASK_TEXT);int slot=(t->head+t->count)%TERM_LINES;if(t->count<TERM_LINES)t->count++;else t->head=(t->head+1)%TERM_LINES;int i=0;while(s[i]&&i<TERM_COLS){t->lines[slot][i]=s[i];i++;}t->lines[slot][i]=0;}
@@ -63,9 +67,9 @@ static const Manual commands[]={
     {"download","download HTTP_URL PATH","Download a complete HTTP response to a new file in the background.","download http://10.0.2.2:8000/song.wav /song.wav","Up to 2 MiB on the data disk. Never overwrites. HTTP only, no redirects."},
     {"downloads","downloads [status|cancel]","Show the current download, byte progress and disk save status.","downloads","The download survives closing Terminal. One network request at a time."},
     {"cancel","cancel [download]","Cancel the background download without creating a partial file.","cancel","Only the download is stopped; another app's network request is untouched."},
-    {"start","start FILE [DOCUMENT]","Start a protected BEX1 app, optionally with a document path.","start /Programs/docstats.bex /Documents/stats-sample.txt","Quote paths with spaces. Ctrl+C stops; closing this window stops it."},
+    {"start","start FILE [DOCUMENT]","Start a native app, optionally with a document path.","start /Programs/docstats.bex /Documents/stats-sample.txt","GUI apps open their own window. Hosted apps use this Terminal."},
     {"stop","stop","Stop this terminal's native task.","stop","Ctrl+C also stops a task without waiting for the program."},
-    {"tasks","tasks","List the running native task slots.","tasks","Sleeping and minimized tasks remain alive; closing a terminal stops it."},
+    {"tasks","tasks","List the running native task slots.","tasks","Sleeping and minimized tasks remain alive; closing their window stops them."},
     {"exec","exec FILE","Run a BEX1 native x86 program in protected memory.","exec /Programs/hello.bex","64 KB memory; two-second limit. Faults return to the terminal."}
 };
 static int manual(const char *name){
@@ -232,11 +236,19 @@ usage:
     push("Usage: mv SOURCE DESTINATION_FOLDER (exactly two paths; double-quote spaces)");
     return -1;
 }
+static int start_dispatch(int file,const char *argument,unsigned length){
+    int owner=selected;
+    int result=native_launch_hook?native_launch_hook(owner,file,fs_identity(file),argument,length):
+        term_task_start_file_with_arg(owner,file,fs_identity(file),argument,length);
+    /* Focus may now belong to a GUI, but the remainder of this shell command
+     * (or bounded script) still belongs to its original Terminal. */
+    term_select(owner);return result;
+}
 static int start_command(int file,const char *remaining,int quoted){
     if(quoted)remaining++;
     if(*remaining&&*remaining!=' ')return -1;
     while(*remaining==' ')remaining++;
-    if(!*remaining)return term_task_start_file(selected,file,fs_identity(file));
+    if(!*remaining)return start_dispatch(file,0,0);
     char input[TERM_COLS+1];unsigned n=0;char quote=*remaining=='"'?*remaining++:0;
     while(*remaining&&(quote?*remaining!=quote:*remaining!=' ')&&n<TERM_COLS)
         input[n++]=*remaining++;
@@ -249,7 +261,7 @@ static int start_command(int file,const char *remaining,int quoted){
         push("Cannot start: the document is not an ordinary file.");return -1;
     }
     char path[FS_PATH_LEN];fs_path(document,path,sizeof path);
-    return term_task_start_file_with_arg(selected,file,fs_identity(file),path,(unsigned)kstrlen(path));
+    return start_dispatch(file,path,(unsigned)kstrlen(path));
 }
 static int script(int id,int depth,int *budget){
     if(depth>=4||!fs_valid(id)||fs_is_dir(id))return -1;
@@ -309,7 +321,7 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"tasks")){
         int found=0;TermTaskInfo info;
         for(int slot=0;slot<PROCESS_TASKS;slot++)if(term_task_running(slot)){
-            print_number((term_task_info(slot,&info)&&info.state==PROCESS_TASK_SLEEPING)?"Sleeping, terminal slot ":"Running, terminal slot ",(unsigned)slot+1);found=1;
+            print_number((term_task_info(slot,&info)&&info.state==PROCESS_TASK_SLEEPING)?"Sleeping, window slot ":"Running, window slot ",(unsigned)slot+1);found=1;
             char title[TERM_TASK_TITLE_LEN];term_task_title(slot,title,sizeof title);push(title);
         }
         if(!found)push("No native tasks are running.");
@@ -343,5 +355,5 @@ void term_enter(void){
     if(overflow){push("Command exceeds 80 characters; nothing was run. Use cd for shorter paths.");return;}
     int result=execute(line,0,&budget);
     if(result==FS_ERR_BUSY)push("Disk is saving; retry shortly.");
-    else if(result)push("Error: check command, path, syntax, or available space.");
+    else if(result&&result!=TERM_COMMAND_REPORTED)push("Error: check command, path, syntax, or available space.");
 }

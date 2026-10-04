@@ -9,7 +9,7 @@
 #define BASEOS_BEX2_ENABLED 1
 #endif
 #define PROCESS_PRIVATE_PAGE_LIMIT 1024u
-/* Callbacks operate only on the owning terminal's bounded canvas/output. */
+/* Callbacks operate only on the owning app view's bounded canvas/output. */
 #define PROCESS_IMAGE_LIMIT 49152u
 #define PROCESS_FILE_CHUNK_MAX 4096u
 #define PROCESS_DOCUMENT_MAX 32768u
@@ -69,8 +69,21 @@ typedef struct {
 #define PROCESS_CREATE_MEMORY (-3)
 #define PROCESS_CREATE_UNSUPPORTED (-5)
 #define PROCESS_CREATE_LAYOUT (-6)
+/* Internal attachment modes, not window handles or public ABI values. */
+#define PROCESS_LAUNCH_HOSTED 1u
+#define PROCESS_LAUNCH_OWNED_WINDOW 2u
+/* Allocation-free executable validation. Successful output selects the required
+ * desktop backend; failure leaves it unchanged. This reserves no capacity. */
+int process_probe_launch(const void *file,unsigned bytes,unsigned *out_mode);
+/* Requires the exact launch mode declared by the executable. A mismatch is
+ * UNSUPPORTED before allocating a record, owner identity or physical page. */
+int process_create_mode(const void *file,unsigned bytes,const char *argument,
+                        unsigned argument_length,unsigned mode,ProcessHandle *out_process);
+/* Current record launch mode; zero for stale/unknown identity. */
+unsigned process_launch_mode(ProcessHandle process);
 /* Creation is not runnable. BEX1 owns16 backing pages; enabled BEX2 owns its
  * complete declared commitment plus a private directory/table before publish. */
+/* Compatibility entry point: hosted only, never silently attaches GUI BEX2. */
 int process_create(const void *file,unsigned bytes,const char *argument,
                    unsigned argument_length,ProcessHandle *out_process);
 int process_bind(ProcessHandle process,const ProcessIO *io);

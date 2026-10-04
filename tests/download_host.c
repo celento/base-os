@@ -41,6 +41,11 @@ int program_key(void){return 0;}
 void program_present(void){}
 int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;return -1;}
 int process_create(const void *p,unsigned n,const char *argument,unsigned length,ProcessHandle *out){(void)p;(void)n;(void)argument;(void)length;(void)out;return -1;}
+int process_create_mode(const void *file,unsigned bytes,const char *argument,unsigned length,
+                        unsigned mode,ProcessHandle *out){
+    return mode==PROCESS_LAUNCH_HOSTED?process_create(file,bytes,argument,length,out):PROCESS_CREATE_UNSUPPORTED;
+}
+
 int process_bind(ProcessHandle p,const ProcessIO *io){(void)p;(void)io;return 0;}
 int process_unbind(ProcessHandle p){(void)p;return 0;}
 int process_start(ProcessHandle p){(void)p;return 0;}

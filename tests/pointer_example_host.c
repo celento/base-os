@@ -6,7 +6,12 @@
 #define BASEOS_SDK_H
 #include "../sdk/baseos_abi.h"
 static int bos_ui_query(BosUiInfoV1 *,unsigned);
+#ifdef BOS_APP_NATIVE_WINDOW_V1
+static int bos_abi_query(BosAbiInfo *,unsigned);
+static int bos_ui_window_adopt(unsigned,BosUiTargetInfoV1 *);
+#else
 static int bos_ui_host_open(unsigned,BosUiTargetInfoV1 *);
+#endif
 static int bos_ui_read(BosHandle,BosUiEventV1 *);
 static int bos_ui_wait(BosHandle,unsigned,unsigned);
 static int bos_ui_release(BosHandle);
@@ -24,6 +29,9 @@ static BosUiEventV1 queue[8];
 static unsigned queue_count,queue_at,opens,releases,presents,waits,stage,key_at;
 static unsigned working_w,working_h,published_w,published_h,geometry;
 static unsigned live,query_mode,wait_error,open_error;
+#ifdef BOS_APP_NATIVE_WINDOW_V1
+static unsigned abi_mode,target_mode,reopen_error,abi_queries;
+#endif
 static char output[8192];
 static const char *keys[]={"p","rp","p","o","c","p","q"};
 static const unsigned ready=READY;
@@ -97,14 +105,35 @@ static int bos_print(const char *s) {
 static int bos_ui_query(BosUiInfoV1 *out,unsigned capacity) {
     assert(capacity==sizeof *out);
     if(query_mode==1)return -1;
-    *out=(BosUiInfoV1){.size=sizeof *out,.major=BOS_UI_MAJOR,
-        .capabilities=BOS_UI_CAP_HOSTED_CANVAS|BOS_UI_CAP_POINTER|BOS_UI_CAP_IMPLICIT_CAPTURE|
+    *out=(BosUiInfoV1){.size=sizeof *out,.major=BOS_UI_MAJOR,.minor=BOS_UI_MINOR,
+        .capabilities=POINTER_BACKEND_CAPABILITIES|BOS_UI_CAP_POINTER|BOS_UI_CAP_IMPLICIT_CAPTURE|
             BOS_UI_CAP_BOUNDED_WAIT|BOS_UI_CAP_LEGACY_KEY_READINESS|0x80000000u,
         .subscriptions_supported=BOS_UI_SUB_POINTER|BOS_UI_SUB_HOVER|BOS_UI_SUB_WHEEL|0x80000000u,
         .event_bytes=sizeof(BosUiEventV1),.wait_max_ms=60000};
     if(query_mode==2)out->capabilities&=~BOS_UI_CAP_POINTER;
+#ifdef BOS_APP_NATIVE_WINDOW_V1
+    if(query_mode==3)out->capabilities&=~BOS_UI_CAP_OWNED_WINDOW;
+    if(query_mode==4)out->capabilities&=~BOS_UI_CAP_FORCED_CLOSE;
+    if(query_mode==5)out->minor=0;
+#endif
     return BOS_OK;
 }
+#ifdef BOS_APP_NATIVE_WINDOW_V1
+static int bos_abi_query(BosAbiInfo *out,unsigned capacity) {
+    assert(capacity==sizeof *out);++abi_queries;
+    if(abi_mode==1)return BOS_E_UNSUPPORTED;
+    *out=(BosAbiInfo){.struct_size=sizeof *out,.abi_major=BOS_ABI_MAJOR,.abi_minor=2,
+        .features=BOS_FEATURE_BEX2|BOS_FEATURE_OWNED_NATIVE_WINDOW|0x80000000u,
+        .context=BOS_CONTEXT_DESKTOP_TASK};
+    if(abi_mode==2)out->features&=~BOS_FEATURE_OWNED_NATIVE_WINDOW;
+    if(abi_mode==3)out->features&=~BOS_FEATURE_BEX2;
+    if(abi_mode==4)out->abi_minor=1;
+    if(abi_mode==5)out->context=BOS_CONTEXT_LEGACY_EXEC;
+    if(abi_mode==6)out->struct_size=16;
+    if(abi_mode==7)out->abi_major=0;
+    return BOS_OK;
+}
+#endif
 static void enqueue(unsigned type,unsigned reason) {
     assert(queue_count<8);
     unsigned index=queue_count++;
@@ -113,13 +142,26 @@ static void enqueue(unsigned type,unsigned reason) {
         .geometry_epoch=geometry,.stream_epoch=1,.logical_w=published_w,
         .logical_h=published_h,.state=BOS_UI_STATE_FOCUSED|BOS_UI_STATE_AVAILABLE,.reason=reason};
 }
-static int bos_ui_host_open(unsigned sub,BosUiTargetInfoV1 *out) {
+static int pointer_backend_open(unsigned sub,BosUiTargetInfoV1 *out) {
     assert(!live&&sub==(BOS_UI_SUB_POINTER|BOS_UI_SUB_HOVER|BOS_UI_SUB_WHEEL));
     if(open_error)return BOS_E_UNSUPPORTED;
+#ifdef BOS_APP_NATIVE_WINDOW_V1
+    if(reopen_error&&opens)return BOS_E_UNSUPPORTED;
+#endif
     live=++opens;
-    *out=(BosUiTargetInfoV1){.size=sizeof *out,.major=BOS_UI_MAJOR,.target=live,
+    *out=(BosUiTargetInfoV1){.size=sizeof *out,.major=BOS_UI_MAJOR,.minor=BOS_UI_MINOR,.target=live,
         .kind=BOS_UI_KIND_HOSTED_CANVAS,.logical_w=published_w,.logical_h=published_h,
         .geometry_epoch=geometry,.stream_epoch=1};
+#ifdef BOS_APP_NATIVE_WINDOW_V1
+    out->kind=BOS_UI_KIND_OWNED_WINDOW;
+    out->capabilities=POINTER_REQUIRED_CAPABILITIES|0x80000000u;
+    unsigned mode=target_mode>=10?(opens>1?target_mode-10:0):target_mode;
+    if(mode==1)out->kind=BOS_UI_KIND_HOSTED_CANVAS;
+    if(mode==2)out->capabilities&=~BOS_UI_CAP_OWNED_WINDOW;
+    if(mode==3)out->capabilities&=~BOS_UI_CAP_FORCED_CLOSE;
+    if(mode==4)out->minor=0;
+    if(mode==5)out->capabilities&=~BOS_UI_CAP_POINTER;
+#endif
     queue_count=queue_at=0;enqueue(BOS_UI_STATE_RESET,BOS_UI_REASON_OPEN);return BOS_OK;
 }
 static int bos_ui_read(BosHandle handle,BosUiEventV1 *out) {
@@ -161,6 +203,9 @@ static void reset_host(void) {
     opens=releases=presents=waits=stage=key_at=live=query_mode=wait_error=open_error=0;
     queue_count=queue_at=working_w=working_h=published_w=published_h=geometry=0;
     output[0]=0;
+#ifdef BOS_APP_NATIVE_WINDOW_V1
+    abi_mode=target_mode=reopen_error=abi_queries=0;
+#endif
 }
 int main(void) {
     model_checks();reset_host();assert(!pointer_main());
@@ -174,6 +219,23 @@ int main(void) {
     reset_host();query_mode=2;assert(!pointer_main()&&!opens&&!presents&&strstr(output,"POINTER UNSUPPORTED"));
     reset_host();wait_error=1;assert(pointer_main()==1&&releases==1&&!live&&strstr(output,"POINTER ERROR wait"));
     reset_host();open_error=1;assert(pointer_main()==1&&!live&&strstr(output,"POINTER ERROR open"));
+#ifdef BOS_APP_NATIVE_WINDOW_V1
+    for(unsigned mode=1;mode<=7;mode++){
+        reset_host();abi_mode=mode;
+        assert(!pointer_main()&&abi_queries==1&&!opens&&!presents&&strstr(output,"POINTER UNSUPPORTED"));
+    }
+    for(unsigned mode=3;mode<=5;mode++){
+        reset_host();query_mode=mode;
+        assert(!pointer_main()&&!opens&&!presents&&strstr(output,"POINTER UNSUPPORTED"));
+    }
+    for(unsigned mode=1;mode<=5;mode++)for(unsigned reopening=0;reopening<2;reopening++){
+        reset_host();target_mode=mode+10*reopening;
+        assert(pointer_main()==1&&!live&&opens==1+reopening&&releases==opens);
+        assert(strstr(output,reopening?"POINTER ERROR reopen":"POINTER ERROR open"));
+    }
+    reset_host();reopen_error=1;
+    assert(pointer_main()==1&&opens==1&&releases==1&&!live&&strstr(output,"POINTER ERROR reopen"));
+#endif
     puts("Pointer example: transactional chords, reset/cancel, signed coordinates, unknown events, explicit publication, reopen, waits and compatibility passed");
     return 0;
 }

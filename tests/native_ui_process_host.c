@@ -35,7 +35,8 @@ static void unchanged(unsigned from,unsigned bytes){for(unsigned i=from;i<from+b
 static void negotiation(void){
     start(0);assert(ui(BOS_UI_QUERY,1,64,64,0)==BOS_E_UNSUPPORTED);
     const NativeUiHooks hooks={ui_snapshot,ui_acquire,ui_focus_owner};native_ui_init(&hooks);
-    for(unsigned i=0;i<8;i++)ui_hosts[i]=(NativeUiHost){.view={100,100,160,100,213,133},.state=BOS_UI_STATE_AVAILABLE};
+    for(unsigned i=0;i<8;i++)ui_hosts[i]=(NativeUiHost){.view={100,100,160,100,213,133},.state=BOS_UI_STATE_AVAILABLE,
+        .kind=BOS_UI_KIND_HOSTED_CANVAS,.capabilities=NATIVE_UI_CAPABILITIES_HOSTED};
     memset(user_memory,0xa5,sizeof user_memory);
     assert(ui(BOS_UI_QUERY,1,64,16,0)==BOS_OK);
     BosUiInfoV1 info;memcpy(&info,user_memory+64,16);assert(info.size==64&&info.major==1);unchanged(80,64);
@@ -49,6 +50,7 @@ static void negotiation(void){
     assert(ui(BOS_UI_QUERY,1,64,64,1)==BOS_E_INVALID);
     assert(ui(BOS_UI_QUERY,1,USER_CAPACITY-16,64,0)==BOS_E_INVALID);unchanged(64,80);
     assert(ui(99,0,0,0,0)==BOS_E_UNSUPPORTED);
+    assert(ui(BOS_UI_WINDOW_ADOPT,1,256,112,7)==BOS_E_UNSUPPORTED);unchanged(256,112);
     assert(ui(BOS_UI_HOST_OPEN,2,256,96,7)==BOS_E_UNSUPPORTED);
     assert(ui(BOS_UI_HOST_OPEN,1,256,95,7)==BOS_E_INVALID);
     assert(ui(BOS_UI_HOST_OPEN,1,USER_CAPACITY-16,96,7)==BOS_E_INVALID);
@@ -59,6 +61,7 @@ static void negotiation(void){
     assert(ui(BOS_UI_HOST_OPEN,1,256,96,7)==BOS_E_BUSY);
     assert(invoke(BOS_CALL_ABI_QUERY,64,96,1,0,0)==BOS_OK);
     BosAbiInfo abi;memcpy(&abi,user_memory+64,96);assert(abi.features&BOS_FEATURE_HOSTED_UI);
+    assert(!(abi.features&BOS_FEATURE_OWNED_NATIVE_WINDOW));
     /* Invalid whole declared output does not consume the initial reset. */
     assert(ui(BOS_UI_READ,target.target,USER_CAPACITY-96,112,0)==BOS_E_INVALID);
     assert(ui(BOS_UI_READ,target.target,512,96,1)==BOS_E_INVALID);

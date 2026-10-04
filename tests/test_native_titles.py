@@ -20,11 +20,12 @@ class NativeTitleTests(unittest.TestCase):
 #include "term.h"
 #define MAX_WIN 8
 #define WK_TERM 11
+#define WK_NATIVE 24
 static struct { int kind; } wins[MAX_WIN];
 static int live[MAX_WIN], calls;
 static const char *names[MAX_WIN];
 static const char *win_app_name(int kind) { return kind == WK_TERM ? "Terminal" : "Files"; }
-int term_task_title(int slot, char *out, int capacity) {
+int app_view_title(int slot, char *out, int capacity) {
     assert(slot >= 0 && slot < MAX_WIN && capacity == TERM_TASK_TITLE_LEN);
     ++calls; out[0] = 0;
     if (!live[slot]) return 0;
@@ -45,9 +46,12 @@ int main(void) {
     assert(win_display_title(6, two) == two);
     assert(!strcmp(one, "docstats.bex - project.txt"));
     assert(!strcmp(two, "counter.bex"));
+    wins[6].kind=WK_NATIVE;names[6]="pointer-window.bex [Stopped]";
+    assert(win_display_title(6,two)==two);
+    assert(!strcmp(two,"pointer-window.bex [Stopped]"));
     live[2] = 0;
     assert(!strcmp(win_display_title(2, one), "Terminal"));
-    assert(!strcmp(two, "counter.bex"));
+    assert(!strcmp(two, "pointer-window.bex [Stopped]"));
     return 0;
 }
 ''')
