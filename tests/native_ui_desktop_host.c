@@ -113,6 +113,18 @@ int main(void){
     move(440,150,1,0,110);assert(!records);
     e=event(1,b,BOS_UI_STATE_RESET);assert(e.reason==BOS_UI_REASON_QUEUE_LOSS&&e.dropped==65);
     move(760,540,1,0,111);assert(!records);move(760,540,0,0,112);assert(!records);
+    /* Acquisition can be ahead of routing. Release/Stop/publication must
+     * consume already-buffered held MOVE through UP, even if latest is up. */
+    for(unsigned cause=0;cause<3;cause++){
+        fixture();a=ui_open(0);event(0,a,BOS_UI_STATE_RESET);
+        move(90,150,1,0,120);event(0,a,BOS_UI_POINTER_MOVE);event(0,a,BOS_UI_POINTER_BUTTON);
+        pointer(5,0,1,0,121);pointer(0,0,0,0,122);assert(!device_input.buttons&&device_input.count==2);
+        if(cause==0)assert(native_ui_release(native_bindings,a)==BOS_OK);
+        else if(cause==1){native_live[0]=0;native_ui_revoke_owner(native_bindings[0].process);}
+        else {published_w[0]=320;published_h[0]=200;native_ui_refresh(123,device_input.buttons);}
+        desktop_input_turn();assert(!records&&!mouse_left);
+        if(cause==2){event(0,a,BOS_UI_CANCEL);event(0,a,BOS_UI_GEOMETRY);no_event(0,a);}
+    }
     puts("Native UI desktop adapter: real point ownership, focus/capture, overlays, publication geometry, legacy exclusion and input-loss recovery passed.");
     return 0;
 }
