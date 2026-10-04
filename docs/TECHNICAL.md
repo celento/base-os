@@ -20,7 +20,7 @@ The 16 MiB disk has 32,768 sectors. Sector 0 is an explicit BaseOS data marker: 
 
 Each v4 snapshot uses the existing 28-byte checksummed header in one sector and 40-byte v3-compatible node records followed by exact binary content. Version 4 permits 2,097,152 bytes per file. The conservative volume file-data limit is 8,385,024 bytes, leaving room for every node's metadata and the header; it is separate from the per-file limit. There remain 64 nodes. Floppy snapshots continue using v3, preserving compatibility with existing tools and disks.
 
-The RAM node table holds offsets into an 8 MiB compacting byte arena, rather than reserving 2 MiB for every node. Nonempty files also have a convenience NUL byte outside their reported size. Writes check all limits before changing metadata or bytes. Removal/resizing compacts the arena; equal-length overwrites stay in place. Source aliases from `fs_data()` are staged first, so self-overwrites and file copies survive moves. `fs_data()` returns a borrowed pointer valid only until the next filesystem mutation. Consumers needing long-lived data must copy it. Editor/BASIC/script/native-loader limits remain independently bounded by `FS_MAX_SIZE`; general files use `fs_file_limit()`.
+The RAM node table holds offsets into an 8 MiB compacting byte arena, rather than reserving 2 MiB for every node. Nonempty files also have a convenience NUL byte outside their reported size. Writes check all limits before changing metadata or bytes. Removal/resizing compacts the arena; equal-length overwrites stay in place. Source aliases from `fs_data()` are staged first, so self-overwrites and file copies survive moves. `fs_data()` returns a borrowed pointer valid only until the next filesystem mutation. Consumers needing long-lived data must copy it. Editor is independently bounded to 65,535 bytes; BASIC/scripts/native images keep their 16,383-byte limits. General files use `fs_file_limit()`.
 
 Mount prefers a valid data volume. When both marked data slots are wholly blank, it first mounts the boot floppy, then stages those files for the first data-disk save. It never writes the floppy during migration, and never migrates from an incompletely readable source. Legacy 1.44 MB source geometry is supported read-only. A missing IDE disk selects ordinary floppy storage. An unknown/corrupt/unreadable IDE volume exposes boot files as a protected recovery view; it does not silently format either disk. A valid surviving snapshot can recover a damaged peer using the existing alternating-snapshot protocol.
 
@@ -75,7 +75,9 @@ The QEMU suite creates disposable images and checks fresh boot, reboot, timer pr
 | `0x700000` | disk DMA bounce buffer      |
 | `0x710000`–`0x720000` | SB16 ISA DMA ring          |
 | `0xA00000` | cached desktop wallpaper    |
-| `0xB00000` | app state and undo storage  |
+| `0xB00000`–`0xB20000` | Paint undo history |
+| `0xB30000`–`0xD40000` | download buffer reservation |
+| `0xE00000`–`0xF00000` | independent Terminal state/script buffers |
 | `0xDF0000`–`0xE00000` | reserved graphics lookup cache within app arena |
 | `0xF00000` | page directory and user page table |
 | `0x1000000` | protected native-program region |
@@ -87,7 +89,9 @@ The QEMU suite creates disposable images and checks fresh boot, reboot, timer pr
 | `0x1900000`–`0x2000000` | reserved image decoding / owned pixels |
 | `0x2000000`–`0x2800000` | compact file-data pool (8 MiB) |
 | `0x2800000`–`0x3000000` | filesystem snapshot staging (8 MiB) |
-| `0x3000000`–`0x3100000` | reserved native task-save arena |
+| `0x3000000`–`0x3100000` | native task images and a separately bounded 64 KiB syscall stack |
+| `0x3100000`–`0x3600000` | Editor documents/undo/clipboard |
+| `0x3600000`–`0x3F00000` | video stream/decoder/frame workspace |
 
 Disk LBA 0 contains the loader. The kernel uses LBAs 1–383 and the previously unused tail at LBAs 5184–5695, for 895 sectors total. The loader joins those extents in memory. Snapshot slots remain at LBAs 384 and 2784, each reserving 2400 sectors; their existing on-disk data is never relocated. The linker independently limits the complete kernel and BSS below the stack. All physical addresses, disk boundaries, and the kernel sector budget are defined in `src/layout.h` and checked by the linker, C assertions, and image builder.
 
@@ -125,3 +129,8 @@ Eight 64 KiB document buffers and eight snapshots per document use a separate
 Compile-time checks bound all document state below those buffers. Find/replace uses
 bounded linear construction and one history step for Replace All; it does not
 mutate the original document if the result exceeds capacity.
+
+The native syscall stack lives inside the supervisor-only task arena rather than
+kernel BSS. Its 64 KiB budget accommodates device-only MP3 decoding during ordinary
+file operations; compiler stack-usage output reports about17 KiB for that decoder
+alone. GUI/file callbacks are never dispatched reentrantly from device polling.

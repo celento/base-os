@@ -11,6 +11,7 @@
 #include "net.h"
 #include "browser.h"
 #include "player.h"
+#include "video.h"
 #include "image_viewer.h"
 #include "audio_example.h"
 #include "platform.h"
@@ -1702,7 +1703,7 @@ static void win_close(int i) {
     if(wins[i].kind==WK_VIEW)image_viewer_close();
     if(wins[i].kind==WK_TERM)term_task_close(i);
     if(wins[i].kind==WK_BROWSER)browser_close();
-    if(wins[i].kind==WK_PLAYER)audio_stop();
+    if(wins[i].kind==WK_PLAYER)player_close();
     wins[i].open = 0;
     context_set(win_front());
     if (dragging_win == i) {
@@ -3586,7 +3587,7 @@ static void open_fs_file(int id) {
     if(fs_is_app(id)&&!kstrcmp(n,"Media Player")){open_player(-1);return;}
     if(!fs_is_dir(id)&&!fs_is_app(id)){
         if(file_extension(n,".html")||file_extension(n,".htm")){open_browser(id);return;}
-        if(file_extension(n,".wav")||file_extension(n,".wave")||file_extension(n,".mp3")){open_player(id);return;}
+        if(file_extension(n,".wav")||file_extension(n,".wave")||file_extension(n,".mp3")||file_extension(n,".mpg")||file_extension(n,".mpeg")){open_player(id);return;}
     }
     if (kstrcmp(n, "Calculator") == 0) {
         open_calc();
@@ -6807,13 +6808,14 @@ void kmain(void) {
             if (woke) {
                 saver_stop();
             } else {
+                if(fs_needs_sync())fs_autosync();
                 saver_frame();
                 continue;
             }
         }
         if (kqn > 0 || mouse_clicked || mouse_moved || mouse_rclicked || mouse_wheel)
             last_input_frame = frame_count;
-        else if (saver_enabled && !display_pending && frame_count - last_input_frame > SAVER_DELAY && !open_dlg)
+        else if (saver_enabled && !display_pending && video_status()->state!=VIDEO_PLAYING && video_status()->state!=VIDEO_LOADING && frame_count - last_input_frame > SAVER_DELAY && !open_dlg)
             saver_start();
 
         while (kqn > 0) {

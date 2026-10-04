@@ -32,7 +32,8 @@ static NativeTask *current_task;
 static int tasks_ready, have_fpu;
 static FpuState kernel_fpu, sync_fpu;
 static unsigned kernel_cr0;
-_Static_assert(sizeof(NativeTask)*PROCESS_TASKS<=TASK_CAPACITY,"native task arena overflow");
+_Static_assert(TASK_BASE+sizeof(NativeTask)*PROCESS_TASKS<=TASK_INTERRUPT_STACK_BASE,"native tasks overlap syscall stack");
+_Static_assert(TASK_INTERRUPT_STACK_BASE+TASK_INTERRUPT_STACK_CAPACITY<=TASK_BASE+TASK_CAPACITY,"syscall stack exceeds task arena");
 _Static_assert(TASK_BASE+TASK_CAPACITY<=RAM_REQUIRED_END,"native task arena must be boot-validated");
 static void fpu_enter(NativeTask *task) {
     if(!have_fpu)return;
@@ -55,7 +56,9 @@ static void fpu_leave(NativeTask *task) {
     __asm__ volatile("frstor %0"::"m"(kernel_fpu):"memory");
     __asm__ volatile("mov %0,%%cr0"::"r"(kernel_cr0):"memory");
 }
-static unsigned char kernel_stack[16384] __attribute__((aligned(16)));
+/* Syscall-side device polling can decode an MP3 frame (about 17 KiB stack).
+ * Keep a separately reserved 64 KiB exception/syscall stack out of kernel BSS. */
+static unsigned char *const kernel_stack=(unsigned char *)TASK_INTERRUPT_STACK_BASE;
 /* 32-bit TSS; I/O bitmap offset equals descriptor size, denying all ports. */
 static unsigned char tss[104] __attribute__((aligned(4)));
 static int paging_ready;
@@ -87,7 +90,7 @@ void process_init(void){
     have_fpu=(d&1)!=0;
     descriptor(gdt_user_code,USER_BASE,USER_CAPACITY-1,0xfa,0x40);
     descriptor(gdt_user_data,USER_BASE,USER_CAPACITY-1,0xf2,0x40);
-    *(uint32_t *)(tss+4)=(uintptr_t)(kernel_stack+sizeof(kernel_stack));
+    *(uint32_t *)(tss+4)=(uintptr_t)(kernel_stack+TASK_INTERRUPT_STACK_CAPACITY);
     *(uint32_t *)(tss+8)=0x10;
     *(uint16_t *)(tss+102)=sizeof(tss);
     descriptor(gdt_tss,(uintptr_t)tss,sizeof(tss)-1,0x89,0);
