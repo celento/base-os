@@ -358,6 +358,17 @@ static void test_pdf_export(void) {
     assert(writer_export_pdf(0, "large.pdf", WRITER_PDF_A4) < 0); assert(strstr(writer_status(), "512 KiB"));
     assert(create_count == creates && write_count == writes); compare_docs(&prior, writer_document());
     assert(writer_dirty() && writer_caret() == 8 && writer_anchor() == 3);
+    writer_doc_init(&fixture); fixture.length = WRITER_TEXT_MAX;
+    for (unsigned i = 0; i <= fixture.length; i++) {
+        if (i < fixture.length) fixture.text[i] = '\n';
+        fixture.paragraph[i] = WRITER_PARAGRAPH_HEADING;
+    }
+    assert(!writer_native_encode(&fixture, encoded, sizeof encoded, &bytes));
+    assert(writer_restore(encoded, bytes, -1, 0, 1, 8, 3)); prior = *writer_document();
+    assert(writer_pdf_export(&prior, WRITER_PDF_LETTER, NULL, 0, &length, &pages) == WRITER_PDF_OK && pages == 1214);
+    int maximum = writer_export_pdf(0, "1214-pages.pdf", WRITER_PDF_LETTER);
+    assert(maximum >= 0 && fs_size(maximum) == (int)length && writer_dirty());
+    compare_docs(&prior, writer_document()); fs_delete(maximum);
     /* Export never inserts history or consumes redo. */
     writer_new(); type("first"); ticks += 71; type(" second"); key(0x2c, WRITER_MOD_CTRL); check_text("first");
     int clean = writer_export_pdf(0, "history.pdf", WRITER_PDF_LETTER); assert(clean >= 0 && writer_dirty());
@@ -567,4 +578,5 @@ int main(int argc, char **argv) {
     assert(polls > 100); assert(sync_count >= 4);
     for (int i = 1; i < 20; i++) if (files[i].valid) free(files[i].data);
     puts("All Writer host functional checks passed.");
+    return 0;
 }
