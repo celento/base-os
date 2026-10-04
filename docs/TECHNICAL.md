@@ -69,3 +69,16 @@ Fonts use four bits per pixel (16 coverage levels), and window masks preserve th
 Terminal opens with a help hint. Use `help` for the command index, `help NAME` or `man NAME` for usage and examples, and Page Up/Page Down to scroll. Output wraps to the window width.
 
 A controlled 20-frame QEMU test with five overlapping windows took 203 timer ticks before the compositor optimizations and 31 afterward: about 7 versus 45 rendered frames per second, including initial cache creation. This measures guest rendering in headless QEMU, not the macOS window's displayed frame rate. The test also checks that cached composition matches a complete redraw pixel-for-pixel. Host tests cover corner clipping, palette invalidation, font access, cursor restoration, and presentation with padded 16-, 24-, and 32-bit framebuffers.
+
+## Runtime display modes
+
+QEMU standard VGA exposes a Bochs DISPI register interface at ports 0x1CE/0x1CF.
+The display driver retains the firmware-validated framebuffer mapping and only
+programs a bounded table of four 32-bit modes whose indexed backbuffers fit 1 MiB.
+Settings confirms each change for 15 seconds and restores the previous mode and
+window geometry on cancellation or timeout. A saved preference is loaded after
+filesystem mount. Other adapters keep the initial BIOS mode.
+
+Run `python3 tools/display_test.py build` to exercise mode changes, keyboard
+confirmation, automatic recovery and persistence. The test prints its screenshot
+and log directory. Register reference: https://www.qemu.org/docs/master/specs/standard-vga.html
