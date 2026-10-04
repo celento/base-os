@@ -125,13 +125,22 @@ static void test_editing(void) {
     puts("Writer editing: inline/paragraph formatting, rich/plain clipboard, validated replacement passed");
 }
 static void test_history(void) {
-    writer_new(); type("abcdefghijkl");
+    writer_new(); for (char c = 'a'; c <= 'l'; c++) { ticks += 71; assert(writer_key(0, c, 0)); }
     for (int i = 0; i < 8; i++) key(0x2c, WRITER_MOD_CTRL);
     check_text("abcd"); key(0x2c, WRITER_MOD_CTRL); check_text("abcd");
     for (int i = 0; i < 8; i++) key(0x15, WRITER_MOD_CTRL);
     check_text("abcdefghijkl"); key(0x2c, WRITER_MOD_CTRL); type("Z");
     check_text("abcdefghijkZ"); key(0x15, WRITER_MOD_CTRL); check_text("abcdefghijkZ");
     key(0x2c, WRITER_MOD_CTRL | WRITER_MOD_SHIFT); check_text("abcdefghijkZ");
+    writer_new(); type("a normal sentence"); key(0x2c, WRITER_MOD_CTRL); check_text("");
+    key(0x15, WRITER_MOD_CTRL); check_text("a normal sentence");
+    for (int i = 0; i < 8; i++) key(0x0e, 0);
+    check_text("a normal "); key(0x2c, WRITER_MOD_CTRL); check_text("a normal sentence");
+    ticks += 71; type(" one"); ticks += 71; type(" two");
+    key(0x2c, WRITER_MOD_CTRL); check_text("a normal sentence one");
+    key(0x2c, WRITER_MOD_CTRL); check_text("a normal sentence");
+    key(0x4b, 0); type("X"); key(0x4d, 0); type("Y"); key(0x2c, WRITER_MOD_CTRL);
+    check_text("a normal sentencXe"); key(0x2c, WRITER_MOD_CTRL); check_text("a normal sentence");
     puts("Writer history: eight-step bound, redo, branching and alternate shortcut passed");
 }
 static void test_files(void) {

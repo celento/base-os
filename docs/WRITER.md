@@ -33,7 +33,10 @@ Logo font. Bold and italic are bounded synthetic treatments. Word wrapping,
 alignment, scaled advances, selection and caret hit testing share the same line
 geometry. A caret at a soft line ending can stay visually on that line.
 
-History retains eight complete prior operations plus the current state. Undo
+History retains eight complete prior operations plus the current state. Adjacent
+typing, Backspace and Delete coalesce into separate runs of up to 512 keystrokes,
+ending on a one-second pause, navigation/selection, formatting, paste, save or
+paragraph break. Undo
 restores text, formatting, caret and selection. A new edit after undo discards
 redo. History is in RAM; it is not serialized into a document or recovery draft.
 Undo back to a successfully saved revision removes the unsaved marker.
