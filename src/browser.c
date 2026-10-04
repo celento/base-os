@@ -507,8 +507,8 @@ static void download_summary(void) {
         number(digits,B.download_received);append(B.download_text,sizeof B.download_text,digits);append(B.download_text,sizeof B.download_text," bytes");
         if(B.download_http){append(B.download_text,sizeof B.download_text," | HTTP ");number(digits,(unsigned)B.download_http);append(B.download_text,sizeof B.download_text,digits);}
         append(B.download_text,sizeof B.download_text,"\n");
-        if(B.download_state==DOWNLOAD_ACTIVE)append(B.download_text,sizeof B.download_text,"Cancel stops only this Browser download. Closing Browser leaves it running.");
-        else append(B.download_text,sizeof B.download_text,B.download_message);
+        append(B.download_text,sizeof B.download_text,B.download_message);
+        if(B.download_state==DOWNLOAD_ACTIVE)append(B.download_text,sizeof B.download_text,"\nCancel stops only this Browser download. Closing Browser leaves it running.");
         append(B.download_text,sizeof B.download_text,"\nFile limit: ");number(digits,B.download_limit);append(B.download_text,sizeof B.download_text,digits);
         append(B.download_text,sizeof B.download_text," bytes\n");append(B.download_text,sizeof B.download_text,B.download_url);
     } else if(!B.download_notice[0])copy(B.download_text,sizeof B.download_text,"No Browser download yet.\nType an HTTP address, then Download or Ctrl+D.\nTab or Pick link selects a link to download.\nHTTP is unencrypted. HTTPS is unsupported.");

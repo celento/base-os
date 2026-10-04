@@ -66,6 +66,133 @@ static void command(const char *text){while(*text)term_char(*text++);term_enter(
 static int term_contains(const char *text){for(int i=0;i<term_count();i++)if(strstr(term_get(i),text))return 1;return 0;}
 static void begin(const char *path){assert(!download_start(0,"http://10.0.2.2:8000/binary",path));assert(download_active());}
 static void check_absent(const char *path){assert(fs_resolve(0,path)<0);}
+static FsSyncTicket start_snapshot(void){
+    FsSyncTicket ticket;assert(fs_sync_request(&ticket)==0&&fs_sync_busy());
+    assert(fs_sync_result(ticket)==FS_SYNC_PENDING);return ticket;
+}
+static void drain_snapshot(FsSyncTicket ticket,int expected){
+    unsigned turns=0;
+    while(fs_sync_busy()){
+        assert(fs_sync_result(ticket)==FS_SYNC_PENDING);
+        assert(fs_sync_step()!=FS_SYNC_IDLE);assert(++turns<100000);
+    }
+    assert(fs_sync_result(ticket)==expected);
+}
+static void expect_waiting(unsigned request,unsigned size){
+    const DownloadStatus *d=download_status();
+    assert(download_active()&&d->state==DOWNLOAD_ACTIVE&&d->http_state==NET_HTTP_DONE);
+    assert(d->request_id==request&&d->received==size&&d->http_status==200&&d->file_id==-1);
+    assert(strstr(d->message,"waiting for disk saving"));check_absent(d->path);
+}
+
+static void test_complete_body_waits_for_storage(void){
+    reset_download();int notes=fs_create(0,"notes");assert(fs_write(notes,"Prior snapshot",14)==14);
+    begin("/waiting.bin");unsigned request=download_status()->request_id;
+    header(200,FS_FILE_MAX);feed(payload,20000);assert(download_tick());
+    FsSyncTicket ticket=start_snapshot();int before=fs_node_count();unsigned used=fs_used_bytes();
+    for(unsigned p=20000;p<FS_FILE_MAX;){unsigned count=FS_FILE_MAX-p>1460?1460:FS_FILE_MAX-p;feed(payload+p,count);p+=count;download_tick();}
+    expect_waiting(request,FS_FILE_MAX);assert(!busy&&!download_tick());
+    assert(fs_node_count()==before&&fs_used_bytes()==used&&fs_sync_result(ticket)==FS_SYNC_PENDING);
+    /* A second download is still refused even though the network is idle. */
+    DownloadStatus waiting=*download_status();int starts=started;
+    assert(download_start(0,"http://10.0.2.2/other","/other.bin")<0&&started==starts);
+    assert(!memcmp(download_status(),&waiting,sizeof waiting));
+    /* Another app can replace the shared HTTP parser/result and finish a
+     * request. Neither its payload nor final status belongs to our download. */
+    char other[1024];assert(!net_http_start("http://10.0.2.2/page",other,sizeof other));
+    header(404,73);body(73);assert(response.status==404&&response.request_id!=request);
+    assert(!memcmp(other,payload,73)&&!download_tick());expect_waiting(request,FS_FILE_MAX);
+    /* Time spent waiting for storage is not a network deadline. A different
+     * app's later timeout must not replace the already complete response. */
+    assert(!net_http_start("http://10.0.2.2/slow",other,sizeof other));
+    now+=60*TIMER_HZ;response.state=NET_HTTP_ERROR;busy=0;
+    strcpy(response.error,"Network request timed out (15 seconds)");
+    unsigned turns=0;
+    while(fs_sync_busy()){
+        assert(!download_tick());expect_waiting(request,FS_FILE_MAX);
+        assert(fs_node_count()==before&&fs_used_bytes()==used);
+        assert(fs_sync_step()!=FS_SYNC_IDLE);assert(++turns<100000);
+    }
+    assert(fs_sync_result(ticket)==0&&!fs_needs_sync());expect_waiting(request,FS_FILE_MAX);
+    /* Retained explicit completion records are not mutation leases. The old
+     * snapshot is durable, but cannot make the later download durable. */
+    assert(download_tick()&&!download_active());const DownloadStatus *d=download_status();
+    int id=d->file_id;assert(d->state==DOWNLOAD_DONE&&d->request_id==request&&d->http_status==200&&d->received==FS_FILE_MAX);
+    assert(id==fs_resolve(0,"/waiting.bin")&&fs_size(id)==FS_FILE_MAX&&!memcmp(fs_data(id),payload,FS_FILE_MAX));
+    assert(fs_size(notes)==14&&!memcmp(fs_data(notes),"Prior snapshot",14));
+    assert(fs_needs_sync()&&strstr(d->message,"RAM")&&strstr(d->message,"pending"));
+    assert(fs_sync_release(ticket)==0);ticket=start_snapshot();
+    assert(download_tick()&&strstr(download_status()->message,"Saving disk snapshot"));
+    assert(!strstr(download_status()->message,"disk is synchronized"));
+    data_write_error=1;drain_snapshot(ticket,-1);assert(fs_sync_release(ticket)==0);
+    assert(download_tick()&&download_status()->state==DOWNLOAD_DONE&&strstr(download_status()->message,"Save failed"));
+    assert(fs_needs_sync()&&!memcmp(fs_data(id),payload,FS_FILE_MAX));
+    data_write_error=0;ticket=start_snapshot();drain_snapshot(ticket,0);assert(fs_sync_release(ticket)==0);
+    assert(download_tick()&&strstr(download_status()->message,"disk is synchronized"));
+    remount();id=fs_resolve(0,"/waiting.bin");assert(id>0&&fs_size(id)==FS_FILE_MAX&&!memcmp(fs_data(id),payload,FS_FILE_MAX));
+}
+static void test_waiting_cancellation_and_destination_changes(void){
+    reset_download();begin("/cancel-wait.bin");FsSyncTicket ticket=start_snapshot();
+    unsigned request=download_status()->request_id;header(200,543);body(543);expect_waiting(request,543);
+    char other[1024];assert(!net_http_start("http://10.0.2.2/page",other,sizeof other));
+    unsigned other_request=response.request_id;assert(download_cancel());
+    assert(download_status()->state==DOWNLOAD_CANCELLED&&!download_active()&&busy&&!cancelled&&response.request_id==other_request);
+    assert(fs_sync_busy()&&fs_sync_result(ticket)==FS_SYNC_PENDING&&!download_cancel());
+    drain_snapshot(ticket,0);assert(fs_sync_release(ticket)==0);header(200,31);body(31);
+    assert(!download_tick());check_absent("/cancel-wait.bin");
+    /* Cancellation releases the private arena for a new, independent job. */
+    begin("/retry.bin");header(200,72);body(72);assert(download_status()->state==DOWNLOAD_DONE);
+    assert(fs_size(fs_resolve(0,"/retry.bin"))==72);
+
+    for(int change=0;change<4;change++){
+        reset_download();int folder=fs_mkdir(0,"destination");assert(folder>0);
+        begin("/destination/file.bin");ticket=start_snapshot();request=download_status()->request_id;
+        header(200,123);body(123);expect_waiting(request,123);
+        drain_snapshot(ticket,0);assert(fs_sync_release(ticket)==0);
+        if(change==0){int id=fs_create(folder,"file.bin");assert(fs_write(id,"New owner",9)==9);}
+        else if(change==1)assert(fs_rename(folder,"renamed")==0);
+        else if(change==2){unsigned identity=fs_identity(folder);assert(fs_delete(folder)==0);assert(fs_mkdir(0,"destination")==folder&&fs_identity(folder)!=identity);}
+        else {int parent=fs_mkdir(0,"moved");assert(parent>0&&fs_move(folder,parent)==0);}
+        int count=fs_node_count();assert(download_tick()&&!download_active()&&download_status()->state==DOWNLOAD_ERROR);
+        assert(fs_node_count()==count);
+        if(change==0){int id=fs_resolve(0,"/destination/file.bin");assert(strstr(download_status()->message,"now exists")&&id>0&&fs_size(id)==9&&!memcmp(fs_data(id),"New owner",9));}
+        else {assert(strstr(download_status()->message,"folder changed"));assert(fs_find_child(folder,"file.bin")<0);}
+    }
+}
+static void test_waiting_snapshot_failures(void){
+    /* A failed old snapshot releases its lease. It does not lose a complete
+     * download or promise that newly created RAM bytes have reached disk. */
+    for(int protected=0;protected<2;protected++){
+        reset_download();checkpoint("old");assert(fs_write(file(),"new",3)==3);
+        begin("/failure.bin");FsSyncTicket ticket=start_snapshot();unsigned request=download_status()->request_id;
+        header(200,20037);body(20037);expect_waiting(request,20037);
+        data_fail_flush_at=data_flush_count+(protected?2:1);drain_snapshot(ticket,-1);
+        assert(fs_sync_release(ticket)==0&&download_tick());const DownloadStatus *d=download_status();
+        assert(d->state==DOWNLOAD_DONE&&d->received==20037&&d->http_status==200&&fs_needs_sync());
+        int id=fs_resolve(0,"/failure.bin");assert(id>0&&fs_size(id)==20037&&!memcmp(fs_data(id),payload,20037));
+        assert(strstr(d->message,"RAM only")&&!strstr(d->message,"disk is synchronized"));
+        if(protected){assert(strstr(d->message,"Disk protected")&&fs_sync()<0);}
+        else {
+            assert(strstr(d->message,"Save failed"));data_fail_flush_at=0;
+            ticket=start_snapshot();drain_snapshot(ticket,0);assert(fs_sync_release(ticket)==0);
+            assert(download_tick()&&strstr(download_status()->message,"disk is synchronized"));
+            remount();id=fs_resolve(0,"/failure.bin");assert(id>0&&fs_size(id)==20037&&!memcmp(fs_data(id),payload,20037));
+        }
+    }
+    /* Unsuccessful/truncated HTTP responses never become storage waiters. */
+    reset_download();begin("/bad.bin");FsSyncTicket ticket=start_snapshot();header(404,123);body(123);
+    assert(download_status()->state==DOWNLOAD_ERROR&&!download_active()&&fs_sync_busy());check_absent("/bad.bin");
+    begin("/oversize.bin");header(200,FS_FILE_MAX+1);body(FS_FILE_MAX+1);
+    assert(download_status()->state==DOWNLOAD_ERROR&&!download_active());check_absent("/oversize.bin");
+    drain_snapshot(ticket,0);assert(fs_sync_release(ticket)==0);
+    /* Empty successful responses also wait: an empty destination is still
+     * a filesystem mutation, and DONE is not published while it is absent. */
+    int dirty=fs_create(0,"dirty");assert(dirty>0);ticket=start_snapshot();
+    begin("/empty-wait.bin");header(204,0);assert(download_tick()&&download_active());
+    assert(download_status()->http_status==204&&download_status()->received==0);check_absent("/empty-wait.bin");
+    drain_snapshot(ticket,0);assert(fs_sync_release(ticket)==0&&download_tick());
+    assert(download_status()->state==DOWNLOAD_DONE&&fs_size(fs_resolve(0,"/empty-wait.bin"))==0);
+}
 
 static void test_binary_and_async_terminal(void){
     reset_download();command("download http://10.0.2.2:8000/binary /music.bin");
@@ -130,8 +257,9 @@ static void test_storage_limits(void){
 int main(void){
     for(unsigned i=0;i<sizeof payload;i++)payload[i]=(unsigned char)(i*37+(i>>16)+91);
     test_binary_and_async_terminal();test_no_overwrites_and_folder_identity();test_cancel_limits_and_ownership();test_storage_limits();
+    test_complete_body_waits_for_storage();test_waiting_cancellation_and_destination_changes();test_waiting_snapshot_failures();
     reset_download();command("download http://10.0.2.2/a \"/quoted file.bin\"");assert(download_active());command("downloads cancel");assert(!download_active());
     command("download http://10.0.2.2/a /bad extra");assert(!download_active());
-    puts("downloads: asynchronous Terminal, exact 2 MiB binary/reboot, progress, cancellation, ownership, folder identity, no overwrite, size/storage limits passed");
+    puts("downloads: asynchronous Terminal, exact 2 MiB binary/reboot, progress, cancellation, ownership, folder identity, no overwrite, size/storage limits and deferred snapshot-lease completion passed");
     return 0;
 }

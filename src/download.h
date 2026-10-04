@@ -5,7 +5,12 @@
 
 /* One background transfer, independent of any Terminal window. The desktop
  * calls download_tick immediately after net_poll, outside borrowed fs_data
- * lifetimes. No download function waits for network or disk I/O. */
+ * lifetimes and before another app can replace the shared HTTP result.
+ * No download function waits for network or disk I/O. DOWNLOAD_ACTIVE also
+ * includes a validated complete body waiting for fs_sync_busy() to clear:
+ * http_state is NET_HTTP_DONE, final HTTP fields are retained and cancellation
+ * discards only the private body. DOWNLOAD_DONE means all bytes reached the
+ * RAM filesystem; message separately reports later disk synchronization. */
 enum { DOWNLOAD_IDLE, DOWNLOAD_ACTIVE, DOWNLOAD_DONE,
        DOWNLOAD_ERROR, DOWNLOAD_CANCELLED };
 typedef struct {
