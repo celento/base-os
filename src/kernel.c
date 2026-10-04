@@ -4,6 +4,7 @@
  */
 
 #include "gfx.h"
+#include "build_info.h"
 #include "decimal.h"
 #include "text_search.h"
 #include "display.h"
@@ -507,6 +508,42 @@ static const char icon_clock16[] =
     "     ######     "
     "                ";
 
+static const char icon_browser16[] =
+    "     ######     "
+    "   ##..##..##   "
+    "  #...#..#...#  "
+    " #...#....#...# "
+    " #...#....#...# "
+    "############### "
+    "#....#....#....#"
+    "#....#....#....#"
+    "#....#....#....#"
+    "############### "
+    " #...#....#...# "
+    " #...#....#...# "
+    "  #...#..#...#  "
+    "   ##..##..##   "
+    "     ######     "
+    "                ";
+
+static const char icon_player16[] =
+    "                "
+    "  ############  "
+    " #............# "
+    " #............# "
+    " #....#.......# "
+    " #....###.....# "
+    " #....#####...# "
+    " #....######..# "
+    " #....#####...# "
+    " #....###.....# "
+    " #....#.......# "
+    " #............# "
+    " #.##########.# "
+    " #............# "
+    "  ############  "
+    "                ";
+
 static const char icon_cal16[] =
     "   #        #   "
     " ############## "
@@ -668,8 +705,8 @@ static void icons_init(void) {
     icon_set(ICON_BREAKOUT, "Breakout", icon_brick16, 0xA855F7);
     icon_set(ICON_SYSMON, "Monitor", icon_mon16, 0x10B981);
     icon_set(ICON_SETTINGS, "Settings", icon_gear16, 0x7C8494);
-    icon_set(ICON_BROWSER, "Browser", icon_clock16, 0x2476C9);
-    icon_set(ICON_PLAYER, "Media Player", icon_view16, 0xDC587A);
+    icon_set(ICON_BROWSER, "Browser", icon_browser16, 0x2476C9);
+    icon_set(ICON_PLAYER, "Media Player", icon_player16, 0xDC587A);
     icon_set(ICON_TRASH, "Trash", icon_trash, 0x9CA3AF);
 
     int col_w = 96;
@@ -4675,9 +4712,9 @@ static const char icon_todo16[] =
 
 static void draw_tb_icon(int kind, int x, int y, uint8_t invert) {
     if (kind == WK_BROWSER)
-        draw_icon16(x,y,icon_clock16,invert);
+        draw_icon16(x,y,icon_browser16,invert);
     else if(kind == WK_PLAYER)
-        draw_icon16(x,y,icon_view16,invert);
+        draw_icon16(x,y,icon_player16,invert);
     else if (kind == WK_FILES)
         draw_icon16(x, y, icon_folder16, invert);
     else if (kind == WK_CLOCK)
@@ -6341,6 +6378,8 @@ static void draw_about(int wx, int wy, int ww, int wh, int fl) {
     kstrcpy(geometry + kstrlen(geometry), "  |  256 colors");
     draw_string_in_win(geometry, wx, ww, y, ui_text);
     y += CHAR_H + 10;
+    draw_string_in_win("Build " BASEOS_BUILD_LABEL, wx, ww, y, ui_text_dim);
+    y += CHAR_H + 6;
     draw_string_in_win("(C) 2026 CCG", wx, ww, y, ui_text_dim);
 }
 
@@ -6738,7 +6777,7 @@ static void render_desktop_frame(void) {
 /* ---------- kmain ---------- */
 
 void kmain(void) {
-    kprint_debug("Kernel started\n");
+    kprint_debug("Kernel started\nBuild " BASEOS_BUILD_LABEL "\n");
     platform_validate_memory();
     kmemset(window_state, 0, sizeof(WindowState) * MAX_WIN);
     disk_configure(((const BootInfo *)BOOTINFO_ADDR)->sectors_per_track);

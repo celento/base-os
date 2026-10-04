@@ -86,7 +86,13 @@ $(OUT)/chime.wav: tools/make_audio_example.py | $(OUT)
 $(OUT)/audio_example.h: $(OUT)/chime.wav tools/bin2c.py
 	$(PYTHON) tools/bin2c.py $< audio_example > $@
 
-$(OUT)/kernel.o: $(OUT)/native_example.h $(OUT)/sdk_examples.h $(OUT)/audio_example.h
+$(OUT)/build_info.h: FORCE tools/build_info.py | $(OUT)
+	$(PYTHON) tools/build_info.py $(OUT)
+
+FORCE:
+.PHONY: FORCE
+
+$(OUT)/kernel.o: $(OUT)/build_info.h $(OUT)/native_example.h $(OUT)/sdk_examples.h $(OUT)/audio_example.h
 
 # Rendering is the hot path; retain size optimization for the rest of the kernel.
 $(OUT)/gfx.o: CFLAGS := $(filter-out -Os,$(CFLAGS)) -O2
