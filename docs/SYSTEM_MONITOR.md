@@ -141,7 +141,25 @@ other or closing Terminal, completion, close, reset, immediate restart, and
 unsigned timer rollover. These are deterministic functional tests, without
 fuzzing or intentional memory-fault/privilege probes.
 
-These host checks do not substitute for real production-desktop PS/2 verification
-of the kernel routing. Run the native task input regression after integration
-and verify Monitor's Show terminal, Stop task, Windows Close, resizing, and
-minimized-owner flows on disposable QEMU images.
+## Production desktop verification
+
+```sh
+python3 tools/sysmon_input_test.py build
+```
+
+This script boots the normal production kernel with newly created disposable
+floppy/data images. It uses real launcher, keyboard and PS/2 mouse controls; ELF
+symbols and QMP memory reads inspect outcomes without modifying guest memory.
+It verifies two actual counter programs and their names, state and lifetime;
+Show terminal restoring a minimized owner; maximizing and then stopping one
+task while both terminals remain open and the other task continues to save;
+eight visible Windows rows at the standard minimum size; Windows Close ending
+its terminal's task; the empty Tasks view; and shell input in the stopped owner.
+It saves screenshots in its printed temporary directory. The struct-size checks
+fail early if the inspected normal-kernel layouts change.
+
+The first integrated production run passed on `c790ffb` using this script. The
+three-tab renderer and Terminal tests above also passed with ASan/UBSan. This is
+normal functional coverage, not a claim of exhaustive process or security
+verification. `tools/task_input_test.py` separately covers the broader native
+task launcher, keyboard input, Ctrl+C, close, restart and native-exit lifecycle.
