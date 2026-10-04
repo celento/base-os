@@ -1,5 +1,6 @@
 #ifndef BASEOS_ABI_H
 #define BASEOS_ABI_H
+#include "baseos_executable.h"
 /* Shared freestanding wire contract. All fields are little-endian 32-bit values.
  * BEX1 retains its exact 16-byte header and 64 KiB offset-pointer interpretation.
  * A handle is opaque, owner-bound and valid only for this boot and its lifetime.
@@ -9,7 +10,7 @@ typedef int bos_i32;
 typedef bos_u32 BosHandle;
 _Static_assert(sizeof(bos_u32)==4 && sizeof(bos_i32)==4,"BaseOS ABI requires 32-bit integers");
 #define BOS_ABI_MAJOR 1u
-#define BOS_ABI_MINOR 0u
+#define BOS_ABI_MINOR 1u
 #define BOS_ABI_QUERY_MIN_SIZE 16u
 #define BOS_HANDLE_INVALID 0u
 
@@ -25,7 +26,8 @@ enum BosSyscall {
     BOS_CALL_ABI_QUERY=18, BOS_CALL_SYNC_BEGIN=19, BOS_CALL_SYNC_POLL=20,
     BOS_CALL_SYNC_WAIT=21, BOS_CALL_SYNC_RELEASE=22, BOS_CALL_FILE_OPEN=23,
     BOS_CALL_FILE_INFO=24, BOS_CALL_FILE_READ_AT=25,
-    BOS_CALL_FILE_REPLACE=26, BOS_CALL_FILE_CLOSE=27
+    BOS_CALL_FILE_REPLACE=26, BOS_CALL_FILE_CLOSE=27,
+    BOS_CALL_MEMORY_INFO=28 /* 29 reserved for a later UI service. */
 };
 enum BosResult {
     BOS_OK=0, BOS_PENDING=1,
@@ -38,6 +40,9 @@ enum BosResult {
 #define BOS_FEATURE_OWNED_SYNC      (1u<<1)
 #define BOS_FEATURE_OPERATION_WAIT (1u<<2)
 #define BOS_FEATURE_PROCESS_ID     (1u<<3)
+#define BOS_FEATURE_MEMORY_INFO    (1u<<4)
+/* This execution context uses BEX2 sparse offsets; not a global exec promise. */
+#define BOS_FEATURE_BEX2           (1u<<5)
 #define BOS_CONTEXT_LEGACY_EXEC 1u
 #define BOS_CONTEXT_DESKTOP_TASK 2u
 
@@ -49,7 +54,9 @@ enum BosResult {
 typedef struct {
     bos_u32 struct_size, abi_major, abi_minor, features;
     bos_u32 context, process;
-    /* Linker image/BSS reservation only, not a guarded or guaranteed usable stack. */
+    /* BEX1 user_bytes is the contiguous 64 KiB extent. For BEX2 it is a sparse
+     * 4 MiB virtual extent, NOT permission to access every byte; query memory
+     * regions. BEX1 stack is a linker reservation, BEX2 stack is committed. */
     bos_u32 user_bytes, image_bytes, stack_reserved_bytes, path_bytes;
     bos_u32 file_chunk_bytes, replace_bytes, file_bytes;
     bos_u32 files_per_process, files_total;
@@ -58,6 +65,36 @@ typedef struct {
     bos_u32 reserved[4];
 } BosAbiInfo;
 _Static_assert(sizeof(BosAbiInfo)==96,"ABI query wire size");
+
+#define BOS_MEMORY_INFO_VERSION 1u
+#define BOS_MEMORY_INFO_MIN_SIZE 16u
+#define BOS_MEMORY_READ 1u
+#define BOS_MEMORY_WRITE 2u
+/* EXEC describes the code-segment range; x86 paging here does not implement NX. */
+#define BOS_MEMORY_EXEC 4u
+#define BOS_MEMORY_LEGACY 1u
+#define BOS_MEMORY_TEXT 2u
+#define BOS_MEMORY_DATA 3u
+#define BOS_MEMORY_WORKSPACE 4u
+#define BOS_MEMORY_STACK 5u
+typedef struct { bos_u32 offset,bytes,protection,purpose; } BosMemoryRegion;
+/* Output-only, versioned like ABI query; capacity>=16, version=1, unused args0.
+ * Validate the full supplied capacity; copy min(capacity,128), leave tail alone.
+ * Every error leaves output unchanged. Offsets/lengths are virtual, never PFNs.
+ * owned_pages includes table_pages (directory+PT) and committed user storage.
+ * policy_pages is the context's maximum owned-page policy, including tables.
+ * Legacy exec: mapped16/owned0/table0/policy0; BEX1 task:16/16/0/16.
+ * Pool values are momentary non-reserving capacity snapshots. Nonempty regions
+ * are ordered text/data/workspace/stack (BEX1: single legacy RWX region).
+ * Unused regions and reserved words are zero; ignore unknown output flags. */
+typedef struct {
+    bos_u32 struct_size,version,format,page_bytes;
+    bos_u32 virtual_bytes,mapped_pages,owned_pages,table_pages;
+    bos_u32 policy_pages,pool_total_pages,pool_free_pages,region_count;
+    bos_u32 reserved[4];
+    BosMemoryRegion regions[4];
+} BosMemoryInfo;
+_Static_assert(sizeof(BosMemoryInfo)==128,"memory info wire size");
 
 #define BOS_FILE_OPEN_READ 1u
 #define BOS_FILE_OPEN_WRITE 2u

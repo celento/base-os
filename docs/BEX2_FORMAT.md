@@ -72,7 +72,7 @@ that arbitrary untrusted programs are safe.
 `executable_plan_bex2(image, bytes, policy, out)` in `src/executable.c` reads no
 live ABI, page allocator, filesystem or paging state and allocates nothing.
 Input may be byte-unaligned. The caller supplies exact available input length,
-supported ABI major/minor, mounted-backend file cap and available/policy owned
+supported ABI major/minor, mounted-backend file cap and fixed policy owned
 page cap. Both caps are inclusive; zero means no capacity, not unlimited.
 The format's 256 KiB file cap applies even if the filesystem supports more.
 
@@ -97,7 +97,8 @@ Results:
 
 Mapped page counts include text, data, workspace and stack. Owned pages include
 those pages plus exactly two page-table overhead pages (one PD and one PT).
-An admissible plan is a capacity snapshot, not a reservation or activation.
+An admissible plan checks fixed policy; it is not a live-capacity snapshot,
+reservation or activation. The loader separately checks current free pages.
 Maximum virtual commitment can reach 1,022 user pages plus two table pages, but
 available physical pages on a particular machine usually impose a lower limit.
 The parser does not replace allocator admission or owner-checked rollback.
@@ -172,6 +173,7 @@ They rebuild all five BEX1 examples and compare every byte and SHA-256 with the
 frozen `tests/fixtures/bex1-hour05` files. The parser also compiles as freestanding
 i386 without undefined runtime helper symbols.
 
-No guest app is executed by these tests. No loader, root switch, memory query,
-physical allocation, guest persistence, GUI behavior, mixed-format scheduling,
-or performance claim follows from them. Those remain the C3 runtime gates.
+No guest app is executed by these tests. No guest persistence, GUI behavior, mixed-format scheduling or performance
+claim follows from those parser/toolchain tests. The separate C3 integration
+adds the loader, root switching, memory query and owned allocation, gated and
+verified as described in [ADDRESS_SPACES.md](ADDRESS_SPACES.md).

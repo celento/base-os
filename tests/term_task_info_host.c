@@ -23,7 +23,8 @@ typedef struct {
 static FixtureProcess fixture_processes[PROCESS_TASKS];
 static ProcessHandle next_handle=0x100;
 static unsigned schedule_cursor;
-static int create_result;
+static int create_result,exec_result;
+static unsigned exec_calls;
 static FixtureProcess *fixture_process(ProcessHandle handle){
     for(unsigned i=0;i<PROCESS_TASKS;i++)
         if(handle&&fixture_processes[i].handle==handle)return &fixture_processes[i];
@@ -36,7 +37,7 @@ static void fixture_set_state(FixtureProcess *p,int state){
 int basic_run(const char *s,int n,const ProgramIO *io){(void)s;(void)n;(void)io;return 0;}
 int program_key(void){return 0;}
 void program_present(void){}
-int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;return 0;}
+int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;exec_calls++;return exec_result;}
 int process_create(const void *file,unsigned bytes,const char *argument,unsigned length,ProcessHandle *out){
     assert(file&&bytes>=16&&out);
     if(create_result)return create_result;
@@ -149,6 +150,16 @@ static int executable(const char *name){
 #ifndef TERM_TASK_FIXTURE_ONLY
 int main(void){
     reset();int first=executable("counter.bex");executable("another.bex");
+    term_select(0);term_reset();exec_result=-5;command("exec /counter.bex");
+    assert(exec_calls==1&&!strcmp(term_get(term_count()-2),"Program stopped (error, fault, or execution limit)."));
+    exec_result=0;
+    unsigned char extended[8192]={0};
+    BosBex2Header header={BOS_BEX2_MAGIC,64,1,0,8192,4096,2,8192,0,0,0,65536,1,1,0,0};
+    memcpy(extended,&header,sizeof header);extended[4096]=0xeb;extended[4097]=0xfe;
+    int second_format=fs_create(fs_root(),"extended.bex");assert(second_format>=0);
+    assert(fs_write(second_format,(const char *)extended,sizeof extended)==sizeof extended);
+    command("exec /extended.bex");
+    assert(exec_calls==1&&!strcmp(term_get(term_count()-2),"Legacy exec supports BEX1 only; use start for this program."));
     term_select(0);term_reset();canvas_resize(320,200);plot(17,23,9);
     unsigned generation=terms[0].binding_generation;
     create_result=PROCESS_CREATE_MEMORY;command("start /counter.bex");

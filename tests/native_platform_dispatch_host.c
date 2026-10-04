@@ -59,10 +59,23 @@ static void start(unsigned slot){
 }
 static void query(void){
     start(2);BosAbiInfo info;
+    BosMemoryInfo memory;
+    memset(user_memory,0xa5,sizeof user_memory);
+    assert(invoke(BOS_CALL_MEMORY_INFO,64,sizeof memory+16,1,0,0)==BOS_OK);
+    memcpy(&memory,user_memory+64,sizeof memory);
+    assert(memory.struct_size==128&&memory.version==1&&memory.format==BOS_EXECUTABLE_BEX1);
+    assert(memory.page_bytes==4096&&memory.virtual_bytes==65536&&memory.mapped_pages==16);
+    assert(memory.owned_pages==16&&memory.table_pages==0&&memory.policy_pages==16&&memory.region_count==1);
+    assert(memory.regions[0].offset==0&&memory.regions[0].bytes==65536);
+    assert(memory.regions[0].protection==7&&memory.regions[0].purpose==BOS_MEMORY_LEGACY);
+    assert(memory.pool_total_pages==host_physmem_stats().total&&memory.pool_free_pages==host_physmem_stats().free);
+    for(unsigned i=0;i<4;i++)assert(!memory.reserved[i]);
+    for(unsigned i=1;i<4;i++)assert(!memory.regions[i].offset&&!memory.regions[i].bytes&&!memory.regions[i].purpose&&!memory.regions[i].protection);
+    for(unsigned i=64+sizeof memory;i<64+sizeof memory+16;i++)assert(user_memory[i]==0xa5);
     memset(user_memory,0xa5,sizeof(user_memory));
     assert(invoke(BOS_CALL_ABI_QUERY,64,sizeof info,BOS_ABI_MAJOR,0,0)==BOS_OK);
     memcpy(&info,user_memory+64,sizeof info);
-    assert(info.struct_size==96&&info.abi_major==1&&info.abi_minor==0&&info.features==15);
+    assert(info.struct_size==96&&info.abi_major==1&&info.abi_minor==1&&info.features==(15|BOS_FEATURE_MEMORY_INFO));
     assert(info.context==BOS_CONTEXT_DESKTOP_TASK&&info.process==current_task->owner_id);
     assert(info.user_bytes==65536&&info.image_bytes==49152&&info.stack_reserved_bytes==16384);
     assert(info.file_bytes==2097152&&info.replace_bytes==32768&&info.file_chunk_bytes==4096);
@@ -81,12 +94,16 @@ static void query(void){
     stub_available=0;stub_limit=16383;
     assert(invoke(BOS_CALL_ABI_QUERY,64,sizeof info,1,0,0)==BOS_OK);
     memcpy(&info,user_memory+64,sizeof info);
-    assert(info.features==(BOS_FEATURE_VERSIONED_FILES|BOS_FEATURE_PROCESS_ID));
+    assert(info.features==(BOS_FEATURE_VERSIONED_FILES|BOS_FEATURE_PROCESS_ID|BOS_FEATURE_MEMORY_INFO));
     assert(!info.operations_total&&!info.operations_per_process&&!info.wait_milliseconds&&info.replace_bytes==16383);
     current_task=0;synchronous_owner=allocate_owner();stub_available=1;
     assert(invoke(BOS_CALL_ABI_QUERY,64,sizeof info,1,0,0)==BOS_OK);
     memcpy(&info,user_memory+64,sizeof info);
-    assert(info.context==BOS_CONTEXT_LEGACY_EXEC&&info.process==synchronous_owner&&info.features==9);
+    assert(info.context==BOS_CONTEXT_LEGACY_EXEC&&info.process==synchronous_owner&&info.features==(9|BOS_FEATURE_MEMORY_INFO));
+    assert(invoke(BOS_CALL_MEMORY_INFO,64,sizeof memory,1,0,0)==BOS_OK);
+    memcpy(&memory,user_memory+64,sizeof memory);
+    assert(memory.format==BOS_EXECUTABLE_BEX1&&memory.mapped_pages==16);
+    assert(!memory.owned_pages&&!memory.table_pages&&!memory.policy_pages&&memory.region_count==1);
     assert(invoke(BOS_CALL_SYNC_BEGIN,0,0,0,0,0)==BOS_E_UNSUPPORTED);
     assert(invoke(BOS_CALL_SYNC,0,0,0,0,0)==0&&legacy_syncs==1);
     assert(invoke(999,0,0,0,0,0)==-1);

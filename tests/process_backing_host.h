@@ -64,6 +64,13 @@ static void host_physmem_copy(void *to,const void *from,unsigned bytes){
 static void host_physmem_destroy(void){
     for(unsigned pfn=0;pfn<PHYS_PAGE_COUNT;pfn++)free(backing_contents[pfn]);
 }
+static uint32_t *space_frame_pointer(uint32_t frame){
+    return host_physmem_pointer((const void *)(uintptr_t)frame,PHYS_PAGE_BYTES);
+}
+static int host_stats(PhysmemStats *out){return physmem_core_stats(&backing_core,out);}
+static int host_release_owner(BosHandle owner){return physmem_core_release_owner(&backing_core,owner);}
+#define physmem_stats host_stats
+#define physmem_release_owner host_release_owner
 #define physmem_alloc host_physmem_alloc
 #define physmem_release host_physmem_release
 #endif

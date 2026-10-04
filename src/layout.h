@@ -57,6 +57,7 @@
 /* Separate inactive kernel root. Both compatibility pages retain their layout. */
 #define KERNEL_DIRECTORY_BASE 0xF02000
 #define USER_BASE 0x1000000
+#define USER_DIRECTORY_INDEX 4
 #define USER_CAPACITY 0x10000
 /* The compatibility page directory replaces this entire 4 MiB PDE. Unused
  * addresses are not kernel identity mappings, so exclude every physical alias. */

@@ -30,14 +30,14 @@ def run_contexts(build,work,app,old_build=None):
         session.text('start /Programs/platform.bex');session.key('ret');session.key('alt-ret')
         session.until(lambda o:o['page']==0,'platform app on floppy')
         caps=session.page(1);limits=session.page(2)
-        assert caps['features']==9 and caps['context']==2 and caps['file_bytes']==16383
+        assert (caps['features']&15)==9 and caps['context']==2 and caps['file_bytes']==16383
         assert caps['replace_bytes']==16383 and caps['user_bytes']==65536 and caps['image_bytes']==49152
         assert limits['operations_per_process']==limits['operations_total']==limits['wait_ms']==0
         session.page(0);session.key('s')
         unsupported=session.until(lambda o:o['sync_result']==-1000,'floppy async reports unsupported')[0]
         session.key('q');session.text('exec /Programs/platform.bex');session.key('ret')
         legacy=session.until(lambda o:o['page']==1 and o['context']==1,'legacy exec truthful capability query')[0]
-        assert legacy['features']==9 and legacy['process']!=caps['process'] and legacy['slot']==0
+        assert (legacy['features']&15)==9 and legacy['process']!=caps['process'] and legacy['slot']==0
         result.update(floppy_task=caps,floppy_limits=limits,floppy_async=unsupported,floppy_exec=legacy)
         assert 'PANIC:' not in session.log.read_text()
     result['floppy_sha256']=sha(image.read_bytes())

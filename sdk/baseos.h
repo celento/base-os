@@ -75,6 +75,9 @@ static inline int bos_argument(char *out,unsigned capacity) {
 static inline int bos_abi_query(BosAbiInfo *out,unsigned capacity) {
     return bos_call(BOS_CALL_ABI_QUERY,(unsigned)out,capacity,BOS_ABI_MAJOR,0,0);
 }
+static inline int bos_memory_info(BosMemoryInfo *out,unsigned capacity) {
+    return bos_call(BOS_CALL_MEMORY_INFO,(unsigned)out,capacity,BOS_MEMORY_INFO_VERSION,0,0);
+}
 /* Task + asynchronous IDE only. Begin reserves an owned completion without
  * doing whole-operation I/O. A handle remains valid until release or exit.
  * Releasing it abandons this receipt, never cancels somebody else's save. */

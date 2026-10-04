@@ -2,6 +2,13 @@
 #define PROGRAM_H
 #include <stdint.h>
 #include "address_space.h"
+#include "executable.h"
+/* Staged loader gate. Enabled only in explicitly identified verification builds
+ * until ordinary compatibility/private-space runtime gates have passed. */
+#ifndef BASEOS_BEX2_ENABLED
+#define BASEOS_BEX2_ENABLED 0
+#endif
+#define PROCESS_PRIVATE_PAGE_LIMIT 1024u
 /* Callbacks operate only on the owning terminal's bounded canvas/output. */
 #define PROCESS_IMAGE_LIMIT 49152u
 #define PROCESS_FILE_CHUNK_MAX 4096u
@@ -60,7 +67,10 @@ typedef struct {
 /* Private creation result: backing capacity/readiness unavailable. The public
  * BEX1 syscall ABI is unchanged. Creation failure leaves out_process untouched. */
 #define PROCESS_CREATE_MEMORY (-3)
-/* Creation is not runnable. Successful desktop creation owns 16 zeroed pages. */
+#define PROCESS_CREATE_UNSUPPORTED (-5)
+#define PROCESS_CREATE_LAYOUT (-6)
+/* Creation is not runnable. BEX1 owns16 backing pages; enabled BEX2 owns its
+ * complete declared commitment plus a private directory/table before publish. */
 int process_create(const void *file,unsigned bytes,const char *argument,
                    unsigned argument_length,ProcessHandle *out_process);
 int process_bind(ProcessHandle process,const ProcessIO *io);

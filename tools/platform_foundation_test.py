@@ -244,8 +244,8 @@ def run_profile(build,work,profile,app,seed,timeout,staged_default=False):
             time.sleep(.01)
         session.launch('terminal');a=session.start_client();aid=a['process']
         caps=session.page(1);limits=session.page(2);session.page(0)
-        assert caps['major']==1 and caps['minor']==0 and caps['struct_size']==96
-        assert caps['features']==15 and caps['context']==2 and caps['user_bytes']==65536 and caps['image_bytes']==49152
+        assert caps['major']==1 and caps['minor']>=0 and caps['struct_size']==96
+        assert (caps['features']&15)==15 and caps['context']==2 and caps['user_bytes']==65536 and caps['image_bytes']==49152
         assert caps['stack_bytes']==16384 and caps['chunk_bytes']==4096 and caps['replace_bytes']==32768
         assert caps['file_bytes']==data_layout(profile).file_limit
         assert limits['hz']==70 and limits['wait_ms']==60000 and limits['operations_per_process']>0

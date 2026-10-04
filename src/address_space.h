@@ -1,6 +1,7 @@
 #ifndef ADDRESS_SPACE_H
 #define ADDRESS_SPACE_H
 #include <stdint.h>
+#include "executable.h"
 
 /* Pure construction/inspection helpers; no hardware access or allocation.
  * Offsets are relative to the native aperture, never physical addresses. */
@@ -26,5 +27,20 @@ static inline int address_space_span(const uint32_t *table,uint32_t extent,
     for(unsigned page=first;page<=last;page++)
         if((table[page]&required)!=required)return 0;
     return 1;
+}
+/* plan is parser-validated and frames contains exactly mapped_pages uniquely
+ * owned, zeroed physical pages. Never use this for a partially validated plan. */
+static inline void address_space_tables(uint32_t directory[1024],uint32_t table[1024],
+                                        uint32_t aperture_index,uint32_t table_frame,
+                                        const ExecutablePlan *plan,const uint32_t *frames) {
+    for(unsigned i=0;i<1024;i++){directory[i]=(i<<22)|0x83;table[i]=0;}
+    directory[aperture_index]=table_frame|7u;
+    const ExecutableRegion *regions[4]={&plan->text,&plan->data,&plan->workspace,&plan->stack};
+    unsigned frame=0;
+    for(unsigned r=0;r<4;r++){
+        unsigned first=regions[r]->offset/ADDRESS_PAGE_BYTES;
+        for(unsigned page=0;page<regions[r]->pages;page++)
+            table[first+page]=frames[frame++]|(r?7u:5u);
+    }
 }
 #endif
