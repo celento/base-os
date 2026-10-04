@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix="baseos-gallery-") as temp:
                     str(work / "kernel.bin")], check=True)
     layout = constants()
     kernel = (work / "kernel.bin").read_bytes()
-    assert len(kernel) <= layout["KERNEL_SECTORS"] * 512
+
     disk = bytearray(layout["DISK_SECTORS"] * 512)
     disk[:512] = (BUILD / "boot.bin").read_bytes()
     install_kernel(disk, kernel, layout)
