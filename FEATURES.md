@@ -263,7 +263,12 @@ desktop icon, launcher and `.bsh`/`.csv` files. Its formula bar preserves source
 text while cells show calculated values or explicit errors. Arithmetic, A1
 references and SUM/AVG/MIN/MAX/COUNT work with three-decimal fixed-point values.
 Range copy/cut/paste, four-operation undo/redo, keyboard/mouse selection, address
-jumps and scrolling fit the 800 x 600 desktop and a 420 x 260 minimum client.
+jumps and scrolling fit the 800 x 600 desktop and a 360 x 260 minimum client.
+
+General/two-decimal/currency/percent formats and 48..320-pixel column widths
+apply to selected ranges with undo/redo. Values stay exact; an over-wide numeric
+result shows ### rather than clipped digits. Native BSH1 v2 retains formats and
+widths, including formatted empty cells; default sheets still emit legacy v1.
 
 Native BSH1 files retain formulas and kinds. CSV imports create unsaved native
 copies; CSV exports calculated values separately. Existing unrelated filenames,
