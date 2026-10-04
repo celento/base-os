@@ -379,6 +379,9 @@ def launch_files(session, name):
 
 def toggle_output(session, window):
     session.click(window[0]+40, window[1]+48)
+    # Cursor tail at the control covers the first Output row; preserve exact
+    # glyph checks by moving it outside the client before taking evidence.
+    session.move(1275, 670)
 
 
 def pointer_stroke(session, evidence, state, label):

@@ -49,6 +49,11 @@ class NativeWindowCollectorTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             collector.reconstruct(np.zeros((200, 300, 3), dtype=np.uint8), viewport, (320, 200))
 
+    def test_output_toggle_leaves_log_pixels_unobscured(self):
+        session=mock.Mock()
+        collector.toggle_output(session,(2,38,1276,636))
+        self.assertEqual(session.method_calls,[mock.call.click(42,86),mock.call.move(1275,670)])
+
     def test_exact_shell_font_diagnostic_match(self):
         font = collector.ShellFont(); screen = np.full((130, 640, 3), 32, dtype=np.uint8)
         text = 'WINDOW LOG ROW 63'; mask = font.bitmap(text)
