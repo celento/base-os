@@ -14,7 +14,7 @@ import tempfile
 
 from elf_debug import DebugInfo
 from video_input_test import Observations
-from volume import DATA_LAYOUT, commit, load, resolve
+from volume import DATA_LAYOUT, data_layout, commit, load, resolve
 from writer_input_test import WriterSession, WriterCheck, fixture
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -134,7 +134,8 @@ class SheetCheck(WriterCheck):
         self.s.wait(lambda: self.o.integer('name_dlg') == 0 and self.o.integer('fs_touched') == 0, 'native save completed')
 
 
-def run(build):
+def run(build, profile="default"):
+    machine = ["-m", "128M" if profile == "large" else "64M"]
     work = pathlib.Path(tempfile.mkdtemp(prefix='baseos-sheet-input-data-'))
     saved = native([(0, 2, '100'), (1, 3, '=A1*2'), (2, 1, 'guarded')])
     changed = native([(0, 2, '200'), (1, 3, '=A1*2'), (2, 1, 'guarded')])
@@ -145,9 +146,9 @@ def run(build):
     app = work / 'change.bex'
     subprocess.run([sys.executable, str(ROOT / 'tools/build_app.py'), str(source), str(app)], check=True)
     csv = b'Name,Amount,Note\r\n"comma, quote """,12.500,"line1\nline2"\r\n=2+3,007,last\r\n'
-    disk = fixture(work, [('source.bsh', saved), ('import.csv', csv), ('change.bex', app.read_bytes())])
+    disk = fixture(work, [('source.bsh', saved), ('import.csv', csv), ('change.bex', app.read_bytes())], profile)
     pictures = []
-    with SheetSession(build, 'sheet-input', extra=['-drive', f'file={disk},format=raw,index=0,if=ide']) as session:
+    with SheetSession(build, 'sheet-input', extra=machine + ['-drive', f'file={disk},format=raw,index=0,if=ide']) as session:
         print(session.directory, flush=True); session.boot(); check = SheetCheck(session, build)
         session.launch('settings'); session.key('1'); session.key('ret'); session.key('ctrl-w')
         session.wait(lambda: check.o.integer('fb_w') == 800 and check.o.integer('fb_h') == 600, 'minimum supported display')
@@ -250,7 +251,7 @@ def run(build):
                 records = decode(nodes[draft_id]['data']); records[0] = (2, b'300')
                 nodes[draft_id]['data'] = native([(i, k, text) for i, (k, text) in records.items()])
             commit(target, baseline, slot, generation, nodes)
-        with SheetSession(build, 'sheet-recovery-' + mode, extra=['-drive', f'file={target},format=raw,index=0,if=ide']) as session:
+        with SheetSession(build, 'sheet-recovery-' + mode, extra=machine + ['-drive', f'file={target},format=raw,index=0,if=ide']) as session:
             print(session.directory, flush=True); session.boot(); check = SheetCheck(session, build)
             check.expect(28, 'Pending recovery', 1)
             before = contents(target, '/Documents/source.bsh')
@@ -265,9 +266,9 @@ def run(build):
                 assert contents(target, '/Documents/source.bsh') == before
             pictures.append(str(session.screenshot('spreadsheet-recovery-' + mode + '.png')))
             print('PASS: recovery ' + mode, flush=True)
-    unknown = work / 'unknown.img'; unknown.write_bytes(b'Ordinary unknown disk'.ljust(DATA_LAYOUT.sectors * 512, b'\0'))
+    unknown = work / 'unknown.img'; unknown.write_bytes(b'Ordinary unknown disk'.ljust(data_layout(profile).sectors * 512, b'\0'))
     digest = hashlib.sha256(unknown.read_bytes()).hexdigest()
-    with SheetSession(build, 'sheet-readonly', extra=['-drive', f'file={unknown},format=raw,index=0,if=ide']) as session:
+    with SheetSession(build, 'sheet-readonly', extra=machine + ['-drive', f'file={unknown},format=raw,index=0,if=ide']) as session:
         print(session.directory, flush=True); session.boot(); check = SheetCheck(session, build)
         session.launch('spreadsheet'); session.text('Do not lose this'); session.key('ctrl-w'); check.modal(); check.choose('save'); check.name('retained.bsh')
         session.wait(lambda: check.o.integer('name_failed') == 1, 'read-only failed sync reported')
@@ -280,7 +281,7 @@ def run(build):
         assert session.process.poll() is None and check.owner()['open']; check.expect(0, 'Do not lose this', 1)
         pictures.append(str(session.screenshot('spreadsheet-readonly-save.png')))
     assert hashlib.sha256(unknown.read_bytes()).hexdigest() == digest
-    result = dict(passed=True, disk=str(disk), screenshots=pictures,
+    result = dict(passed=True, profile=profile, disk=str(disk), screenshots=pictures,
                   checks=['production PS/2 editing/cancel/formulas/range clipboard/undo', 'exact native and quoted CSV bytes',
                           'New/Open/Close guards and rejected names', '800x600 and minimum window', 'live source conflict',
                           'pending edit paired recovery across four real reboots', 'read-only save and Shutdown retain work and disk'])
@@ -289,4 +290,6 @@ def run(build):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__); parser.add_argument('build', type=pathlib.Path)
-    run(parser.parse_args().build.resolve())
+    parser.add_argument('--profile', choices=('default', 'large'), default='default')
+    args = parser.parse_args()
+    run(args.build.resolve(), args.profile)

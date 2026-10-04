@@ -14,7 +14,7 @@ import zlib
 from elf_debug import DebugInfo
 from init_data import initialize
 from video_input_test import Observations, ProductionSession
-from volume import DATA_LAYOUT, MAGIC, load, resolve
+from volume import DATA_LAYOUT, MAGIC, data_layout, load, resolve
 
 WRITER = 22
 
@@ -37,9 +37,10 @@ def decode_native(data):
                 paragraph=data[17 + count * 2:])
 
 
-def fixture(directory, files):
+def fixture(directory, files, profile="default"):
+    layout = data_layout(profile)
     disk = directory / 'writer-data.img'
-    assert initialize(disk)
+    assert initialize(disk, profile=profile)
     data = bytearray(disk.read_bytes())
     records = [(0, -1, 1, '', b''), (1, 0, 1, 'Documents', b'')]
     records += [(i + 2, 1, 0, name, content) for i, (name, content) in enumerate(files)]
@@ -47,9 +48,9 @@ def fixture(directory, files):
     for ident, parent, is_dir, name, content in records:
         payload += struct.pack('<HhBBHI24sI', ident, parent, is_dir, 0, 0,
                                len(content), name.encode(), 0) + content
-    header = struct.pack('<6I', MAGIC, 4, len(records), len(payload), zlib.crc32(payload), 1)
+    header = struct.pack('<6I', MAGIC, layout.version, len(records), len(payload), zlib.crc32(payload), 1)
     header += struct.pack('<I', zlib.crc32(header))
-    start = DATA_LAYOUT.lbas[0] * 512
+    start = layout.lbas[0] * 512
     data[start:start + 512] = header.ljust(512, b'\0')
     data[start + 512:start + 512 + len(payload)] = payload
     assert len(load(data)[2]) == len(records)
@@ -181,13 +182,14 @@ class WriterCheck:
         self.pick(ident)
 
 
-def run(build):
+def run(build, profile="default"):
+    machine = ["-m", "128M" if profile == "large" else "64M"]
     work = pathlib.Path(tempfile.mkdtemp(prefix='baseos-writer-input-data-'))
     disk = fixture(work, [('import.txt', b'Windows line one\r\nSecond line\r\n'),
                           ('other.bwr', native('Another saved document.')),
-                          ('maximum.txt', b'x' * 32768)])
+                          ('maximum.txt', b'x' * 32768)], profile)
     evidence = []
-    with WriterSession(build, 'writer-input', extra=['-drive', f'file={disk},format=raw,index=0,if=ide']) as session:
+    with WriterSession(build, 'writer-input', extra=machine + ['-drive', f'file={disk},format=raw,index=0,if=ide']) as session:
         print(session.directory, flush=True)
         session.boot()
         check = WriterCheck(session, build)
@@ -270,7 +272,7 @@ def run(build):
         before = check.o.integer('redraw_count')
         session.key('alt-tab'); session.key('alt-tab')
         assert check.o.integer('redraw_count') > before
-    with WriterSession(build, 'writer-recovery', extra=['-drive', f'file={disk},format=raw,index=0,if=ide']) as session:
+    with WriterSession(build, 'writer-recovery', extra=machine + ['-drive', f'file={disk},format=raw,index=0,if=ide']) as session:
         print(session.directory, flush=True)
         session.boot(); check = WriterCheck(session, build)
         assert check.content() == recovery and check.document()['caret'] == caret
@@ -280,7 +282,7 @@ def run(build):
     nodes = load(disk.read_bytes())[2]
     assert nodes[resolve(nodes, '/Documents/import.txt')]['data'] == b'Windows line one\r\nSecond line\r\n'
     assert decode_native(nodes[resolve(nodes, '/Documents/maximum.bwr')]['data']) == recovery
-    result = {'passed': True, 'disk': str(disk), 'screenshots': evidence,
+    result = {'passed': True, 'profile': profile, 'disk': str(disk), 'screenshots': evidence,
               'checks': ['minimum-resolution styling', 'native save/reopen', 'separate RTF export',
                          'rich clipboard', 'undo/redo', 'New/Close cancellation', 'discard stays discarded',
                          'CRLF import copy', '32768-byte exact cap', 'styled maximum-document recovery']}
@@ -291,4 +293,6 @@ def run(build):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('build', type=pathlib.Path)
-    run(parser.parse_args().build.resolve())
+    parser.add_argument('--profile', choices=('default', 'large'), default='default')
+    args = parser.parse_args()
+    run(args.build.resolve(), args.profile)
