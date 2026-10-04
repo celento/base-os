@@ -4,10 +4,23 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import sys
 import unittest
 from test_editor_binding import function
 ROOT=Path(__file__).resolve().parents[1]
 class NativeWindowShellTests(unittest.TestCase):
+    def test_monitor_collector_control_geometry(self):
+        sys.path.insert(0,str(ROOT/'tools'))
+        from native_window_input_test import ShellFont
+        from native_window_shell_input_test import monitor_layout
+        font=ShellFont()
+        for window in ((2,38,1276,636),(100,70,520,472),(20,50,900,650)):
+            x,y,w,h=window
+            points=monitor_layout(window,font)
+            for px,py in points['tabs']+[points['show'],points['stop'],points['close']]:
+                self.assertTrue(x<px<x+w and y+32<py<y+h)
+            self.assertLess(points['show'][0],points['stop'][0])
+            self.assertEqual(points['stop'][1]+42,y+160)
     def test_actual_shell_helpers(self):
         source=(ROOT/'src/kernel.c').read_text()
         names=('native_output_rows','native_output_columns','native_output_total',
