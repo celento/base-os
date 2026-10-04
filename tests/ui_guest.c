@@ -1,5 +1,7 @@
+#ifndef BASEOS_UI_SHARED_TEST
 #define FEATURE_TEST
 #include "../src/kernel.c"
+#endif
 static void check_ui(int ok,const char *why){if(!ok){platform_log("UI-FAIL: ");panic(why);}}
 static void type_ui(const char *text){while(*text){key_sc=0;key_char=*text++;handle_key();}}
 static void command_ui(const char *text){while(*text)term_char(*text++);term_enter();}
