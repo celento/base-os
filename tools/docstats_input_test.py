@@ -38,10 +38,7 @@ class TerminalCheck:
         return 'Ready. R reloads, S saves a report, Q exits.' in self.terminal(slot)['lines']
 
     def assert_canvas(self, window, width, height):
-        terminal = self.terminal(window['slot'])
-        assert (terminal['canvas_width'], terminal['canvas_height']) == (width, height)
         self.ui.move(self.ui.o.integer('fb_w') - 24, self.ui.o.integer('fb_h') - 65)
-        time.sleep(.3)
         target_h = 400 if width > 160 and window['h'] > 550 else 200 if window['h'] > 360 else 100
         available_h = window['h'] - 32 - 2 - 24 - 2 * 15 - 8
         target_h = min(target_h, available_h)
@@ -50,12 +47,21 @@ class TerminalCheck:
         if target_w > available_w:
             target_w = available_w; target_h = height * target_w // width
         screen_w, screen_h = self.ui.o.integer('fb_w'), self.ui.o.integer('fb_h')
-        pixels = self.s.memory(self.s.layout['FB_BASE'], screen_w * screen_h)
         ax, ay = window['x'] + 13, window['y'] + 45
-        for y in range(target_h):
-            row = terminal['canvas'][(y * height // target_h) * width:((y * height // target_h) + 1) * width]
-            expected = bytes(row[x * width // target_w] for x in range(target_w))
-            assert pixels[(ay + y) * screen_w + ax:(ay + y) * screen_w + ax + target_w] == expected, (y, target_w, target_h)
+        def presented():
+            terminal = self.terminal(window['slot'])
+            if (terminal['canvas_width'], terminal['canvas_height']) != (width, height):
+                return False
+            # The backbuffer may be midway through repaint. Observe the last
+            # presented indexed pixels after the app has settled instead.
+            pixels = self.s.memory(self.s.layout['PRESENT_BASE'], screen_w * screen_h)
+            for y in range(target_h):
+                row = terminal['canvas'][(y * height // target_h) * width:((y * height // target_h) + 1) * width]
+                expected = bytes(row[x * width // target_w] for x in range(target_w))
+                if pixels[(ay + y) * screen_w + ax:(ay + y) * screen_w + ax + target_w] != expected:
+                    return False
+            return True
+        self.s.wait(presented, 'complete native canvas is presented pixel-for-pixel', 20)
         return target_w, target_h
 
 
@@ -73,7 +79,9 @@ def run(build):
         session.wait(lambda: check.ready(first['slot']), 'first DocStats stream completes')
         assert check.assert_canvas(check.front(), 320, 200) == (320, 200)
         captures.append(str(session.screenshot('docstats-native-canvas.png')))
-        session.key('alt-ret'); assert check.assert_canvas(check.front(), 320, 200) == (640, 400)
+        session.key('alt-ret')
+        session.wait(lambda: check.front()['maximized'], 'Terminal maximized')
+        assert check.assert_canvas(check.front(), 320, 200) == (640, 400)
         captures.append(str(session.screenshot('docstats-maximized.png')))
         for index in range(2):
             window = check.front(); slot = window['slot']; report = f'/Documents/stats-{slot + 1}.txt'
@@ -97,10 +105,15 @@ def run(build):
         session.key('ctrl-w')
         session.key('q')
         session.wait(lambda: 'Native task finished.' in check.terminal(first['slot'])['lines'], 'DocStats returns to shell')
-        session.text('start /Programs/counter.bex'); session.key('ret'); time.sleep(.4)
+        session.text('start /Programs/counter.bex'); session.key('ret')
+        session.wait(lambda: 'Counter: +/- changes by 10; Space pauses; S saves.' in check.terminal(first['slot'])['lines'],
+                     'legacy Counter initialized')
+        finished = check.terminal(first['slot'])['lines'].count('Native task finished.')
+        session.key('q')
+        session.wait(lambda: check.terminal(first['slot'])['lines'].count('Native task finished.') > finished,
+                     'Counter stopped normally before static pixel comparison')
         check.assert_canvas(check.front(), 160, 100)
         captures.append(str(session.screenshot('docstats-legacy-canvas-restored.png')))
-        session.key('q')
         session.wait(lambda: check.ui.o.integer('fs_touched') == 0, 'final disk synchronized')
     with WriterSession(build, 'docstats-reboot', extra=['-drive', f'file={disk},format=raw,index=0,if=ide']) as session:
         session.boot()
