@@ -3,7 +3,7 @@
 #include "sheet_codec.h"
 #define SPREADSHEET_W 720
 #define SPREADSHEET_H 520
-#define SPREADSHEET_MIN_W 420
+#define SPREADSHEET_MIN_W 360
 #define SPREADSHEET_MIN_H 260
 #define SPREADSHEET_MOD_CTRL 1
 #define SPREADSHEET_MOD_SHIFT 2
