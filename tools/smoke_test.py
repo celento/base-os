@@ -12,6 +12,7 @@ import tempfile
 import time
 import zlib
 from layout import constants
+from update_image import install_kernel, kernel_offset
 
 C = constants()
 
@@ -100,7 +101,7 @@ def main(build, keep):
         disk = bytearray(C['DISK_SECTORS'] * 512)
         disk[:512] = (build / 'boot.bin').read_bytes()
         kernel = (build / 'kernel.bin').read_bytes()
-        disk[512:512 + len(kernel)] = kernel
+        install_kernel(disk, kernel, C)
         image = directory / 'roundtrip.img'; image.write_bytes(disk)
         run(image, directory, 'fresh', 'DESKTOP', ticks_address=symbols['ticks'])
         assert valid_slots(image)
@@ -114,7 +115,7 @@ def main(build, keep):
             ('general-protection', b'\x66\xb8\xf8\xff\x8e\xd8', '0000000D'),
         ):
             patched = bytearray(disk)
-            offset = 512 + symbols['kmain'] - C['KERNEL_LOAD_ADDR']
+            offset = kernel_offset(symbols['kmain'] - C['KERNEL_LOAD_ADDR'], C)
             patched[offset:offset + len(code)] = code
             target = directory / f'{label}.img'; target.write_bytes(patched)
             text = run(target, directory, label, 'PANIC: CPU exception')
@@ -138,8 +139,7 @@ def main(build, keep):
         poisoned = bytearray(disk)
         data = (directory / 'dirty.bin').read_bytes()
         assert len(data) <= C['KERNEL_SECTORS'] * 512
-        poisoned[512:512 + C['KERNEL_SECTORS'] * 512] = bytes(C['KERNEL_SECTORS'] * 512)
-        poisoned[512:512 + len(data)] = data
+        install_kernel(poisoned, data, C)
         target = directory / 'dirty-bss.img'; target.write_bytes(poisoned)
         run(target, directory, 'dirty-bss', 'DESKTOP')
         # Exercise multi-track DMA writes and both snapshot locations in QEMU.
@@ -159,7 +159,7 @@ def main(build, keep):
         storage_disk = bytearray(disk)
         data = (directory / 'storage.bin').read_bytes()
         assert len(data) <= C['KERNEL_SECTORS'] * 512
-        storage_disk[512:512 + len(data)] = data
+        install_kernel(storage_disk, data, C)
         target = directory / 'storage.img'; target.write_bytes(storage_disk)
         run(target, directory, 'multi-track-storage', 'HARDWARE-STORAGE-PASS', seconds=40)
         assert valid_slots(target) == [1, 2]

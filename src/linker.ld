@@ -24,6 +24,10 @@ SECTIONS {
     ASSERT(__load_end - KERNEL_LOAD_ADDR <= KERNEL_SECTORS * SECTOR_SIZE,
            "kernel exceeds boot loader reservation")
     ASSERT(__kernel_end <= STACK_BOTTOM, "kernel overlaps reserved stack")
-    ASSERT(1 + KERNEL_SECTORS <= FS_DISK_LBA, "kernel overlaps filesystem")
+    ASSERT(1 + KERNEL_PRIMARY_SECTORS <= FS_DISK_LBA, "kernel overlaps filesystem")
+    ASSERT(KERNEL_EXT_LBA >= FS_SECOND_LBA + FS_DISK_SECTORS,
+           "kernel extension overlaps filesystem")
+    ASSERT(KERNEL_EXT_LBA + KERNEL_SECTORS - KERNEL_PRIMARY_SECTORS <= DISK_SECTORS,
+           "kernel extension exceeds disk")
     /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
 }

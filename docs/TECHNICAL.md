@@ -10,7 +10,7 @@ The image updater extends an old 1.44 MB image to 2.88 MB without changing its e
 
 Saves alternate between two snapshots. A save writes and verifies the new payload, then commits a checksummed header. On boot, the kernel validates both snapshots and loads the newest complete one. It never automatically reformats a corrupt or unreadable disk. The desktop displays a disk warning if changes are only in RAM; Shutdown stays in the desktop if flushing fails. Automatic retries are five seconds apart and stop after three failures. Selecting Shutdown explicitly retries a failed flush, unless a mount or uncertain commit has protected the disk until reboot.
 
-A legacy 1.44 MB disk can still boot with the new loader, but is read-only for persistence until the build upgrades its size. Keep backups outside the running image for host disk failure or damage to both snapshots. The snapshot protocol protects against interrupted guest writes; it cannot guarantee durability if the host storage stack loses or reorders acknowledged writes after host power loss.
+The current split-extent loader requires a 2.88 MB floppy. The image updater upgrades legacy 1.44 MB disks before installing this loader, preserving both the existing volume data and an original-image backup. Keep backups outside the running image for host disk failure or damage to both snapshots. The snapshot protocol protects against interrupted guest writes; it cannot guarantee durability if the host storage stack loses or reorders acknowledged writes after host power loss.
 
 ## Supported machine
 
@@ -24,6 +24,7 @@ Built-in applications run cooperatively in the kernel. Loadable BEX1 programs ru
 make test
 make
 python3 tools/smoke_test.py build --keep
+python3 tools/extent_test.py build
 python3 tools/process_test.py build
 python3 tools/ui_test.py build
 python3 tools/input_test.py build
@@ -53,7 +54,7 @@ The QEMU suite creates disposable images and checks fresh boot, reboot, timer pr
 | `0x1400000` | cached background during dragging |
 | `0x1500000` | last-presented framebuffer mirror |
 
-Disk LBA 0 contains the loader. The kernel reservation starts at LBA 1 and ends before LBA 384. Snapshot slots start at LBAs 384 and 2784, each reserving 2400 sectors. All physical addresses, disk boundaries, and the kernel sector budget are defined in `src/layout.h` and checked by the linker, C assertions, and image builder.
+Disk LBA 0 contains the loader. The kernel uses LBAs 1–383 and the previously unused tail at LBAs 5184–5695, for 895 sectors total. The loader joins those extents in memory. Snapshot slots remain at LBAs 384 and 2784, each reserving 2400 sectors; their existing on-disk data is never relocated. The linker independently limits the complete kernel and BSS below the stack. All physical addresses, disk boundaries, and the kernel sector budget are defined in `src/layout.h` and checked by the linker, C assertions, and image builder.
 
 ## Palette
 

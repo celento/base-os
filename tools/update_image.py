@@ -24,16 +24,42 @@ def update(image, boot, kernel):
         _update(image, boot, kernel)
 
 
+def kernel_offset(offset, c=None):
+    """Map a byte offset in the linked kernel to its split disk extent."""
+    c = c or constants()
+    first = c['KERNEL_PRIMARY_SECTORS'] * c['SECTOR_SIZE']
+    if not 0 <= offset < c['KERNEL_SECTORS'] * c['SECTOR_SIZE']:
+        raise ValueError('kernel offset outside reservation')
+    return (c['SECTOR_SIZE'] + offset if offset < first else
+            c['KERNEL_EXT_LBA'] * c['SECTOR_SIZE'] + offset - first)
+
+
+def install_kernel(data, kernel, c=None):
+    """Install both code extents without touching either filesystem snapshot."""
+    c = c or constants()
+    sector = c['SECTOR_SIZE']
+    first = c['KERNEL_PRIMARY_SECTORS'] * sector
+    extra = (c['KERNEL_SECTORS'] - c['KERNEL_PRIMARY_SECTORS']) * sector
+    tail = c['KERNEL_EXT_LBA'] * sector
+    if (c['KERNEL_PRIMARY_SECTORS'] + 1 > c['FS_DISK_LBA'] or
+        c['FS_SECOND_LBA'] < c['FS_DISK_LBA'] + c['FS_DISK_SECTORS'] or
+        c['KERNEL_EXT_LBA'] < c['FS_SECOND_LBA'] + c['FS_DISK_SECTORS'] or
+        tail + extra > c['DISK_SECTORS'] * sector):
+        raise ValueError('invalid split kernel/filesystem layout')
+    if not kernel or len(kernel) > first + extra:
+        raise ValueError('kernel exceeds its loader reservation')
+    if len(data) != c['DISK_SECTORS'] * sector:
+        raise ValueError('disk has wrong size')
+    data[sector:sector + first] = bytes(first)
+    data[tail:tail + extra] = bytes(extra)
+    data[sector:sector + min(len(kernel), first)] = kernel[:first]
+    if len(kernel) > first:
+        data[tail:tail + len(kernel) - first] = kernel[first:]
+
+
 def _update(image, boot, kernel, old=None):
     c = constants()
     sector = c['SECTOR_SIZE']
-    boundary = c['FS_DISK_LBA'] * sector
-    if c['KERNEL_SECTORS'] + 1 > c['FS_DISK_LBA']:
-        raise ValueError('kernel reservation overlaps filesystem')
-    if c['FS_SECOND_LBA'] < c['FS_DISK_LBA'] + c['FS_DISK_SECTORS']:
-        raise ValueError('filesystem snapshots overlap')
-    if c['FS_SECOND_LBA'] + c['FS_DISK_SECTORS'] > c['DISK_SECTORS']:
-        raise ValueError('filesystem extends past disk')
     boot_data, kernel_data = boot.read_bytes(), kernel.read_bytes()
     if len(boot_data) != sector or boot_data[-2:] != b'\x55\xaa':
         raise ValueError('invalid boot sector')
@@ -43,9 +69,8 @@ def _update(image, boot, kernel, old=None):
         raise ValueError('unrecognized image size; refusing to overwrite it')
     data = bytearray(old or b'')
     data.extend(bytes(c['DISK_SECTORS'] * sector - len(data)))
-    data[:boundary] = bytes(boundary)
     data[:sector] = boot_data
-    data[sector:sector + len(kernel_data)] = kernel_data
+    install_kernel(data, kernel_data, c)
     image.parent.mkdir(parents=True, exist_ok=True)
     if old is not None:
         # One backup per distinct previous image, rather than unbounded copies
