@@ -314,7 +314,14 @@ int process_interrupt(uint32_t *r){
         r[7]=0;
     }
     else if(call==15)r[7]=(unsigned)file_call(call,a,b,c,d,0);
-    else if(call==16)r[7]=(unsigned)fs_sync();
+    else if(call==16){
+        /* The interrupt gate masks PIT ticks, but floppy motor delays need
+         * them. Ring-0 IRQ frames cannot preempt this syscall (see above). */
+        unsigned flags;
+        __asm__ volatile("pushfl; popl %0; sti":"=r"(flags)::"memory");
+        r[7]=(unsigned)fs_sync();
+        __asm__ volatile("pushl %0; popfl"::"r"(flags):"memory","cc");
+    }
     else r[7]=(unsigned)-1;
     return 1;
 }
