@@ -6841,7 +6841,9 @@ void kmain(void) {
             context_set(original);dirty=1;
         }
         if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
-        if(player_tick()&&find_open_kind(WK_PLAYER)>=0)dirty=1;
+        int player_update=player_tick();
+        int player_slot=find_open_kind(WK_PLAYER);
+        if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
         if(term_task_poll())dirty=1;
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
@@ -7013,12 +7015,25 @@ void kmain(void) {
         if(mouse_moved&&dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
         int moved = mouse_moved;
         mouse_moved = 0;
-        if (dirty || moved || !cursor_on) {
+        /* A frame update may touch only the unobscured player client. Menus,
+         * dialogs, moving windows and ordinary dirty state take the full path. */
+        int playback_only=player_update==PLAYER_VIDEO_FRAME&&player_slot>=0&&
+            !wins[player_slot].min&&player_slot==win_front()&&!name_dlg&&!open_dlg&&
+            !launcher_on&&open_menu<0&&!display_pending&&!saver_on&&
+            dragging_win<0&&resizing_win<0&&!fm_dragging;
+        if(player_update==PLAYER_VIDEO_FRAME&&player_slot>=0&&!wins[player_slot].min&&!playback_only)dirty=1;
+        if (dirty || playback_only || moved || !cursor_on) {
             int ox = cursor_sx, oy = cursor_sy, oon = cursor_on;
             cursor_restore();
-            if (dirty) {
-                render_desktop_frame();
-                draw_display_confirmation();
+            if (dirty || playback_only) {
+                if(dirty){
+                    render_desktop_frame();
+                    draw_display_confirmation();
+                }else{
+                    Win *w=&wins[player_slot];
+                    context_set(player_slot);
+                    player_draw_playback(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
+                }
                 redraw_count++;
                 dirty = 0;
                 cursor_save_draw();
