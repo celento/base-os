@@ -162,6 +162,16 @@ def compatibility(build, work, app):
             session.text(mode+' /Programs/hello-c.bex');session.key('ret')
             session.wait(lambda:hello_canvas(session.frame()[0]) is not None,'unchanged C hello canvas in '+mode)
             result['checks'].append('frozen hello-c '+mode+' exact canvas')
+        hello_position=hello_canvas(session.frame()[0]);assert hello_position
+        session.text('exec /Programs/hello.bex');session.key('ret')
+        def assembly_canvas():
+            pixels,_=session.frame();x,y,scale=hello_position
+            canvas=pixels[y:y+100*scale,x:x+160*scale]
+            mask=np.any(canvas!=0,axis=2);expected=np.zeros((100*scale,160*scale),dtype=bool)
+            expected[20*scale:21*scale,20*scale:21*scale]=True
+            return np.array_equal(mask,expected)
+        session.wait(assembly_canvas,'unchanged assembly hello exact plotted point')
+        result['checks'].append('frozen assembly hello legacy exec exact canvas')
         session.text('exec /Programs/notebook.bex');session.key('ret')
         session.wait(lambda:durable_contains(disk,'/Documents/sdk-note.txt',NOTE),'legacy notebook durable bytes',90)
         quiet(session)
@@ -187,7 +197,9 @@ def compatibility(build, work, app):
         session.key('spc');time.sleep(.2);paused=counter_canvas(session.frame()[0]);assert paused and paused['paused']
         session.key('equal');time.sleep(.2);changed=counter_canvas(session.frame('compatibility')[0]);assert changed['value']==(paused['value']+10)%10000
         result['checks']+=['frozen docstats exact durable report','frozen counter independent progress and PS/2 +10']
-        session.key('s');quiet(session)
+        session.key('s')
+        session.wait(lambda:durable_contains(disk,'/Documents/counter-1.txt',(str(changed['value'])+'\n').encode()),'frozen counter saves exact paused value',90)
+        quiet(session)
         session.key('q');session.key('ctrl-w');quiet(session)
         assert 'PANIC:' not in session.log.read_text()
     # Cold process replacement is an actual boot from saved media, never a
@@ -202,20 +214,30 @@ def compatibility(build, work, app):
 
 
 def operation_key(session, key, predicate, message, seconds=120):
+    before=session.until(lambda o:o['page']==0,'native client before '+key)[0]
     session.key(key)
-    return session.until(predicate,message,seconds=seconds)[0]
+    return session.until(lambda o:o['process']==before['process'] and
+                         o['keys']>before['keys'] and predicate(o),message,seconds=seconds)[0]
 
 
 def run_profile(build,work,profile,app,seed,timeout):
     disk,original,details=fixture(work,profile,app,seed)
     result=dict(profile=profile,ram_mib=128 if profile=='large' else 64,**details,checks=[],responses=[])
     with PlatformSession(build,'platform-'+profile,extra=qemu_args(disk,profile)) as session:
-        result['directory']=str(session.directory);session.boot();quiet(session,timeout)
+        result['directory']=str(session.directory)
+        print(profile+' evidence: '+str(session.directory),flush=True)
+        session.boot();quiet(session,timeout)
+        for _ in range(16):
+            session.command('input-send-event',{'events':[
+                {'type':'rel','data':{'axis':'x','value':-80}},
+                {'type':'rel','data':{'axis':'y','value':-80}}]})
+            time.sleep(.01)
         session.launch('terminal');a=session.start_client();aid=a['process']
         caps=session.page(1);limits=session.page(2);session.page(0)
         assert caps['major']==1 and caps['minor']==0 and caps['struct_size']==96
         assert caps['features']==15 and caps['context']==2 and caps['user_bytes']==65536 and caps['image_bytes']==49152
         assert caps['stack_bytes']==16384 and caps['chunk_bytes']==4096 and caps['replace_bytes']==32768
+        assert caps['file_bytes']==data_layout(profile).file_limit
         assert limits['hz']==70 and limits['wait_ms']==60000 and limits['operations_per_process']>0
         result.update(capabilities=caps,limits=limits);result['checks'].append('truthful bounded native capabilities')
         a=operation_key(session,'o',lambda o:o['file_result']==4096,'client A first-version read')
@@ -223,6 +245,7 @@ def run_profile(build,work,profile,app,seed,timeout):
         b=session.start_client();bid=b['process'];assert aid!=bid and a['slot']!=b['slot']
         b=operation_key(session,'o',lambda o:o['file_result']==4096,'client B same-version read')
         assert b['read_hash']==a['read_hash']
+        result['concurrent_readers']=dict(first=a,second=b)
         # Retry only the documented transient write-lease outcome.
         deadline=time.monotonic()+timeout
         while True:
@@ -230,10 +253,13 @@ def run_profile(build,work,profile,app,seed,timeout):
             if b['file_result']==0:break
             assert time.monotonic()<deadline,'write lease never released';time.sleep(.3)
         newer=b['revision'];assert newer!=a['revision']
+        result['newer_writer']=b
         session.focus(aid)
         a=operation_key(session,'r',lambda o:o['file_result']==CHANGED,'reader gets explicit CHANGED')
         assert a['read_hash']==fnv(b'A'*4096),'changed read must not replace accepted chunk'
+        result['reader_changed']=a
         a=operation_key(session,'x',lambda o:o['file_result']==CHANGED,'stale writer gets explicit CHANGED')
+        result['writer_conflict']=a
         result['checks'].append('two ordinary readers/writers reject changed chunks and lost update')
         # Reopen admits the current B version, then request its durability.
         a=operation_key(session,'o',lambda o:o['file_result']==4096,'reader reopens current version')
@@ -246,15 +272,20 @@ def run_profile(build,work,profile,app,seed,timeout):
         session.text('h'+f'{handle_a:08x}');session.key('ret')
         b=session.until(lambda o:o['foreign_result']==STALE,'other owner cannot consume first receipt')[0]
         assert b['sync_result']==1,'ownership checks must occur during a real pending commit'
+        result['nonowner_result']=b
         session.focus(aid);session.key('l')
         a=session.until(lambda o:o['operation']==0 and o['sync_result']==0,'release only first owner receipt')[0]
+        a=operation_key(session,'s',lambda o:o['sync_result']==1 and o['operation']!=0,'owner requests another receipt before normal close')
+        abandoned=a['operation'];assert abandoned!=handle_a
+        result['abandoned_pending']=a
         session.key('ctrl-w')
         session.focus(bid)
         b=session.until(lambda o:o['operation']==handle_b and o['sync_result']==1,'release/close leaves second save active')[0]
         c=session.start_client();cid=c['process'];assert cid not in (aid,bid)
         assert c['slot']==a['slot'],'ordinary closed Terminal slot was not reused'
-        session.text('h'+f'{handle_a:08x}');session.key('ret')
+        session.text('h'+f'{abandoned:08x}');session.key('ret')
         c=session.until(lambda o:o['foreign_result']==STALE,'reused slot cannot own old completion')[0]
+        result['reused_owner_result']=c
         result['checks'].append('owned receipts, release, close and reused-slot stale cleanup')
         # The frozen Counter is a third, independently scheduled old binary.
         session.key('ctrl-n');session.text('start /Programs/counter.bex');session.key('ret');session.key('alt-ret')
@@ -272,6 +303,22 @@ def run_profile(build,work,profile,app,seed,timeout):
         assert any('end_tick' not in job for job in snapshot_jobs(session.log.read_text())), 'counter response was outside pending save'
         result['counter_response']=dict(before=before,after=counter,input_to_visible_ms=(wall-sent)*1000)
         session.focus(bid)
+        before_mouse,before_pixels,_=session.observe()
+        assert before_mouse['sync_result']==1
+        sent_mouse=time.monotonic()
+        session.command('input-send-event',{'events':[
+            {'type':'rel','data':{'axis':'x','value':80}},
+            {'type':'rel','data':{'axis':'y','value':80}}]})
+        deadline=time.monotonic()+12
+        while time.monotonic()<deadline:
+            after_mouse,after_pixels,wall=session.observe()
+            changed=np.any(after_pixels!=before_pixels,axis=2)
+            old_count=int(changed[:24,:24].sum());new_count=int(changed[75:112,75:112].sum())
+            if old_count>3 and new_count>3:break
+            time.sleep(.01)
+        else:raise AssertionError('normal PS/2 pointer movement did not become visible during save')
+        assert after_mouse and after_mouse['sync_result']==1
+        result['mouse_response']=dict(input_to_visible_ms=(wall-sent_mouse)*1000,old_pixels=old_count,new_pixels=new_count)
         for i in range(3):
             prior=session.until(lambda o:o['page']==0,'owner visible')[0]
             if prior['sync_result']!=1:break
@@ -281,7 +328,9 @@ def run_profile(build,work,profile,app,seed,timeout):
         assert result['responses'] and result['responses'][0]['after']['sync_result']==1
         completed=session.until(lambda o:o['operation']==handle_b and o['sync_result']==0,'second owner receives durable completion',seconds=timeout,keep='durable')[0]
         assert completed['pending']>b['pending'] and completed['loops']>b['loops']
-        result['completion']=completed;result['checks'].append('real pending save preserves counter and ordinary PS/2 progress')
+        result['completion']=completed
+        result['completed_client_limits']=session.page(2);session.page(0)
+        result['checks'].append('real pending save preserves counter and ordinary PS/2 progress')
         session.focus(cid)
         c=operation_key(session,'s',lambda o:o['operation']!=0 and o['sync_result'] in (0,1),'new owner can save while another retains result')
         c=session.until(lambda o:o['sync_result']==0,'new owner completion',seconds=timeout)[0]
@@ -317,10 +366,11 @@ def main():
     parser.add_argument('--work',type=Path,required=True)
     parser.add_argument('--profile',choices=('default','large','both'),default='both')
     parser.add_argument('--seed',type=Path,help='Prior compatibility seed, skips compatibility boots')
+    parser.add_argument('--old-build',type=Path,help='Optional clean preplatform build for actual query fallback boot')
     parser.add_argument('--save-timeout',type=int,default=240)
     args=parser.parse_args();args.work.mkdir(parents=True,exist_ok=True)
     result=dict(passed=False,provenance=provenance(args.build),profiles=[],observation_scope='Only ordinary SDK apps, PS/2, published canvas, serial and stopped-disk decode; no guest memory, debugger, injected calls or faults')
-    for name in ('platform_foundation_test.py','platform_evidence.py'):
+    for name in ('platform_foundation_test.py','platform_evidence.py','platform_context_test.py'):
         shutil.copy2(ROOT/'tools'/name,args.work/name)
     shutil.copy2(ROOT/'tests/platform_client_app.c',args.work/'platform_client_app.c')
     try:
@@ -329,6 +379,8 @@ def main():
         if args.seed:seed=args.seed
         else:seed,result['compatibility']=compatibility(args.build,args.work/'compatibility',app)
         result['seed_sha256']=sha(seed.read_bytes())
+        from platform_context_test import run_contexts
+        result['contexts']=run_contexts(args.build,args.work/'contexts',app,args.old_build)
         profiles=('default','large') if args.profile=='both' else (args.profile,)
         for profile in profiles:
             result['profiles'].append(run_profile(args.build,args.work/profile,profile,app,seed,args.save_timeout))
