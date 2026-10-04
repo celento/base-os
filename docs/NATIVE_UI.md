@@ -180,3 +180,12 @@ Additional executed host gates:
 
 Production guest validation and final full-suite results are recorded separately
 once run; these host checks alone do not qualify the candidate for integration.
+
+## Qualified isolated candidate
+
+The exact runtime at `9e52fad` has now passed independent source review, all227
+host tests, 41 ordinary screenshot/offline assertions in each default/large
+profile, both existing production frame-publication profiles, and the legacy
+Files/search launch/save/Stop/exit gate. See [exact qualification evidence](NATIVE_UI_QUALIFICATION.md)
+for binary hashes, observed scope and limitations. This does not imply that the
+parent integration branch or an hourly package already ships the feature.
