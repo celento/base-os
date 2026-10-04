@@ -16,6 +16,8 @@ uint8_t app_accent, app_accent_dk, app_text, app_text_dim, app_chrome, app_chrom
 void kmemset(void *to, int byte, int count) { memset(to, byte, (size_t)count); }
 void kmemcpy(void *to, const void *from, int count) { memmove(to, from, (size_t)count); }
 void fmt_uint(char *out, unsigned number) { sprintf(out, "%u", number); }
+static unsigned progress_polls;
+void platform_poll(void) { progress_polls++; }
 static unsigned char back[800 * 600], linear[800 * 600 * 4];
 
 int main(int argc, char **argv) {
@@ -32,6 +34,7 @@ int main(int argc, char **argv) {
     assert(!image_viewer_key(0, '+'));
     assert(image_viewer_open(source, (unsigned)length, "landscape.png") == IMAGE_OK);
     assert(image_viewer_loaded());
+    assert(progress_polls > 10);
     assert(!strcmp(image_viewer_title(), "landscape.png"));
     unsigned count = viewer.width * viewer.height;
     unsigned char *owned = malloc(count); assert(owned);
@@ -65,6 +68,7 @@ int main(int argc, char **argv) {
     gfx_set_ramp(PAL_ACCENT, PAL_ACCENT_N, 0x00ff00, 0x0000ff); gfx_pal_commit();
     assert(!memcmp(owned, IMAGE_MEMORY, count));
     assert(image_viewer_open("plain text", 10, "notes.txt") == IMAGE_UNSUPPORTED);
+    assert(image_decode_set_poll_hook(NULL) == NULL);
     assert(!image_viewer_loaded() && strstr(image_viewer_status(), "Supported"));
     image_viewer_draw(30, 20, 360, 200);
     /* BOS1 bytes retain their original palette identity. */

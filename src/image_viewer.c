@@ -2,6 +2,7 @@
 #include "app.h"
 #include "image_viewer.h"
 #include "layout.h"
+#include "platform.h"
 
 /* The integration commit adds these to the shared E820-checked memory map. */
 #ifndef IMAGE_BASE
@@ -72,6 +73,50 @@ static uint8_t palette_color(unsigned red, unsigned green, unsigned blue) {
                      PAL_CUBE + ri * 25 + gi * 5 + bi);
 }
 
+/* Serpentine error diffusion preserves gradients and average photo colors in
+ * the 256-color desktop. The two small error rows live only during conversion,
+ * after decoding has returned, so they never overlap the decoder's stack use. */
+static void quantize(const ImageDecoded *image) {
+    int16_t rows[2][(IMAGE_MAX_DIMENSION + 2) * 3];
+    int16_t *current = rows[0], *next = rows[1];
+    unsigned row_entries = (image->width + 2) * 3;
+    for (unsigned i = 0; i < row_entries; i++) current[i] = 0;
+    for (unsigned y = 0; y < image->height; y++) {
+        if (!(y & 7)) platform_poll();
+        for (unsigned i = 0; i < row_entries; i++) next[i] = 0;
+        int direction = y & 1 ? -1 : 1;
+        int x = direction > 0 ? 0 : (int)image->width - 1;
+        for (unsigned step = 0; step < image->width; step++, x += direction) {
+            const uint8_t *source = image->pixels + (y * image->width + (unsigned)x) * image->channels;
+            unsigned rgb[3] = {source[0], source[0], source[0]}, alpha = 255;
+            if (image->channels >= 3) { rgb[1] = source[1]; rgb[2] = source[2]; }
+            if (image->channels == 2 || image->channels == 4) alpha = source[image->channels - 1];
+            unsigned at = ((unsigned)x + 1) * 3;
+            for (unsigned channel = 0; channel < 3; channel++) {
+                if (alpha != 255) {
+                    unsigned background = (((unsigned)x / 12 + y / 12) & 1) ? 208 : 232;
+                    rgb[channel] = (rgb[channel] * alpha + background * (255 - alpha) + 127) / 255;
+                }
+                int error = current[at + channel];
+                int adjusted = (int)rgb[channel] + (error + (error >= 0 ? 8 : -8)) / 16;
+                rgb[channel] = (unsigned)clamp(adjusted, 0, 255);
+            }
+            uint8_t index = palette_color(rgb[0], rgb[1], rgb[2]);
+            IMAGE_MEMORY[y * image->width + (unsigned)x] = index;
+            unsigned color = pal32[index];
+            for (unsigned channel = 0; channel < 3; channel++) {
+                int error = (int)rgb[channel] - (int)((color >> (16 - 8 * channel)) & 255);
+                int offset = (int)at + (int)channel;
+                current[offset + 3 * direction] += (int16_t)(7 * error);
+                next[offset - 3 * direction] += (int16_t)(3 * error);
+                next[offset] += (int16_t)(5 * error);
+                next[offset + 3 * direction] += (int16_t)error;
+            }
+        }
+        int16_t *swap = current; current = next; next = swap;
+    }
+}
+
 static void set_status(void) {
     if (!viewer.loaded) return;
     copy(viewer.status, sizeof viewer.status, image_format_name(viewer.format));
@@ -91,8 +136,10 @@ int image_viewer_open(const void *file, unsigned bytes, const char *name) {
     viewer.fit = 1; viewer.scale = 100;
     copy(viewer.title, sizeof viewer.title, name && *name ? name : "Image Viewer");
     ImageDecoded image;
+    ImagePollHook previous = image_decode_set_poll_hook(platform_poll);
     int error = image_decode(file, bytes, IMAGE_MEMORY + IMAGE_PIXELS_BYTES,
                              IMAGE_CAPACITY - IMAGE_PIXELS_BYTES, &image);
+    image_decode_set_poll_hook(previous);
     if (error != IMAGE_OK) {
         copy(viewer.status, sizeof viewer.status, image_error_string(error));
         return error;
@@ -100,24 +147,11 @@ int image_viewer_open(const void *file, unsigned bytes, const char *name) {
     unsigned count = image.width * image.height;
     uint8_t *destination = IMAGE_MEMORY;
     if (!image.channels) {
-        for (unsigned i = 0; i < count; i++) destination[i] = image.pixels[i];
-    } else {
-        const uint8_t *source = image.pixels;
-        for (unsigned y = 0; y < image.height; y++) {
-            for (unsigned x = 0; x < image.width; x++, source += image.channels) {
-                unsigned red = source[0], green = red, blue = red, alpha = 255;
-                if (image.channels >= 3) { green = source[1]; blue = source[2]; }
-                if (image.channels == 2 || image.channels == 4) alpha = source[image.channels - 1];
-                if (alpha != 255) {
-                    unsigned background = ((x / 12 + y / 12) & 1) ? 208 : 232;
-                    red = (red * alpha + background * (255 - alpha) + 127) / 255;
-                    green = (green * alpha + background * (255 - alpha) + 127) / 255;
-                    blue = (blue * alpha + background * (255 - alpha) + 127) / 255;
-                }
-                destination[y * image.width + x] = palette_color(red, green, blue);
-            }
+        for (unsigned i = 0; i < count; i++) {
+            if (!(i & 4095)) platform_poll();
+            destination[i] = image.pixels[i];
         }
-    }
+    } else quantize(&image);
     viewer.width = image.width; viewer.height = image.height; viewer.format = image.format;
     viewer.loaded = 1;
     set_status();

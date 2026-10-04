@@ -78,6 +78,14 @@ def main():
     picture = landscape()
     picture.save(out / 'landscape.png')
     picture.save(out / 'landscape.jpg', quality=91, subsampling=0)
+    maximum = picture.resize((1024, 768))
+    maximum.save(out / 'maximum.png')
+    maximum.save(out / 'maximum.jpg', quality=91, subsampling=0)
+    maximum.save(out / 'maximum_progressive.jpg', quality=91, progressive=True, subsampling=2)
+    maximum.transpose(Image.Transpose.ROTATE_90).save(out / 'portrait.png')
+    # These are valid ordinary files that exercise explicit product limits.
+    maximum.save(out / 'workspace_limit.jpg', quality=91, progressive=True, subsampling=0)
+    picture.resize((1025, 512)).save(out / 'dimension_limit.png')
     picture.resize((192, 108)).save(out / 'progressive.jpg', quality=91, progressive=True, subsampling=0)
     picture.resize((128, 72)).convert('L').save(out / 'grayscale.jpg', quality=91)
     small = picture.resize((96, 54))
@@ -85,11 +93,13 @@ def main():
     small.quantize(colors=32).save(out / 'palette.bmp')
     small.quantize(colors=32).save(out / 'palette.png')
     alpha = rgba_example(); alpha.save(out / 'transparent.png')
+    alpha.resize((1024, 768)).save(out / 'maximum_alpha.png')
     (out / 'interlaced.png').write_bytes(adam7(alpha.resize((71, 43))))
     alpha.convert('LA').save(out / 'gray_alpha.png')
     mono = Image.new('1', (31, 23)); md = ImageDraw.Draw(mono); md.rectangle((3, 4, 25, 18), fill=1); mono.save(out / 'monochrome.png')
     palette = small.quantize(colors=16)
     palette.save(out / 'animated.gif', save_all=True, append_images=[palette.transpose(Image.Transpose.FLIP_LEFT_RIGHT)], loop=0, duration=[100, 100])
+    picture.resize((1024, 512)).quantize(colors=32).save(out / 'large.gif')
     transparent = alpha.quantize(colors=63); transparent.save(out / 'transparent.gif', transparency=0)
     gray = Image.new('I;16', (53, 29)); gray.putdata([int(65535 * (x + y) / 80) for y in range(29) for x in range(53)]); gray.save(out / 'gray16.png')
     bos = bytes([128 + (x // 8 % 5) * 25 + (y // 8 % 5) * 5 + (x // 24 % 5) for y in range(32) for x in range(48)])
@@ -105,13 +115,15 @@ def main():
             with Image.open(path) as im:
                 width, height = im.size
                 if path.name == 'gray16.png':
-                    expected = bytes(v for value in im.getdata() for v in [value >> 8] * 3 + [255])
+                    expected = bytes(v for y in range(height) for x in range(width)
+                                     for v in [im.getpixel((x, y)) >> 8] * 3 + [255])
                 else:
                     expected = im.convert('RGBA').tobytes()
-        reference = path.name + '.rgba.zlib'
-        (out / reference).write_bytes(zlib.compress(expected, 9))
+        error = {'workspace_limit.jpg': -4, 'dimension_limit.png': -3}.get(path.name, 0)
+        reference = None if error else path.name + '.rgba.zlib'
+        if reference: (out / reference).write_bytes(zlib.compress(expected, 9))
         manifest.append(dict(name=path.name, width=width, height=height, format=kind,
-                             sha256=hashlib.sha256(data).hexdigest(), reference=reference))
+                             sha256=hashlib.sha256(data).hexdigest(), reference=reference, error=error))
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(f'Wrote {len(manifest)} ordinary reference images to {out}')
 

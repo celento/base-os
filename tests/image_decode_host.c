@@ -5,6 +5,9 @@
 #include <string.h>
 #include "image_decode.h"
 
+static unsigned progress_calls;
+static void progress(void) { progress_calls++; }
+
 int main(int argc, char **argv) {
     assert(argc == 3 || argc == 4);
     FILE *input = fopen(argv[1], "rb"); assert(input);
@@ -17,11 +20,15 @@ int main(int argc, char **argv) {
     unsigned capacity = argc == 4 ? (unsigned)strtoul(argv[3], 0, 0) : 0x640000u;
     unsigned char *workspace = malloc(capacity); assert(workspace);
     ImageDecoded image;
+    ImagePollHook previous = image_decode_set_poll_hook(progress);
+    assert(previous == NULL);
     int result = image_decode(source, (unsigned)length, workspace, capacity, &image);
+    assert(image_decode_set_poll_hook(previous) == progress);
     FILE *output = fopen(argv[2], "wb"); assert(output);
     fprintf(output, "%d %u %u %u %u %u\n", result, image.width, image.height,
             image.channels, image.format, image.workspace_peak);
     if (result == IMAGE_OK) {
+        if (image.width * image.height > 131072) assert(progress_calls > 0);
         unsigned bytes = image.width * image.height * (image.channels ? image.channels : 1);
         assert(image.pixels >= workspace && image.pixels + bytes <= workspace + capacity);
         unsigned char *reference = malloc(bytes); assert(reference);

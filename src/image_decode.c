@@ -3,14 +3,35 @@
 #include "image_decode.h"
 #include <stddef.h>
 
+static ImagePollHook poll_hook;
+static unsigned poll_work;
+ImagePollHook image_decode_set_poll_hook(ImagePollHook hook) {
+    ImagePollHook previous = poll_hook;
+    poll_hook = hook; poll_work = 0;
+    return previous;
+}
+static void image_progress(unsigned work) {
+    if (!poll_hook) return;
+    poll_work += work;
+    if (poll_work >= 4096) { poll_work = 0; poll_hook(); }
+}
+
 static void *image_copy(void *to, const void *from, size_t bytes) {
     uint8_t *d = to; const uint8_t *s = from;
-    while (bytes--) *d++ = *s++;
+    while (bytes) {
+        unsigned chunk = bytes > 4096 ? 4096 : (unsigned)bytes;
+        for (unsigned i = 0; i < chunk; i++) *d++ = *s++;
+        bytes -= chunk; image_progress(chunk);
+    }
     return to;
 }
 static void *image_set(void *to, int value, size_t bytes) {
     uint8_t *d = to;
-    while (bytes--) *d++ = (uint8_t)value;
+    while (bytes) {
+        unsigned chunk = bytes > 4096 ? 4096 : (unsigned)bytes;
+        for (unsigned i = 0; i < chunk; i++) *d++ = (uint8_t)value;
+        bytes -= chunk; image_progress(chunk);
+    }
     return to;
 }
 static int image_compare(const void *left, const void *right, size_t bytes) {
@@ -65,7 +86,13 @@ static void *image_allocate(size_t requested) {
     for (unsigned offset = 0; offset != ARENA_END; ) {
         ImageBlock *block = block_at(offset);
         if (block->available && block->size >= bytes) {
-            block_split(block, bytes);
+            /* Large decoded planes grow from the opposite end to compressed
+             * file-sized chunks. Once PNG releases its IDAT bytes, the front
+             * stays contiguous for its second full-size pixel plane. */
+            if (bytes > IMAGE_MAX_FILE_BYTES && block->size >= bytes + sizeof(ImageBlock) + 16) {
+                block_split(block, block->size - bytes - sizeof(ImageBlock));
+                block = block_at(block->next);
+            } else block_split(block, bytes);
             block->available = 0;
             arena.used += block->size + sizeof(ImageBlock);
             if (arena.used > arena.peak) arena.peak = arena.used;
@@ -133,6 +160,7 @@ static void *image_resize(void *pointer, size_t old_bytes, size_t new_bytes) {
 #define STBI_ONLY_BMP
 #define STBI_ONLY_GIF
 #define STBI_NO_FAILURE_STRINGS
+#define STBI_BASEOS_PROGRESS(work) image_progress((unsigned)(work))
 #define STB_IMAGE_STATIC
 #define STBIDEF static __attribute__((unused))
 #define STB_IMAGE_IMPLEMENTATION

@@ -28,6 +28,12 @@ typedef struct {
     unsigned workspace_peak;
 } ImageDecoded;
 
+typedef void (*ImagePollHook)(void);
+/* Optional bounded progress service. The hook must not dispatch apps, mutate
+ * the source/workspace, change this hook, or reenter image decoding. Returns
+ * the previous hook so a synchronous caller can restore it after decoding. */
+ImagePollHook image_decode_set_poll_hook(ImagePollHook hook);
+
 /* One synchronous decoder at a time. Workspace must remain alive until the
  * result is consumed; the next decode into it invalidates the earlier result.
  * No heap, FPU, filesystem calls, or global image-size allocations are used. */

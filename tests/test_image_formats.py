@@ -49,7 +49,10 @@ class ImageFormatTests(unittest.TestCase):
                 source = (FIXTURES / fixture['name']).read_bytes()
                 self.assertEqual(hashlib.sha256(source).hexdigest(), fixture['sha256'])
                 (error, width, height, channels, image_format, peak), actual = self.decode(fixture['name'])
-                self.assertEqual(error, 0)
+                self.assertEqual(error, fixture.get('error', 0))
+                if error:
+                    self.assertFalse(actual)
+                    continue
                 self.assertEqual((width, height, image_format),
                                  (fixture['width'], fixture['height'], fixture['format']))
                 self.assertGreater(peak, 0)
