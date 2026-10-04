@@ -315,9 +315,29 @@ static void legacy_format_and_limits(void) {
     assert(!todo_retry_save()); reboot(); assert(strlen(todo_text(0)) == FS_NAME_LEN - 1);
     puts("Todo: unchanged line format, legacy floppy, capacity/field/text boundaries passed");
 }
+static void unrelated_source_files(void) {
+    const char *sources[]={"Ordinary notes in the reserved path\n",
+        " 123456789012345678901234\n",
+        " a\n b\n c\n d\n e\n f\n g\n h\n i\n j\n k\n l\n m\n"};
+    for(unsigned i=0;i<sizeof sources/sizeof sources[0];i++){
+        reset_volume(1);int p=fs_mkdir(0,"prefs"),f=fs_create(p,"todo");
+        int length=(int)strlen(sources[i]);assert(fs_write(f,sources[i],length)==length);
+        assert(!fs_sync());reset_todo();
+        assert(todo_count()==0&&!td_pending);status(TODO_UNSUPPORTED,"existing bytes kept");
+        assert(!todo_prepare_shutdown()&&fs_size(f)==length&&!memcmp(fs_data(f),sources[i],length));
+        add("my task");assert(td_pending);status(TODO_CONFLICT,"changed");
+        assert(todo_retry_save()<0&&fs_size(f)==length&&!memcmp(fs_data(f),sources[i],length));
+        assert(!fs_rename(f,"previous-todo.txt"));assert(!todo_retry_save());
+        assert(fs_size(f)==length&&!memcmp(fs_data(f),sources[i],length));
+        int replacement=fs_find_child(p,"todo");assert(replacement>=0&&replacement!=f);
+        assert(fs_size(replacement)==9&&!memcmp(fs_data(replacement)," my task\n",9));
+    }
+    puts("Todo: unrelated, oversized-line and excess-row files remain unchanged");
+}
 int main(void) {
     busy_coalescing_and_reopen(); missing_paths_and_stale_ids();
     occupied_paths_and_changed_sources(); full_nodes_and_bytes();
     ordinary_rejections_rollback(); disk_failure_and_shutdown(); legacy_format_and_limits();
+    unrelated_source_files();
     return 0;
 }
