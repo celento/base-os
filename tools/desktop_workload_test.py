@@ -108,7 +108,8 @@ def run(build):
             event('2 MiB copy synchronized')
             files.focus(writer_slot); session.key('ctrl-shift-ret')
             expected_writer = writer_text.replace(b'alpha', b'beta')
-            assert ui.content()['text'] == expected_writer
+            session.wait(lambda: ui.content()['text'] == expected_writer,
+                         'Writer Replace All completed after input dispatch', 20)
             session.key('esc'); session.key('ctrl-s')
             def writer_saved():
                 n = load(disk.read_bytes())[2]
