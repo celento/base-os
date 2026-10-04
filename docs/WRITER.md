@@ -196,3 +196,24 @@ ID is reused, identical plain bytes replacing rich clipboard ownership, and
 Save-before-Open/New. Its supported read-only recovery-mode test keeps Writer's
 failed-save draft open and confirms every byte of the unrecognized disposable
 disk remains unchanged. This is an ordinary UI/storage test, not fault injection.
+
+
+### Recovery source conflicts
+
+The desktop stores a versioned 24-byte `prefs/writer-binding` record alongside the
+native draft. It contains the original serialized size, FNV-1a and CRC32. On reboot,
+the resolved source must match that baseline before the recovered draft can save
+back to it. Missing metadata or changed bytes restore the complete draft as an
+unbound, unsaved document requiring Save As. Checksums detect ordinary content
+changes; they are not cryptographic authentication. The source file is untouched.
+
+The same baseline check runs before an ordinary Save, so another native app cannot
+silently replace a file's bytes and then have them overwritten by a stale Writer
+copy. A successful RAM write updates the baseline even if the subsequent disk sync
+fails, allowing safe retry. No fingerprint scan runs in drawing or dirty queries.
+`tools/writer_binding_test.py` verifies a real C app's same-ID/same-size replacement,
+a matching reboot, a stopped-volume replacement and missing legacy metadata.
+
+`tools/writer_search_test.py` verifies the actual 420-pixel client, mouse case toggle,
+style-preserving Replace All and one-step undo/redo, wrapped F3 navigation, Edit-menu
+routing, live counts, and complete capacity rejection with unchanged history.
