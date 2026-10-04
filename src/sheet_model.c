@@ -145,7 +145,13 @@ typedef struct {
     SheetDoc *doc;
     const char *text;
     unsigned length, position, depth, error, pending;
+    unsigned *poll_work;
 } Parser;
+/* One shared counter spans reparses and the explicit dependency stack. Counting
+ * cells/references, rather than range rows, avoids a device callback per item. */
+static void work_poll(unsigned *work) {
+    if (!(++*work & 255u)) platform_poll();
+}
 static void spaces(Parser *p) {
     while (p->position < p->length) {
         char c = p->text[p->position];
@@ -160,6 +166,7 @@ static char peek(Parser *p) {
 static int32_t expression(Parser *p);
 static int32_t reference_value(Parser *p, unsigned index, int aggregate, int *numeric) {
     SheetCell *cell = &p->doc->cells[index];
+    work_poll(p->poll_work);
     if (cell->state == UNSEEN) {
         p->pending = index; p->error = WAIT_DEPENDENCY; return 0;
     }
@@ -232,7 +239,6 @@ static int32_t function(Parser *p, unsigned start, unsigned length) {
             unsigned r1 = last / SHEET_COLS, c1 = last % SHEET_COLS;
             if (r0 > r1 || c0 > c1) { p->error = SHEET_ERR_REF; return 0; }
             for (unsigned r = r0; r <= r1; ++r) {
-                platform_poll();
                 for (unsigned c = c0; c <= c1; ++c) {
                     int numeric = 0;
                     int32_t v = reference_value(p, r * SHEET_COLS + c, 1, &numeric);
@@ -350,9 +356,11 @@ static int32_t expression(Parser *p) {
     return value;
 }
 int sheet_recalculate(SheetDoc *doc) {
-    if (sheet_validate(doc)) return -1;
+    unsigned poll_work = 0;
+    platform_poll();
+    if (sheet_validate(doc)) { platform_poll(); return -1; }
     for (unsigned i = 0; i < SHEET_CELLS; ++i) {
-        if (!(i & 63u)) platform_poll();
+        work_poll(&poll_work);
         SheetCell *cell = &doc->cells[i];
         cell->value = 0; cell->error = 0;
         cell->state = cell->kind == SHEET_FORMULA ? UNSEEN : READY;
@@ -360,14 +368,14 @@ int sheet_recalculate(SheetDoc *doc) {
             cell->error = (uint8_t)number_value(cell->text, cell->length, 0, &cell->value);
     }
     for (unsigned root = 0; root < SHEET_CELLS; ++root) {
-        if (!(root & 63u)) platform_poll();
+        work_poll(&poll_work);
         if (doc->cells[root].state == READY) continue;
         unsigned depth = 1;
         doc->work[0] = (uint16_t)root;
         doc->cells[root].state = ACTIVE;
         while (depth) {
             SheetCell *cell = &doc->cells[doc->work[depth - 1u]];
-            Parser parser = {doc, cell->text, cell->length, 1, 0, 0, 0};
+            Parser parser = {doc, cell->text, cell->length, 1, 0, 0, 0, &poll_work};
             int32_t value = expression(&parser);
             if (parser.error == WAIT_DEPENDENCY) {
                 /* Each push is an UNSEEN cell, so no push exceeds SHEET_CELLS. */
@@ -380,9 +388,10 @@ int sheet_recalculate(SheetDoc *doc) {
                 cell->state = READY;
                 --depth;
             }
-            platform_poll();
+            work_poll(&poll_work);
         }
     }
+    platform_poll();
     return 0;
 }
 const char *sheet_error_name(unsigned error) {

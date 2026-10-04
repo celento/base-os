@@ -3,7 +3,7 @@
 
 /* Small bounded scratch only: callers own all document and output storage. */
 static void poll_at(unsigned position) {
-    if (!(position & 1023u)) platform_poll();
+    if (!(position & 4095u)) platform_poll();
 }
 
 static int overlaps(const void *a, unsigned an, const void *b, unsigned bn) {
