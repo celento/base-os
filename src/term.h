@@ -14,7 +14,9 @@ void term_scroll(int delta);
 int term_scroll_offset(void);
 int term_cwd(void);
 void term_set_cwd(int id);
-/* Pixels use the active width as their tightly packed row stride. */
+/* Pixels use the returned width as their tightly packed row stride. Native
+ * tasks expose only their last complete published frame, including dimensions,
+ * even after timer preemption, stop or error. BASIC/exec draw synchronously. */
 const unsigned char *term_canvas(void);
 int term_canvas_width(void);
 int term_canvas_height(void);
@@ -55,7 +57,7 @@ int term_task_start_file(int slot, int file, unsigned identity);
 int term_task_start_file_with_arg(int slot, int file, unsigned identity,
                                    const char *argument, unsigned argument_length);
 enum {
-    TERM_TASK_CANVAS = 1,    /* Pixels only; the existing canvas layout is stable. */
+    TERM_TASK_CANVAS = 1,    /* Published pixels; existing canvas layout is stable. */
     TERM_TASK_TEXT = 2,      /* Scrollback/live-row content. */
     TERM_TASK_LAYOUT = 4,    /* First canvas activation, reset or resize. */
     TERM_TASK_LIFECYCLE = 8  /* Start/end changes the window/taskbar title. */

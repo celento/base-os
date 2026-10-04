@@ -3,6 +3,8 @@
 #include "fs_host.c"
 #undef main
 static unsigned char terminal_arena[0x100000];
+static unsigned char published_arena[NATIVE_CANVAS_CAPACITY];
+#define NATIVE_CANVAS_MEMORY ((uintptr_t)published_arena)
 #define TERM_MEMORY ((uintptr_t)terminal_arena)
 #include "../src/term.c"
 static int states[PROCESS_TASKS],exit_next[PROCESS_TASKS],steps[PROCESS_TASKS];

@@ -32,6 +32,9 @@
 #define WRITER_CAPACITY 0x1F0000
 #define PAINT_MEM 0x500000
 #define PAINT_CAPACITY 0x10000
+/* Last complete native frames, separate from per-Terminal working pixels. */
+#define NATIVE_CANVAS_BASE 0x600000
+#define NATIVE_CANVAS_CAPACITY 0x80000
 #define DMA_BASE 0x700000
 #define DMA_CAPACITY 0x10000
 #define AUDIO_DMA_BASE 0x710000

@@ -86,6 +86,7 @@ The QEMU suite creates disposable images and checks fresh boot, reboot, timer pr
 | `0x300000`–`0x310000` | filesystem node table (64 KiB) |
 | `0x310000`–`0x500000` | reserved rich-document workspace |
 | `0x500000` | Paint canvas / viewer arena |
+| `0x600000`–`0x680000` | eight published native canvas frames (512,000 bytes used) |
 | `0x700000` | disk DMA bounce buffer      |
 | `0x710000`–`0x720000` | SB16 ISA DMA ring          |
 | `0xA00000` | cached desktop wallpaper    |
@@ -140,7 +141,10 @@ Window drags cache the unchanged desktop behind the moving window. The presenter
 Native task polling reports the changed terminal slot and separate pixel, text,
 layout and lifecycle flags. A stable frontmost Terminal can redraw just its
 canvas using the same geometry and nearest-neighbor drawing helper as a full
-frame. First activation, canvas resize/reset, output text and task start/end
+frame. Native draws remain private until an explicit present/yield/sleep or
+application exit publishes the complete bounded frame. Timer preemption and
+external stop/error paths retain the previous published pixels and geometry,
+even if another window forces full composition. First activation, canvas resize/reset, output text and task start/end
 retain full composition. Menus, launcher, dialogs, display confirmation, screen
 saver, file rename/drag overlays, mouse-held interactions, moving/resizing windows, a retained drag cache
 or any other dirty work also retain the full path. Exposed background windows

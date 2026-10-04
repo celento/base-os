@@ -10,6 +10,7 @@ static void task_test_step(int owner) {
     if(operation==TEXT||operation==BOTH)callbacks[owner].print("ordinary output");
     if(operation==RESIZE)assert(!callbacks[owner].resize(320,200));
     if(operation==OUTSIDE)callbacks[owner].plot(-1,4,17);
+    if(operation!=QUIET)callbacks[owner].present();
 }
 static TermTaskUpdate update(int op,int owner,unsigned flags) {
     operation=op;
@@ -24,7 +25,7 @@ int main(void) {
     term_select(2);term_reset();command("start /canvas.bex");
     term_select(7);term_reset();term_char('x');
     update(QUIET,2,TERM_TASK_TEXT|TERM_TASK_LAYOUT|TERM_TASK_LIFECYCLE);
-    update(PIXELS,2,TERM_TASK_CANVAS|TERM_TASK_LAYOUT);
+    update(PIXELS,2,TERM_TASK_LAYOUT);
     update(PIXELS,2,TERM_TASK_CANVAS);
     update(BOTH,2,TERM_TASK_CANVAS|TERM_TASK_TEXT);
     update(RESIZE,2,TERM_TASK_LAYOUT);
@@ -36,7 +37,7 @@ int main(void) {
     states[2]=PROCESS_TASK_SLEEPING;
     update(QUIET,-1,0);
     term_select(6);term_reset();command("start /canvas.bex");term_select(7);
-    update(PIXELS,6,TERM_TASK_TEXT|TERM_TASK_LAYOUT|TERM_TASK_LIFECYCLE|TERM_TASK_CANVAS);
+    update(PIXELS,6,TERM_TASK_TEXT|TERM_TASK_LAYOUT|TERM_TASK_LIFECYCLE);
     states[2]=PROCESS_TASK_READY;
     update(PIXELS,2,TERM_TASK_CANVAS);
     update(PIXELS,6,TERM_TASK_CANVAS);
@@ -49,7 +50,7 @@ int main(void) {
     assert(terms[6].task_dirty==(TERM_TASK_TEXT|TERM_TASK_LIFECYCLE));
     update(QUIET,-1,0);
     term_select(2);command("start /canvas.bex");term_select(7);
-    update(PIXELS,2,TERM_TASK_TEXT|TERM_TASK_LAYOUT|TERM_TASK_LIFECYCLE|TERM_TASK_CANVAS);
+    update(PIXELS,2,TERM_TASK_TEXT|TERM_TASK_LAYOUT|TERM_TASK_LIFECYCLE);
     assert(!strcmp(term_input(),"x"));
     puts("Native update flags: start/activation/pixels/text/resize/exit, selection, idle, sleeping and slot fairness passed.");
 }

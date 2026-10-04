@@ -68,7 +68,7 @@ int main(void){
     term_select(2);term_reset();term_char('x');
     assert(!term_task_start_file(0,first,identity)&&selected==2&&!strcmp(term_input(),"x"));
     assert(term_task_info(0,&before)&&!strcmp(before.name,"native one.bex"));
-    term_select(0);canvas_resize(320,200);plot(1,1,6);term_char('z');
+    term_select(0);canvas_resize(320,200);plot(1,1,6);callbacks[0].present();term_char('z');
     assert(term_task_start_file(0,upper,fs_identity(upper))<0);
     assert(term_canvas_width()==320&&term_canvas()[321]==6&&!strcmp(term_input(),"z"));
     assert(term_task_info(0,&after)&&before.instance==after.instance);

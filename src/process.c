@@ -269,7 +269,12 @@ int process_interrupt(uint32_t *r){
     }
     if(vector!=128)finish(-(int)vector-100);
     unsigned call=r[7],a=r[4],b=r[6],c=r[5],d=r[1],e=r[0]; /* eax, ebx, ecx, edx */
-    if(call==0)finish((int)a);
+    if(call==0){
+        /* Explicit application completion publishes even a nonzero return code.
+         * Exceptions, watchdogs and external stops do not use this boundary. */
+        if(current_task&&output->present)output->present();
+        finish((int)a);
+    }
     if(call==1){
         if(a>=USER_CAPACITY||b>4096||b>USER_CAPACITY-a){r[7]=(unsigned)-1;return 1;}
         char line[81];unsigned n=0;
@@ -293,8 +298,8 @@ int process_interrupt(uint32_t *r){
     }
     else if(call==5){
         r[7]=0;
-        if(current_task)task_suspend(r,PROCESS_TASK_READY);
         if(output->present)output->present();
+        if(current_task)task_suspend(r,PROCESS_TASK_READY);
     }
     else if(call>=6&&call<=8)r[7]=(unsigned)file_call(call,a,b,c,d,0);
     else if(call==9){
@@ -307,6 +312,7 @@ int process_interrupt(uint32_t *r){
         /* Sleep is bounded and wrap-safe; zero milliseconds is a yield. */
         if(!current_task||(call==11&&a>TASK_MAX_SLEEP_MS)){r[7]=(unsigned)-1;return 1;}
         r[7]=0;
+        if(output->present)output->present();
         if(call==11&&a){
             current_task->wake=timer_ticks()+(a*TIMER_HZ+999u)/1000u;
             task_suspend(r,PROCESS_TASK_SLEEPING);

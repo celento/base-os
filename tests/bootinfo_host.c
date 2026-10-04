@@ -39,6 +39,9 @@ int main(void) {
     test_map[1].attributes = 0; assert(!available(FB_BASE, RAM_REQUIRED_END));
     test_map[1].attributes = 1;
     test_boot.map_count = 3;
+    test_map[2] = (MemoryRange){NATIVE_CANVAS_BASE, NATIVE_CANVAS_CAPACITY, 2, 1};
+    assert(!available(FB_BASE, RAM_REQUIRED_END));
+    assert(!platform_memory_range_available(NATIVE_CANVAS_BASE, NATIVE_CANVAS_BASE+NATIVE_CANVAS_CAPACITY));
     test_map[2] = (MemoryRange){0x700000, 0x1000, 2, 1};
     assert(!available(FB_BASE, RAM_REQUIRED_END));
     test_map[2] = (MemoryRange){0xfffffffffffffff0ULL, 0x1000, 1, 1};
