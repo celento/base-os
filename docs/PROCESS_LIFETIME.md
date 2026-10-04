@@ -1,12 +1,18 @@
 # Independent process lifetime (C1)
 
-This internal foundation leaves BEX1, syscalls 0–27, the fixed 64 KiB image,
-49,152-byte image cap, 16 KiB linker stack reservation, initial ESP 65,520,
-eight desktop task contexts and synchronous exec unchanged. C1 introduced no
-page allocation. The subsequent [C2b backing change](PROCESS_BACKING.md) replaces
-its inline image with sixteen owned frames, without adding a heap, larger
-programs, detached execution, reassignment, more windows or a new application
-identity namespace.
+This document preserves the C1 lifetime foundation and its historical checks.
+C1 left BEX1, syscalls 0–27, the fixed 64 KiB image, 49,152-byte image cap,
+16 KiB linker stack reservation, initial ESP 65,520, eight desktop task contexts
+and synchronous exec unchanged. C1 introduced no page allocation; the later
+[C2b backing change](PROCESS_BACKING.md) replaced its inline BEX1 image with
+sixteen owned frames.
+
+Current lifetime ordering applies to both BEX1 and the qualified opt-in
+[BEX2 private-space loader](BEX2_FORMAT.md). Only BEX1 gathers/scatters a 64 KiB
+image between slices. BEX2 switches private roots for its launch-declared
+regions within a sparse 4 MiB extent, without per-slice image copying. Neither
+path adds a heap, detached execution, reassignment or independent native windows;
+synchronous `exec` remains BEX1-only.
 
 ## Ownership and state
 
@@ -40,9 +46,11 @@ to Terminal five still reports 6. Synchronous exec still reports 0.
    nonzero result. External Stop records STOP and does not publish.
 2. The interrupt path marks EXITING and leaves the process. It does not release
    files, sync interests, image storage, owner identity or callback state.
-3. After `process_resume`/`process_enter` returns, x87/kernel context is restored
-   before active state is cleared. A continuing desktop process saves its fixed
-   image exactly once. An exiting process does not copy an outgoing image.
+3. After `process_resume`/`process_enter` returns, the kernel root/descriptors
+   are restored before x87 context and before active state is cleared. A
+   continuing BEX1 desktop process scatters its 64 KiB image exactly once; an
+   exiting BEX1 skips that copy. BEX2 does neither per-slice copy. Both formats
+   restore inactive kernel context before any owned backing is released.
 4. In inactive kernel context, owner release runs once and clears wait/input.
    A shared filesystem commit continues under the existing sync coordinator.
 5. DONE retains the exact handle/value/reason until Terminal consumes it. Reap
@@ -59,7 +67,11 @@ its result rather than being replaced by STOP. No further slice follows the
 pending stop. The normal desktop cannot issue Stop during a slice, so these are
 internal deferred-request semantics. These guards do not add kernel preemption.
 
-## Verification and remaining gates
+## Historical C1 verification and remaining gates
+
+The following records the original C1 stage, not the current checkpoint's gate
+status or structure sizes. Later combined memory acceptance is recorded in
+[C3_COMBINED_VERIFICATION.md](C3_COMBINED_VERIFICATION.md).
 
 Focused host checks exercise real extracted production creation, state,
 lookup, dispatcher, scheduler, final-copy and owner-release code. Hardware entry,
@@ -73,7 +85,7 @@ fixtures and two-task input/sleep/x87/owner cleanup, stop/close/reset/reuse,
 publication and persisted-output checks on 64 MiB/default and 128 MiB/large.
 Only the separately assigned verification task may run those guest gates.
 
-### C1 implementation checks (2026-10-04)
+### Historical C1 implementation checks (2026-10-04)
 
 - Focused ordinary aggregate: 20 tests passed with ASan/UBSan:
   `PYTHONPATH=tests python3 -m unittest -v test_process_lifetime
@@ -87,11 +99,13 @@ Only the separately assigned verification task may run those guest gates.
   The broader `features_host` fixture was compile-checked only, not executed.
 - `make -j2 build/kernel.elf build/kernel.packed` passed with the existing NASM
   toolchain and no compiler warnings. No QEMU was run for this implementation.
-- Actual i386 `NativeTask` is 65,980 bytes: eight records use 527,840 bytes and
-  end at `0x03080DE0`, leaving 61,984 bytes before the next-stage metadata start
+- The C1 i386 `NativeTask` measured 65,980 bytes: eight records used 527,840 bytes
+  and ended at `0x03080DE0`, leaving 61,984 bytes before the next-stage metadata start
   `0x03090000`. The new metadata constant activates a production non-overlap
   assertion when C2 is integrated. The unchanged syscall stack starts
-  `0x030E0000`. Each Terminal is 91,520 bytes; eight use 732,160 bytes.
+  `0x030E0000`. Each C1 Terminal measured 91,520 bytes; eight used 732,160 bytes.
+  These historical figures predate page-backed/private images and later input
+  fields; current structures remain guarded by compile-time arena assertions.
 - The first build has 502,731 text, 316 data and 107,792 BSS bytes;
   `__kernel_end=0x195230`, below `STACK_BOTTOM=0x1F0000`. Its packed initialized
   payload is 340,107 bytes. These are build measurements, not runtime timings.
