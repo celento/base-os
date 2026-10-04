@@ -406,8 +406,9 @@ passed the persistence-only reboot. No production scan code changed in that fix.
 
 `examples/c/pointer.c` is a regular C client for the pointer service described in
 [NATIVE_UI.md](NATIVE_UI.md). Build it as the default BEX1 or with the existing
-`--format bex2` option. New volumes install `/Programs/pointer.bex` without
-replacing an existing copy. The qualified hosted-UI runtime supports it; it
+`--format bex2` option. Kernel startup installs `/Programs/pointer.bex` only
+when that name is absent, including on saved disks; an existing file or directory
+is preserved. The qualified hosted-UI runtime supports it; it
 queries capabilities first and exits normally with an unsupported message on
 older kernels or unavailable contexts.
 
