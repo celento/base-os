@@ -247,6 +247,14 @@ static int scan_step(void) {
         if (code==0xb5) return fail(MEDIA_UNSUPPORTED);
         if (code==0xb3) {
             if (stream_bytes-i<12) return fail(MEDIA_BAD_FILE);
+            /* The base header includes two matrix flags. The second flag
+             * follows the optional intra matrix, so check its byte before
+             * inspecting it. Validate original bytes, never the EOF guard. */
+            unsigned header=12;
+            if (STREAM[i+11]&2) header+=64;
+            if (stream_bytes-i<header) return fail(MEDIA_BAD_FILE);
+            if (STREAM[i+header-1]&1) header+=64;
+            if (stream_bytes-i<header) return fail(MEDIA_BAD_FILE);
             unsigned w=(unsigned)STREAM[i+4]*16+(STREAM[i+5]>>4);
             unsigned h=((unsigned)STREAM[i+5]&15)*256+STREAM[i+6];
             unsigned rate=STREAM[i+7]&15, par=STREAM[i+7]>>4;
@@ -268,7 +276,7 @@ static int scan_step(void) {
     }
     scan_cursor=end;
     if (end<stream_bytes) return 0;
-    if (!status.total_frames || stream_bytes<140) return fail(MEDIA_BAD_FILE);
+    if (!status.total_frames) return fail(MEDIA_BAD_FILE);
     phase=2;
     return 1;
 }
