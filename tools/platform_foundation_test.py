@@ -311,6 +311,11 @@ def run_profile(build,work,profile,app,seed,timeout):
         assert any('end_tick' not in job for job in snapshot_jobs(session.log.read_text())), 'counter response was outside pending save'
         result['counter_response']=dict(before=before,after=counter,input_to_visible_ms=(wall-sent)*1000)
         session.focus(bid)
+        operation_key(session,'t',lambda o:o['sync_result']==1,'bounded wait returns to its pending owner')
+        waited=session.page(3)
+        assert waited['wait_result']==-1010 and waited['wait_ticks']>=2 and waited['operation']==handle_b
+        assert waited['sync_result']==1
+        result['bounded_wait']=waited;session.page(0)
         before_mouse,before_pixels,_=session.observe()
         assert before_mouse['sync_result']==1
         sent_mouse=time.monotonic()
