@@ -210,6 +210,9 @@ class CalendarCheck:
     def body(self, x, y):
         win = self.owner()
         assert win and win['w'] >= 620 and win['h'] >= 506
+        assert 0 <= x < win['w'] and 0 <= y < win['h'] - 33, 'Control outside Calendar client'
+        assert win['x'] + x < self.o.integer('fb_w') and win['y'] + 33 + y < self.o.integer('fb_h'), \
+            'Calendar control clipped by the display'
         self.click(win['x'] + x, win['y'] + 33 + y)
 
     def date(self):
@@ -427,9 +430,15 @@ def run(build, profile='default', scenario='all'):
         checks.append('read-only save/retry/Shutdown preserve accepted appointments, draft, and unknown disk digest')
         print('PASS: protected unknown disk unchanged; failed save/retry/Shutdown keep agenda and draft available', flush=True)
 
+    info = (build / 'build_info.h').read_text()
+    revision = re.search(r'#define BASEOS_BUILD_REVISION "([^"]+)"', info)
+    dirty = re.search(r'#define BASEOS_BUILD_DIRTY ([01])', info)
+    assert revision and dirty, 'Missing compiled build provenance'
     result = dict(passed=True, profile=profile, scenario=scenario, build=str(build),
-                  source=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
-                  kernel_sha256=hashlib.sha256((build / 'kernel.bin').read_bytes()).hexdigest(),
+                  harness_source=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                  build_revision=revision[1], build_dirty=bool(int(dirty[1])),
+                  artifacts={name: hashlib.sha256((build / name).read_bytes()).hexdigest()
+                             for name in ('boot.bin', 'kernel.bin', 'kernel.elf')},
                   work=str(work), sessions=sessions, screenshots=pictures, checks=checks)
     (work / 'results.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, indent=2), flush=True)
