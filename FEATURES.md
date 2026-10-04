@@ -26,6 +26,15 @@ when hidden/deleted. See [Files](docs/FILES.md) for controls and safety details.
 
 Editor and Paint keep eight undo steps. Use Ctrl+Z to undo and Ctrl+Y or Ctrl+Shift+Z to redo. An editor step is an edit operation; a Paint step is a stroke, shape, fill, text edit, or clear. Editing after undo discards the redo branch. History is held in RAM and resets on restart.
 
+### Paint save safety
+
+Ctrl+S opens **Save picture as**. Opening or canceling it does not create files or
+folders. Each save needs a new name in `/Pictures`; existing files, applications
+and folders are never overwritten. If saving is temporarily busy, keep the name
+and try Save again. Full storage or another failed save leaves no empty picture
+or newly created Pictures folder. The canvas and undo history stay available.
+See [Paint save safety](docs/PAINT_SAFETY.md) for the format and verification scope.
+
 ### Editor search and larger documents
 
 Editor holds up to 65,535 bytes in each of its eight independent document buffers,

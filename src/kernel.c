@@ -3448,18 +3448,40 @@ static int paint_write_named(const char *name) {
     }
     paint_init();
     int pics = fs_find_child(fs_root(), "Pictures");
-    if (pics < 0)
-        pics = fs_mkdir(fs_root(), "Pictures");
-    if (pics < 0)
+    if (pics >= 0 && !fs_is_dir(pics)) {
+        name_failure_message="Pictures is not a folder.";
         return 0;
-    int id = fs_find_child(pics, name);
-    if (id < 0)
-        id = fs_create(pics, name);
-    if (id < 0)
+    }
+    /* Paint has no owned-file binding: every save needs a new name. */
+    if (pics >= 0 && fs_find_child(pics, name) >= 0) {
+        name_failure_message="Name exists. Choose another name.";
         return 0;
+    }
+    int created_pics = pics < 0;
+    int count = fs_node_count() + 1 + created_pics;
     int nbytes = 8 + PAINT_W * PAINT_H;
-    if (nbytes > FS_MAX_SIZE)
+    if (count > fs_node_limit()) {
+        name_failure_message="Not enough free file slots.";
         return 0;
+    }
+    unsigned capacity = fs_capacity_for_nodes((unsigned)count);
+    unsigned used = fs_used_bytes();
+    if (nbytes > FS_MAX_SIZE || (unsigned)nbytes > fs_file_limit() ||
+        used > capacity || (unsigned)nbytes > capacity - used) {
+        name_failure_message="Not enough space for this picture.";
+        return 0;
+    }
+    if (created_pics) pics = fs_mkdir(fs_root(), "Pictures");
+    if (pics < 0) {
+        name_failure_message="Cannot create Pictures folder.";
+        return 0;
+    }
+    int id = fs_create(pics, name);
+    if (id < 0) {
+        if (created_pics) fs_delete(pics);
+        name_failure_message="Save failed. Check the file name.";
+        return 0;
+    }
     char *buf = (char *)(PAINT_MEM + 0xC000);
     buf[0] = 'B'; buf[1] = 'O'; buf[2] = 'S'; buf[3] = '1';
     buf[4] = (char)(PAINT_W & 0xFF);
@@ -3467,8 +3489,14 @@ static int paint_write_named(const char *name) {
     buf[6] = (char)(PAINT_H & 0xFF);
     buf[7] = (char)((PAINT_H >> 8) & 0xFF);
     kmemcpy(buf + 8, paint_pix, PAINT_W * PAINT_H);
-    if (fs_write(id, buf, nbytes) != nbytes)
+    if (fs_write(id, buf, nbytes) != nbytes) {
+        /* No application dispatch or snapshot start occurs within this compound
+         * operation. Only our new nodes are removed; old paths stay untouched. */
+        fs_delete(id);
+        if (created_pics) fs_delete(pics);
+        name_failure_message="Picture not saved. Try again.";
         return 0;
+    }
     if (find_open_kind(WK_FILES) >= 0)
         fm_refresh();
     dirty = 1;
@@ -3482,15 +3510,16 @@ static void paint_save(void) {
         name_failed=1;name_failure_message="Disk saving. Retry Save shortly.";
         return;
     }
+    /* Opening or canceling the dialog must not create a filesystem path. */
     int pics = fs_find_child(fs_root(), "Pictures");
-    if (pics < 0)
-        pics = fs_mkdir(fs_root(), "Pictures");
-    if (pics < 0)
-        return;
     char name[FS_NAME_LEN];
-    if (unique_untitled_pbm(pics, name) < 0)
+    kstrcpy(name, "untitled.pbm");
+    if (fs_is_dir(pics) && unique_untitled_pbm(pics, name) < 0)
         kstrcpy(name, "art.pbm");
     namedlg_open(1, name);
+    if (pics >= 0 && !fs_is_dir(pics)) {
+        name_failed=1;name_failure_message="Pictures is not a folder.";
+    }
 }
 
 static void open_paint(void) {
