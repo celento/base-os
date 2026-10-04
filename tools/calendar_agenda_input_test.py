@@ -24,7 +24,6 @@ import time
 import zlib
 
 from elf_debug import DebugInfo
-from file_clipboard_input_test import FilesCheck
 from init_data import initialize
 from video_input_test import Observations, ProductionSession
 from volume import data_layout, encode_snapshot, load, resolve
@@ -391,12 +390,11 @@ def run(build, profile='default', scenario='all'):
             assert check.integer('ca_pending') and check.items()[0]['id'] == ident
             pictures.append(str(session.screenshot('calendar-path-collision-preserved.png')))
             check.close(); check.open(); assert check.items()[0]['id'] == ident
-            # Normal Files Cut/Paste moves the whole collision folder intact.
+            # /prefs is intentionally hidden in Files. The ordinary Terminal
+            # move command preserves the complete collision folder and child.
             # Nothing is deleted and no live disk image is read or changed.
-            session.launch('files'); files = FilesCheck(session, build)
-            files.root(); files.select(3); session.key('ret'); files.select(4); files.clipboard('ctrl-x')
-            files.root(); files.select(1); session.key('ret'); files.clipboard('ctrl-v')
-            session.wait(lambda: files.state()['selected_id'] == 4, 'Conflicting folder moved intact')
+            session.launch('terminal')
+            session.text('mv /prefs/calendar.v1 /Documents'); session.key('ret')
             session.key('ctrl-w'); check.open(); check.save(); expected = check.snapshot()
             pictures.append(str(session.screenshot('calendar-path-repaired-retry-saved.png')))
             check.close(); session.shutdown()
@@ -404,7 +402,7 @@ def run(build, profile='default', scenario='all'):
         nodes = load(disk.read_bytes())[2]
         assert nodes[resolve(nodes, '/Documents/calendar.v1/keep.txt')] == original_nodes[5]
         assert nodes[4]['parent'] == 1 and nodes[4]['directory']
-        checks.append('occupied-path protection and non-destructive Files Cut/Paste repair with Ctrl+S retry')
+        checks.append('occupied-path protection and non-destructive Terminal move repair with Ctrl+S retry')
         print('PASS: occupied Calendar path protected, collision bytes moved intact, retained agenda saved on retry', flush=True)
 
     if scenario in ('all', 'readonly'):
