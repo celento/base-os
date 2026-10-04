@@ -349,6 +349,27 @@ static void write_ppm(const char *path) {
     }
     fclose(f);
 }
+static unsigned colored_pixels(int x, int y, int w, int h, unsigned char color) {
+    unsigned count = 0;
+    for (int row = y; row < y+h; row++) for (int col = x; col < x+w; col++)
+        if (back[row*800+col] == color) count++;
+    return count;
+}
+static void test_viewport_reveal(void) {
+    load_fixture("Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10\nLine 11\nLine 12\nLine 13\nLine 14\nLine 15\nLine 16\nLine 17\nLine 18\nLine 19\nLine 20\ntarget");
+    writer_draw(0,0,420,260); key(0x4f,WRITER_MOD_CTRL);
+    key(0x21,WRITER_MOD_CTRL); key(0x1e,WRITER_MOD_CTRL); type("target"); key(0x1c,0);
+    writer_draw(0,0,420,260);
+    assert(colored_pixels(22,74,380,90,COLOR_BLUE) > 10);
+    key(0x01,0); key(0x02,WRITER_MOD_CTRL); writer_draw(0,0,420,260);
+    assert(colored_pixels(22,74,380,152,COLOR_BLUE) > 10);
+    /* A deliberate scroll away from selection survives a larger resize. */
+    writer_scroll(-100); writer_draw(0,0,720,520);
+    assert(!colored_pixels(22,74,680,412,COLOR_BLUE));
+    key(0x4f,WRITER_MOD_CTRL); writer_draw(0,0,720,520);
+    assert(colored_pixels(22,74,680,412,COLOR_BLACK) > 10);
+    puts("Writer viewport: Find-bar shrink and style reflow reveal selection; manual scrolling survives resize");
+}
 static void test_heading_coverage(void) {
     load_fixture("A"); key(0x02, WRITER_MOD_CTRL); key(0x47, WRITER_MOD_CTRL);
     writer_draw(0,0,420,260);
@@ -410,7 +431,7 @@ static void test_drawing(const char *path) {
 int main(int argc, char **argv) {
     files[0].valid = files[0].folder = 1; files[0].identity = 1;
     gfx_init(back, linear, 800, 600, 32, 3200);
-    test_editing(); test_history(); test_files(); test_binding_fingerprints(); test_layout(); test_search(); test_heading_coverage(); test_drawing(argc > 1 ? argv[1] : NULL);
+    test_editing(); test_history(); test_files(); test_binding_fingerprints(); test_layout(); test_search(); test_viewport_reveal(); test_heading_coverage(); test_drawing(argc > 1 ? argv[1] : NULL);
     assert(polls > 100); assert(sync_count >= 4);
     for (int i = 1; i < 20; i++) if (files[i].valid) free(files[i].data);
     puts("All Writer host functional checks passed.");

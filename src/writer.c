@@ -54,7 +54,7 @@ static struct {
         unsigned caret[2], anchor[2];
         char text[2][64];
     } search;
-    int width, content_height, scroll, viewport_height, desired_x;
+    int width, content_height, scroll, viewport_height, desired_x, manual_scroll;
     int layout_valid, blink, last_blink, hit_affinity;
     char title[64], status[112];
 } state;
@@ -96,11 +96,12 @@ static unsigned paragraph_end(const WriterDoc *d, unsigned at) {
 }
 static int is_start(const WriterDoc *d, unsigned at) { return !at || d->text[at - 1] == '\n'; }
 static unsigned paragraph_at(const WriterDoc *d, unsigned at) { return d->paragraph[paragraph_start(d, at)]; }
+static void reveal(void);
 static void invalidate(void) { state.layout_valid = 0; state.desired_x = -1; state.blink = 1; }
 
 /* Each complete operation records one state. Older states drop as a ring. */
 static Snapshot *begin_edit(void) {
-    state.group_kind = 0;
+    state.group_kind = 0; state.manual_scroll = 0;
     unsigned old = (state.first + state.current) % HISTORY;
     state.count = state.current + 1;
     if (state.count == HISTORY) {
@@ -131,7 +132,7 @@ static void accept_staging(unsigned caret, unsigned typing_style, unsigned group
     status("Edited. Ctrl+S saves the native document.");
 }
 static int undo(int redo) {
-    state.group_kind = 0;
+    state.group_kind = 0; state.manual_scroll = 0;
     if ((!redo && !state.current) || (redo && state.current + 1 >= state.count)) {
         status(redo ? "Nothing to redo." : "Nothing to undo."); return WRITER_CHANGED;
     }
@@ -195,6 +196,7 @@ static int format_inline(unsigned mask) {
     for (unsigned i = lo; i < hi; i++) s->doc.style[i] = (unsigned char)(turn_on ? s->doc.style[i] | mask : s->doc.style[i] & ~mask);
     s->typing_style = turn_on ? typing | mask : typing & ~mask;
     s->doc.style[s->doc.length] = (unsigned char)s->typing_style;
+    state.manual_scroll = 0; reveal();
     status("Character style changed."); return WRITER_CHANGED;
 }
 static int format_paragraph(unsigned mask, unsigned value) {
@@ -208,6 +210,7 @@ static int format_paragraph(unsigned mask, unsigned value) {
         if (p >= last) break;
         p = paragraph_end(&s->doc, p) + 1;
     }
+    state.manual_scroll = 0; reveal();
     status("Paragraph style changed."); return WRITER_CHANGED;
 }
 static void copy_selection(void) {
@@ -347,7 +350,7 @@ static void reveal(void) {
     state.scroll = clamp(state.scroll, 0, state.content_height > state.viewport_height ? state.content_height - state.viewport_height : 0);
 }
 static void move_to(unsigned index, int extend, int vertical) {
-    state.group_kind = 0;
+    state.group_kind = 0; state.manual_scroll = 0;
     Snapshot *s = snapshot();
     s->caret = min_u(index, s->doc.length); s->affinity = 0;
     if (!extend) s->anchor = s->caret;
@@ -539,7 +542,7 @@ void writer_new(void) {
     s->caret = s->anchor = s->typing_style = s->affinity = 0;
     s->revision = ++state.next_revision; state.saved_revision = s->revision;
     state.file = -1; state.identity = 0; state.has_binding = state.binding_conflict = 0; state.failed_save = state.dragging = 0;
-    state.scroll = 0; text_copy(state.title, sizeof(state.title), "Untitled");
+    state.scroll = state.manual_scroll = 0; text_copy(state.title, sizeof(state.title), "Untitled");
     invalidate(); status("New document. Body text, printable ASCII and tabs.");
 }
 void writer_init(void) {
@@ -604,7 +607,7 @@ int writer_open_file(int id) {
     state.file = native ? id : -1; state.identity = native ? fs_identity(id) : 0;
     state.has_binding = native; state.binding_conflict = 0;
     if (native) fingerprint(data, (unsigned)size, &state.binding);
-    state.failed_save = state.dragging = 0; state.scroll = 0;
+    state.failed_save = state.dragging = 0; state.scroll = state.manual_scroll = 0;
     text_copy(state.title, sizeof(state.title), fs_name(id));
     invalidate(); status(native ? "Opened native document." : "Imported text. Save As a new .bwr to retain formatting."); return 1;
 }
@@ -723,7 +726,7 @@ int writer_restore(const unsigned char *data, unsigned length, int file, unsigne
     }
     state.saved_revision = dirty ? 0 : s->revision; state.failed_save = 0;
     text_copy(state.title, sizeof(state.title), state.file >= 0 ? fs_name(state.file) : "Recovered document");
-    state.scroll = state.dragging = 0; invalidate(); status("Recovered document draft."); return 1;
+    state.scroll = state.dragging = state.manual_scroll = 0; invalidate(); status("Recovered document draft."); return 1;
 }
 const char *writer_title(void) { return state.initialized ? state.title : "Untitled"; }
 const char *writer_status(void) { return state.status; }
@@ -739,6 +742,7 @@ unsigned writer_line_count(void) { writer_layout(state.width); return state.line
 void writer_close(void) { if (state.initialized) writer_new(); }
 void writer_release(void) { if (state.initialized) state.dragging = 0; }
 int writer_scroll(int lines) {
+    if (lines) state.manual_scroll = 1;
     writer_layout(state.width);
     int old = state.scroll;
     state.scroll = clamp(state.scroll + lines * BODY_HEIGHT, 0,
@@ -998,9 +1002,11 @@ static int button_action(unsigned action) {
     search_open(0); return WRITER_CHANGED;
 }
 static void geometry(int w, int h) {
+    int old_width = state.width, old_height = state.viewport_height;
     state.viewport_height = h - TOOL_H - FOOT_H - 16 - search_height();
     if (state.viewport_height < 24) state.viewport_height = 24;
     writer_layout(w - 2 * PAGE_PAD - 18);
+    if (!state.manual_scroll && (old_width != state.width || old_height != state.viewport_height)) reveal();
 }
 void writer_draw(int x, int y, int w, int h) {
     if (!state.initialized) writer_init();
@@ -1082,6 +1088,7 @@ int writer_click(int x, int y, int w, int h, int mx, int my, int modifiers) {
     if (my < top || my >= y + h - FOOT_H - 8 - search_height()) return 0;
     state.search.focus = 0;
     if (mx >= x + w - 18) {
+        state.manual_scroll = 1;
         int range = state.content_height - state.viewport_height;
         if (range > 0) state.scroll = clamp((my - top) * range / state.viewport_height, 0, range);
         return WRITER_CHANGED;
