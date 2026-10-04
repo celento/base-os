@@ -154,6 +154,22 @@ static void live_workflows(void) {
     assert(!fs_delete(id));int before=fs_node_count();assert(!edit_write_named("no-space.txt"));assert(fs_node_count()==before&&fs_find_child(0,"no-space.txt")<0);
     puts("Editor live conflicts, same-byte replacement, rename, undo baselines, reused IDs and create rollback passed");
 }
+static void snapshot_busy_retries(void) {
+    reset(1);int id=make_file(0,"report.txt","Original");open_editor(id);
+    FsSyncTicket ticket;assert(!fs_sync_request(&ticket)&&fs_sync_busy());
+    EditorSource baseline=edit_source;Document original=window_state[context_slot].doc;
+    assert(!edit_save()&&edit_save_busy&&!name_dlg);
+    assert(!memcmp(&original,&window_state[context_slot].doc,sizeof original));
+    replace_text("Private draft while disk saves");Document draft=window_state[context_slot].doc;
+    int count=fs_node_count();assert(!edit_write_named("later.txt")&&strstr(name_failure_message,"Retry Save"));
+    assert(fs_node_count()==count&&!memcmp(&draft,&window_state[context_slot].doc,sizeof draft));
+    assert(!memcmp(&baseline,&edit_source,sizeof baseline));expect_file(id,"Original");
+    unsigned turns=0;while(fs_sync_busy()){assert(fs_sync_step()!=FS_SYNC_IDLE);assert(++turns<100000);}
+    assert(!fs_sync_result(ticket)&&!fs_sync_release(ticket));
+    assert(edit_save()&&!edit_save_busy&&edit_saved_ok);expect_file(id,"Private draft while disk saves");
+    fs_init();assert(fs_load_disk()==0);id=fs_find_child(0,"report.txt");expect_file(id,"Private draft while disk saves");
+    puts("Editor busy saves preserve clean/dirty private state and bindings, then retry durably");
+}
 static void readonly_retries(void) {
     reset(0);int id=make_file(0,"report.txt","Original");assert(!fs_sync());
     /* An unknown optional volume exposes saved floppy files in supported read-only recovery. */
@@ -258,5 +274,5 @@ static void session_capacity(void) {
 }
 int main(void) {
     EditorBinding hash;edit_fingerprint("123456789",9,&hash);assert(hash.size==9&&hash.hash_b==0xcbf43926u&&hash.hash_a==0xbb86b11cu);
-    live_workflows();readonly_retries();recovery_workflows();recovery_pairing();session_capacity();return 0;
+    live_workflows();snapshot_busy_retries();readonly_retries();recovery_workflows();recovery_pairing();session_capacity();return 0;
 }
