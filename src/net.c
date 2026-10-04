@@ -102,6 +102,7 @@ static int tcp_send(unsigned flags,uint32_t seq,const uint8_t *data,unsigned siz
 }
 static void reset_connection(void){
     if(N.tcp_open||N.closing)tcp_send(TCP_RST|TCP_ACK,N.seq,0,0);
+    else if(N.phase==PHASE_SYN)tcp_send(TCP_RST,N.seq,0,0);
     N.tcp_open=N.closing=N.fin_seen=0;
 }
 static void job_error(const char *message){
@@ -223,6 +224,8 @@ static int begin(int job,const char *host){
     N.local_port=49152u+((N.started+N.ip_id*37u)&16383u);N.dns_id=(N.started+N.ip_id*71u+0x4261u)&65535u;N.ping_id=N.dns_id;
     if(!N.status.available){job_error("No RTL8139 adapter; start QEMU with -nic user,model=rtl8139");return -1;}
     if(!net_driver_link()){job_error("Network link is down");return -1;}
+    unsigned host_length=0;while(host[host_length]&&host_length<NET_HOST_MAX)host_length++;
+    if(host_length>=NET_HOST_MAX){job_error("DNS hostname exceeds 127 characters");return -1;}
     if(host!=N.host)string(N.host,sizeof N.host,host);
     if(net_parse_ipv4(N.host,&N.server))after_resolve();
     else {uint8_t query[160];if(net_dns_query(query,sizeof query,N.dns_id,N.host)<0){job_error("Invalid DNS hostname");return -1;}
@@ -231,11 +234,11 @@ static int begin(int job,const char *host){
 }
 static void append(char *out,unsigned *position,const char *text){while(*text&&*position+1<sizeof N.request)out[(*position)++]=*text++;out[*position]=0;}
 int net_http_start(const char *url,char *body,unsigned capacity){
-    net_init();if(net_busy())return -1;zero(&N.http,sizeof N.http);N.http.request_id=++N.http_serial;
-    if(!body||capacity<2||capacity>NET_HTTP_BODY_MAX){N.http.state=NET_HTTP_ERROR;string(N.http.error,sizeof N.http.error,"HTTP buffer must hold 2..32768 bytes");return -1;}
+    net_init();if(net_busy())return -1;reset_connection();zero(&N.http,sizeof N.http);N.http.request_id=++N.http_serial;
+    if(!body||capacity<2||capacity>NET_HTTP_BODY_MAX){N.http.state=NET_HTTP_ERROR;string(N.http.error,sizeof N.http.error,"HTTP buffer must hold 2..32768 bytes");string(N.error,sizeof N.error,N.http.error);return -1;}
     body[0]=0;
     if(!net_parse_url(url,N.host,&N.server_port,N.path)){
-        N.http.state=NET_HTTP_ERROR;string(N.http.error,sizeof N.http.error,"Use http://host[:port]/path; HTTPS/TLS is not supported");return -1;
+        N.http.state=NET_HTTP_ERROR;string(N.http.error,sizeof N.http.error,"Use http://host[:port]/path; HTTPS/TLS is not supported");string(N.error,sizeof N.error,N.http.error);return -1;
     }
     net_http_parser_init(&N.parser,body,capacity,&N.http);unsigned p=0;N.request[0]=0;
     append(N.request,&p,"GET ");append(N.request,&p,N.path);append(N.request,&p," HTTP/1.1\r\nHost: ");append(N.request,&p,N.host);
