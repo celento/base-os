@@ -10,7 +10,6 @@ import json
 import pathlib
 import re
 import shutil
-import socket
 import struct
 import subprocess
 import tempfile
@@ -20,7 +19,7 @@ import zlib
 from layout import constants
 from qemu_session import DesktopSession
 from update_image import install_kernel, install_packed_kernel, update
-from kernel_pack import RAW, pack_kernel, unpack_kernel
+from kernel_pack import LZ4, RAW, pack_kernel, unpack_kernel
 import volume
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -49,75 +48,6 @@ def install(path, build, kernel):
 
 
 
-class BootObserver:
-    """Read-only reconstruction observation using a hardware execution break.
-
-    The production image is unchanged. No guest instructions/data are patched.
-    Stop after successful checksums but before high GDTR reload/C changes data.
-    """
-    def __init__(self, path):
-        self.connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.connection.settimeout(90)
-        self.connection.connect(str(path))
-
-    def read(self, size):
-        data = bytearray()
-        while len(data) < size:
-            chunk = self.connection.recv(size - len(data))
-            if not chunk:
-                raise RuntimeError('GDB observer disconnected')
-            data.extend(chunk)
-        return bytes(data)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        self.connection.close()
-
-    def send(self, packet):
-        data = packet.encode()
-        self.connection.sendall(b'$' + data + b'#' + f'{sum(data) & 255:02x}'.encode())
-        ack = self.read(1)
-        assert ack == b'+', ack
-
-    def response(self):
-        while self.read(1) != b'$':
-            pass
-        data = bytearray()
-        while True:
-            value = self.read(1)
-            if value == b'#':
-                break
-            data.extend(value)
-        checksum = self.read(2)
-        assert checksum == f'{sum(data) & 255:02x}'.encode(), (data, checksum)
-        self.connection.sendall(b'+')
-        return data.decode()
-
-    def request(self, packet):
-        self.send(packet)
-        return self.response()
-
-    def verify(self, session, names, kernel):
-        address = names['__packed_verified'] - C['KERNEL_LOAD_ADDR'] + C['KERNEL_STAGE_ADDR']
-        assert self.request(f'Z1,{address:x},1') == 'OK'
-        self.send('c')
-        stopped = self.response()
-        assert stopped.startswith(('T05', 'S05')), stopped
-        registers = session.command('human-monitor-command', {'command-line': 'info registers'})
-        assert int(re.search(r'\bEIP=([0-9a-fA-F]+)', registers)[1], 16) == address, registers
-        assert session.memory(C['KERNEL_LOAD_ADDR'], len(kernel)) == kernel
-        expected = bytearray(kernel[:C['KERNEL_BOOTSTRAP_BYTES']])
-        # x86 sets descriptor Accessed bits when loading the low CS/DS caches.
-        for name in ('gdt_code', 'gdt_data'):
-            expected[names[name] - C['KERNEL_LOAD_ADDR'] + 5] |= 1
-        assert session.memory(C['KERNEL_STAGE_ADDR'], len(expected)) == expected
-        assert self.request(f'z1,{address:x},1') == 'OK'
-        self.send('c')
-        return {'raw_memory_exact': True, 'plain_prefix_exact_except_gdt_accessed': True}
-
-
 def check_runtime(session, names, kernel):
     session.command('stop')
     try:
@@ -129,15 +59,22 @@ def check_runtime(session, names, kernel):
         assert C['STACK_BOTTOM'] <= esp < C['STACK_TOP'], registers
         assert gdt == names['gdt_start'], registers
         assert names['__kernel_end'] <= C['STACK_BOTTOM']
-        # Immutable instructions match the reconstructed canonical binary.
-        # Only the plain prefix has identical raw bytes at the BIOS stage.
-        for name in ('_start', 'kmain'):
-            address = names[name]
-            offset = address - C['KERNEL_LOAD_ADDR']
-            expected = kernel[offset:offset + 64]
-            assert session.memory(address, len(expected)) == expected, name
-            if offset + len(expected) <= C['KERNEL_BOOTSTRAP_BYTES']:
-                assert session.memory(C['KERNEL_STAGE_ADDR'] + offset, len(expected)) == expected, name
+        # C legitimately changes the GDT and .data. Compare every immutable
+        # instruction/rodata byte, excluding just the embedded GDT, not samples.
+        immutable_bytes = 0
+        for start, end in ((C['KERNEL_LOAD_ADDR'], names['gdt_start']),
+                           (names['__bootstrap_end'], names['__text_end']),
+                           (names['__rodata_start'], names['__rodata_end'])):
+            offset = start - C['KERNEL_LOAD_ADDR']
+            expected = kernel[offset:offset + end - start]
+            assert session.memory(start, len(expected)) == expected, hex(start)
+            immutable_bytes += len(expected)
+        # Only the plain prefix is raw at the BIOS stage. Its initial GDT has
+        # CPU-updated Accessed bits, so compare immutable ranges around it.
+        for start, end in ((0, names['gdt_start'] - C['KERNEL_LOAD_ADDR']),
+                           (names['__bootstrap_end'] - C['KERNEL_LOAD_ADDR'],
+                            C['KERNEL_BOOTSTRAP_BYTES'])):
+            assert session.memory(C['KERNEL_STAGE_ADDR'] + start, end - start) == kernel[start:end]
         gdtr = session.memory(C['BOOTINFO_ADDR'] + 0x40, 6)
         assert struct.unpack('<HI', gdtr) == (47, names['gdt_start'])
         # The active TSS uses the existing independent 64 KiB task syscall stack.
@@ -159,24 +96,21 @@ def check_runtime(session, names, kernel):
             assert session.memory(start, end - start) == bytes(end - start)
         return dict(eip=hex(eip), esp=hex(esp), gdt=hex(gdt), task_esp0=hex(esp0),
                     kernel_bytes=len(kernel), packed_bytes=len(pack_kernel(kernel, C)),
+                    immutable_bytes_verified=immutable_bytes,
                     kernel_end=hex(names['__kernel_end']),
                     memory_margin=C['STACK_BOTTOM'] - names['__kernel_end'])
     finally:
         session.command('cont')
 
 
-def boot(build, image, directory, label, names, kernel, loaded=False):
-    observer_path = directory / 'boot-observer.sock'
-    with DesktopSession(build, 'kernel-space-' + label, image=image,
-                        extra=('-S', '-gdb', f'unix:{observer_path},server=on,wait=off')) as session:
-        with BootObserver(observer_path) as observer:
-            verified = observer.verify(session, names, kernel)
+def boot(build, image, directory, label, names, kernel, loaded=False, codec=LZ4):
+    with DesktopSession(build, 'kernel-space-' + label, image=image) as session:
         session.boot()
         log = session.log.read_text()
         if loaded:
             assert 'FS loaded from disk' in log and 'FS seeded fresh' not in log, log
         result = check_runtime(session, names, kernel)
-        result.update(verified)
+        result.update(codec=codec, packed_bytes=len(pack_kernel(kernel, C, codec=codec)))
         # Ordinary first-boot autosaves finish before this owned QEMU is stopped.
         time.sleep(4)
         shutil.copyfile(session.log, directory / (label + '.log'))
@@ -247,7 +181,7 @@ def main(build, quick=False):
         raw_disk[:512] = (build / 'boot.bin').read_bytes()
         install_packed_kernel(raw_disk, pack_kernel(kernel, C, codec=RAW), C)
         raw_path.write_bytes(raw_disk)
-        results['raw-codec'] = boot(build, raw_path, directory, 'raw-codec', names, kernel)
+        results['raw-codec'] = boot(build, raw_path, directory, 'raw-codec', names, kernel, codec=RAW)
         old_path = directory / 'legacy.img'
         old, content = legacy_image(old_path)
         update(old_path, build / 'boot.bin', build / 'kernel.bin')

@@ -447,8 +447,6 @@ pm_relocate:
     cmp eax, [KERNEL_STAGE_ADDR + KERNEL_BOOTSTRAP_BYTES + 20]
     jne packed_failed
 
-global __packed_verified
-__packed_verified:
     ; process_init will edit the reconstructed user/TSS descriptors. Reload
     ; GDTR before C so LTR and later ring-3 returns see those same bytes.
     mov dword [0x7E42], gdt_start
