@@ -10,6 +10,13 @@ void timer_delay(unsigned t){now+=t;}
 int program_key(void){return 65;}
 void program_present(void){}
 int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;return -1;}
+int process_task_start(int owner,const void *p,unsigned n,const ProgramIO *io){(void)owner;(void)p;(void)n;(void)io;return -1;}
+int process_task_step(int owner){(void)owner;return 0;}
+int process_task_status(int owner){(void)owner;return PROCESS_TASK_EMPTY;}
+int process_task_result(int owner){(void)owner;return 0;}
+int process_task_key(int owner,int key){(void)owner;(void)key;return 0;}
+void process_task_stop(int owner){(void)owner;}
+void process_task_clear(int owner){(void)owner;}
 static char result[192];static int plotted;
 static void output_line(const char *s){snprintf(result,sizeof result,"%s",s);}
 static void output_plot(int x,int y,int c){assert(x>=0&&x<160&&y>=0&&y<100&&c==7);plotted++;}
