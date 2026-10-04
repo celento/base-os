@@ -26,7 +26,9 @@ int main(void){
     for(unsigned i=0;i<PM_BYTES;i++)if(workspace[i])return 43;
     for(unsigned i=0;i<PM_BYTES;i++){workspace[i]=(unsigned char)expected(i);checksum+=workspace[i];}
     char path[]="/Documents/pm-0.bin";path[14]=(char)('0'+display);
-    if(bos_file_open(path,BOS_FILE_OPEN_READ|BOS_FILE_OPEN_WRITE|BOS_FILE_OPEN_CREATE,&file)!=BOS_OK)return 44;
+    int opened=bos_file_open(path,BOS_FILE_OPEN_READ|BOS_FILE_OPEN_WRITE,&file);
+    if(opened==BOS_E_NOT_FOUND)opened=bos_file_open(path,BOS_FILE_OPEN_READ|BOS_FILE_OPEN_WRITE|BOS_FILE_OPEN_CREATE,&file);
+    if(opened!=BOS_OK)return 44;
     if(bos_file_replace(file.handle,workspace,PM_BYTES,&file)!=BOS_OK)return 45;
     for(;;){
         for(unsigned i=0;i<PM_BYTES;i++)if(workspace[i]!=expected(i))return 46;
