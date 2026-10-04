@@ -79,7 +79,8 @@ references.
 
 Native Save As requires `.bwr`; export requires `.rtf`. Existing unrelated names
 are rejected. Ordinary Save checks the original filesystem identity, including
-after rename: a deleted file's reused node ID is never overwritten. A clean
+after a `.bwr` rename: a deleted file's reused node ID is never overwritten.
+Renaming away from `.bwr` requires Save As. A clean
 bound document whose file disappears is treated as unsaved and needs Save As.
 Every successful save requires `fs_sync()` to finish successfully. Failed writes
 or synchronization leave the document open and unsaved. A newly created empty

@@ -191,6 +191,9 @@ static void test_files(void) {
     int plain = fs_create(0, "plain.txt"); assert(fs_write(plain, "plain\ntext", 10) == 10);
     assert(writer_open_file(plain)); check_text("plain\ntext"); assert(writer_file() == -1 && writer_dirty());
     assert(writer_save() == WRITER_SAVE_NEEDS_NAME);
+    assert(writer_restore(saved, length, plain, fs_identity(plain), 0, 0, 0));
+    assert(writer_file() == -1 && writer_dirty());
+    assert(!memcmp(fs_data(plain), "plain\ntext", 10));
     int bad = fs_create(0, "binary.txt"); assert(fs_write(bad, "A\x01" "B", 3) == 3);
     prior = *writer_document(); assert(!writer_open_file(bad)); compare_docs(&prior, writer_document());
     assert(writer_restore(saved, length, 19, 1, 0, 999, 999)); assert(writer_file() == -1 && writer_dirty());
