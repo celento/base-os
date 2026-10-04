@@ -64,7 +64,7 @@ python3 tools/volume.py build/baseos-data.img import notes.txt /Projects/notes.t
 python3 tools/volume.py build/baseos-data.img export /Projects/notes.txt recovered.txt
 ```
 
-Add `--replace` to explicitly replace an existing data file or export destination. Parent folders must already exist. File contents can be binary; names are ASCII, at most 23 characters, and cannot contain `/`. On the data disk, files can contain up to 2,097,152 bytes (2 MiB). Editor supports 65,535-byte documents; command scripts, BASIC sources, and native BEX images retain their separate 16,383-byte application limits. Large media files are not editable as text. Boot a fresh data image once before importing into it.
+Add `--replace` to explicitly replace an existing data file or export destination. Parent folders must already exist. File contents can be binary; names are ASCII, at most 23 characters, and cannot contain `/`. On the data disk, files can contain up to 2,097,152 bytes (2 MiB). Editor supports 65,535-byte documents; command scripts and BASIC sources retain their separate 16,383-byte limits. Native BEX1 images support 49,152 bytes on IDE storage. Large media files are not editable as text. Boot a fresh data image once before importing into it.
 
 The same tool still reads and updates old `build/baseos.img` floppy snapshots, which keep their 16,383-byte per-file limit. Once the data disk has mounted successfully, import new files into `baseos-data.img`; changing the old floppy does not replace the newer data volume.
 
@@ -122,7 +122,7 @@ A fault returns to the terminal. `exec` remains synchronous with its roughly two
 
 This is a small desktop-driven task runtime, not a POSIX process system. Kernel syscalls are bounded but are not preempted; disk, rendering, and built-in app work can delay task scheduling. The user pages are writable and executable, with no NX/W^X guarantee. This is an educational boundary, not a claim of production-grade sandbox security. See [the native task guide](docs/NATIVE_TASKS.md) for lifecycle, scheduling and integration details.
 
-The file begins with four little-endian 32-bit words: magic `0x31584542` (`BEX1`), entry offset (at least 16), exact file length, and reserved zero. The complete executable must fit the BEX1 loader's 16,383-byte image limit. Offsets, including the instruction pointer and syscall pointers, are relative to the start of the user region. Initial stack offset is 65,520. Programs must exit through a syscall rather than return.
+The file begins with four little-endian 32-bit words: magic `0x31584542` (`BEX1`), entry offset (at least 16), exact file length, and reserved zero. The complete executable must fit the BEX1 loader's 49,152-byte image limit; files above 16,383 bytes require the IDE data disk. The SDK reserves the last 16 KiB for stack, including when code and BSS grow. Offsets, including the instruction pointer and syscall pointers, are relative to the start of the user region. Initial stack offset is 65,520. Programs must exit through a syscall rather than return.
 
 Use `int 0x80`, with EAX selecting the operation:
 
@@ -137,16 +137,28 @@ Use `int 0x80`, with EAX selecting the operation:
 | 6 | Read file | EBX=path offset, ECX=path length, EDX=buffer, ESI=capacity (≤4096) | Bytes copied or -1 |
 | 7 | Write document | EBX=path offset, ECX=path length, EDX=data, ESI=length (≤4096) | Bytes saved or -1 |
 | 8 | File size | EBX=path offset, ECX=path length | File length or -1 |
-| 9 | Filled rectangle | EBX=x, ECX=y, EDX=width≤160, ESI=height≤100, EDI=color | 0 or -1 |
+| 9 | Filled rectangle | EBX=x, ECX=y, EDX=width≤canvas width, ESI=height≤canvas height, EDI=color | 0 or -1 |
 | 10 | Yield task | None | 0 in task mode, -1 in synchronous exec |
 | 11 | Sleep task | EBX=milliseconds, 0..60000 | 0, or -1 for invalid duration/synchronous exec |
 | 12 | Task owner | None | Terminal slot 1..8, or 0 in synchronous exec |
+| 13 | Read file at offset | EBX=path, ECX=path length, EDX=buffer, ESI=capacity≤4096, EDI=byte offset | Bytes copied, 0 at/beyond EOF, or -1 |
+| 14 | Set canvas mode | EBX=width, ECX=height: exactly 160×100 or 320×200 | 0 and cleared canvas, or -1 |
+| 15 | Replace document | EBX=path, ECX=path length, EDX=data, ESI=bytes≤32768 | Complete RAM replacement length, or -1 |
+| 16 | Synchronize files | None | 0 after durable snapshot flush, or -1 |
 
 The other general registers are preserved across returning syscalls. Native graphics
 appear on Present or when execution finishes in synchronous mode; task changes
 appear on the next desktop redraw. Present also yields in task mode. Paths must be absolute ASCII, at most
 128 bytes. File writes are confined to `/Documents` and its existing subfolders;
-reads reject folders and applications. Data transfers are capped at 4096 bytes.
+reads reject folders and applications. Read chunks and legacy writes are capped at
+4096 bytes. Replacement syscall 15 accepts 32,768 bytes atomically; a failed write
+preserves the original. Writes change RAM first. Syscall 16 flushes the complete
+filesystem snapshot and reports durability separately. Offset reads can stream
+complete 2 MiB files, but separate calls do not form an immutable snapshot.
+
+Native programs start on a 160×100 canvas. Syscall 14 opts into 320×200 and clears
+it; the next app and BASIC reset to 160×100. Rectangle bounds follow the active
+mode. Each terminal keeps independent pixels and dimensions.
 No network API is exposed to native programs. Audio pauses during a synchronous
 native program and resumes afterward to avoid replaying a stale DMA buffer.
 Task mode does not pause audio. x87 state is isolated between native tasks and
@@ -163,6 +175,7 @@ and leave at least 16 KB for the application stack.
 python3 tools/build_app.py examples/c/hello.c build/hello-c.bex
 python3 tools/build_app.py examples/c/notebook.c build/notebook.bex
 python3 tools/build_app.py examples/c/counter.c build/counter.bex
+python3 tools/build_app.py examples/c/docstats.c build/docstats.bex
 ```
 
 The examples are installed without replacing existing files. Run
@@ -177,6 +190,14 @@ the owning terminal slot. Task memory is not restored after reboot.
 
 Test the C build/run/persistence path with `python3 tools/sdk_test.py build`, and
 the task runtime with `python3 tools/task_test.py build`.
+
+`start /Programs/docstats.bex` streams a configurable document into byte/word/line
+counts and a 320×200 byte histogram. Edit `/Documents/stats-path.txt` to select an
+absolute input path; R reloads, S saves a synchronized per-slot report, and Q exits.
+The included 56,812-byte sample requires IDE storage. The [native SDK guide](docs/NATIVE_SDK.md)
+documents the extended ABI, memory limits, exact counting rules and bounded
+replacement writes. `python3 tools/native_sdk_test.py build` verifies the new
+streaming, large-image, canvas, capacity and reboot paths.
 
 `examples/hello.asm` is assembled during every build and installed as `/Programs/hello.bex` if missing. To assemble another example with the same header and ABI:
 
