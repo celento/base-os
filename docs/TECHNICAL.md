@@ -97,7 +97,7 @@ The 256-entry palette is laid out as 16 fixed base colors, a 32-step gray ramp, 
 
 ## Rendering and terminal help
 
-Window drags cache the unchanged desktop behind the moving window. The presenter compares RAM buffers and transfers only changed horizontal spans to video memory. Palette lookups and rounded-corner coverage are cached; bulk fills/copies use x86 word operations. Background app visuals refresh when the drag finishes, while the dragged app is repainted during movement. The idle desktop sleeps until the next timer tick instead of continuously polling. Normal QEMU runs use 64 MiB; all fixed reservations, including file data and staging, require RAM through 49 MiB.
+Window drags cache the unchanged desktop behind the moving window. The presenter compares RAM buffers and transfers only changed horizontal spans to video memory. Palette lookups and rounded-corner coverage are cached; bulk fills/copies use x86 word operations. Background app visuals refresh when the drag finishes, while the dragged app is repainted during movement. The idle desktop sleeps until the next timer tick instead of continuously polling. Normal QEMU runs use 64 MiB; all fixed reservations, including file data and staging, require RAM through 63 MiB.
 
 Fonts use four bits per pixel (16 coverage levels), and window masks preserve the background at all four corners. The heavy layered shadows are removed. Font generation uses the included licensed font files and requires Python with Pillow; normal builds use the checked-in generated header.
 
@@ -117,3 +117,11 @@ filesystem mount. Other adapters keep the initial BIOS mode.
 Run `python3 tools/display_test.py build` to exercise mode changes, keyboard
 confirmation, automatic recovery and persistence. The test prints its screenshot
 and log directory. Register reference: https://www.qemu.org/docs/master/specs/standard-vga.html
+
+## Editor working memory
+
+Eight 64 KiB document buffers and eight snapshots per document use a separate
+5 MiB arena at 49 MiB. Two 64 KiB scratch/clipboard buffers occupy its final 128 KiB.
+Compile-time checks bound all document state below those buffers. Find/replace uses
+bounded linear construction and one history step for Replace All; it does not
+mutate the original document if the result exceeds capacity.
