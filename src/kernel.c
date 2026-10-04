@@ -5422,12 +5422,12 @@ static void draw_window_contents(Win *w, int inactive) {
         int y = wy + TITLE_H + 18;
         int x = wx + 24;
         static const char *tips[] = {
-            "Double-click a desktop icon to launch an app",
-            "File menu: New, New Folder, Open, Save, Duplicate",
-            "Drag files onto Trash to remove them, System > Empty Trash to purge",
-            "Ctrl+Space opens the launcher, Ctrl+Tab cycles windows",
-            "Ctrl+N new, Ctrl+S save, Ctrl+W close, Ctrl+M minimize",
-            "Escape or the close button leaves a window",
+            "Ctrl+Space searches apps/files; Alt+Tab changes windows",
+            "Files: Ctrl+F filters; Ctrl+1 through Ctrl+4 select sorting",
+            "Ctrl+C/X/V copy, cut and paste files or selected text",
+            "Writer: Ctrl+S saves BWR; Ctrl+Shift+P exports PDF",
+            "Open .bex files to run native apps; Ctrl+C stops a task",
+            "Documents includes Writer and Spreadsheet quick starts",
         };
         draw_string_bold("Getting around", x, y, ui_text);
         y += LINE_H + 8;
@@ -7679,7 +7679,20 @@ static void install_examples(void){
         if(id>=0&&fs_write(id,example_sheet_guide,kstrlen(example_sheet_guide))!=kstrlen(example_sheet_guide))fs_delete(id);
     }
     if(docs>=0&&fs_find_child(docs,"welcome.html")<0){
-        const char *page="<title>BaseOS guide</title><h1>BaseOS guide</h1><p>Open several apps from the desktop or Ctrl+Space. Alt+Tab changes windows.</p><h2>Browser</h2><p>Use HTTP addresses or file:///Documents/welcome.html. HTTPS, JavaScript and CSS layout are not supported. Never enter passwords over HTTP.</p><h2>Media Player</h2><p>Open /Media/chime.wav. WAV PCM and MP3 playback use the QEMU Sound Blaster 16.</p><h2>Make an app</h2><p>Terminal can run exec /Programs/hello-c.bex and exec /Programs/notebook.bex. The host C SDK is in the source archive.</p>";
+        const char *page=
+            "<title>BaseOS guide</title><h1>BaseOS guide</h1>"
+            "<p>Open apps and files with Ctrl+Space. Alt+Tab changes windows.</p>"
+            "<h2>Files</h2><p>Ctrl+F filters this folder. Ctrl+1 through Ctrl+4 select Name, Type, Size or Modified sorting. "
+            "Ctrl+C, Ctrl+X and Ctrl+V copy or move the selected file. Existing unrelated names are never replaced.</p>"
+            "<h2>Documents</h2><p>Writer saves editable BWR files. Ctrl+Shift+E exports RTF; Ctrl+Shift+P exports Letter or A4 PDF. "
+            "PDF is for viewing or printing on the host. Spreadsheet opens budget.bsh and exchanges CSV values.</p>"
+            "<h2>Native apps</h2><p>Open a .bex program from Files or search. In Terminal, "
+            "start /Programs/docstats.bex /Documents/stats-sample.txt scans that document. S saves the report; Q exits. "
+            "Existing installed examples are preserved when the kernel is updated.</p>"
+            "<h2>Media and storage</h2><p>Media Player supports WAV, MP3 and bounded MPEG-1/MP2. "
+            "Terminal df shows this volume's actual limits. The explicit large profile allows 16 MiB files and WAV/MP3 sources.</p>"
+            "<h2>Browser</h2><p>Use HTTP addresses or file:///Documents/welcome.html. "
+            "HTTPS, JavaScript and CSS layout are not supported. Never enter passwords over HTTP.</p>";
         int id=fs_create(docs,"welcome.html");if(id>=0)fs_write(id,page,kstrlen(page));
     }
     int dir=fs_find_child(fs_root(),"Programs");if(dir<0)dir=fs_mkdir(fs_root(),"Programs");if(dir<0)return;

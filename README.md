@@ -11,14 +11,14 @@ BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data p
 - Open up to eight windows. Move, resize, maximize, minimize or snap them; keep independent documents, folders and terminals open.
 - Edit documents up to 65,535 bytes with selection, clipboard, eight undo steps, and case-sensitive or insensitive find/replace. Changed documents have Save/Discard/Cancel on close; saving confirms disk synchronization. Draw with Paint's brushes, shapes, fill and text tools.
 - Calculate small budgets in Spreadsheet: a 128 x 26 grid, bounded formulas, range copy/paste, four-step undo, native .bsh files, CSV value interchange and guarded recovery. Start with Documents/budget.bsh.
-- Write formatted documents with Writer: proportional wrapping, bold/italic/underline, headings, alignment, grouped undo, native save/recovery and a separate RTF export. Writer supports 32,768 ASCII text bytes; the plain Editor remains available.
+- Write formatted documents with Writer: proportional wrapping, bold/italic/underline, headings, alignment, grouped undo, native save/recovery and separate RTF or paginated Letter/A4 PDF exports. Writer supports 32,768 ASCII text bytes; the plain Editor remains available.
 - Store files up to 2 MiB on a separate 16 MiB data disk, or explicitly choose the large profile for 16 MiB files on a 64 MiB disk. Dual snapshots hold about 8 MiB or 32 MiB of file data respectively; both support 256 total file, folder and application nodes (64 in legacy floppy-only mode). Existing boot-disk files migrate without changing the old snapshots.
 - Sort Files by Name, Type, Size or Modified, and filter the current folder with Ctrl+F. Each window keeps identity-safe selection through reordering.
 - Copy and move files or folders through Files with Ctrl+C/Ctrl+X/Ctrl+V or the Edit menu. Collisions never overwrite unrelated files, and stale file identities are rejected.
 - Read HTTP pages in Browser, follow links, navigate history, and save complete HTML for offline reading. Download binary files with Browser’s Download button or Terminal while other apps keep running.
 - Play PCM WAV and MP3 through QEMU's SB16 device, with pause, resume, volume and a playlist. Play MPEG-1 program streams with synchronized MP2 audio; 48 kHz audio is resampled to 44.1 kHz for QEMU SB16. Exact bounds are in the media guides.
 - View JPEG, PNG, BMP, GIF's first frame and BaseOS images, with fit, actual size, zoom, pan and transparency. Images are bounded to 1,024 pixels per side and 786,432 pixels total.
-- Build C applications up to 48 KiB with the included host SDK, keeping a 64 KiB process region and 16 KiB stack reserve. Native tasks can stream files in bounded chunks (2 MiB by default, 16 MiB on the large profile), replace 32 KiB documents with explicit sync, and use an optional 320x200 canvas. The included DocStats app counts a document and displays its byte histogram.
+- Build C applications up to 48 KiB with the included host SDK, keeping a 64 KiB process region and 16 KiB stack reserve. Native tasks can stream files in bounded chunks (2 MiB by default, 16 MiB on the large profile), replace 32 KiB documents with explicit sync, and use an optional 320x200 canvas. The included DocStats app accepts an optional document path, counts its bytes/words/lines and displays a byte histogram.
 - Launch `.bex` native apps directly from Files or the `Ctrl+Space` search; each opens its own protected Terminal task. Run shell scripts, Tiny BASIC and the legacy synchronous `exec` interface. Calculator, Todo, Clock, Calendar and the original games remain included. System Monitor lists native tasks with Show and Stop controls, alongside resource and window information.
 - Search apps and files with `Ctrl+Space`; use the mouse wheel to scroll. Restore saved window arrangements and Editor/Paint/Writer/Spreadsheet drafts after reboot.
 
@@ -110,6 +110,8 @@ Host and reference-media tests additionally need Clang, FFmpeg and Pillow (`pyth
 | Snap left / right | `Alt+Left` / `Alt+Right` |
 | Maximize / restore | `Alt+Enter` |
 | Save Editor, Paint or a complete Browser page | `Ctrl+S` |
+| Export Writer PDF / RTF | `Ctrl+Shift+P` / `Ctrl+Shift+E` |
+| Filter Files / select sorting | `Ctrl+F` / `Ctrl+1` through `Ctrl+4` |
 | Find / replace in Editor | `Ctrl+F` / `Ctrl+H` |
 | Find next / previous | `F3` / `Shift+F3` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
