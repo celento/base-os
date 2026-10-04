@@ -23,6 +23,7 @@
 #include "image_viewer.h"
 #include "audio_example.h"
 #include "platform.h"
+#include "physmem.h"
 #include "history.h"
 #include "program.h"
 #include "native_example.h"
@@ -8146,6 +8147,14 @@ void kmain(void) {
     poll_time();
 
     video_init();
+    if (physmem_init() != PHYS_OK)
+        panic("owned-page metadata/map initialization failed");
+    PhysmemStats pages;
+    if (physmem_stats(&pages) != PHYS_OK)
+        panic("owned-page accounting unavailable");
+    kprint_debug("Owned pages total="); kprint_uint(pages.total);
+    kprint_debug(" allocated="); kprint_uint(pages.allocated);
+    kprint_debug(" high_water="); kprint_uint(pages.high_water); serial_write('\n');
     audio_init();
     net_init();
 

@@ -3,21 +3,31 @@
 static const MemoryRange *memory_map = (const MemoryRange *)E820_BASE;
 static const BootInfo *boot_info = (const BootInfo *)BOOTINFO_ADDR;
 
-static int available(uint32_t base, uint32_t end) {
+int platform_memory_map_valid(const MemoryRange *map, unsigned count) {
+    if (!map || !count || count > E820_MAX) return 0;
+    for (unsigned i = 0; i < count; ++i) {
+        const MemoryRange *r = &map[i];
+        if ((r->attributes & 1) && r->length &&
+            r->base + r->length < r->base) return 0;
+    }
+    return 1;
+}
+int platform_memory_map_available(const MemoryRange *map, unsigned count,
+                                  uint64_t base, uint64_t end) {
+    if (base >= end || !platform_memory_map_valid(map, count)) return 0;
     uint64_t cursor = base;
     /* Reject overlap with firmware reservations even if a usable descriptor
      * also covers it. Then allow adjacent usable descriptors to form a range. */
-    for (unsigned i = 0; i < boot_info->map_count; ++i) {
-        const MemoryRange *r = &memory_map[i];
+    for (unsigned i = 0; i < count; ++i) {
+        const MemoryRange *r = &map[i];
         if (!(r->attributes & 1) || !r->length) continue;
         uint64_t top = r->base + r->length;
-        if (top < r->base) return 0;
         if (r->type != 1 && r->base < end && top > base) return 0;
     }
     while (cursor < end) {
         uint64_t next = cursor;
-        for (unsigned i = 0; i < boot_info->map_count; ++i) {
-            const MemoryRange *r = &memory_map[i];
+        for (unsigned i = 0; i < count; ++i) {
+            const MemoryRange *r = &map[i];
             if (r->type == 1 && (r->attributes & 1) && r->base <= cursor &&
                 r->base + r->length > next) next = r->base + r->length;
         }
@@ -25,6 +35,9 @@ static int available(uint32_t base, uint32_t end) {
         cursor = next;
     }
     return 1;
+}
+static int available(uint32_t base, uint32_t end) {
+    return platform_memory_map_available(memory_map, boot_info->map_count, base, end);
 }
 int platform_memory_range_available(uint32_t base, uint32_t end) {
     if (base >= end || !boot_info->map_count || boot_info->map_count > E820_MAX)
