@@ -16,6 +16,8 @@ uses the real RTL8139 / IPv4 / DNS / TCP / HTTP stack described in
 - Click an underlined link. Tab / Shift+Tab select links and Enter follows one.
 - Mouse wheel, Up/Down, Page Up/Page Down, Space and Home/End scroll the page.
   The scrollbar track can also be clicked.
+- Save or Ctrl+S writes a complete original page to a unique file in
+  `/Downloads`; open the saved HTML/text file offline. See [DOWNLOADS.md](DOWNLOADS.md).
 - Home opens `about:home`. Opening Browser itself makes no network request.
 - `file:///path` reads a local BaseOS file. `.html` and `.htm` are parsed as HTML;
   other local files are shown as text. The desktop can use `browser_open_file`
@@ -40,8 +42,10 @@ alongside its actual HTTP status.
 
 - HTTP is unencrypted. Do not use it for passwords or private information.
 - There is no HTTPS / TLS, JavaScript, CSS layout, form submission, image
-  decoding, downloads, cookie store, authentication, tabs, bookmarks or page
+  decoding, cookie store, authentication, tabs, bookmarks or page
   cache. Many modern websites require these features and will not work.
+- Large binary files can be downloaded in the background with Terminal
+  `download HTTP_URL PATH`; Browser Save is limited to its complete 32 KB source.
 - The network stack permits one request at a time. If Terminal owns it, Browser
   reports that the network is busy rather than cancelling that request.
 - URLs are limited to 255 characters. One 32 KB buffer holds the HTTP body,
@@ -68,7 +72,7 @@ input routing.
    client clicks with the same geometry to `browser_click`.
 4. Route scancode / ASCII events to `browser_key(sc, ch, modifiers)`. Modifier
    bits are `BROWSER_MOD_CTRL`, `BROWSER_MOD_SHIFT` and `BROWSER_MOD_ALT`.
-   Browser must receive its Ctrl+L / Ctrl+R and Alt+Left / Alt+Right shortcuts
+   Browser must receive its Ctrl+L / Ctrl+R / Ctrl+S and Alt+Left / Alt+Right shortcuts
    before generic app or window shortcuts consume them.
 5. `browser_scroll(lines)` scrolls down for a positive value. Closing the
    singleton calls `browser_close()`, which stops only its owned network job.

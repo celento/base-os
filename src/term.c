@@ -3,6 +3,7 @@
 #include "program.h"
 #include "layout.h"
 #include "net.h"
+#include "download.h"
 typedef struct {
     char lines[TERM_LINES][TERM_COLS+1], input[TERM_COLS+1];
     char history[16][TERM_COLS+1], draft[TERM_COLS+1];
@@ -52,6 +53,9 @@ static const Manual commands[]={
     {"ping","ping HOST","Send an ICMP echo and report round-trip time.","ping 10.0.2.2","One bounded request. Some hosts do not answer ICMP."},
     {"nslookup","nslookup HOST","Resolve an IPv4 A record through QEMU DNS.","nslookup example.com","Uses 10.0.2.3; upstream DNS must be reachable on the host."},
     {"fetch","fetch HTTP_URL","Fetch and print up to 4095 bytes of an HTTP response.","fetch http://10.0.2.2:8000/","HTTP only, no TLS. No files are saved. Network waits are bounded."},
+    {"download","download HTTP_URL PATH","Download a complete HTTP response to a new file in the background.","download http://10.0.2.2:8000/song.wav /song.wav","Up to 2 MiB on the data disk. Never overwrites. HTTP only, no redirects."},
+    {"downloads","downloads [status|cancel]","Show the current download, byte progress and disk save status.","downloads","The download survives closing Terminal. One network request at a time."},
+    {"cancel","cancel [download]","Cancel the background download without creating a partial file.","cancel","Only the download is stopped; another app's network request is untouched."},
     {"start","start FILE","Start a protected BEX1 app alongside the desktop.","start /Programs/counter.bex","One task per terminal. Ctrl+C stops; closing this window stops it."},
     {"stop","stop","Stop this terminal's native task.","stop","Ctrl+C also stops a task without waiting for the program."},
     {"tasks","tasks","List the running native task slots.","tasks","Sleeping and minimized tasks remain alive; closing a terminal stops it."},
@@ -105,6 +109,29 @@ static void print_http_body(const char *text,unsigned size){
         if(c=='\n'){row[n]=0;push(row);n=0;continue;}
         row[n++]=c>=32&&c<=126?(char)c:'.';if(n==80){row[n]=0;push(row);n=0;}
     }if(n){row[n]=0;push(row);}
+}
+static void print_download(void){
+    const DownloadStatus *d=download_status();
+    push(d->state==DOWNLOAD_IDLE?"No download yet.":d->state==DOWNLOAD_ACTIVE?"Download in progress":d->state==DOWNLOAD_DONE?"Download complete":d->state==DOWNLOAD_CANCELLED?"Download cancelled":"Download failed");
+    if(d->state==DOWNLOAD_IDLE)return;
+    push(d->url);push(d->path);print_number("Received bytes: ",d->received);print_number("File byte limit: ",d->limit);
+    if(d->http_status)print_number("HTTP status: ",(unsigned)d->http_status);
+    if(d->state==DOWNLOAD_ACTIVE)push(d->http_state==NET_HTTP_RESOLVING?"Looking up host...":d->http_state==NET_HTTP_CONNECTING?"Connecting...":"Receiving body...");
+    else if(d->state==DOWNLOAD_DONE){
+        const char *storage=fs_storage_status();
+        push(storage?storage:fs_needs_sync()?"File complete in RAM; disk autosave pending.":"File saved; disk is synchronized.");
+    }else push(d->message);
+}
+static int download_command(int cwd,const char *url,const char *remaining,int quoted){
+    if(quoted)remaining++;
+    while(*remaining==' ')remaining++;
+    char path[81];int count=0;char quote=*remaining=='"'?*remaining++:0;
+    while(*remaining&&(quote?*remaining!=quote:*remaining!=' ')&&count<80)path[count++]=*remaining++;
+    path[count]=0;if(quote){if(*remaining!='"')return -1;remaining++;}
+    while(*remaining==' ')remaining++;
+    if(!url[0]||!path[0]||*remaining){push("Usage: download HTTP_URL PATH (quote names containing spaces)");return -1;}
+    if(download_start(cwd,url,path)){push(download_last_error());return -1;}
+    push("Download started in background. Use downloads for status; cancel to stop.");return 0;
 }
 static void cat(int id){char row[81];int n=0;for(int i=0;i<fs_size(id);i++){char c=fs_data(id)[i];if(c=='\r')continue;if(c=='\n'){row[n]=0;push(row);n=0;continue;}row[n++]=c>=32&&c<=126?c:'.';if(n==80){row[n]=0;push(row);n=0;}}if(n){row[n]=0;push(row);}}
 static void plot(int x,int y,int color){if(x>=0&&x<160&&y>=0&&y<100){T.task_dirty=1;T.canvas_on=1;T.canvas[y*160+x]=(unsigned char)color;}}
@@ -162,6 +189,16 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"echo"))push(s);
     else if(!kstrcmp(cmd,"clear")){T.head=T.count=T.canvas_on=0;}
     else if(!kstrcmp(cmd,"net"))print_network();
+    else if(!kstrcmp(cmd,"download"))return download_command(cwd,arg,p,quote!=0);
+    else if(!kstrcmp(cmd,"downloads")){
+        if(!arg[0]||!kstrcmp(arg,"status"))print_download();
+        else if(!kstrcmp(arg,"cancel")){if(!download_cancel())push("No background download is running.");else push(download_status()->message);}
+        else return -1;
+    }
+    else if(!kstrcmp(cmd,"cancel")){
+        if(arg[0]&&kstrcmp(arg,"download"))return -1;
+        if(!download_cancel())push("No background download is running.");else push(download_status()->message);
+    }
     else if(!kstrcmp(cmd,"ping")||!kstrcmp(cmd,"nslookup")||!kstrcmp(cmd,"fetch")){
         if(!arg[0])return -1;
         if(net_busy()){push("Network is busy; wait for the current request or stop it.");return -1;}

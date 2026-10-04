@@ -11,3 +11,7 @@ int net_ping(const char *host,unsigned *ms){(void)host;(void)ms;return -1;}
 int net_resolve(const char *host,uint32_t *address){(void)host;(void)address;return -1;}
 int net_http_get(const char *url,char *body,unsigned capacity){(void)url;(void)body;(void)capacity;return -1;}
 void net_format_ipv4(uint32_t address,char out[16]){(void)address;out[0]='0';out[1]=0;}
+
+int net_http_start(const char *url,char *body,unsigned capacity){(void)url;(void)body;(void)capacity;return -1;}
+int net_http_busy(void){return 0;}
+void net_cancel(void){}

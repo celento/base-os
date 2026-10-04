@@ -235,7 +235,7 @@ static int begin(int job,const char *host){
 static void append(char *out,unsigned *position,const char *text){while(*text&&*position+1<sizeof N.request)out[(*position)++]=*text++;out[*position]=0;}
 int net_http_start(const char *url,char *body,unsigned capacity){
     net_init();if(net_busy())return -1;reset_connection();zero(&N.http,sizeof N.http);N.http.request_id=++N.http_serial;
-    if(!body||capacity<2||capacity>NET_HTTP_BODY_MAX){N.http.state=NET_HTTP_ERROR;string(N.http.error,sizeof N.http.error,"HTTP buffer must hold 2..32768 bytes");string(N.error,sizeof N.error,N.http.error);return -1;}
+    if(!body||capacity<2||capacity>NET_HTTP_TRANSFER_MAX){N.http.state=NET_HTTP_ERROR;string(N.http.error,sizeof N.http.error,"HTTP buffer must hold 2..2097153 bytes");string(N.error,sizeof N.error,N.http.error);return -1;}
     body[0]=0;
     if(!net_parse_url(url,N.host,&N.server_port,N.path)){
         N.http.state=NET_HTTP_ERROR;string(N.http.error,sizeof N.http.error,"Use http://host[:port]/path; HTTPS/TLS is not supported");string(N.error,sizeof N.error,N.http.error);return -1;

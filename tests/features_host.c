@@ -44,7 +44,7 @@ int main(void){
     char name[24];assert(fs_destination(0,"/test folder/new.txt",name)==dir&&!strcmp(name,"new.txt"));
     assert(fs_destination(0,"/test folder/1234567890123456789012345",name)<0);
     term_select(0);term_reset();command("cd \"/test folder\"");assert(term_cwd()==dir);
-    term_char('c');term_char('a');term_complete();assert(!strcmp(term_input(),"cat "));
+    term_char('c');term_char('a');term_char('t');term_complete();assert(!strcmp(term_input(),"cat "));
     term_char('h');term_complete();assert(!strcmp(term_input(),"cat hello.txt "));term_enter();assert(!strcmp(term_get(term_count()-1),"contents"));
     term_history(-1);assert(!strcmp(term_input(),"cat hello.txt "));term_history(1);assert(!*term_input());
     term_select(1);term_reset();command("echo separate");assert(term_cwd()==0);

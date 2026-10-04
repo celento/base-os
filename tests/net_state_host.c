@@ -29,5 +29,9 @@ int main(void){
     reset();uint32_t address=0;assert(net_resolve("10.0.2.2",&address)==0&&address==IP_GATEWAY&&!net_busy());
     reset();assert(net_ping("10.0.2.2",0)==-1&&strstr(net_last_error(),"timed out"));
     initialized=0;available=0;net_init();assert(!net_status()->available);assert(net_http_get("http://10.0.2.2/",body,sizeof body)==-1&&strstr(net_last_error(),"No RTL8139"));
+    reset();static char transfer[NET_HTTP_TRANSFER_MAX];
+    assert(NET_HTTP_BODY_MAX==32768&&NET_HTTP_TRANSFER_MAX==2097153);
+    assert(net_http_start("http://10.0.2.2/large",transfer,sizeof transfer)==0);net_cancel();
+    assert(net_http_start("http://10.0.2.2/too-large",transfer,sizeof transfer+1)==-1&&!net_busy());
     puts("network state: request ownership, cancellation, disconnect, ARP/TCP deadlines, offline handling passed");
 }

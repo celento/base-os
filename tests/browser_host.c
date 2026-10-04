@@ -5,6 +5,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include "layout.h"
+#define main filesystem_fixture_main
+#include "fs_host.c"
+#undef main
 static uint8_t test_mirror[0x100000];
 #undef PRESENT_BASE
 #define PRESENT_BASE ((uintptr_t)test_mirror)
@@ -15,8 +18,6 @@ static uint8_t test_mirror[0x100000];
 
 uint8_t app_accent=COLOR_BLUE,app_accent_dk=COLOR_NAVY,app_text=COLOR_BLACK;
 uint8_t app_text_dim=COLOR_GRAY,app_chrome=COLOR_LTGRAY,app_chrome_dk=COLOR_GRAY;
-void kmemset(void *d,int v,int n){memset(d,v,(size_t)n);}
-void kmemcpy(void *d,const void *s,int n){memmove(d,s,(size_t)n);}
 static NetHttpResult result;
 static int busy,starts_count,cancels,serial;
 static char started_url[NET_URL_MAX];
@@ -32,15 +33,8 @@ int net_http_start(const char *url,char *body,unsigned cap){
     busy=1;http_body=body;http_capacity=cap;body[0]=0;return 0;
 }
 static const char sample_html[]="<title>Local sample</title><h1>Local file</h1><p>Saved on the BaseOS disk.</p>";
-int fs_root(void){return 0;}
-int fs_valid(int id){return id==1;}
-int fs_is_dir(int id){return id==0;}
-int fs_is_app(int id){(void)id;return 0;}
-int fs_resolve(int root,const char *path){(void)root;return strcmp(path,"/sample.html")==0?1:-1;}
-void fs_path(int id,char *out,int max){assert(id==1);assert(max>13);strcpy(out,"/sample.html");}
-int fs_read(int id,char *out,int max){assert(id==1);assert(max>(int)sizeof sample_html);strcpy(out,sample_html);return sizeof sample_html-1;}
 static uint8_t back[1024*768],linear[1024*768*4];
-static void reset_browser(void){browser_ready=0;busy=0;starts_count=0;cancels=0;serial=0;memset(&result,0,sizeof result);browser_init();}
+static void reset_browser(void){reset();fs_empty_dir(0);int sample=fs_create(0,"sample.html");assert(sample==1);assert(fs_write(sample,sample_html,sizeof sample_html-1)==sizeof sample_html-1);browser_ready=0;busy=0;starts_count=0;cancels=0;serial=0;memset(&result,0,sizeof result);browser_init();}
 static void complete(const char *html,const char *type){
     assert(busy);unsigned n=(unsigned)strlen(html);assert(n<http_capacity);memcpy(http_body,html,n+1);
     result.state=NET_HTTP_DONE;result.status=200;result.length=n;strcpy(result.content_type,type);busy=0;
@@ -132,6 +126,30 @@ static void test_scroll_reflow_and_bounds(void){
         for(int yy=0;yy<768;yy++)for(int xx=0;xx<1024;xx++)if(xx<20||xx>=20+sizes[k][0]||yy<20||yy>=20+sizes[k][1])assert(back[yy*1024+xx]==0x55);
     }
 }
+static void test_save_original_pages(void){
+    reset_browser();assert(!browser_can_save());assert(browser_save_page(0,"/home.html")==-1);
+    browser_open("http://example.com/article");assert(!browser_can_save());assert(browser_save_page(0,"/pending.html")==-1);
+    complete(example_html,"text/html");assert(browser_can_save());
+    int id=browser_save_page(0,"/original.html");assert(id>0);
+    assert(fs_size(id)==(int)sizeof example_html-1&&!memcmp(fs_data(id),example_html,sizeof example_html-1));
+    assert(strstr(fs_data(id),"<script>")); /* Original source, never the parsed display. */
+    assert(browser_save_page(0,"/original.html")==-1&&!memcmp(fs_data(id),example_html,sizeof example_html-1));
+    browser_key(0x1f,0,BROWSER_MOD_CTRL);int first=fs_resolve(0,"/Downloads/page.html");assert(first>0);
+    browser_draw(40,30,360,200);browser_click(40,30,360,200,button_x(40,5)+10,30+15);
+    int second=fs_resolve(0,"/Downloads/page-2.html");assert(second>0&&second!=first);
+    assert(fs_size(first)==fs_size(second)&&!memcmp(fs_data(first),fs_data(second),fs_size(first)));
+    assert(fs_sync()==0);remount();assert(fs_resolve(0,"/Downloads/page.html")>=0);
+    browser_open("http://example.com/large");result.truncated=1;complete("Partial body","text/plain");assert(!browser_can_save());
+    int before=fs_node_count();assert(browser_save_page(0,"/partial.txt")==-1&&fs_node_count()==before);
+    browser_open("http://example.com/broken");result.state=NET_HTTP_ERROR;strcpy(result.error,"Connection closed early");busy=0;browser_tick();assert(!browser_can_save());
+    browser_open("http://example.com/next");browser_key(KEY_ESC,0,0);assert(!browser_can_save());
+    browser_open("http://example.com/plain");complete("a < b & original text","text/plain");browser_key(0x1f,0,BROWSER_MOD_CTRL);
+    int plain=fs_resolve(0,"/Downloads/page.txt");assert(plain>0&&!strcmp(fs_data(plain),"a < b & original text"));
+    /* A complete response may be saved even if only rendering was bounded. */
+    browser_open("http://example.com/short");complete("Complete body","text/plain");B.truncated=1;assert(browser_can_save());
+    before=fs_node_count();while(fs_node_count()<FS_MAX_NODES){char name[24];snprintf(name,sizeof name,"file%d",fs_node_count());assert(fs_create(0,name)>0);}
+    assert(browser_save_page(0,"/no-slots.txt")==-1&&fs_node_count()==FS_MAX_NODES);assert(before<FS_MAX_NODES);
+}
 static void write_preview(const char *path){
     reset_browser();browser_open("http://10.0.2.2:8000/docs/index.html");complete(example_html,"text/html");
     memset(back,0x55,sizeof back);browser_draw(32,28,760,600);
@@ -140,7 +158,7 @@ static void write_preview(const char *path){
 }
 int main(int argc,char **argv){
     gfx_init(back,linear,1024,768,32,4096);
-    test_url_resolution();test_document_and_async();test_navigation();test_address_and_clicks();test_redirects_and_ownership();test_scroll_reflow_and_bounds();
+    test_url_resolution();test_document_and_async();test_navigation();test_address_and_clicks();test_redirects_and_ownership();test_scroll_reflow_and_bounds();test_save_original_pages();
     if(argc>1)write_preview(argv[1]);
     puts("browser: HTTP lifecycle, HTML rendering, links, navigation, address editing, redirects, local files, scrolling and client-area bounds passed");return 0;
 }
