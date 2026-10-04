@@ -1,6 +1,7 @@
 """Focused host-only preparation/oracle/observation checks; never starts QEMU."""
 from array import array
 import json
+import datetime
 from pathlib import Path
 import sys
 import tempfile
@@ -30,11 +31,34 @@ class GuiMediaCollectorTests(unittest.TestCase):
         self.assertEqual(gate.PROFILES,{'default':64,'large':128})
         self.assertEqual(gate.AUDIO_SECONDS,45)
         self.assertEqual(gate.SAVE_TIMEOUT,180)
+        self.assertIn('tests/snapshot_responsive_app.c',gate.IMMUTABLE_SOURCE_PATHS)
+        self.assertIn('tests/media_mp3_host.c',gate.IMMUTABLE_SOURCE_PATHS)
 
     def test_no_slot_never_starts_guest(self):
         with mock.patch.object(gate,'Session',side_effect=AssertionError('guest created')):
             with self.assertRaisesRegex(AssertionError,'exclusive QEMU slot'):
                 gate.run(Path('/unread'),Path('/uncreated'),None)
+
+    def test_release_reservation_includes_pre_freeze_duration(self):
+        utc=datetime.timezone.utc
+        for hour,minute in ((22,30),(23,19),(23,20),(23,34)):
+            with self.assertRaisesRegex(AssertionError,'23:35'):
+                gate.require_release_window(datetime.datetime(2026,10,4,hour,minute,tzinfo=utc))
+        gate.require_release_window(datetime.datetime(2026,10,4,23,35,tzinfo=utc))
+        gate.require_release_window(datetime.datetime(2026,10,5,0,0,tzinfo=utc))
+
+    def test_failed_constructor_stops_and_records_child(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder=Path(temporary)
+            process=mock.Mock();process.poll.return_value=0
+            def failed_init(session,*args,**kwargs):
+                session.directory=folder;session.process=process
+                raise RuntimeError('host-only mocked startup failure')
+            with mock.patch.object(gate.InputSession,'__init__',failed_init), mock.patch.object(gate.Session,'close') as close:
+                with self.assertRaisesRegex(RuntimeError,'retained evidence'):
+                    gate.Session('/unused')
+            close.assert_called_once()
+            self.assertTrue(json.loads((folder/'startup-failure.json').read_text())['process_stopped'])
 
     def test_memory_and_debug_routes_are_not_allowed(self):
         session=gate.Session.__new__(gate.Session)
