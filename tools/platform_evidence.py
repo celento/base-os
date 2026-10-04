@@ -19,6 +19,7 @@ COMMON = 'magic process slot page keys loops ticks'.split()
 NORMAL = 'file_result file_handle revision size read_hash sync_result operation pending foreign_result verified errors'.split()
 CAPS = 'struct_size major minor features context user_bytes image_bytes stack_bytes chunk_bytes replace_bytes file_bytes'.split()
 LIMITS = 'files_per_process files_total operations_per_process operations_total wait_ms hz processes path_bytes max_gap max_call errors'.split()
+WAIT = 'wait_result wait_ticks operation sync_result wait_loops last_gap max_gap max_call wait_keys pending errors'.split()
 
 
 def sha(data):
@@ -99,11 +100,11 @@ def decode_canvas(pixels):
                     values.append(value)
                     continue
                 break
-            if len(values) != 18 or values[0] != MAGIC or values[3] not in (0, 1, 2):
+            if len(values) != 18 or values[0] != MAGIC or values[3] not in (0, 1, 2, 3):
                 continue
-            fields = COMMON + (NORMAL if values[3] == 0 else CAPS if values[3] == 1 else LIMITS)
+            fields = COMMON + (NORMAL if values[3] == 0 else CAPS if values[3] == 1 else LIMITS if values[3] == 2 else WAIT)
             result = dict(zip(fields, values))
-            for field in ('file_result', 'sync_result', 'foreign_result'):
+            for field in ('file_result', 'sync_result', 'foreign_result', 'wait_result'):
                 if field in result:
                     result[field] = signed(result[field])
             return result, (int(x), int(y), scale)

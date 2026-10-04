@@ -12,6 +12,8 @@ static BosFileInfo file, verify_file;
 static unsigned rows[WORDS], page, keys, loops, last_draw, errors, last_gap, max_gap;
 static unsigned operation, pending, foreign, entering, entered, digits;
 static int file_result, sync_result=BOS_E_STALE, foreign_result=BOS_E_STALE;
+static int wait_result=BOS_E_STALE;
+static unsigned wait_ticks;
 static unsigned read_hash, verify_result, verified, verify_index, verify_offset;
 static unsigned verify_hash, manifest[12], verify_running, max_call_ticks;
 static unsigned char bytes[SHARED_BYTES], chunk[BOS_FILE_CHUNK_MAX];
@@ -35,6 +37,11 @@ static void draw(void){
         rows[11]=abi.wait_milliseconds;rows[12]=abi.ticks_per_second;
         rows[13]=abi.processes_total;rows[14]=abi.path_bytes;
         rows[15]=max_gap;rows[16]=max_call_ticks;rows[17]=errors;
+    }else if(page==3){
+        rows[7]=(unsigned)wait_result;rows[8]=wait_ticks;rows[9]=operation;
+        rows[10]=(unsigned)sync_result;rows[11]=loops;rows[12]=last_gap;
+        rows[13]=max_gap;rows[14]=max_call_ticks;rows[15]=keys;
+        rows[16]=pending;rows[17]=errors;
     }else{
         rows[7]=(unsigned)file_result;rows[8]=file.handle;rows[9]=file.revision;
         rows[10]=file.size;rows[11]=read_hash;rows[12]=(unsigned)sync_result;
@@ -106,7 +113,7 @@ int main(void){
     }
     if(bos_canvas_size(320,200)){return 2;}
     bos_print("Platform client: O open, R read, W replace B, X replace C.\n");
-    bos_print("S sync, L release, T timed wait, H handle, V verify, 0/1/2 pages.\n");
+    bos_print("S sync, L release, T timed wait, H handle, V verify, 0-3 pages.\n");
     bos_print("A echoes input. Q exits normally.\n");
     unsigned previous=bos_ticks();last_draw=previous;
     if(!bos_task_id())page=1;
@@ -127,7 +134,7 @@ int main(void){
                     if(nibble<16){entered=(entered<<4)|nibble;digits++;}
                 }
             }else if(key=='q'||key==27)return errors?1:0;
-            else if(key>='0'&&key<='2')page=(unsigned)(key-'0');
+            else if(key>='0'&&key<='3')page=(unsigned)(key-'0');
             else if(key=='o')open_shared();
             else if(key=='r'){
                 file_result=bos_file_read_at(file.handle,chunk,sizeof chunk,sizeof chunk);
@@ -138,7 +145,10 @@ int main(void){
             }else if(key=='i')file_result=bos_file_info(file.handle,&file);
             else if(key=='s')begin();
             else if(key=='l'){sync_result=bos_sync_release(operation);if(sync_result==BOS_OK)operation=0;}
-            else if(key=='t')sync_result=bos_sync_wait(operation,20);
+            else if(key=='t'){
+                unsigned began=bos_ticks();wait_result=bos_sync_wait(operation,20);
+                wait_ticks=bos_ticks()-began;
+            }
             else if(key=='h'){entering=1;entered=digits=0;}
             else if(key=='v')verify_start();
             unsigned elapsed=bos_ticks()-started;if(elapsed>max_call_ticks)max_call_ticks=elapsed;

@@ -47,7 +47,7 @@ class PlatformEvidenceTests(unittest.TestCase):
             self.assertEqual(decode_canvas(pixels),(None,None))
 
     def test_capability_pages_are_not_interpreted_as_file_status(self):
-        for page in (1,2):
+        for page in (1,2,3):
             values=[MAGIC,7,2,page,1,50,70]+list(range(11))
             pixels,_=drawn_canvas(values)
             result,_=decode_canvas(pixels)
