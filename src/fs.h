@@ -4,7 +4,8 @@
 #include "layout.h"
 #define FS_NAME_LEN  24
 #define FS_MAX_SIZE  16384 /* Legacy floppy, command scripts and Tiny BASIC buffer limit. */
-#define FS_FILE_MAX  2097152 /* Data-volume file limit, inclusive. */
+#define FS_FILE_MAX  2097152 /* Default data-volume file limit, inclusive. */
+#define FS_LARGE_FILE_MAX 16777216 /* Explicit large-profile volume only. */
 
 int kstrlen(const char *s);
 int kstrcmp(const char *a, const char *b);
@@ -22,6 +23,14 @@ unsigned fs_capacity(void);
 /* Same allowance for a projected total node count, or 0 outside this backend. */
 unsigned fs_capacity_for_nodes(unsigned count);
 unsigned fs_file_limit(void);
+/* True only while the marked large backend is selected and the FS owns high
+ * arenas. False for default IDE, floppy and protected fallback views.
+ * Query only after mount; fs_init/reconfiguration ends that arena ownership. */
+int fs_large_profile(void);
+/* Physical E820 availability only, even on a default disk using low arenas.
+ * This query alone NEVER means the old 32-48 MiB FS arenas are unused. No
+ * ownership is granted to media; those consumers retain existing limits. */
+int fs_large_arenas_available(void);
 const char *fs_storage_name(void);
 unsigned fs_used_bytes(void);
 int fs_resolve(int cwd, const char *path);

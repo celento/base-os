@@ -36,6 +36,17 @@ def validate(c):
         c['KERNEL_EXT_LBA'] + sectors - primary > c['DISK_SECTORS']):
         raise ValueError('invalid split kernel/filesystem disk layout')
 
+    if (c['RAM_REQUIRED_END'] > c['FS_LARGE_POOL_BASE'] or
+        c['FS_LARGE_POOL_BASE'] + c['FS_LARGE_POOL_CAPACITY'] > c['FS_LARGE_IMG_BASE'] or
+        c['FS_LARGE_IMG_BASE'] + c['FS_LARGE_IMG_CAPACITY'] != c['RAM_LARGE_REQUIRED_END']):
+        raise ValueError('invalid optional filesystem arena layout')
+    for prefix, expected in (('DATA', (32768, 16383, 1, 16384, 1)),
+                             ('DATA_LARGE', (131072, 65535, 1, 65536, 2))):
+        actual = tuple(c[prefix + suffix] for suffix in
+                       ('_DISK_SECTORS', '_SLOT_SECTORS', '_FIRST_LBA', '_SECOND_LBA', '_MARKER_VERSION'))
+        if actual != expected:
+            raise ValueError('unsupported data profile geometry')
+
 
 if __name__ == '__main__':
     for name, value in constants().items():

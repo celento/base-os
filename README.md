@@ -81,6 +81,11 @@ make run
 
 `make run` builds `build/baseos.img`, a 2.88 MB boot floppy, and creates `build/baseos-data.img`, a separate 16 MiB IDE data disk, only if it does not already exist. QEMU starts with 64 MiB RAM. Use `make headless` for a serial-console run without a graphical window. The data volume holds up to 8,385,024 file bytes, with 2 MiB per file and up to 256 total file/folder/app nodes. Metadata for nodes beyond 64 slightly reduces the byte allowance; see the technical reference.
 
+An [optional large-volume profile](docs/LARGE_VOLUMES.md) uses 128 MiB RAM and
+an explicitly created 64 MiB data disk, with 16 MiB files and about 32 MiB of
+file data. The default build and existing disks stay unchanged; migration is
+a copy into a new image, never an in-place resize.
+
 At the first boot with a newly marked data disk, BaseOS reads the existing floppy files and saves a copy to the data disk. Both old floppy snapshots remain untouched. Later boots use the data disk. Without the optional IDE disk, the old floppy filesystem remains usable with its original limits. An unknown or unreadable IDE disk is never formatted automatically; BaseOS exposes the boot files read-only for recovery.
 
 The build keeps the exact linked `kernel.bin` and derives a deterministic `kernel.packed` for the BIOS boot disk. Packing can accommodate initialized kernels above the former raw disk limit, subject to compressed disk capacity and the unchanged kernel/BSS RAM bound. See the [packed boot layout](docs/TECHNICAL.md).
