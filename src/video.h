@@ -29,7 +29,8 @@ typedef struct {
  * Owns a source copy.
  * There is no heap; all stream/decoder/image storage is in VIDEO_BASE. */
 int video_play(const void *data, uint32_t bytes);
-/* Cooperative load: one <=65535-byte PES packet or 32768-byte scan per call.
+/* Cooperative load: up to 16 small PS units within 32768 bytes, one larger
+ * <=65535-byte PES payload, or a 32768-byte scan per call.
  * Playback: at most one displayed frame per call (first output may require
  * two reference pictures). No frame-accumulating catch-up loop. */
 int video_poll(void);

@@ -47,8 +47,10 @@ size is 640 × 614; resizing retains a fitted video image and usable controls.
 ## Timing and cooperative work
 
 `video_play` checks the outer header and copies input. Subsequent loading polls
-consume one pack/system/PES unit (at most 65,535 payload bytes), scan at most
-32,768 video bytes, or inspect one bounded batch of MP2 frames. Every sequence
+consume up to 16 small pack/system/PES units within a 32,768-byte budget,
+or one larger legal PES unit (at most 65,535 payload bytes), scan at most
+32,768 video bytes, or inspect one bounded batch of MP2 frames. Batching tiny
+PES packets avoids spending one desktop tick on every 2 KiB packet. Every sequence
 header is validated before decoder construction. No playback loop waits for an
 entire clip to decode.
 
