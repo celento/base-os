@@ -154,7 +154,7 @@ Limits: 256 lines, 191 characters after a line number, expression nesting of 16,
 
 `exec PATH` loads a BEX1 executable into a cleared 64 KB region and enters 32-bit x86 ring 3. User code/data/stack share that region. Paging permits user access only to those 16 pages; kernel memory, page tables, and device mappings are supervisor-only. TSS stack switching and checked system calls handle transitions. Direct port I/O and privileged instructions fault.
 
-A fault returns to the terminal. `exec` remains synchronous with its roughly two-second PIT watchdog. For an interactive or long-running app, use `start PATH`: up to eight terminal-owned tasks share the desktop, with one bounded user-mode slice per desktop turn. Each has an independent 64 KB image, register frame, x87 state, and input queue. `Present`, `yield`, and `sleep` return to the desktop; a timer also preempts CPU-bound user code. Ctrl+C stops the focused task, and closing its terminal discards it. Minimized tasks continue running. `tasks` lists running/sleeping terminal slots.
+A synchronous fault returns to the Terminal; `exec` retains its roughly two-second PIT watchdog. For a long-running app use `start PATH`, Files or Ctrl+Space: up to eight native owners share the desktop with bounded user-mode slices. BEX1 retains its 64 KiB image; opt-in BEX2 declares private text/data/workspace/stack regions inside a sparse 4 MiB extent. Unflagged apps stay Terminal-hosted. BEX2 `--window native-v1` creates one independent decorated window without a Terminal. Each owner retains its own registers, x87 state and byte-key queue. Present/yield/sleep return to the desktop; a timer preempts user code. Minimize keeps running; Ctrl+C stops. Current owned Close is forced. APP exit zero dismisses an owned window, while Stop/error/nonzero exit retain inert Output/frame diagnostics. `tasks` lists active display slots. See [native windows](docs/NATIVE_WINDOWS.md).
 
 This is a small desktop-driven task runtime, not a POSIX process system. Kernel syscalls are bounded but are not preempted; disk, rendering, and built-in app work can delay task scheduling. The user pages are writable and executable, with no NX/W^X guarantee. This is an educational boundary, not a claim of production-grade sandbox security. See [the native task guide](docs/NATIVE_TASKS.md) for lifecycle, scheduling and integration details.
 
@@ -176,7 +176,7 @@ Use `int 0x80`, with EAX selecting the operation:
 | 9 | Filled rectangle | EBX=x, ECX=y, EDX=width≤canvas width, ESI=height≤canvas height, EDI=color | 0 or -1 |
 | 10 | Yield task | None | 0 in task mode, -1 in synchronous exec |
 | 11 | Sleep task | EBX=milliseconds, 0..60000 | 0, or -1 for invalid duration/synchronous exec |
-| 12 | Task owner | None | Terminal slot 1..8, or 0 in synchronous exec |
+| 12 | Task owner | None | Display/view slot 1..8 (Terminal for hosted apps), or 0 in synchronous exec |
 | 13 | Read file at offset | EBX=path, ECX=path length, EDX=buffer, ESI=capacity≤4096, EDI=byte offset | Bytes copied, 0 at/beyond EOF, or -1 |
 | 14 | Set canvas mode | EBX=width, ECX=height: exactly 160×100 or 320×200 | 0 and cleared canvas, or -1 |
 | 15 | Replace document | EBX=path, ECX=path length, EDX=data, ESI=bytes≤32768 | Complete RAM replacement length, or -1 |
@@ -216,8 +216,8 @@ python3 tools/build_app.py examples/c/docstats.c build/docstats.bex
 
 The examples are installed without replacing existing files. Run
 `exec /Programs/hello-c.bex` for graphics and `exec /Programs/notebook.bex` to read
-and write a persistent document. The compiler runs on the host; native apps still
-have the 64 KB address space. The two-second watchdog applies to `exec` only.
+and write a persistent document. The compiler runs on the host; these default
+BEX1 examples retain the 64 KiB address space. The two-second watchdog applies to `exec` only.
 Open two terminals and run `start /Programs/counter.bex` in each for independent
 long-running counters. +/- changes the value, Space pauses, S saves to that
 terminal slot's `/Documents/counter-N.txt`, and Q/Escape exits. Sleep and yield

@@ -2,11 +2,11 @@
 
 Later-layer scope note: the [qualified app-view extraction](APP_VIEW_QUALIFICATION.md)
 moves attachment, generation, canvas and completion consumption from Terminal
-into the bounded common view without changing process lifetime. The isolated
-[independent-window candidate](NATIVE_WINDOWS.md) then adds an owned backend.
+into the bounded common view without changing process lifetime. The qualified
+[independent-window increment](NATIVE_WINDOWS.md) adds an owned backend.
 The original C1 Terminal terminology below is historical, not a requirement
-that an owned GUI create a Terminal. The new backend's guest qualification is
-separate and pending.
+that an owned GUI create a Terminal. See its separate
+[guest and integration qualification](NATIVE_WINDOWS_QUALIFICATION.md).
 
 This document preserves the C1 lifetime foundation and its historical checks.
 C1 left BEX1, syscalls 0–27, the fixed 64 KiB image, 49,152-byte image cap,
@@ -128,7 +128,7 @@ slot-labelled views for readable assertions but resolve distinct opaque handles
 through independent fixture records. Guest helpers now create/bind/start and
 consume/reap explicitly; they do not change executable bytes or syscall data.
 
-## Owned-window candidate completion policy
+## Owned-window completion policy
 
 The common view owns the copied process/slot/generation attachment and its
 output sink. One completion consumer drains retained DONE before another
@@ -146,5 +146,5 @@ their existing publication behavior until return. Zero-time/immediate sync
 results, UI WAIT, timer preemption, generic error and the Stop/Close request
 itself do not publish. APP exit recorded in that active slice wins over deferred
 Stop and keeps its exact signed value. See the
-[candidate lifetime table](NATIVE_WINDOWS.md#publication-and-lifetime) for full
-retention and resource-release semantics; this is not guest qualification.
+[native-window lifetime table](NATIVE_WINDOWS.md#publication-and-lifetime) for
+full retention and resource-release semantics and its separately linked evidence.

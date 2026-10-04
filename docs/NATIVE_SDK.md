@@ -42,8 +42,11 @@ layout](BEX2_FORMAT.md#building-and-inspecting). BEX2 uses the desktop task rout
 synchronous `exec` accepts BEX1 only.
 
 Open a `.bex` file in **Files**, the ordinary **Open** dialog, or search for its
-filename with **Ctrl+Space** and press Enter. A program opens in a new Terminal
-window with its own protected task, even when another copy is already running.
+filename with **Ctrl+Space** and press Enter. BEX1 and unflagged BEX2 open a new
+Terminal with their own protected task. A BEX2 built with `--window native-v1`
+opens its own decorated native window without allocating a Terminal. Each
+activation is independent, including another copy of the same executable. See
+[owned native windows](NATIVE_WINDOWS.md) and their [qualification](NATIVE_WINDOWS_QUALIFICATION.md).
 Native programs have a Terminal icon and appear as applications in Files and as
 **Native app** results in the launcher. File names containing spaces and
 case-insensitive `.BEX` extensions work without quoting a Terminal command.
@@ -58,18 +61,24 @@ start /Programs/docstats.bex /Documents/stats-sample.txt
 
 `exec` remains synchronous with its two-second watchdog. `start` gives the app
 bounded slices alongside the desktop and other native tasks. Its memory, keys,
-registers and x87 state belong to its independent process record; its Terminal
-owns the working/published canvases and retains an exact process attachment. See
+registers and x87 state belong to its independent process record. The common
+app view owns its working/published canvas and exact process attachment; hosted
+apps retain Terminal command state, while owned apps have a bounded Output log. See
 [NATIVE_TASKS.md](NATIVE_TASKS.md) for lifecycle and scheduling guarantees.
 
 Eight desktop windows and eight task owners remain the limits. A full desktop
 reports that a window must be closed; it never takes over another Terminal.
-A loader error stays visible in the newly opened Terminal, and the source file
-is unchanged. Cached Files/Open/launcher selections reject reused node identities;
+Hosted loader errors stay in the Terminal. Owned-window launch failure leaves
+the caller/window state intact and reports an error without a hidden Terminal
+or hosted fallback. The source file is unchanged. Cached Files/Open/launcher selections reject reused node identities;
 launcher names are copied and a renamed search result must be selected again.
 The loader validates the current file and copies its bytes before execution.
-Closing the Terminal stops the task; minimizing leaves it running. A finished
-program leaves its output and the command prompt available.
+Closing a hosted Terminal stops its task; minimizing either backend leaves it
+running. Hosted completion leaves output and the command prompt. Owned APP
+exit zero closes its window; Stop/error/nonzero exit retain an inert result
+with copied title, bounded Output and the last published frame. Current Close
+is forced and has no native save handshake; native/result windows are not
+restored by desktop sessions.
 
 Counter's **S** and Notebook's document write explicitly call `bos_sync()`.
 They report **Saved** only after successful disk synchronization. If the write
@@ -114,12 +123,13 @@ throughout. Its progress arithmetic also covers the opt-in 16 MiB file limit.
 
 ## Additive platform services
 
-The shared [platform ABI 1.1](NATIVE_PLATFORM_ABI.md) provides capability/limit
+The shared [platform ABI 1.2](NATIVE_PLATFORM_ABI.md) provides capability/limit
 discovery, process identities, versioned file handles, conditional replacement
 and owned asynchronous IDE completion at calls 18–27, plus memory discovery at
-call 28. Call 29 is the independently negotiated [UI 1.0 gateway](NATIVE_UI.md);
-feature bit 6 is conditional on a bound desktop task and available trusted
-hosted-input hooks. Existing calls and binaries remain unchanged. Query
+call 28. Call 29 is the independently negotiated [UI 1.1 gateway](NATIVE_UI.md).
+Bound hosted tasks advertise feature bit 6; eligible owned-window tasks instead
+advertise bit 7 and use WINDOW_ADOPT, not HOST_OPEN. Both require trusted input
+hooks. Existing calls and binaries remain unchanged. Query
 capabilities and check results before reading output; neither hosted UI nor
 asynchronous sync is available in every execution context/backend.
 
@@ -217,7 +227,7 @@ The kernel-only `ProgramIO` adapter remains for BASIC and synchronous `exec`.
 Its optional `resize(width,height)` and `rect(x,y,width,height,color)` callbacks
 follow `present`. Desktop native tasks instead use a copied `ProcessIO` table;
 each callback receives the exact `(process, slot, generation)` binding and
-validates it before updating the explicit Terminal owner. A null resize callback
+validates it before updating the explicit common-view owner. A null resize callback
 returns -1; a null rectangle callback retains the per-pixel `plot` loop.
 Terminal's rectangle callback clips once and fills working-canvas rows without
 publishing, polling devices or switching tasks. Syscall 9 still checks both
@@ -230,15 +240,16 @@ tightly packed stride. Explicit-owner input and occlusion helpers coexist:
 `term_canvas_size(slot, ...)` reads published geometry without changing selection.
 `ProcessIO.present` is bounded and must not dispatch other applications;
 The shared `app_view`/`app_canvas` implementation supplies native ownership and
-copy-only publication through Terminal compatibility wrappers. Terminal retains
-its text and command state. This is still hosted Terminal integration, not
-independent native-window support.
+copy-only publication to both backends. Terminal compatibility wrappers retain
+its text and command state; owned native windows use the same canvas/publication
+engine without a Terminal. Their fit-centered geometry also drives input mapping.
 
 Historical footprint: the complete-input overflow checkpoint measured 91,516
 bytes per Terminal and **732,128 bytes** for eight, leaving 54,304 bytes before
 script scratch. Later binding/input fields changed that measurement. The current
-structure remains compile-time bounded by the fixed 786,432-byte terminal-state
-subarena within the unchanged 1 MiB Terminal arena. Published frames use
+shared AppStorage remains compile-time bounded by the fixed 786,432-byte
+subarena within the unchanged 1 MiB application arena. The qualified independent-
+window layout uses 763,808 bytes, with 22,624 spare; this is not extra process RAM. Published frames use
 512,000 bytes in a separately asserted 512 KiB reservation at `0x600000`–`0x680000`,
 in the existing Paint-to-DMA gap. No application-memory or machine-RAM increase
 is required; the existing boot E820 validation covers this arena.
