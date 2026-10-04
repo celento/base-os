@@ -164,7 +164,9 @@ a target, readiness flags and rounded-up wrap-safe deadline. Readiness wins a
 same-tick deadline. QUEUE is mandatory; optional LEGACY_KEY observes without
 consuming the existing byte queue. UI events never wake a separate sync wait.
 UI WAIT never publishes, including immediate-ready and timeout paths. Explicit
-present/yield/sleep/exit retain their pre-existing publication behavior.
+present/yield/sleep/exit retain their pre-existing publication behavior. A pending
+positive native SYNC_WAIT also publishes before suspension under its existing
+contract; it is distinct from UI WAIT.
 
 Process binding checks now reject a stopping owner immediately; Stop/exit revoke
 UI eligibility before deferred backing cleanup. The existing owner-release path
@@ -242,3 +244,65 @@ profile, both existing production frame-publication profiles, and the legacy
 Files/search launch/save/Stop/exit gate. See [exact qualification evidence](NATIVE_UI_QUALIFICATION.md)
 for binary hashes, observed scope and limitations. This does not imply that the
 parent integration branch or an hourly package already ships the feature.
+
+## Hosted app-view ownership extraction
+
+The hosted implementation now keeps Terminal command state separate from the
+bounded app view. This is an internal prerequisite only: existing BEX1/BEX2
+launches still use Terminal, and no window kind, launch flag, ABI value or public
+capability has been added.
+
+- `app_canvas` owns explicit working/published canvas metadata and bounded
+  drawing/publication helpers. Its frame snapshot contains the visible pixels
+  and dimensions together; BASIC/exec retain unbuffered drawing.
+- `app_view` owns the exact process/slot/generation tuple, copied name/document,
+  start time, dirty classifications and output policy. Generations survive
+  Terminal resets and WM slot reuse. Trusted I/O additionally requires READY or
+  SLEEPING lifetime; EXITING, retained-DONE and reused owners cannot mutate a
+  view. A deferred Stop immediately revokes UI eligibility, but preserves an
+  already-active slice's explicit publication/output boundaries until return,
+  including nonzero APP exit precedence. The Stop request itself never publishes.
+  The hosted sink copies directly into the explicit Terminal's
+  scrollback without changing selection or retaining text pointers.
+- `app_view_poll_update` is the only desktop scheduler/completion consumer;
+  retained DONE results are drained before another process slice. Historical
+  `term_task*` and `term_canvas*` entry points remain compatibility wrappers.
+- Terminal keeps its text, input/history/draft, cwd incarnation, scrolling and
+  input-loss state. Synchronous input adapters and `program_key` are unchanged.
+  Publication boundaries, the native byte-key queue and process resource cleanup
+  remain unchanged.
+
+The actual freestanding i386 layout is measured by `tests/app_view_layout.c`
+and `test_app_view.py`, rather than inferred from a design budget:
+
+| Item | Bytes |
+|---|---:|
+| Terminal text per slot | 27,432 |
+| View metadata before canvas per slot | 72 |
+| Working canvas plus publication metadata per slot | 64,032 |
+| Complete view per slot | 64,104 |
+| Eight text records plus eight views | 732,288 |
+| Original Terminal container capacity | 786,432 |
+| Unused container bytes | 54,144 |
+| Published pixels, eight full frames | 512,000 |
+| Original published arena capacity | 524,288 |
+
+`AppStorage` is one typed aggregate at the original `APPS_BASE+0x300000`.
+The published arena remains at `NATIVE_CANVAS_BASE`. Static assertions retain
+both limits and the production link retains the kernel/stack and process-page
+metadata guards. No extra physical arena, surface pages or GUI log is allocated.
+The earlier 776,192-byte native-window design budget is not the measured layout
+of this extraction.
+
+New normal-operation tests cover direct view initialization before any Terminal,
+explicit copied output and metadata, preserved command/history/input-loss state,
+NONE-output print/completion, retained-DONE I/O refusal, deferred-close storage
+retention, common poller compatibility and generation persistence. The real
+process+view integration gate checks actual published pixels after deferred
+Stop followed by present/yield/sleep/pending positive SYNC_WAIT/explicit exit,
+immediate UI ineligibility,
+APP exit precedence, nonpublishing timer/error/idle Stop and stale output refusal.
+Existing publication, native binding, rectangle, input, launch, resource-lifetime
+and renderer suites remain
+the behavioral regressions. Exact final host/guest qualification is recorded
+separately; this description alone is not guest qualification.

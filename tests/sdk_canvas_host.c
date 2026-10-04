@@ -4,8 +4,9 @@
 int main(void){
     reset();executable("canvas.bex");
     memset(terminal_arena+0xC0000,0x5a,0x40000);
-    /* Binding generation and two command-loss guard words are included. */
-    assert(sizeof(Terminal)==91528 && sizeof(Terminal)*8==732224);
+    /* The same container now separates terminal text and explicit app views. */
+    assert(sizeof(TerminalText)==27432 && sizeof(AppView)==64104);
+    assert(sizeof(AppStorage)==732288 && sizeof(AppStorage)<=APP_STORAGE_CAPACITY);
     for(int owner=0;owner<8;owner++){
         term_select(owner);term_reset();
         assert(!term_canvas()&&term_canvas_width()==160&&term_canvas_height()==100);
@@ -30,7 +31,7 @@ int main(void){
     plot(319,199,9);
     assert(callbacks[3].resize(&callbacks[3].binding,160,100)==0);callbacks[3].present(&callbacks[3].binding);
     assert(term_canvas_width()==160&&term_canvas_height()==100);
-    for(int i=0;i<64000;i++)assert(terms[3].canvas[i]==0);
+    for(int i=0;i<64000;i++)assert(views[3].canvas.pixels[i]==0);
     plot(159,99,45);callbacks[3].present(&callbacks[3].binding);assert(term_canvas()[15999]==45);
     assert(callbacks[3].resize(&callbacks[3].binding,320,200)==0);callbacks[3].present(&callbacks[3].binding);
     for(int i=0;i<64000;i++)assert(term_canvas()[i]==0);
@@ -45,5 +46,5 @@ int main(void){
     canvas_resize(320,200);term_reset();
     assert(!term_canvas()&&term_canvas_width()==160&&term_canvas_height()==100);
     for(int i=0xC0000;i<0x100000;i++)assert(terminal_arena[i]==0x5a);
-    puts("native canvas: 732224-byte eight-terminal footprint, independent full canvases, clipping, clear and legacy lifecycle reset passed");
+    puts("native canvas: 732288-byte shared text/view footprint, independent full canvases, clipping, clear and legacy lifecycle reset passed");
 }

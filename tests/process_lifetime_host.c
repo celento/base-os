@@ -106,6 +106,9 @@ static int process_resume(const uint32_t *frame){
     assert(invoke(BOS_CALL_TASK_ID,0,0)==(int)current_task->io.binding.slot+1);
     if(setjmp(returned))return process_result;
     user_memory[400]++;
+#ifdef PROCESS_LIFETIME_SLICE_HOOK
+    PROCESS_LIFETIME_SLICE_HOOK();
+#endif
     switch(slice_kind){
     case SLICE_SCATTER:
         for(unsigned page=0;page<TASK_BACKING_PAGES;page++){

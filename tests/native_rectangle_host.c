@@ -4,8 +4,8 @@
 #include "term_task_info_host.c"
 
 typedef struct { int x,y,width,height,color; } Rectangle;
-static Terminal before,scalar;
-static unsigned char published_before[CANVAS_PIXELS];
+static AppView before,scalar;
+static unsigned char published_before[APP_CANVAS_PIXELS];
 
 /* Match the old syscall loop, including unsigned register-coordinate addition. */
 static void scalar_rect(Rectangle rect){
@@ -14,19 +14,19 @@ static void scalar_rect(Rectangle rect){
             plot((int)((unsigned)rect.x+x),(int)((unsigned)rect.y+y),rect.color);
 }
 static void equivalent(Rectangle rect,int buffered,int visible,int pending){
-    T.canvas_buffered=buffered;T.canvas_on=visible;T.canvas_pending=pending;
-    T.task_dirty=TERM_TASK_TEXT;
-    T.published_on=1;T.published_width=160;T.published_height=100;
-    for(unsigned i=0;i<CANVAS_PIXELS;i++)T.canvas[i]=(unsigned char)(i*13+7);
-    memset(published_canvases[selected],53,CANVAS_PIXELS);
-    memcpy(published_before,published_canvases[selected],CANVAS_PIXELS);
-    before=T;scalar_rect(rect);scalar=T;T=before;
+    V.canvas.buffered=buffered;V.canvas.on=visible;V.canvas.pending=pending;
+    V.task_dirty=TERM_TASK_TEXT;
+    V.canvas.published_on=1;V.canvas.published_width=160;V.canvas.published_height=100;
+    for(unsigned i=0;i<APP_CANVAS_PIXELS;i++)V.canvas.pixels[i]=(unsigned char)(i*13+7);
+    memset(published_canvases[selected],53,APP_CANVAS_PIXELS);
+    memcpy(published_before,published_canvases[selected],APP_CANVAS_PIXELS);
+    before=V;scalar_rect(rect);scalar=V;V=before;
     canvas_rect(rect.x,rect.y,rect.width,rect.height,rect.color);
     /* Full structure compares exact working pixels, activation and dirty flags. */
-    assert(!memcmp(&T,&scalar,sizeof T));
-    assert(!memcmp(published_before,published_canvases[selected],CANVAS_PIXELS));
+    assert(!memcmp(&V,&scalar,sizeof V));
+    assert(!memcmp(published_before,published_canvases[selected],APP_CANVAS_PIXELS));
     const unsigned char *pixels=term_canvas();
-    assert(pixels==(buffered?published_canvases[selected]:(T.canvas_on?T.canvas:0)));
+    assert(pixels==(buffered?published_canvases[selected]:(V.canvas.on?V.canvas.pixels:0)));
 }
 static void pixel_equivalence(void){
     term_select(3);term_reset();
@@ -72,39 +72,39 @@ static void owner_lifecycle(void){
     for(int owner=0;owner<PROCESS_TASKS;owner++){
         term_select(owner);
         for(int i=0;i<64000;i++)assert(term_canvas()[i]==owner+1);
-        assert(T.canvas[321]==99&&T.canvas_pending);
+        assert(V.canvas.pixels[321]==99&&V.canvas.pending);
         term_task_stop(owner);
         for(int i=0;i<64000;i++)assert(term_canvas()[i]==owner+1);
-        assert(!T.canvas_pending);
+        assert(!V.canvas.pending);
     }
     term_select(3);command("start /rect.bex");
-    const ProcessIO *io=&callbacks[3];T.task_dirty=0;
+    const ProcessIO *io=&callbacks[3];V.task_dirty=0;
     io->rect(&io->binding,-5,0,5,100,2);io->rect(&io->binding,160,0,160,100,2);
     io->rect(&io->binding,0,0,0,100,2);io->present(&io->binding);
-    assert(!term_canvas()&&!T.canvas_on&&!T.canvas_pending&&!T.task_dirty);
+    assert(!term_canvas()&&!V.canvas.on&&!V.canvas.pending&&!V.task_dirty);
     io->rect(&io->binding,-2,-3,5,7,301);
-    assert(!term_canvas()&&T.canvas_pending&&!T.task_dirty);
-    io->present(&io->binding);assert(T.task_dirty==TERM_TASK_LAYOUT);
+    assert(!term_canvas()&&V.canvas.pending&&!V.task_dirty);
+    io->present(&io->binding);assert(V.task_dirty==TERM_TASK_LAYOUT);
     assert(term_canvas_width()==160&&term_canvas_height()==100);
     for(int y=0;y<100;y++)for(int x=0;x<160;x++)
         assert(term_canvas()[y*160+x]==(x<3&&y<4?45:0));
-    T.task_dirty=0;io->rect(&io->binding,1,1,1,1,45);io->present(&io->binding);
-    assert(T.task_dirty==TERM_TASK_CANVAS); /* Same color still counts as a draw. */
-    T.task_dirty=0;io->present(&io->binding);assert(!T.task_dirty);
+    V.task_dirty=0;io->rect(&io->binding,1,1,1,1,45);io->present(&io->binding);
+    assert(V.task_dirty==TERM_TASK_CANVAS); /* Same color still counts as a draw. */
+    V.task_dirty=0;io->present(&io->binding);assert(!V.task_dirty);
     assert(!io->resize(&io->binding,320,200));io->rect(&io->binding,319,199,1,1,6);
     assert(term_canvas_width()==160);io->present(&io->binding);
     assert(term_canvas_width()==320&&term_canvas()[63999]==6);
     assert(!io->resize(&io->binding,320,200));io->present(&io->binding);
     for(int i=0;i<64000;i++)assert(!term_canvas()[i]);
-    command("clear");T.task_dirty=0;io->rect(&io->binding,159,99,1,1,7);
+    command("clear");V.task_dirty=0;io->rect(&io->binding,159,99,1,1,7);
     assert(!term_canvas());io->present(&io->binding);
     assert(term_canvas_width()==160&&term_canvas()[15999]==7);
     io->rect(&io->binding,159,99,1,1,99);term_task_close(3);
-    assert(term_canvas()[15999]==7&&!T.canvas_pending);
+    assert(term_canvas()[15999]==7&&!V.canvas.pending);
     command("exec /rect.bex");canvas_rect(1,2,3,4,9);
-    assert(term_canvas()==T.canvas&&term_canvas()[321]==9);
+    assert(term_canvas()==V.canvas.pixels&&term_canvas()[321]==9);
     command("basic /rect.bex");canvas_rect(2,3,4,5,10);
-    assert(term_canvas()==T.canvas&&term_canvas()[482]==10);
+    assert(term_canvas()==V.canvas.pixels&&term_canvas()[482]==10);
     term_reset();assert(!term_canvas()&&term_canvas_width()==160);
     for(int owner=0;owner<PROCESS_TASKS;owner++)if(owner!=3){
         term_select(owner);

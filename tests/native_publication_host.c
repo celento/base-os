@@ -11,15 +11,15 @@ static void task_test_step(int owner) {
 #ifdef NATIVE_RECTANGLE_CALLBACK
     assert(io->rect);
     if(operation==CLEAR||operation==CLEAR_TEXT)
-        io->rect(&io->binding,0,0,terms[owner].canvas_width,terms[owner].canvas_height,0);
+        io->rect(&io->binding,0,0,views[owner].canvas.width,views[owner].canvas.height,0);
     if(operation==FOOTER)
-        io->rect(&io->binding,0,terms[owner].canvas_height-1,terms[owner].canvas_width,1,42);
+        io->rect(&io->binding,0,views[owner].canvas.height-1,views[owner].canvas.width,1,42);
 #else
     if(operation==CLEAR||operation==CLEAR_TEXT)
-        for(int y=0;y<terms[owner].canvas_height;y++)
-            for(int x=0;x<terms[owner].canvas_width;x++)io->plot(&io->binding,x,y,0);
+        for(int y=0;y<views[owner].canvas.height;y++)
+            for(int x=0;x<views[owner].canvas.width;x++)io->plot(&io->binding,x,y,0);
     if(operation==FOOTER)
-        for(int x=0;x<terms[owner].canvas_width;x++)io->plot(&io->binding,x,terms[owner].canvas_height-1,42);
+        for(int x=0;x<views[owner].canvas.width;x++)io->plot(&io->binding,x,views[owner].canvas.height-1,42);
 #endif
     if(operation==SMALL)assert(!io->resize(&io->binding,160,100));
     if(operation==LARGE)assert(!io->resize(&io->binding,320,200));
@@ -49,7 +49,7 @@ static void begin_frame(int width,int height){
     for(int y=0;y<height;y++)for(int x=0;x<width;x++)plot(x,y,(x+y*13)%251+1);
     int before=polls;callbacks[0].present(&callbacks[0].binding);assert(polls==before);
     memcpy(frame,term_canvas(),(size_t)width*height);render();memcpy(reference,rendered,sizeof reference);
-    terms[0].task_dirty=0;
+    views[0].task_dirty=0;
 }
 static unsigned program_input_calls;
 static void program_input(int active) {
@@ -89,13 +89,13 @@ int main(void){
     step(PUBLISH,TERM_TASK_CANVAS); /* Net geometry unchanged; clear still visible. */
     for(int i=0;i<16000;i++)assert(!term_canvas()[i]);
     begin_frame(320,200);step(CLEAR,0);term_task_stop(0);unchanged(320,200);
-    assert(!terms[0].canvas_pending&&!term_task_running(0));
+    assert(!views[0].canvas.pending&&!term_task_running(0));
     command("start /canvas.bex");assert(!term_canvas()&&term_canvas_width()==160);
-    terms[0].task_dirty=0;step(FOOTER,0);assert(!term_canvas());
-    term_task_close(0);assert(!term_canvas()&&!terms[0].canvas_pending);
+    views[0].task_dirty=0;step(FOOTER,0);assert(!term_canvas());
+    term_task_close(0);assert(!term_canvas()&&!views[0].canvas.pending);
     command("start /canvas.bex");begin_frame(160,100);
-    command("clear");assert(!term_canvas()&&terms[0].canvas_buffered);
-    terms[0].task_dirty=0;step(FOOTER,0);assert(!term_canvas());step(PUBLISH,TERM_TASK_LAYOUT);
+    command("clear");assert(!term_canvas()&&views[0].canvas.buffered);
+    views[0].task_dirty=0;step(FOOTER,0);assert(!term_canvas());step(PUBLISH,TERM_TASK_LAYOUT);
     term_task_stop(0);
     /* Every slot owns its pixels; resetting one cannot reinterpret another. */
     for(int owner=0;owner<8;owner++){
@@ -115,9 +115,9 @@ int main(void){
     assert(!program_input_calls);
     term_select(3);term_task_stop(3);command("exec /canvas.bex");
     assert(program_input_calls==2);plot(2,3,9);
-    assert(term_canvas()==terms[3].canvas&&term_canvas()[3*160+2]==9);
+    assert(term_canvas()==views[3].canvas.pixels&&term_canvas()[3*160+2]==9);
     command("basic /canvas.bex");
     assert(program_input_calls==4);plot(4,5,10);
-    assert(term_canvas()==terms[3].canvas&&term_canvas()[5*160+4]==10);
+    assert(term_canvas()==views[3].canvas.pixels&&term_canvas()[5*160+4]==10);
     puts("Native publication: preempted working bytes/metadata stay hidden from actual renderer; publication, resize, stop/close, clear, reuse, eight slots and synchronous compatibility passed.");
 }

@@ -3,7 +3,11 @@
 #undef main
 static unsigned char terminal_arena[0x100000];
 #define TERM_MEMORY ((uintptr_t)terminal_arena)
+#include "../src/app_storage.c"
+#include "../src/app_canvas.c"
+#include "../src/app_view.c"
 #include "../src/term.c"
+#define V (views[selected])
 #include "../src/basic.c"
 #include "../src/history.c"
 void timer_delay(unsigned t){now+=t;}
@@ -16,6 +20,7 @@ int process_unbind(ProcessHandle p){(void)p;return 0;}
 int process_start(ProcessHandle p){(void)p;return 0;}
 int process_step(ProcessHandle p){(void)p;return 0;}
 ProcessHandle process_schedule_one(void){return 0;}
+int process_binding_live(const ProcessBinding *binding){(void)binding;return 0;}
 int process_status(ProcessHandle p){(void)p;return PROCESS_TASK_EMPTY;}
 int process_get_result(ProcessHandle p,ProcessResult *out){(void)p;(void)out;return 0;}
 int process_key(ProcessHandle p,int key){(void)p;(void)key;return 0;}
