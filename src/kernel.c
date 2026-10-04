@@ -7208,6 +7208,7 @@ void kmain(void) {
                 dirty = 0;
                 cursor_save_draw();
                 gfx_present();
+                if(redraw_count==1)platform_log("DESKTOP-READY\n");
             } else {
                 cursor_save_draw();
                 if (oon)

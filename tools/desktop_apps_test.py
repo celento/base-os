@@ -49,7 +49,7 @@ def browser_contains(text):return text.encode() in read(c['BROWSER_BASE'],c['BRO
 def shot(name):qmp('screendump',{'filename':str(work/name),'format':'png'})
 try:
     assert p.stdout.readline();qmp('qmp_capabilities')
-    until(lambda:log.exists() and 'DESKTOP' in log.read_text(),'desktop boot',30);time.sleep(1)
+    until(lambda:log.exists() and 'DESKTOP-READY\n' in log.read_text(),'desktop boot',30);time.sleep(1)
     launch('browser');key('ctrl-l');type_text(f'http://10.0.2.2:{server.server_port}/index');key('ret')
     until(lambda:'/index' in Fixture.paths and browser_contains('BaseOS live HTTP'),'Browser HTTP page')
     shot('browser-desktop.png');geometry=read(symbols['wins'],64)
