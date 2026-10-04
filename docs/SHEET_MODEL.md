@@ -1,18 +1,19 @@
 # Spreadsheet core and interchange
 
-The isolated spreadsheet engine is in `src/sheet_model.[ch]` and
-`src/sheet_codec.[ch]`. It is ready for an eventual `.bsh` desktop application;
-this change does **not** add a window, filesystem binding, arena reservation,
-menu command, or Makefile kernel integration. The existing `decimal.c` provides
-checked arithmetic. All model storage belongs to the caller.
+The spreadsheet engine is in `src/sheet_model.[ch]` and
+`src/sheet_codec.[ch]`. The [desktop application](SHEET.md) supplies its window,
+filesystem binding, arena and menus. The existing `decimal.c` provides checked
+arithmetic. All model storage belongs to the caller. The exact versioned native
+wire layout and display metadata are documented in [SHEET_FORMAT.md](SHEET_FORMAT.md).
 
 ## Bounds and memory
 
 - Grid: **26 columns × 128 rows**, A1 through Z128; zero-based row/column API.
 - Cell source: **95 bytes**, plus a NUL terminator. Printable ASCII, TAB, CR and
   LF are accepted; NUL within text, DEL, non-ASCII and UTF-8 BOM are rejected.
-- One `SheetCell`: 104 bytes. One `SheetDoc`: **352,768 bytes**, comprising
-  346,112 bytes of cells and a 6,656-byte private dependency-index stack.
+- One `SheetCell`: 104 bytes. One `SheetDoc`: **356,148 bytes**, comprising
+  346,112 bytes of cells, a 6,656-byte private dependency-index stack, 3,328
+  one-byte cell display formats, and 52 bytes of column widths.
 - No heap, static model, physical address, document-sized C stack, floating point,
   or compiler 64-bit division runtime is required. Align `SheetDoc` normally.
 - Expression nesting: **16** parenthesis/function levels. Unary signs are parsed
@@ -21,14 +22,14 @@ checked arithmetic. All model storage belongs to the caller.
 - Numeric representation: signed 32-bit fixed point, **three decimal places**;
   exact supported interval **−2,147,483.648 through +2,147,483.647**. Do not hide
   this range or the text limit in the eventual input UI.
-- A native file needs at most **329,488 bytes**. A CSV export needs at most
-  **642,432 bytes**. Query the exact size before reserving/writing file data.
+- A native v1 file needs at most **329,488 bytes**; v2, **332,868 bytes**. A CSV
+  export needs at most **642,432 bytes**. Query the exact size before writing.
 
 `platform_poll()` is called during model and codec work. Recalculation polls
 at entry/exit and after every 256 cell/reference/evaluation work units, using a
 small local counter shared by nested parsing and dependency reparses. Model
 validation also polls every 128 cells; initialization and CSV byte scans poll
-around 4 KiB, and native records poll in batches of 32 (at most 3,168 bytes).
+around 4 KiB, and native records poll in batches of 32 (at most 3,200 bytes).
 There is no per-range-row or per-cell-reference device callback. Callbacks must
 not mutate the input/document/output or reenter the same document operation.
 The implementation is not a concurrent-edit API. The normal platform's
@@ -78,7 +79,17 @@ fractional digits and no unnecessary zeroes. It emits literal text verbatim and
 empty as empty; calculation errors use the labels below. Its output is NUL
 terminated; `written` excludes NUL. `out=NULL, capacity=0` measures. Output and
 count remain unchanged on failure. The output/count cannot alias each other or
-the source cell. No rendering, column width, alignment or wrapping is imposed.
+the source cell. `sheet_format` deliberately ignores display metadata, so CSV
+and numerical interchange retain their existing precision.
+
+`sheet_format_display` applies General, Fixed2, Currency or Percent to numeric
+and successful formula results. Formats do not alter source or calculations;
+text, empty cells and errors display unchanged. Fixed2/Currency round halfway
+away from zero to two decimals and suppress negative zero. Percent multiplies
+the cached value by 100 for display. Column widths default to 104 pixels and
+accept 48..320 pixels. Editing or clearing a cell preserves its format; a
+formatted EMPTY cell can therefore retain presentation for later entry. See
+[the metadata API and examples](SHEET_FORMAT.md#display-metadata).
 
 **Embedded CSV newlines are cell text, never grid row separators.** A UI must
 clip/wrap or visibly replace TAB/CR/LF within the one cell's drawing rectangle;
@@ -148,35 +159,21 @@ away a cycle and recalculating clears its old errors normally.
 
 ## Native `.bsh`: versioned, sparse and lossless
 
-All integers are little-endian. Header, 16 bytes:
+Both versions retain the 16-byte little-endian `BSH1` header and strictly ordered
+sparse records. Version 1 preserves the original four-byte record prefix and is
+emitted byte-for-byte as before when all display metadata is default. Version 2
+adds a 52-byte width table and a format byte to every record; it also retains
+formatted EMPTY cells. New readers accept both; older v1-only readers reject v2.
+The [complete wire specification](SHEET_FORMAT.md#common-native-header) defines
+every offset, valid value, maximum length and compatibility rule.
 
-| Offset | Bytes | Value |
-|---|---:|---|
-| 0 | 4 | ASCII `BSH1` |
-| 4 | 2 | Version 1 |
-| 6 | 2 | Flags 0 |
-| 8 | 2 | Rows 128 |
-| 10 | 2 | Columns 26 |
-| 12 | 4 | Record count, 0..3328 |
-
-Each record has a four-byte prefix: unsigned 16-bit row-major index
-`row*26+column`, unsigned 8-bit kind (1 TEXT, 2 NUMBER, 3 FORMULA), unsigned
-8-bit byte length (0..95), then exactly that many source bytes without NUL.
-Records must have strictly increasing indices. EMPTY cells are omitted; an
-explicit empty TEXT has a zero-length record. There is no padding or trailer.
-
-The format preserves kind, exact numeric spelling, formula source, ASCII
-controls and all literal text. Cached results and private traversal state are
-not serialized. Decode validates the complete header/record sequence, lengths,
-source kinds and all bytes before clearing/replacing the destination, then
-recalculates. Unrecognized versions, flags, dimensions, duplicates, invalid
-indices, trailing bytes and invalid source bytes are rejected atomically.
-Calculation errors are legitimate content and survive native save/reopen.
-
-`sheet_native_encode` validates and measures before writing. Its bytes depend
-only on source data; fresh caches are not required for native encoding. Empty
-native sheets are exactly the 16-byte header. There is no checksum/authentication
-field in version 1; the filesystem's storage protection is a separate layer.
+Kinds, exact numeric spelling, formula source, permitted ASCII controls and
+literal text survive native reopening. Display formats and widths survive v2.
+Cached results and private traversal state are not serialized. Complete
+validation precedes replacement, then the accepted document is recalculated.
+Calculation errors are legitimate content. Encoding needs no fresh caches.
+Neither version has a checksum/authentication field; storage protection is a
+separate layer. An all-default empty sheet is the original 16-byte v1 header.
 
 ## CSV interchange
 
@@ -201,6 +198,8 @@ area through the last nonempty kind. Interior/leading empty cells and rows keep
 their positions. Every emitted row ends CRLF. Fields containing commas, quotes,
 CR or LF are quoted, with embedded quotes doubled. An entirely empty grid emits
 zero bytes. Errors export as their visible error labels; these import as text.
+Cell display formats and column widths do not affect exported numerical bytes
+or enlarge the rectangle. CSV import resets all metadata to defaults.
 
 CSV does not carry types/formulas, so this is deliberately not a lossless native
 save path. For example, literal text `0012` may import back as the number 12,
@@ -242,14 +241,16 @@ signed boundary values, precision/overflow/divide-by-zero errors, function
 coercion, every A1 coordinate, full 3,328-cell dependency chains and cycles,
 cycle repair, expression depth, cell-copy aliases, exact native reopening,
 quoted multiline CSV, CSV literal-formula import, maximum document/file sizes,
-malformed format rejection, and import/export failure atomicity. Independent
+malformed format rejection, and import/export failure atomicity. The format
+suite adds numeric display rounding, widths, formatted empty cells, exact v2
+persistence, unchanged CSV bytes and metadata rejection. Independent
 Python `csv` and `struct` readers verify actual emitted interchange files.
 There are no fuzzers or intentional memory-fault probes.
 
 Freestanding i386 objects are compiled with the production flags and
 `-fstack-usage`; unresolved dependencies are only `decimal_calculate`,
 `platform_poll` and the documented model APIs. The model and codec add roughly
-8.5 KiB of object text and zero mutable data/BSS before final-link alignment.
+9.94 KiB of object text and zero mutable data/BSS before final-link alignment.
 Measured own stack frames are at most 192 bytes; bounded expression recursion
 uses roughly 4.5 KiB before platform callbacks in the production `-Os` build.
 QEMU/desktop/file-binding verification belongs to the later integration and is
@@ -272,5 +273,5 @@ returning to per-item device I/O. Production integration must measure real
 platform callbacks. No evaluation-work cutoff leaves stale results: every valid
 cell reaches a value or explicit error during each complete recalculation.
 
-The final isolated i386 build measured model text **5,721 bytes**, codec text
-**2,923 bytes**, and zero mutable data/BSS in either object (8,644 bytes combined).
+The metadata-aware i386 build measured model text **6,853 bytes**, codec text
+**3,326 bytes**, and zero mutable data/BSS in either object (10,179 bytes combined).
