@@ -117,7 +117,9 @@ a target, readiness flags and rounded-up wrap-safe deadline. Readiness wins a
 same-tick deadline. QUEUE is mandatory; optional LEGACY_KEY observes without
 consuming the existing byte queue. UI events never wake a separate sync wait.
 UI WAIT never publishes, including immediate-ready and timeout paths. Explicit
-present/yield/sleep/exit retain their pre-existing publication behavior.
+present/yield/sleep/exit retain their pre-existing publication behavior. A pending
+positive native SYNC_WAIT also publishes before suspension under its existing
+contract; it is distinct from UI WAIT.
 
 Process binding checks now reject a stopping owner immediately; Stop/exit revoke
 UI eligibility before deferred backing cleanup. The existing owner-release path
@@ -250,7 +252,8 @@ explicit copied output and metadata, preserved command/history/input-loss state,
 NONE-output print/completion, retained-DONE I/O refusal, deferred-close storage
 retention, common poller compatibility and generation persistence. The real
 process+view integration gate checks actual published pixels after deferred
-Stop followed by present/yield/sleep/explicit exit, immediate UI ineligibility,
+Stop followed by present/yield/sleep/pending positive SYNC_WAIT/explicit exit,
+immediate UI ineligibility,
 APP exit precedence, nonpublishing timer/error/idle Stop and stale output refusal.
 Existing publication, native binding, rectangle, input, launch, resource-lifetime
 and renderer suites remain
