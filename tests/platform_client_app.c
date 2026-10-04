@@ -106,7 +106,9 @@ int main(void){
     bos_print("Platform client: O open, R read, W replace B, X replace C.\n");
     bos_print("S sync, L release, T timed wait, H handle, V verify, 0/1/2 pages.\n");
     bos_print("A echoes input. Q exits normally.\n");
-    unsigned previous=bos_ticks();last_draw=previous;draw();
+    unsigned previous=bos_ticks();last_draw=previous;
+    if(!bos_task_id())page=1;
+    draw();
     if(!bos_task_id())return 0;
     for(;;){
         unsigned now=bos_ticks();last_gap=now-previous;previous=now;

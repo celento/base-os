@@ -14,7 +14,7 @@ import numpy as np
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
 from platform_evidence import COLORS, MAGIC, PlatformSession, decode_canvas, fnv, signed, snapshot_jobs
-from platform_foundation_test import counter_canvas, fixture, frozen_apps, hello_canvas
+from platform_foundation_test import counter_canvas, fixture, frozen_apps, hello_canvas, operation_key
 from volume import data_layout, load, resolve
 
 
@@ -82,6 +82,26 @@ class PlatformEvidenceTests(unittest.TestCase):
             self.assertEqual(magic,0x31584542)
             self.assertEqual(length,len(data));self.assertEqual(reserved,0)
             self.assertGreaterEqual(entry,16)
+
+    def test_operation_gate_requires_fresh_keyboard_consumption(self):
+        class Session:
+            def __init__(self):self.calls=0
+            def key(self,key):self.key_sent=key
+            def until(self,predicate,_message,**_kwargs):
+                before=dict(process=3,page=0,keys=9,file_result=-1006)
+                self.calls+=1
+                if self.calls==1:
+                    self.assert_before=predicate(before)
+                    return before,None,0
+                assert not predicate(before), 'A previous equal error must not satisfy a new action'
+                assert not predicate(dict(before,process=4,keys=10))
+                after=dict(before,keys=10)
+                assert predicate(after)
+                return after,None,1
+        session=Session()
+        observed=operation_key(session,'x',lambda o:o['file_result']==-1006,'conflict')
+        self.assertEqual(observed['keys'],10)
+        self.assertEqual(session.key_sent,'x')
 
     def test_fixture_profiles_use_exact_frozen_apps_and_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:

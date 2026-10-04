@@ -184,8 +184,11 @@ class PlatformSession(DesktopSession):
         raise AssertionError(message)
 
     def page(self, page):
+        before = self.until(lambda o: True, 'native client before page selection')[0]
         self.key(str(page))
-        return self.until(lambda o: o['page'] == page, 'visible page ' + str(page))[0]
+        return self.until(lambda o: o['process'] == before['process'] and
+                          o['keys'] > before['keys'] and o['page'] == page,
+                          'visible page ' + str(page))[0]
 
     def focus(self, process):
         for _ in range(9):
