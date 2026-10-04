@@ -45,6 +45,7 @@ static struct {
     unsigned line_count, layout_revision;
     int initialized, file, failed_save, clipboard_owned, dragging;
     unsigned identity;
+    unsigned group_kind, group_caret, group_ticks, group_count;
     int width, content_height, scroll, viewport_height, desired_x;
     int layout_valid, blink, last_blink, hit_affinity;
     char title[64], status[112];
@@ -91,6 +92,7 @@ static void invalidate(void) { state.layout_valid = 0; state.desired_x = -1; sta
 
 /* Each complete operation records one state. Older states drop as a ring. */
 static Snapshot *begin_edit(void) {
+    state.group_kind = 0;
     unsigned old = (state.first + state.current) % HISTORY;
     state.count = state.current + 1;
     if (state.count == HISTORY) {
@@ -104,14 +106,24 @@ static Snapshot *begin_edit(void) {
     invalidate();
     return s;
 }
-static void accept_staging(unsigned caret, unsigned typing_style) {
-    Snapshot *s = begin_edit();
+static void accept_staging(unsigned caret, unsigned typing_style, unsigned group) {
+    unsigned now = timer_ticks();
+    int join = group && state.group_kind == group && state.group_caret == snapshot()->caret &&
+               snapshot()->caret == snapshot()->anchor && state.current + 1 == state.count &&
+               snapshot()->revision != state.saved_revision && state.group_count < 512u &&
+               now - state.group_ticks < TIMER_HZ;
+    unsigned count = join ? state.group_count + 1 : 1;
+    Snapshot *s;
+    if (join) { s = snapshot(); s->revision = ++state.next_revision; invalidate(); }
+    else s = begin_edit();
     copy_bytes(&s->doc, &ARENA->staging, sizeof(WriterDoc));
     s->caret = s->anchor = caret; s->affinity = 0;
     s->typing_style = typing_style & WRITER_STYLE_MASK;
+    state.group_kind = group; state.group_caret = caret; state.group_ticks = now; state.group_count = count;
     status("Edited. Ctrl+S saves the native document.");
 }
 static int undo(int redo) {
+    state.group_kind = 0;
     if ((!redo && !state.current) || (redo && state.current + 1 >= state.count)) {
         status(redo ? "Nothing to redo." : "Nothing to undo."); return WRITER_CHANGED;
     }
@@ -125,7 +137,7 @@ static int undo(int redo) {
  * inserted paragraphs retain rich clipboard attributes. The destination's
  * partial first paragraph retains its existing paragraph properties. */
 static int replace(unsigned lo, unsigned hi, const unsigned char *text, unsigned length,
-                   const unsigned char *styles, const unsigned char *paragraphs) {
+                   const unsigned char *styles, const unsigned char *paragraphs, unsigned group) {
     WriterDoc *d = document(), *n = &ARENA->staging;
     if (lo > hi || hi > d->length || length > WRITER_TEXT_MAX - (d->length - (hi - lo))) {
         status("Document limit is 32,768 text bytes. Nothing was changed."); return 0;
@@ -164,7 +176,7 @@ static int replace(unsigned lo, unsigned hi, const unsigned char *text, unsigned
     if (!lo) n->paragraph[0] = (unsigned char)(paragraphs && length ? paragraphs[0] : inherited);
     n->style[n->length] = (unsigned char)typing;
     if (writer_doc_validate(n)) { status("The edit could not be represented safely."); return 0; }
-    accept_staging(lo + length, typing); return 1;
+    accept_staging(lo + length, typing, group); return 1;
 }
 static int format_inline(unsigned mask) {
     unsigned lo = selection_low(), hi = selection_high(), typing = snapshot()->typing_style;
@@ -191,6 +203,7 @@ static int format_paragraph(unsigned mask, unsigned value) {
     status("Paragraph style changed."); return WRITER_CHANGED;
 }
 static void copy_selection(void) {
+    state.group_kind = 0;
     unsigned lo = selection_low(), hi = selection_high();
     if (lo == hi) { status("Select text to copy."); return; }
     const WriterDoc *d = document(); WriterDoc *c = &ARENA->clipboard;
@@ -207,6 +220,7 @@ static void copy_selection(void) {
     status("Copied. Styles stay with this Writer clipboard selection.");
 }
 static void paste(void) {
+    state.group_kind = 0;
     unsigned generation = 0;
     int length = writer_clipboard_get((char *)ARENA->output, WRITER_TEXT_MAX + 1u, &generation);
     const WriterDoc *c = &ARENA->clipboard;
@@ -214,8 +228,8 @@ static void paste(void) {
     int own = state.clipboard_owned && ((length < 0 && !state.clipboard_generation) ||
               (length >= 0 && generation == state.clipboard_generation && (unsigned)length == state.clipboard_length));
     if (own && length >= 0) for (int i = 0; i < length; i++) if (ARENA->output[i] != c->text[i]) { own = 0; break; }
-    if (own) replace(selection_low(), selection_high(), c->text, c->length, c->style, c->paragraph);
-    else if (length >= 0 && (unsigned)length <= WRITER_TEXT_MAX) replace(selection_low(), selection_high(), ARENA->output, (unsigned)length, 0, 0);
+    if (own) replace(selection_low(), selection_high(), c->text, c->length, c->style, c->paragraph, 0);
+    else if (length >= 0 && (unsigned)length <= WRITER_TEXT_MAX) replace(selection_low(), selection_high(), ARENA->output, (unsigned)length, 0, 0, 0);
     else status("Clipboard is unavailable or exceeds the 32,768-byte limit.");
 }
 
@@ -325,6 +339,7 @@ static void reveal(void) {
     state.scroll = clamp(state.scroll, 0, state.content_height > state.viewport_height ? state.content_height - state.viewport_height : 0);
 }
 static void move_to(unsigned index, int extend, int vertical) {
+    state.group_kind = 0;
     Snapshot *s = snapshot();
     s->caret = min_u(index, s->doc.length); s->affinity = 0;
     if (!extend) s->anchor = s->caret;
@@ -339,6 +354,7 @@ static void move_hit(int x, int y, int extend, int vertical) {
 }
 
 void writer_new(void) {
+    state.group_kind = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); writer_doc_init(&s->doc);
     s->caret = s->anchor = s->typing_style = s->affinity = 0;
@@ -369,6 +385,7 @@ static int native_name(const char *name) {
            (name[n - 2] == 'w' || name[n - 2] == 'W') && (name[n - 1] == 'r' || name[n - 1] == 'R');
 }
 int writer_open_file(int id) {
+    state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id)) { status("That file is unavailable."); return 0; }
     int size = fs_size(id); const unsigned char *data = (const unsigned char *)fs_data(id);
@@ -414,11 +431,13 @@ static int save_to(int id) {
     status("Saved and synchronized to disk."); return WRITER_SAVE_OK;
 }
 int writer_save(void) {
+    state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (!binding_valid()) { status("Choose Save As for a new native .bwr file."); return WRITER_SAVE_NEEDS_NAME; }
     return save_to(state.file);
 }
 int writer_save_as(int parent, const char *name) {
+    state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (!name || !native_name(name)) { status("Native documents use the .bwr filename extension."); return WRITER_SAVE_ERROR; }
     int existing = fs_find_child(parent, name);
@@ -446,6 +465,7 @@ int writer_save_as(int parent, const char *name) {
     return result;
 }
 int writer_export_rtf(int parent, const char *name) {
+    state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (!name || !extension(name, "rtf")) { status("RTF exports use the .rtf filename extension."); return -1; }
     if (fs_find_child(parent, name) >= 0) {
@@ -466,6 +486,7 @@ int writer_export_rtf(int parent, const char *name) {
 }
 int writer_restore(const unsigned char *data, unsigned length, int file, unsigned identity,
                    int dirty, unsigned caret, unsigned anchor) {
+    state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (writer_native_decode(&ARENA->staging, data, length)) { status("Invalid recovery document; current work is unchanged."); return 0; }
     state.first = state.current = 0; state.count = 1;
@@ -510,8 +531,8 @@ int writer_key(int sc, char ch, int modifiers) {
     if (modifiers & WRITER_MOD_ALT) return 0;
     if (control) {
         switch (sc) {
-        case 0x1f: return extend ? WRITER_REQUEST_SAVE_AS : WRITER_REQUEST_SAVE;
-        case 0x12: if (extend) return WRITER_REQUEST_EXPORT; return format_paragraph(WRITER_ALIGN_MASK, WRITER_ALIGN_CENTER);
+        case 0x1f: state.group_kind = 0; return extend ? WRITER_REQUEST_SAVE_AS : WRITER_REQUEST_SAVE;
+        case 0x12: if (extend) { state.group_kind = 0; return WRITER_REQUEST_EXPORT; } return format_paragraph(WRITER_ALIGN_MASK, WRITER_ALIGN_CENTER);
         case 0x30: return format_inline(WRITER_STYLE_BOLD);
         case 0x17: return format_inline(WRITER_STYLE_ITALIC);
         case 0x16: return format_inline(WRITER_STYLE_UNDERLINE);
@@ -523,7 +544,7 @@ int writer_key(int sc, char ch, int modifiers) {
         case 0x15: undo(1); reveal(); return WRITER_CHANGED;
         case 0x1e: snapshot()->anchor = 0; move_to(document()->length, 1, 0); return WRITER_CHANGED;
         case 0x2e: copy_selection(); return WRITER_CHANGED;
-        case 0x2d: copy_selection(); if (selection_low() != selection_high()) replace(selection_low(), selection_high(), 0, 0, 0, 0); reveal(); return WRITER_CHANGED;
+        case 0x2d: copy_selection(); if (selection_low() != selection_high()) replace(selection_low(), selection_high(), 0, 0, 0, 0, 0); reveal(); return WRITER_CHANGED;
         case 0x2f: paste(); reveal(); return WRITER_CHANGED;
         }
     }
@@ -565,18 +586,22 @@ int writer_key(int sc, char ch, int modifiers) {
     }
     if (control) return 0;
     if (sc == 0x0e || sc == 0x53) {
+        unsigned group = low == high ? (sc == 0x0e ? 2u : 3u) : 0;
         if (low == high) {
             if (sc == 0x0e && low) low--;
             if (sc == 0x53 && high < document()->length) high++;
         }
-        if (low != high) replace(low, high, 0, 0, 0, 0);
+        if (low != high) {
+            if (high - low != 1 || document()->text[low] == '\n') group = 0;
+            replace(low, high, 0, 0, 0, 0, group);
+        }
         reveal(); return WRITER_CHANGED;
     }
     unsigned char inserted = (unsigned char)ch;
     if (sc == 0x1c) inserted = '\n';
     else if (sc == 0x0f) inserted = '\t';
     else if (inserted < 32 || inserted > 126) return 0;
-    replace(low, high, &inserted, 1, 0, 0); reveal(); return WRITER_CHANGED;
+    replace(low, high, &inserted, 1, 0, 0, low == high && inserted >= 32 ? 1u : 0); reveal(); return WRITER_CHANGED;
 }
 
 /* Local clipping is mandatory: gfx primitives otherwise clip only to screen. */
@@ -635,6 +660,7 @@ static int button_active(unsigned action) {
     return 0;
 }
 static int button_action(unsigned action) {
+    state.group_kind = 0;
     if (action <= 3) return format_inline(1u << (action - 1));
     if (action == 4 || action == 5) return format_paragraph(WRITER_PARAGRAPH_HEADING, action == 5 ? WRITER_PARAGRAPH_HEADING : 0);
     if (action >= 6 && action <= 8) return format_paragraph(WRITER_ALIGN_MASK, action - 6);
