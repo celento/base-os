@@ -29,7 +29,7 @@ const char *fs_data(int id){assert(id==1);return (const char *)image;}
 int fs_size(int id){assert(id==1);return sizeof image;}
 const char *fs_name(int id){assert(id==1);return "view.bex";}
 
-enum { VIEW_INITIAL, VIEW_PRESENT, VIEW_YIELD, VIEW_SLEEP_ZERO, VIEW_SLEEP,
+enum { VIEW_INITIAL, VIEW_PRESENT, VIEW_YIELD, VIEW_SLEEP_ZERO, VIEW_SLEEP, VIEW_SYNC_WAIT,
        VIEW_EXIT_ZERO, VIEW_EXIT_NONZERO, VIEW_EXIT_STOP_VALUE, VIEW_TIMER, VIEW_ERROR, VIEW_PENDING, VIEW_SCHEDULER };
 static int view_mode;
 static unsigned owner_slot=4;
@@ -89,6 +89,7 @@ static void view_slice(void){
     case VIEW_YIELD:invoke(BOS_CALL_YIELD,0,0);break;
     case VIEW_SLEEP_ZERO:invoke(BOS_CALL_SLEEP,0,0);break;
     case VIEW_SLEEP:invoke(BOS_CALL_SLEEP,17,0);break;
+    case VIEW_SYNC_WAIT:stub_poll=BOS_PENDING;invoke(BOS_CALL_SYNC_WAIT,BOS_HANDLE_TYPE_OPERATION|7,1000);break;
     case VIEW_EXIT_ZERO:invoke(BOS_CALL_EXIT,0,0);break;
     case VIEW_EXIT_NONZERO:invoke(BOS_CALL_EXIT,27,0);break;
     case VIEW_EXIT_STOP_VALUE:invoke(BOS_CALL_EXIT,(unsigned)PROCESS_TASK_STOPPED,0);break;
@@ -204,6 +205,6 @@ int main(int argc,char **argv){
     real_view_scheduler();
     assert(backing_allocations==backing_releases&&!host_physmem_stats().allocated);
     host_physmem_destroy();
-    printf("Real process + app view: %u MiB; deferred Stop preserves exact present/yield/sleep/APP-exit frames and output; UI revokes immediately; timer/error/idle Stop never publish; DONE/reaped/reused output is refused.\n",ram);
+    printf("Real process + app view: %u MiB; deferred Stop preserves exact present/yield/sleep/SYNC_WAIT/APP-exit frames and output; UI revokes immediately; timer/error/idle Stop never publish; DONE/reaped/reused output is refused.\n",ram);
     return 0;
 }
