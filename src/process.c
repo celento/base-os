@@ -415,7 +415,8 @@ int process_interrupt(uint32_t *r){
     else if(call>=BOS_CALL_READ_FILE&&call<=BOS_CALL_FILE_SIZE)r[7]=(unsigned)file_call(call,a,b,c,d,0);
     else if(call==BOS_CALL_RECT){
         if(c>canvas_width||d>canvas_height){r[7]=(unsigned)-1;return 1;}
-        for(unsigned y=0;y<d;y++)for(unsigned x=0;x<c;x++)
+        if(c&&d&&output->rect)output->rect((int)a,(int)b,(int)c,(int)d,(int)e);
+        else for(unsigned y=0;y<d;y++)for(unsigned x=0;x<c;x++)
             output->plot((int)(a+x),(int)(b+y),(int)e);
         r[7]=0;
     }

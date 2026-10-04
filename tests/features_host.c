@@ -29,7 +29,7 @@ int main(void){
     assert(history_step(&h,&value,0)&&value==4);assert(history_step(&h,&value,0)&&value==3);
     assert(history_step(&h,&value,1)&&value==4);history_record(&h,&value);value=99;
     assert(!history_step(&h,&value,1));assert(history_step(&h,&value,0)&&value==4);
-    ProgramIO io={output_line,output_plot,program_key,program_present,0};
+    ProgramIO io={output_line,output_plot,program_key,program_present,0,0};
     const char *source="10 LET A=2+3*4\n20 PRINT A\n30 RECT 0,0,2,3,7\n40 END\n";
     assert(!basic_run(source,strlen(source),&io));assert(!strcmp(result,"14")&&plotted==6);
     source="10 LET A=0\n20 LET A=A+1\n30 IF A < 5 THEN 20\n40 PRINT A\n";

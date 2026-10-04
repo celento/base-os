@@ -3,7 +3,7 @@
 static void check(int ok,const char *why){if(!ok)panic(why);}
 static void quiet(const char *text){(void)text;}
 static void pixel(int x,int y,int color){(void)x;(void)y;(void)color;}
-static ProgramIO io={quiet,pixel,0,0,0};
+static ProgramIO io={quiet,pixel,0,0,0,0};
 static int file(const char *path){return fs_resolve(fs_root(),path);}
 static void command(const char *s){while(*s)term_char(*s++);term_enter();}
 static void record(int owner,const char *expected){
