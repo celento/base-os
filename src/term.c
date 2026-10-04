@@ -229,7 +229,7 @@ static int execute(const char *s,int depth,int *budget){
         else if(!kstrcmp(cmd,"nslookup")){uint32_t address;char ip[16];if(net_resolve(arg,&address)){push(net_last_error());return -1;}net_format_ipv4(address,ip);push(ip);}
         else {char body[4096];if(net_http_get(arg,body,sizeof body)){push(net_last_error());return -1;}const NetHttpResult *result=net_http_result();print_number("HTTP status: ",(unsigned)result->status);if(result->content_type[0])push(result->content_type);print_http_body(body,result->length);if(result->truncated)push("[Response truncated to 4095 bytes]");if(result->location[0]){push("Redirect Location:");push(result->location);}}
     }
-    else if(!kstrcmp(cmd,"pwd")){char path[64];fs_path(cwd,path,sizeof path);push(path);}
+    else if(!kstrcmp(cmd,"pwd")){char path[FS_PATH_LEN];fs_path(cwd,path,sizeof path);print_http_body(path,(unsigned)kstrlen(path));}
     else if(!kstrcmp(cmd,"cd")){if(!fs_is_dir(id))return -1;term_set_cwd(id);}
     else if(!kstrcmp(cmd,"ls")){if(!fs_is_dir(id))return -1;int ids[FS_MAX_NODES],count=fs_list(id,ids,FS_MAX_NODES);for(int i=0;i<count;i++){char row[26];kstrcpy(row,fs_name(ids[i]));if(fs_is_dir(ids[i]))kstrcpy(row+kstrlen(row),"/");push(row);}}
     else if(!kstrcmp(cmd,"cat")){if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;cat(id);}
