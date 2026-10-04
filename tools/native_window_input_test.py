@@ -21,6 +21,8 @@ import numpy as np
 from PIL import Image
 from build_app import build as build_app, _bex2_header
 from init_data import initialize
+from kernel_pack import unpack_kernel
+from layout import constants
 from native_pointer_input_test import Font, Session, COLORS, FROZEN, require, sha256
 from volume import data_layout, encode_snapshot, load, resolve
 
@@ -197,6 +199,24 @@ def declared_pages(data):
     return (h[6]+4095)//4096 + (h[9]+4095)//4096 + h[10]//4096 + h[11]//4096 + 2
 
 
+def verify_build_directory(build):
+    """Prove the exact boot image contains the recorded packed/raw kernel."""
+    build = Path(build); layout = constants()
+    image = (build/'baseos.img').read_bytes(); boot = (build/'boot.bin').read_bytes()
+    packed = (build/'kernel.packed').read_bytes(); raw = (build/'kernel.bin').read_bytes()
+    sector = layout['SECTOR_SIZE']; first = layout['KERNEL_PRIMARY_SECTORS']*sector
+    tail = layout['KERNEL_EXT_LBA']*sector
+    require(len(image) == layout['DISK_SECTORS']*sector and len(boot) == sector,
+            'Production boot artifacts have inconsistent extents')
+    require(image[:sector] == boot, 'Held boot image differs from recorded boot.bin')
+    installed = image[sector:sector+min(first, len(packed))]
+    if len(packed) > first:
+        installed += image[tail:tail+len(packed)-first]
+    require(installed == packed, 'Held boot image differs from recorded kernel.packed')
+    require(unpack_kernel(packed, layout) == raw, 'Packed kernel differs from recorded kernel.bin')
+    return dict(boot_matches=True, packed_matches=True, raw_matches=True)
+
+
 def make_volume(path, profile, apps):
     require(initialize(path, profile=profile), 'Refusing to overwrite fixture volume')
     nodes = {0: dict(parent=-1, name='', directory=1, app=0, data=b'', modified=0),
@@ -238,6 +258,7 @@ def prepare(build, output, hosted_pointer, profiles=('default', 'large'), old_ke
                 manifest['source'][name] = file_record(ROOT/name)
         held = hosted_pointer.read_bytes()
         require(sha256(held) == HOSTED_SHA256, 'Hosted Pointer differs from qualified extraction binary')
+        manifest['boot_consistency'] = verify_build_directory(build)
         (output/'pointer.bex').write_bytes(held)
         frozen = json.loads((FROZEN/'manifest.json').read_text())
         counter = (FROZEN/'counter.bex').read_bytes()
@@ -267,6 +288,7 @@ def prepare(build, output, hosted_pointer, profiles=('default', 'large'), old_ke
         if old_kernel:
             manifest['old_kernel'] = {name: file_record(old_kernel/name) for name in CORE_ARTIFACTS}
             manifest['old_kernel_directory'] = str(old_kernel.resolve())
+            manifest['old_boot_consistency'] = verify_build_directory(old_kernel)
             manifest['old_refusal_volume'] = make_volume(output/'old-refusal.img', 'default', apps)
         else:
             manifest['lanes']['old-kernel-refusal'] = 'BLOCKED: explicit --old-kernel build directory required'
@@ -302,7 +324,9 @@ class Evidence:
         path = self.output/(self.phase+'-'+name+'.png')
         self.session.command('screendump', {'filename': str(path), 'format': 'png'})
         self.report['screenshots'].append(file_record(path)); self.save()
-        return np.array(Image.open(path).convert('RGB'))
+        image = np.array(Image.open(path).convert('RGB'))
+        require(image.shape == (720, 1280, 3), 'Collector requires normal1280x720 production display')
+        return image
 
     def check(self, name, condition, **measured):
         self.report['checks'].append(dict(name=name, passed=bool(condition), measured=measured)); self.save()
