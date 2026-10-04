@@ -1,4 +1,4 @@
-# Audio playback
+# Audio and media playback
 
 BaseOS has an original, allocation-free Sound Blaster 16 driver and PCM WAVE
 reader, plus the CC0-licensed minimp3 decoder. It targets QEMU's SB16 at port `0x220`, IRQ5, low DMA1/high DMA5. IRQ5
@@ -16,20 +16,21 @@ controller continues using its independent DMA2 channel.
 - Playback owns a copy, so changing or deleting the source file is safe
 
 Other codecs, free-format MP3, WAVE extensible, floating-point WAVE, recording,
-MIDI and video are not implemented. MP3 encoder delay/padding is retained;
+MIDI and MPEG audio are not implemented. MPEG-1 video-only playback is documented
+in [VIDEO.md](VIDEO.md). MP3 encoder delay/padding is retained;
 gapless trimming and seeking are not implemented. MP3 streams must keep the
-same sample rate and channel count throughout. Normal BaseOS files still have a
-16,383-byte limit. The playback arena can accept up to 384 KiB from a future
-larger-file source, but that does not enlarge the filesystem or add streaming
-file I/O. Uncompressed CD-rate stereo therefore fits only very short clips in
-the existing volume.
+same sample rate and channel count throughout. The IDE data volume supports 2 MiB per file and roughly 8 MiB total payload.
+The owned audio-input arena also accepts up to 2 MiB. The optional legacy
+floppy-only volume retains its original limits; larger-file support does not
+add streaming file I/O. Uncompressed CD-rate stereo therefore fits only short
+clips, while compressed MP3 can hold more playback time.
 
 `tools/make_audio_example.py build/chime.wav` generates an original one-second
 melody that fits the filesystem. After booting a fresh disk once and stopping
 QEMU, import it with:
 
 ```
-python3 tools/volume.py build/baseos.img import build/chime.wav /chime.wav
+python3 tools/volume.py build/baseos-data.img import build/chime.wav /chime.wav
 ```
 
 ## Integration
@@ -58,7 +59,7 @@ and device faults return bounded errors and do not block the desktop.
 Memory reservations:
 
 - `0x710000..0x720000`: 64 KiB audio ISA DMA ring
-- `0x720000..0x780000`: owned audio input, 384 KiB
+- `0x1700000..0x1900000`: owned audio input, 2 MiB
 
 ## QEMU and verification
 
@@ -109,7 +110,7 @@ MPEG-2 stereo 22.05 kHz, and MPEG-2.5 mono 8 kHz fixtures have been verified.
 `src/player.c` is a singleton client-area app. The desktop owns its window and
 calls `player_init`, `player_draw`, `player_click`, `player_key`, and
 `player_tick`. `player_open_file(id)` opens and plays a filesystem item directly;
-`player_refresh()` updates its alphabetical WAV/MP3 library. The library skips
+`player_refresh()` updates its alphabetical WAV/MP3/MPEG-1 library. The library skips
 Trash descendants, preserves selection across refreshes, checks file identity
 before opening a previously selected slot, and shows the actual decoder input
 limit. It can accept larger filesystem files later without a new player API.
@@ -122,8 +123,10 @@ name remains visible if its file is moved or changed during playback because
 the audio engine owns a separate input copy.
 
 The caller must keep servicing `audio_poll()` even if the player window is
-minimized or closed. `player_tick()` only reports visual changes. Suggested
-outer size is `PLAYER_W` × `PLAYER_H` (560×504), with a minimum 420×414.
+minimized or closed. `player_tick()` services bounded video playback and reports visual changes.
+`player_close()` stops both transports. Suggested outer size is `PLAYER_W` ×
+`PLAYER_H` (640×614), with a minimum client area 420×414. MPEG-1 video is visibly
+labeled video-only; MPEG audio is not played. See [VIDEO.md](VIDEO.md).
 
 `python3 tools/player_test.py build` exercises real QEMU playback, keyboard
 pause/resume, volume, playlist selection and stopping. It also captures the
