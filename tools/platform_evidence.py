@@ -37,6 +37,13 @@ def signed(value):
     return value - 0x100000000 if value & 0x80000000 else value
 
 
+def semantic_payload(value):
+    # These fields naturally advance between complete publications; ownership,
+    # key acknowledgment, page identity and every actual result remain checked.
+    changing={'loops','ticks','pending','max_gap','max_call','last_gap','wait_loops'}
+    return {key:item for key,item in value.items() if key not in changing}
+
+
 def provenance(build):
     """Record built source identity separately from the current harness checkout.
 
@@ -134,6 +141,7 @@ class PlatformSession(DesktopSession):
         self.events = []
         self.last_key = time.monotonic()
         self.last_io = 0
+        self.transition_count = 0
         super().__init__(*args, **kwargs)
 
     def command(self, name, arguments=None):
@@ -182,12 +190,28 @@ class PlatformSession(DesktopSession):
 
     def until(self, predicate, message, seconds=120, keep=None):
         end = time.monotonic() + seconds
+        candidate = None
         while time.monotonic() < end:
             if time.monotonic() - self.last_key > 10:
                 self.key('shift', 0)
             value, pixels, wall = self.observe()
             if value and predicate(value):
-                return self.observe(keep) if keep else (value, pixels, wall)
+                if candidate and semantic_payload(candidate[0]) == semantic_payload(value):
+                    if keep:
+                        # Save the exact accepted observation, not a new possibly
+                        # transitional screendump requested after acceptance.
+                        Image.fromarray(pixels).save(self.directory / (keep + '.png'))
+                    return value, pixels, wall
+                if candidate:
+                    self.transition_count += 1
+                    prefix = f'transition-{self.transition_count:03d}'
+                    Image.fromarray(candidate[1]).save(self.directory / (prefix + '-before.png'))
+                    Image.fromarray(pixels).save(self.directory / (prefix + '-after.png'))
+                    self.events.append(dict(kind='semantic-transition', wall=wall, prefix=prefix,
+                                            before=candidate[0], after=value))
+                candidate = value, pixels, wall
+            else:
+                candidate = None
             if self.process.poll() is not None or 'PANIC:' in self.log.read_text():
                 raise AssertionError(message + '\n' + self.log.read_text())
             time.sleep(.04)

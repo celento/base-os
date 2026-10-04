@@ -381,6 +381,8 @@ def main():
     parser.add_argument('--work',type=Path,required=True)
     parser.add_argument('--profile',choices=('default','large','both'),default='both')
     parser.add_argument('--seed',type=Path,help='Prior compatibility seed, skips compatibility boots')
+    parser.add_argument('--compatibility-result',type=Path,
+                        help='Explicitly reuse a passed compatibility result from this exact candidate; requires --seed')
     parser.add_argument('--old-build',type=Path,help='Optional clean preplatform build for actual query fallback boot')
     parser.add_argument('--save-timeout',type=int,default=900,
                         help='Bound a complete large-volume snapshot under concurrent native rendering')
@@ -395,7 +397,18 @@ def main():
     try:
         app=args.work/'platform.bex';build_app(ROOT/'tests/platform_client_app.c',app)
         result['app_sha256']=sha(app.read_bytes())
-        if args.seed:seed=args.seed
+        if args.seed:
+            seed=args.seed
+            if args.compatibility_result:
+                prior=json.loads(args.compatibility_result.read_text())
+                assert prior['compatibility']['passed']
+                for name in ('boot.bin','kernel.bin','kernel.packed'):
+                    assert prior['provenance']['artifacts'][name]['sha256']==result['provenance']['artifacts'][name]['sha256']
+                assert sha(seed.read_bytes())==prior['seed_sha256']==prior['compatibility']['disk_sha256']
+                result['compatibility']=prior['compatibility']
+                result['compatibility_reused']=dict(result_path=str(args.compatibility_result),
+                    result_sha256=sha(args.compatibility_result.read_bytes()),
+                    built_source=prior['provenance']['built_source'],seed_sha256=prior['seed_sha256'])
         else:seed,result['compatibility']=compatibility(args.build,args.work/'compatibility',app)
         result['seed_sha256']=sha(seed.read_bytes())
         from platform_context_test import run_contexts
