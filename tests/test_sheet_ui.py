@@ -26,7 +26,8 @@ class SheetUITests(unittest.TestCase):
                         '-DSPREADSHEET_HOST_TEST', '-I', str(ROOT / 'src'),
                         str(ROOT / 'tests/sheet_ui_host.c'), str(ROOT / 'src/sheet.c'),
                         str(ROOT / 'src/sheet_codec.c'), str(ROOT / 'src/sheet_model.c'),
-                        str(ROOT / 'src/decimal.c'), '-o', str(executable)], check=True)
+                        str(ROOT / 'src/decimal.c'), str(ROOT / 'src/document_save.c'),
+                        str(ROOT / 'src/kernel_owner.c'), '-o', str(executable)], check=True)
         env = dict(os.environ)
         env.setdefault('ASAN_OPTIONS', 'detect_leaks=0')
         env['UBSAN_OPTIONS'] = 'halt_on_error=1'

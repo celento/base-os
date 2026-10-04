@@ -56,7 +56,8 @@ class SheetRecoveryTests(unittest.TestCase):
                             str(ROOT / 'tests/sheet_recovery_host.c'), str(ROOT / 'src/history.c'),
                             str(ROOT / 'src/sheet.c'), str(ROOT / 'src/sheet_model.c'),
                             str(ROOT / 'src/sheet_codec.c'), str(ROOT / 'src/decimal.c'),
-                            str(ROOT / 'src/example_sheet.c'),
+                            str(ROOT / 'src/example_sheet.c'), str(ROOT / 'src/native_sync.c'),
+                            str(ROOT / 'src/document_save.c'), str(ROOT / 'src/kernel_owner.c'),
                             '-o', str(output)], check=True)
             env = dict(os.environ, ASAN_OPTIONS=os.environ.get('ASAN_OPTIONS', 'detect_leaks=0'),
                        UBSAN_OPTIONS='halt_on_error=1')

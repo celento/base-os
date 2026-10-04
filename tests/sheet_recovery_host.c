@@ -5,6 +5,7 @@
 #include "editor_binding_host.c"
 #undef main
 #include "example_sheet.h"
+#include "native_sync.h"
 static unsigned char buffer[SHEET_NATIVE_MAX_SIZE];
 static SheetDoc checked;
 static void sheet_type(const char *text) { while(*text)spreadsheet_key(0,*text++,0); }
@@ -22,10 +23,18 @@ static void expect_cell(unsigned row,unsigned col,const char *text) {
 }
 static int sheet_start(void) { int slot=win_open(WK_SPREADSHEET);assert(slot>=0);return slot; }
 static void sheet_reboot(void) { assert(!fs_sync());fs_init();assert(!fs_load_disk());spreadsheet_close();desktop_reset();session_restore(); }
+static int save_done(int result) {
+    if (result != SPREADSHEET_SAVE_PENDING) return result;
+    unsigned steps = 0;
+    while (fs_sync_busy()) { fs_sync_step(); native_sync_tick(); assert(++steps < 100000); }
+    assert(spreadsheet_persistence_poll());
+    DocumentSave save; spreadsheet_save_info(&save);
+    return save.result == 0 ? SPREADSHEET_SAVE_OK : SPREADSHEET_SAVE_ERROR;
+}
 static void test_pending_recovery(void) {
     reset(1);int docs=fs_mkdir(0,"Documents");sheet_start();fm_set_cwd(docs);
     sheet_enter("A1","12.50");sheet_enter("B1","=A1*2");
-    assert(spreadsheet_save_as(docs,"budget.bsh")==SPREADSHEET_SAVE_OK);
+    assert(save_done(spreadsheet_save_as(docs,"budget.bsh"))==SPREADSHEET_SAVE_OK);
     int source=spreadsheet_file();SpreadsheetBinding baseline;assert(spreadsheet_binding(&baseline));
     sheet_jump("A1");sheet_type("27.125");assert(spreadsheet_editing());
     unsigned caret=spreadsheet_caret();session_save();assert(!*session_status);
@@ -37,13 +46,33 @@ static void test_pending_recovery(void) {
     sheet_reboot();expect_cell(0,0,"27.125");assert(spreadsheet_file()==source&&spreadsheet_dirty());
     assert(spreadsheet_caret()==caret&&fm_cwd==docs);
     assert(spreadsheet_binding_matches(source,&baseline));
-    assert(spreadsheet_save()==SPREADSHEET_SAVE_OK);
+    assert(save_done(spreadsheet_save())==SPREADSHEET_SAVE_OK);
     assert(!spreadsheet_binding_matches(source,&baseline));
     puts("Spreadsheet session: pending edit preserved live, encoded, rebound and saved after reboot");
 }
+static void test_pending_shutdown_order(void) {
+    spreadsheet_close(); reset(1); sheet_start(); sheet_enter("A1", "First submitted");
+    assert(spreadsheet_save_as(0, "shutdown.bsh") == SPREADSHEET_SAVE_PENDING);
+    sheet_jump("A1"); sheet_type("Newest private draft");
+    assert(spreadsheet_editing() && spreadsheet_dirty());
+    int count = fs_node_count(); unsigned used = fs_used_bytes();
+    session_save();
+    assert(fs_node_count() == count && fs_used_bytes() == used && pref("sheet-draft.bsh") < 0);
+    /* Production shutdown ordering: join accepted snapshot first, collect
+     * without navigating, stage latest session bytes, then final durable sync. */
+    assert(!fs_sync()); native_sync_tick(); assert(spreadsheet_persistence_poll());
+    assert(spreadsheet_editing() && spreadsheet_dirty());
+    session_save(); assert(!*session_status && spreadsheet_editing());
+    assert(!fs_sync());
+    fs_init(); assert(!fs_load_disk()); spreadsheet_close(); desktop_reset(); session_restore();
+    expect_cell(0, 0, "Newest private draft"); assert(spreadsheet_dirty() && spreadsheet_file() >= 0);
+    assert(!sheet_native_decode(&checked, (const unsigned char *)fs_data(spreadsheet_file()), (unsigned)fs_size(spreadsheet_file())));
+    assert(!strcmp(checked.cells[0].text, "First submitted"));
+    puts("Spreadsheet shutdown ordering: active save joined before latest private recovery draft and final sync passed");
+}
 static void saved_fixture(void) {
     spreadsheet_close();reset(1);sheet_start();sheet_enter("A1","100");
-    assert(spreadsheet_save_as(0,"source.bsh")==SPREADSHEET_SAVE_OK);
+    assert(save_done(spreadsheet_save_as(0,"source.bsh"))==SPREADSHEET_SAVE_OK);
     sheet_enter("B2","Draft survives");session_save();assert(!*session_status);
 }
 static void expect_unbound(void) {
@@ -118,4 +147,4 @@ static void test_budget(void) {
     assert(bytes==strlen(example_budget_csv)&&!memcmp(buffer,example_budget_csv,bytes));
     puts("Spreadsheet budget: native formulas and exact value CSV agree");
 }
-int main(void) { test_pending_recovery();test_pairing();test_admission();test_small_volume_limit();test_budget();return 0; }
+int main(void) { test_pending_recovery();test_pending_shutdown_order();test_pairing();test_admission();test_small_volume_limit();test_budget();return 0; }

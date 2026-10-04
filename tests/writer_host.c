@@ -16,11 +16,11 @@ static unsigned char clipboard[WRITER_TEXT_MAX + 1];
 static int write_failure, payload_failure, sync_failure, sync_count, write_count;
 static int create_count, delete_count, node_limit = 20;
 static unsigned storage_limit = 8u * 1024u * 1024u, node_cost;
-static int storage_busy;
+static int storage_busy, version_capacity = 1, last_create_version;
 int fs_sync_busy(void) { return storage_busy; }
-static unsigned next_identity = 1;
+static unsigned next_identity = 1, next_content_version = 1;
 static unsigned file_limit = 2097152;
-typedef struct { int valid, folder, size; unsigned identity; char name[FS_NAME_LEN]; unsigned char *data; } File;
+typedef struct { int valid, folder, size; unsigned identity, version; char name[FS_NAME_LEN]; unsigned char *data; } File;
 static File files[20];
 static unsigned char back[800 * 600], linear[800 * 600 * 4];
 static WriterDoc fixture, prior;
@@ -42,6 +42,35 @@ int fs_valid(int id) { return id >= 0 && id < 20 && files[id].valid; }
 int fs_is_dir(int id) { return fs_valid(id) && files[id].folder; }
 int fs_is_app(int id) { (void)id; return 0; }
 unsigned fs_identity(int id) { return fs_valid(id) ? files[id].identity : 0; }
+unsigned fs_incarnation(void) { return 1; }
+unsigned fs_content_revision(int id) { return fs_valid(id) ? files[id].version : 0; }
+int fs_version_available(int creating) { (void)creating; return version_capacity; }
+/* Existing workflows select compatibility explicitly; async harnesses drive
+ * this ordinary deterministic service double through the same adapter API. */
+#include "../sdk/baseos_abi.h"
+static int async_mode, sync_begin_error;
+static unsigned async_serial, async_owner, async_handle, async_begins, async_releases;
+static int async_result;
+int fs_sync_async_supported(void) { return async_mode; }
+int native_sync_begin(unsigned owner, unsigned *handle) {
+    assert(async_mode); ++async_begins;
+    if (sync_begin_error) return sync_begin_error;
+    assert(!async_owner);
+    async_owner = owner; async_handle = 0x30000000u | ++async_serial;
+    *handle = async_handle; async_result = BOS_PENDING; storage_busy = 1; return BOS_OK;
+}
+int native_sync_poll(unsigned owner, unsigned handle) {
+    return owner == async_owner && handle == async_handle ? async_result : BOS_E_STALE;
+}
+int native_sync_release(unsigned owner, unsigned handle) {
+    if (owner != async_owner || handle != async_handle) return BOS_E_STALE;
+    async_owner = async_handle = 0; ++async_releases; return BOS_OK;
+}
+void native_sync_owner_release(unsigned owner) {
+    if (owner == async_owner) { async_owner = async_handle = 0; ++async_releases; }
+}
+int kstrlen(const char *text) { return (int)strlen(text); }
+int kstrcmp(const char *a, const char *b) { return strcmp(a, b); }
 int fs_size(int id) { return fs_valid(id) ? files[id].size : -1; }
 const char *fs_name(int id) { return fs_valid(id) ? files[id].name : ""; }
 const char *fs_data(int id) { return fs_valid(id) ? (const char *)files[id].data : NULL; }
@@ -55,7 +84,7 @@ int fs_create(int parent, const char *name) {
     create_count++;
     if (write_failure || parent != 0 || !name || !*name || strlen(name) >= FS_NAME_LEN || strchr(name, '/') || fs_find_child(parent, name) >= 0) return -1;
     for (int i = 1; i < 20; i++) if (!files[i].valid) {
-        files[i].valid = 1; files[i].identity = ++next_identity; files[i].size = 0;
+        files[i].valid = 1; files[i].identity = ++next_identity; files[i].version = ++next_content_version; if (last_create_version) version_capacity = 0; files[i].size = 0;
         files[i].data = malloc(1); assert(files[i].data); files[i].data[0] = 0;
         strcpy(files[i].name, name); return i;
     }
@@ -67,7 +96,7 @@ int fs_write(int id, const char *text, int length) {
     if (write_failure || payload_failure || !fs_valid(id) || files[id].folder || length < 0 || (unsigned)length > file_limit) return -1;
     unsigned char *data = malloc((unsigned)length + 1); assert(data);
     memcpy(data, text, (unsigned)length); data[length] = 0;
-    free(files[id].data); files[id].data = data; files[id].size = length;
+    free(files[id].data); files[id].data = data; files[id].size = length; files[id].version = ++next_content_version;
     return length;
 }
 int fs_delete(int id) {
@@ -323,7 +352,7 @@ static void test_pdf_export(void) {
     strcpy(files[letter].name, "letter.PDF");
     sync_failure = 1; assert(writer_export_pdf(0, "pending.pdf", WRITER_PDF_A4) < 0);
     int pending = fs_find_child(0, "pending.pdf"); assert(pending >= 0 && fs_size(pending) > 0);
-    assert(strstr(writer_status(), "RAM") && strstr(writer_status(), "Retry"));
+    assert(strstr(writer_status(), "RAM") && strstr(writer_status(), "retry"));
     writes = write_count; creates = create_count; syncs = sync_count;
     assert(writer_export_pdf(0, "pending.pdf", WRITER_PDF_LETTER) < 0);
     assert(sync_count == syncs && write_count == writes && create_count == creates);

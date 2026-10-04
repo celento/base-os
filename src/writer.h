@@ -2,6 +2,7 @@
 #define BASEOS_WRITER_H
 #include "writer_codec.h"
 #include "writer_pdf.h"
+#include "document_save.h"
 #define WRITER_W 720
 #define WRITER_H 520
 #define WRITER_MIN_W 420
@@ -17,6 +18,8 @@
 #define WRITER_SAVE_ERROR (-1)
 #define WRITER_SAVE_NEEDS_NAME 0
 #define WRITER_SAVE_OK 1
+#define WRITER_SAVE_PENDING 2
+#define WRITER_EXPORT_PENDING (-2)
 /* Singleton, independent of Editor. Coordinates include supplied client origin.
  * Caller must perform its Save/Discard/Cancel guard before new/open/close. */
 void writer_init(void);
@@ -29,20 +32,27 @@ int writer_drag(int x, int y, int w, int h, int mx, int my);
 void writer_release(void);
 int writer_scroll(int lines);
 int writer_tick(void);
+/* Top-level desktop completion collection, never inside device/IRQ polling. */
+int writer_persistence_poll(void);
+void writer_save_info(DocumentSave *out);
+int writer_export_retry_name(unsigned kind, char *out, unsigned capacity, unsigned *option);
 void writer_close(void);
-/* Save/export reject a temporary storage lease with their normal error result
- * and a retry message; native dirty/binding/owned-retry state stays unchanged. */
+/* IDE Save/Save As return PENDING after complete RAM publication; only the
+ * dedicated persistence poll can advance the submitted durable revision.
+ * A duplicate native Save returns PENDING without queuing newer edits. Other
+ * active operations/storage leases reject before model/FS mutation. Explicit
+ * floppy compatibility still waits. Exports never change native save state. */
 int writer_save(void);
 /* New names only, except the currently bound, identity-matching native file.
  * Existing unrelated names are rejected rather than silently overwritten. */
 int writer_save_as(int parent, const char *name);
-/* Creates a new .rtf export; never rebinds or clears the native dirty marker.
- * Returns the new nonnegative filesystem ID on success, -1 on failure. */
+/* New .rtf export, or exact owned failed-output sync-only retry.
+ * Returns a durable nonnegative file ID, EXPORT_PENDING (-2), or error (-1). */
 int writer_export_rtf(int parent, const char *name);
 /* New .pdf export on Letter or A4. Exact size/storage checks precede creation.
  * Never rebinds/clears native state. A disk-sync failure retains our RAM file;
  * retrying the same name/paper only syncs if identity, revision and bytes match.
- * Returns a synchronized file ID, or -1 with writer_status() explaining why. */
+ * Returns a durable file ID, EXPORT_PENDING (-2), or -1 with status detail. */
 int writer_export_pdf(int parent, const char *name, unsigned paper);
 const char *writer_title(void);
 const char *writer_status(void);

@@ -15,12 +15,16 @@ static char name_buf[FS_NAME_LEN], key_char;
 static const char *name_failure_message;
 static int edit_close_owner = -1, document_action, document_target, finishes, other_writes;
 static unsigned document_target_identity;
+static int edit_close_failed, edit_close_dlg, edit_close_focus;
+static int document_wait_for_save(void) { return 0; }
+static int document_destination_valid(void) { return 1; }
 static int fm_checked_cwd(void) { return 0; }
 static void context_set(int owner) { context_slot = owner; }
 static void edit_close_cancel(void) { edit_close_owner = -1; }
 static int edit_close_valid(void) { return edit_close_owner >= 0; }
 static int edit_write_named(const char *name) { (void)name; other_writes++; return 1; }
 static int paint_write_named(const char *name) { return edit_write_named(name); }
+static int spreadsheet_export_retry_name(char *out, unsigned capacity) { (void)out; (void)capacity; return 0; }
 static int spreadsheet_save_as(int parent, const char *name) { (void)parent; return edit_write_named(name); }
 static int spreadsheet_export_csv(int parent, const char *name) { (void)parent; return edit_write_named(name); }
 static void document_finish(int owner, int action, int target, unsigned identity) {

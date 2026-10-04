@@ -5,6 +5,8 @@
 #include <string.h>
 #include "sheet.h"
 #include "fs.h"
+#include "native_sync.h"
+#include "../sdk/baseos_abi.h"
 #include "layout.h"
 static unsigned char presented[FB_CAPACITY];
 #undef PRESENT_BASE
@@ -15,14 +17,41 @@ static unsigned char presented[FB_CAPACITY];
 #define FILE_COUNT 40
 static unsigned polls, ticks, clipboard_generation, clipboard_length;
 static unsigned char clipboard[SPREADSHEET_CLIPBOARD_CAPACITY + 1u];
-static int create_failure, write_failure, sync_failure, write_count, sync_count;
+static int create_failure, write_failure, short_write, sync_failure, write_count, sync_count;
 static int clipboard_set_failure, clipboard_get_failure;
 static int storage_busy;
 int fs_sync_busy(void) { return storage_busy; }
-static unsigned next_identity = 1, file_limit = FS_FILE_MAX;
+static unsigned next_identity = 1, next_version = 1, mount_incarnation = 1, file_limit = FS_FILE_MAX;
+static int version_budget = -1;
+static unsigned native_begin_count, native_release_count, native_next_handle, native_owner, native_handle;
+static int async_backend, native_result = BOS_PENDING, native_begin_result = BOS_OK;
+/* The legacy UI suite explicitly uses the synchronous compatibility backend.
+ * Async model tests switch this fixture to the separately controlled service. */
+int fs_sync_async_supported(void) { return async_backend; }
+unsigned fs_incarnation(void) { return mount_incarnation; }
+int fs_version_available(int creating) { (void)creating; return version_budget != 0; }
+int native_sync_begin(unsigned owner, unsigned *handle) {
+    native_begin_count++;
+    if (native_begin_result != BOS_OK) return native_begin_result;
+    assert(owner && !native_handle);
+    native_owner = owner; native_handle = ++native_next_handle; *handle = native_handle;
+    storage_busy = native_result == BOS_PENDING;
+    return BOS_OK;
+}
+int native_sync_poll(unsigned owner, unsigned handle) {
+    assert(owner == native_owner && handle == native_handle && handle);
+    return native_result;
+}
+int native_sync_release(unsigned owner, unsigned handle) {
+    assert(owner == native_owner && handle == native_handle && handle);
+    native_release_count++; native_owner = native_handle = 0; return BOS_OK;
+}
+void native_sync_owner_release(unsigned owner) {
+    if (native_owner == owner && native_handle) (void)native_sync_release(owner, native_handle);
+}
 typedef struct {
     int valid, folder, size;
-    unsigned identity;
+    unsigned identity, version;
     char name[FS_NAME_LEN];
     unsigned char *data;
 } File;
@@ -54,6 +83,7 @@ int fs_valid(int id) { return id >= 0 && id < FILE_COUNT && files[id].valid; }
 int fs_is_dir(int id) { return fs_valid(id) && files[id].folder; }
 int fs_is_app(int id) { (void)id; return 0; }
 unsigned fs_identity(int id) { return fs_valid(id) ? files[id].identity : 0; }
+unsigned fs_content_revision(int id) { return fs_valid(id) ? files[id].version : 0; }
 int fs_size(int id) { return fs_valid(id) ? files[id].size : -1; }
 const char *fs_name(int id) { return fs_valid(id) ? files[id].name : ""; }
 const char *fs_data(int id) { return fs_valid(id) ? (const char *)files[id].data : NULL; }
@@ -69,6 +99,7 @@ int fs_create(int parent, const char *name) {
         strchr(name, '/') || fs_find_child(parent, name) >= 0) return -1;
     for (int i = 1; i < FILE_COUNT; i++) if (!files[i].valid) {
         files[i].valid = 1; files[i].identity = ++next_identity; files[i].size = 0;
+        files[i].version = ++next_version; if (version_budget > 0) version_budget--;
         files[i].data = malloc(1); assert(files[i].data); files[i].data[0] = 0;
         strcpy(files[i].name, name); return i;
     }
@@ -79,9 +110,12 @@ int fs_write(int id, const char *text, int length) {
     write_count++;
     if (write_failure || !fs_valid(id) || files[id].folder || length < 0 ||
         (unsigned)length > file_limit) return -1;
+    if (short_write && length) return length - 1;
     unsigned char *data = malloc((unsigned)length + 1u); assert(data);
     memcpy(data, text, (unsigned)length); data[length] = 0;
-    free(files[id].data); files[id].data = data; files[id].size = length; return length;
+    free(files[id].data); files[id].data = data; files[id].size = length;
+    files[id].version = ++next_version; if (version_budget > 0) version_budget--;
+    return length;
 }
 int fs_delete(int id) {
     if (storage_busy) return FS_ERR_BUSY;
@@ -696,7 +730,7 @@ int main(int argc, char **argv) {
     test_files(argc > 1 ? argv[1] : NULL); test_bindings(); test_recovery();
     test_drawing(argc > 1 ? argv[1] : NULL);
     test_format_controls(argc > 1 ? argv[1] : NULL); test_variable_width_geometry();
-    assert(polls > 100 && sync_count >= 4);
+    assert(polls > 100 && sync_count >= 4 && !async_backend && !native_begin_count);
     for (int i = 1; i < FILE_COUNT; i++) if (files[i].valid) free(files[i].data);
     puts("All Spreadsheet UI host functional checks passed."); return 0;
 }
