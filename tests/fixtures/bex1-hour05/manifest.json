@@ -1,0 +1,27 @@
+{
+  "source_revision": "a7ea36be6db5ae2cd477dfe36e8e58db48145048",
+  "source_build_label": "2026-10-04 13:10 UTC",
+  "provenance": "Copied unmodified prebuilt BEX1 executables from frozen checkpoint/hour-05-20261004 build; never rebuilt with the new SDK.",
+  "files": {
+    "counter.bex": {
+      "bytes": 1490,
+      "sha256": "b38c7b1c2dcda44763907d417d381301b900a6a23b5d1dac242d72f303c910ee"
+    },
+    "docstats.bex": {
+      "bytes": 3732,
+      "sha256": "0963f6cc1bef14f74603bfe819ddc0f5781932ab0aea3353c7c4475ec55faec6"
+    },
+    "hello-c.bex": {
+      "bytes": 225,
+      "sha256": "6d69f2dc24b8a86859738d89c9a0ae5dbed02489b8442d8fd4cb6a966ea3ba75"
+    },
+    "hello.bex": {
+      "bytes": 100,
+      "sha256": "4878c515b537f378f4faf68e9451d2e29c45b6ff964df205a934cc2f6598d578"
+    },
+    "notebook.bex": {
+      "bytes": 623,
+      "sha256": "a5adb40bc2fc4c34a4008aeb30e5af74188078fc0a311aab10d20633c2538e7b"
+    }
+  }
+}
