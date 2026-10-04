@@ -45,6 +45,8 @@ static struct {
     unsigned line_count, layout_revision;
     int initialized, file, failed_save, clipboard_owned, dragging;
     unsigned identity;
+    WriterBinding binding;
+    int has_binding, binding_conflict;
     unsigned group_kind, group_caret, group_ticks, group_count;
     unsigned stats_revision, words;
     struct {
@@ -536,7 +538,7 @@ void writer_new(void) {
     Snapshot *s = snapshot(); writer_doc_init(&s->doc);
     s->caret = s->anchor = s->typing_style = s->affinity = 0;
     s->revision = ++state.next_revision; state.saved_revision = s->revision;
-    state.file = -1; state.identity = 0; state.failed_save = state.dragging = 0;
+    state.file = -1; state.identity = 0; state.has_binding = state.binding_conflict = 0; state.failed_save = state.dragging = 0;
     state.scroll = 0; text_copy(state.title, sizeof(state.title), "Untitled");
     invalidate(); status("New document. Body text, printable ASCII and tabs.");
 }
@@ -561,6 +563,25 @@ static int native_name(const char *name) {
     return n >= 4 && name[n - 4] == '.' && (name[n - 3] == 'b' || name[n - 3] == 'B') &&
            (name[n - 2] == 'w' || name[n - 2] == 'W') && (name[n - 1] == 'r' || name[n - 1] == 'R');
 }
+static void fingerprint(const unsigned char *data, unsigned size, WriterBinding *out) {
+    unsigned fnv = 2166136261u, crc = ~0u;
+    for (unsigned i = 0; i < size; i++) {
+        fnv = (fnv ^ data[i]) * 16777619u;
+        crc ^= data[i];
+        for (unsigned bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        if (!(i & 2047u)) platform_poll();
+    }
+    out->size = size; out->hash_a = fnv; out->hash_b = ~crc;
+}
+int writer_binding_matches(int file, const WriterBinding *binding) {
+    if (!binding || !fs_valid(file) || fs_is_dir(file) || fs_is_app(file) || !native_name(fs_name(file))) return 0;
+    int size = fs_size(file);
+    if (size < (int)WRITER_NATIVE_HEADER_SIZE + 2 || (unsigned)size > WRITER_NATIVE_MAX_SIZE || (unsigned)size != binding->size) return 0;
+    const unsigned char *data = (const unsigned char *)fs_data(file);
+    if (!data) return 0;
+    WriterBinding actual; fingerprint(data, (unsigned)size, &actual);
+    return actual.hash_a == binding->hash_a && actual.hash_b == binding->hash_b;
+}
 int writer_open_file(int id) {
     state.group_kind = 0;
     if (!state.initialized) writer_init();
@@ -581,6 +602,8 @@ int writer_open_file(int id) {
     s->caret = s->anchor = s->affinity = 0; s->typing_style = s->doc.style[0];
     s->revision = ++state.next_revision; state.saved_revision = native ? s->revision : 0;
     state.file = native ? id : -1; state.identity = native ? fs_identity(id) : 0;
+    state.has_binding = native; state.binding_conflict = 0;
+    if (native) fingerprint(data, (unsigned)size, &state.binding);
     state.failed_save = state.dragging = 0; state.scroll = 0;
     text_copy(state.title, sizeof(state.title), fs_name(id));
     invalidate(); status(native ? "Opened native document." : "Imported text. Save As a new .bwr to retain formatting."); return 1;
@@ -588,6 +611,10 @@ int writer_open_file(int id) {
 static int binding_valid(void) {
     return state.file >= 0 && fs_valid(state.file) && !fs_is_dir(state.file) && !fs_is_app(state.file) &&
            native_name(fs_name(state.file)) && fs_identity(state.file) == state.identity;
+}
+int writer_binding(WriterBinding *out) {
+    if (!out || !state.initialized || !state.has_binding || !binding_valid()) return 0;
+    *out = state.binding; return 1;
 }
 const unsigned char *writer_snapshot(unsigned *length) {
     if (!state.initialized) writer_init();
@@ -600,6 +627,11 @@ static int save_to(int id) {
     if (fs_write(id, (const char *)ARENA->output, (int)length) < 0) {
         state.failed_save = 1; status("Save failed; the complete document remains open."); return WRITER_SAVE_ERROR;
     }
+    /* Update the baseline immediately after the atomic RAM write, including
+     * failed-sync retries. This target is ours, even for a new Save As. */
+    state.file = id; state.identity = fs_identity(id); state.has_binding = 1; state.binding_conflict = 0;
+    fingerprint(ARENA->output, length, &state.binding);
+    text_copy(state.title, sizeof(state.title), fs_name(id));
     /* fs_write may replace bytes in RAM; only fs_sync makes this a saved state. */
     if (fs_sync() < 0) {
         state.failed_save = 1; status("Disk sync failed. Unsaved work remains open; retry Save."); return WRITER_SAVE_ERROR;
@@ -612,6 +644,11 @@ int writer_save(void) {
     state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (!binding_valid()) { status("Choose Save As for a new native .bwr file."); return WRITER_SAVE_NEEDS_NAME; }
+    if (!state.has_binding || !writer_binding_matches(state.file, &state.binding)) {
+        state.binding_conflict = 1;
+        status("The source file changed outside Writer. Save As a new .bwr; the source is unchanged.");
+        return WRITER_SAVE_NEEDS_NAME;
+    }
     return save_to(state.file);
 }
 int writer_save_as(int parent, const char *name) {
@@ -620,7 +657,7 @@ int writer_save_as(int parent, const char *name) {
     if (!name || !native_name(name)) { status("Native documents use the .bwr filename extension."); return WRITER_SAVE_ERROR; }
     int existing = fs_find_child(parent, name);
     if (existing >= 0) {
-        if (binding_valid() && existing == state.file) return save_to(existing);
+        if (binding_valid() && existing == state.file) return writer_save();
         status("That name already exists. Choose a new name; no file was replaced."); return WRITER_SAVE_ERROR;
     }
     unsigned length;
@@ -673,14 +710,24 @@ int writer_restore(const unsigned char *data, unsigned length, int file, unsigne
     s->affinity = 0; s->caret = min_u(caret, s->doc.length); s->anchor = min_u(anchor, s->doc.length);
     s->typing_style = s->doc.style[s->caret]; s->revision = ++state.next_revision;
     state.file = file; state.identity = identity;
+    state.has_binding = state.binding_conflict = 0;
     if (!binding_valid()) { state.file = -1; state.identity = 0; dirty = 1; }
+    else {
+        int size = fs_size(state.file);
+        if (size < (int)WRITER_NATIVE_HEADER_SIZE + 2 || (unsigned)size > WRITER_NATIVE_MAX_SIZE) {
+            state.file = -1; state.identity = 0; dirty = 1;
+        } else {
+            fingerprint((const unsigned char *)fs_data(state.file), (unsigned)size, &state.binding);
+            state.has_binding = 1;
+        }
+    }
     state.saved_revision = dirty ? 0 : s->revision; state.failed_save = 0;
     text_copy(state.title, sizeof(state.title), state.file >= 0 ? fs_name(state.file) : "Recovered document");
     state.scroll = state.dragging = 0; invalidate(); status("Recovered document draft."); return 1;
 }
 const char *writer_title(void) { return state.initialized ? state.title : "Untitled"; }
 const char *writer_status(void) { return state.status; }
-int writer_dirty(void) { return state.initialized && (state.failed_save || snapshot()->revision != state.saved_revision || (state.file >= 0 && !binding_valid())); }
+int writer_dirty(void) { return state.initialized && (state.failed_save || state.binding_conflict || snapshot()->revision != state.saved_revision || (state.file >= 0 && !binding_valid())); }
 int writer_read_only(void) { return 0; } /* All valid imports are editable copies. */
 int writer_file(void) { return state.initialized && binding_valid() ? state.file : -1; }
 unsigned writer_file_identity(void) { return state.initialized && binding_valid() ? state.identity : 0; }

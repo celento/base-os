@@ -204,6 +204,47 @@ static void test_files(void) {
     writer_close(); writer_init(); assert(!writer_dirty() && !writer_length());
     puts("Writer files: round trip, identities, reused nodes, failed sync/write, safe import and recovery passed");
 }
+static void test_binding_fingerprints(void) {
+    load_fixture("baseline"); int source = writer_file(); unsigned identity = writer_file_identity();
+    WriterBinding baseline, current;
+    assert(writer_binding(&baseline)); assert(baseline.size == 42);
+    /* Independent constants: Python struct.pack + zlib.crc32 and FNV-1a. */
+    assert(baseline.hash_a == 0xebc8c161u && baseline.hash_b == 0xdca71052u);
+    assert(writer_binding_matches(source, &baseline));
+    int duplicate = fs_create(0, "duplicate.bwr"); assert(duplicate > 0);
+    assert(fs_write(duplicate, fs_data(source), fs_size(source)) == fs_size(source));
+    assert(fs_identity(duplicate) != identity && writer_binding_matches(duplicate, &baseline));
+    strcpy(files[duplicate].name, "duplicate.txt"); assert(!writer_binding_matches(duplicate, &baseline));
+    /* Same byte count and runtime ID, but a different ordinary native file. */
+    assert(!writer_plain_import(&fixture, (const unsigned char *)"external", 8));
+    unsigned length; assert(!writer_native_encode(&fixture, encoded, sizeof(encoded), &length));
+    assert(fs_write(source, (const char *)encoded, (int)length) == (int)length);
+    assert(fs_identity(source) == identity && !writer_binding_matches(source, &baseline));
+    int writes = write_count; prior = *writer_document();
+    assert(writer_save() == WRITER_SAVE_NEEDS_NAME && write_count == writes);
+    compare_docs(&prior, writer_document()); assert(writer_dirty());
+    assert(writer_save_as(0, "fixture.bwr") == WRITER_SAVE_NEEDS_NAME && write_count == writes);
+    assert(!memcmp(fs_data(source), encoded, length));
+    assert(writer_save_as(0, "separate.bwr") == WRITER_SAVE_OK); source = writer_file();
+    assert(writer_binding(&current)); assert(current.hash_a == baseline.hash_a && current.hash_b == baseline.hash_b);
+    key(0x4f, WRITER_MOD_CTRL); type("!"); sync_failure = 1;
+    assert(writer_save() == WRITER_SAVE_ERROR && writer_dirty());
+    assert(writer_binding(&current)); assert(current.size == baseline.size + 3);
+    assert(writer_binding_matches(source, &current) && !writer_binding_matches(source, &baseline));
+    sync_failure = 0; assert(writer_save() == WRITER_SAVE_OK && !writer_dirty());
+    baseline = current;
+    /* Recovery baseline is the verified source, never the unsaved draft. */
+    type(" draft"); const unsigned char *draft = writer_snapshot(&length);
+    assert(writer_binding_matches(source, &baseline));
+    assert(writer_restore(draft, length, source, fs_identity(source), 1, 3, 1));
+    assert(writer_binding(&current) && !memcmp(&current, &baseline, sizeof baseline));
+    check_text("baseline! draft"); assert(writer_dirty());
+    assert(writer_save() == WRITER_SAVE_OK); assert(!writer_binding_matches(source, &baseline));
+    writer_new(); current = baseline; assert(!writer_binding(&current));
+    assert(!memcmp(&current, &baseline, sizeof baseline));
+    assert(!writer_binding_matches(source, NULL));
+    puts("Writer bindings: independent fingerprints, same-ID replacement, cross-node match, sync retry and draft baseline passed");
+}
 static void test_layout(void) {
     load_fixture("iiii WWWW and words\ncenter\nright\n");
     writer_layout(90); assert(writer_line_count() > 4);
@@ -357,7 +398,7 @@ static void test_drawing(const char *path) {
 int main(int argc, char **argv) {
     files[0].valid = files[0].folder = 1; files[0].identity = 1;
     gfx_init(back, linear, 800, 600, 32, 3200);
-    test_editing(); test_history(); test_files(); test_layout(); test_search(); test_heading_coverage(); test_drawing(argc > 1 ? argv[1] : NULL);
+    test_editing(); test_history(); test_files(); test_binding_fingerprints(); test_layout(); test_search(); test_heading_coverage(); test_drawing(argc > 1 ? argv[1] : NULL);
     assert(polls > 100); assert(sync_count >= 4);
     for (int i = 1; i < 20; i++) if (files[i].valid) free(files[i].data);
     puts("All Writer host functional checks passed.");
