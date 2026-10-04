@@ -39,6 +39,9 @@ const char example_sheet_guide[]=
     "Click a cell, type, then Enter or Tab to commit. F2 edits the exact source. Escape cancels.\n"
     "Arrow keys move; Shift+arrows select a range. Ctrl+C/X/V copy/cut/paste a range.\n"
     "Ctrl+Z undoes; Ctrl+Y redoes. Formula references are copied verbatim, never shifted.\n"
+    "Ctrl+1/2/3/4 applies General/two decimals/currency/percent to selected cells. Values stay exact.\n"
+    "Ctrl+- or Ctrl+= narrows/widens selected columns; Ctrl+0 resets width. Formats and widths have undo.\n"
+    "Numbers too wide for a cell show ###; select the cell to inspect exact source in the formula bar.\n"
     "Ctrl+G jumps to an A1 coordinate. Ctrl+Home returns to A1. Use both scrollbars.\n"
     "Ctrl+S saves native .bsh; Ctrl+Shift+S saves with a new name. Existing other files are protected.\n"
     "Ctrl+O opens .bsh or .csv. Ctrl+N and Ctrl+W ask Save/Discard/Cancel for unsaved work.\n"
@@ -48,5 +51,5 @@ const char example_sheet_guide[]=
     "Numbers use fixed-point arithmetic with three decimal places, truncating toward zero.\n"
     "Formulas: + - * /, parentheses, A1 references, SUM/AVG/MIN/MAX/COUNT and ranges.\n"
     "No charts, extra workbook tabs, Unicode, Excel file support or relative-reference rewriting.\n"
-    "Native .bsh preserves formulas and cell types. CSV is values-only interchange, not a native backup.\n"
+    "Native .bsh preserves formulas, cell types, formats and widths. CSV exports unformatted values, not a backup.\n"
     "Automatic session recovery includes a pending cell edit. A changed source recovers as an unsaved copy.\n";
