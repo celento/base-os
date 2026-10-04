@@ -17,6 +17,8 @@ static unsigned polls, ticks, clipboard_generation, clipboard_length;
 static unsigned char clipboard[SPREADSHEET_CLIPBOARD_CAPACITY + 1u];
 static int create_failure, write_failure, sync_failure, write_count, sync_count;
 static int clipboard_set_failure, clipboard_get_failure;
+static int storage_busy;
+int fs_sync_busy(void) { return storage_busy; }
 static unsigned next_identity = 1, file_limit = FS_FILE_MAX;
 typedef struct {
     int valid, folder, size;
@@ -62,6 +64,7 @@ int fs_find_child(int parent, const char *name) {
     return -1;
 }
 int fs_create(int parent, const char *name) {
+    if (storage_busy) return FS_ERR_BUSY;
     if (create_failure || parent != 0 || !name || !*name || strlen(name) >= FS_NAME_LEN ||
         strchr(name, '/') || fs_find_child(parent, name) >= 0) return -1;
     for (int i = 1; i < FILE_COUNT; i++) if (!files[i].valid) {
@@ -72,6 +75,7 @@ int fs_create(int parent, const char *name) {
     return -1;
 }
 int fs_write(int id, const char *text, int length) {
+    if (storage_busy) return FS_ERR_BUSY;
     write_count++;
     if (write_failure || !fs_valid(id) || files[id].folder || length < 0 ||
         (unsigned)length > file_limit) return -1;
@@ -80,6 +84,7 @@ int fs_write(int id, const char *text, int length) {
     free(files[id].data); files[id].data = data; files[id].size = length; return length;
 }
 int fs_delete(int id) {
+    if (storage_busy) return FS_ERR_BUSY;
     if (!fs_valid(id) || files[id].folder) return -1;
     free(files[id].data); memset(&files[id], 0, sizeof files[id]); return 0;
 }
@@ -489,9 +494,68 @@ static void test_drawing(const char *directory) {
     memset(back, COLOR_LTGRAY, sizeof back); select_2x2("A1"); spreadsheet_draw(30,20,720,520); write_ppm(directory);
     puts("Spreadsheet rendering: every-pixel client clipping, normal/minimum/small/offscreen, address/edit fields and mouse range passed");
 }
+static void test_storage_busy(void) {
+    basic_fixture(); int id = load_fixture();
+    unsigned identity = spreadsheet_file_identity();
+    SpreadsheetBinding before, after; assert(spreadsheet_binding(&before));
+    int writes_before = write_count, syncs = sync_count;
+    storage_busy = 1;
+    assert(spreadsheet_save() == SPREADSHEET_SAVE_ERROR && !spreadsheet_dirty());
+    assert(spreadsheet_save_as(0, "lease.bsh") == SPREADSHEET_SAVE_ERROR);
+    assert(spreadsheet_export_csv(0, "lease.csv") < 0);
+    assert(strstr(spreadsheet_status(), "Disk is saving; retry shortly"));
+    assert(fs_find_child(0, "lease.bsh") < 0 && fs_find_child(0, "lease.csv") < 0);
+    assert(write_count == writes_before && sync_count == syncs && !spreadsheet_dirty());
+    assert(spreadsheet_file() == id && spreadsheet_file_identity() == identity);
+    assert(spreadsheet_binding(&after) && !memcmp(&before, &after, sizeof before));
+
+    /* Busy Save/Save As/Export must not commit or dismiss a pending cell edit. */
+    prior = *spreadsheet_document(); type("77");
+    assert(spreadsheet_dirty() && spreadsheet_editing());
+    unsigned caret = spreadsheet_caret(), anchor = spreadsheet_anchor();
+    assert(spreadsheet_save() == SPREADSHEET_SAVE_ERROR);
+    assert(spreadsheet_save_as(0, "lease.bsh") == SPREADSHEET_SAVE_ERROR);
+    assert(spreadsheet_export_csv(0, "lease.csv") < 0);
+    assert(spreadsheet_editing() && spreadsheet_dirty()); compare_docs(&prior, spreadsheet_document());
+    assert(spreadsheet_caret() == caret && spreadsheet_anchor() == anchor);
+    assert(spreadsheet_binding(&after) && !memcmp(&before, &after, sizeof before));
+    assert(write_count == writes_before && sync_count == syncs);
+    unsigned length; const unsigned char *draft = spreadsheet_snapshot(&length);
+    assert(draft && !sheet_native_decode(&decoded, draft, length));
+    assert(!strcmp(sheet_cell(&decoded, 0, 0)->text, "77"));
+    type("8"); assert(spreadsheet_editing());
+    storage_busy = 0;
+    assert(spreadsheet_save() == SPREADSHEET_SAVE_OK && !spreadsheet_dirty() && !spreadsheet_editing());
+    cell(0, 0, SHEET_NUMBER, "778", 778000, SHEET_OK);
+    assert(spreadsheet_file() == id && spreadsheet_file_identity() == identity);
+
+    enter("A1", "42"); sync_failure = 1;
+    assert(spreadsheet_save_as(0, "lease.bsh") == SPREADSHEET_SAVE_ERROR);
+    int owned = spreadsheet_file(); unsigned owned_identity = spreadsheet_file_identity();
+    assert(owned != id && spreadsheet_dirty() && spreadsheet_binding(&before));
+    writes_before = write_count; syncs = sync_count; storage_busy = 1;
+    assert(spreadsheet_save() == SPREADSHEET_SAVE_ERROR);
+    assert(spreadsheet_save_as(0, "lease.bsh") == SPREADSHEET_SAVE_ERROR);
+    assert(spreadsheet_dirty() && spreadsheet_file() == owned && spreadsheet_file_identity() == owned_identity);
+    assert(spreadsheet_binding(&after) && !memcmp(&before, &after, sizeof before));
+    assert(write_count == writes_before && sync_count == syncs);
+    storage_busy = sync_failure = 0;
+    assert(spreadsheet_save_as(0, "lease.bsh") == SPREADSHEET_SAVE_OK && !spreadsheet_dirty());
+    assert(spreadsheet_file() == owned && spreadsheet_file_identity() == owned_identity);
+    assert(fs_write(owned, "external", 8) == 8);
+    assert(spreadsheet_save() == SPREADSHEET_SAVE_NEEDS_NAME && strstr(spreadsheet_status(), "changed outside"));
+    assert(!memcmp(fs_data(owned), "external", 8));
+    assert(spreadsheet_open_file(id)); write_failure = 1;
+    assert(spreadsheet_save() == SPREADSHEET_SAVE_ERROR && strstr(spreadsheet_status(), "Save failed"));
+    write_failure = 0;
+    assert(spreadsheet_save() == SPREADSHEET_SAVE_OK && !spreadsheet_dirty());
+    assert(!fs_delete(owned));
+    puts("Spreadsheet storage lease: clean/dirty bindings, pending cell edits, safe save retry and honest errors passed");
+}
 int main(int argc, char **argv) {
     files[0].valid = files[0].folder = 1; files[0].identity = 1;
     gfx_init(back, linear, 800, 600, 32, 3200);
+    test_storage_busy(); spreadsheet_close();
     test_editing(); test_navigation(); test_history(); test_clipboard(); test_clipboard_edges();
     test_files(argc > 1 ? argv[1] : NULL); test_bindings(); test_recovery();
     test_drawing(argc > 1 ? argv[1] : NULL);

@@ -29,6 +29,29 @@ Borrowed `fs_data` pointers remain stable during the lease; ordinary filesystem
 mutations after completion may move them as before. Code outside the filesystem
 must not write either leased arena directly.
 
+## Application feedback and retries
+
+Writer and Spreadsheet check the lease before Save, Save As or Export changes
+private save bookkeeping. Busy reports "Disk is saving; retry shortly." Existing
+bindings, clean/dirty state and pending Spreadsheet cell edits stay intact, with
+private editing and reading still available. Retrying a native owned save after
+release keeps its identity; a retained PDF export still uses its identity/content
+checked sync-only retry. This does not make GUI saves asynchronous: successful
+Save continues to require the blocking API's verified durable completion.
+
+Files Paste checks before consuming Cut or changing its completed-copy retry
+guard. Busy returns its existing error result for an unstarted paste, or RAM-only
+for a previously completed paste awaiting sync. It never allocates another copy.
+The RAM-only duplicate helper preserves `FS_ERR_BUSY` for desktop callers.
+
+Terminal only rejects filesystem-mutating `touch`, `mkdir` and `rm` commands;
+the busy result also survives command-script dispatch. Reading, navigation,
+manuals and native launch continue normally. The native SDK exposes the same -2
+as `BOS_ERR_BUSY`, and the Counter, Notebook and DocStats sources explain that a
+write should be retried shortly. These source updates do not overwrite installed
+example binaries. Complete network downloads waiting for storage use the
+Download manager's wait message instead of claiming body reception is ongoing.
+
 ## API and completion ownership
 
 `FsSyncTicket` is an incarnation/serial pair. A request reserves the single
@@ -148,3 +171,11 @@ Files view, Editor/session and related application host suites exercise blocking
 compatibility against the same implementation. Actual responsive desktop/QEMU
 integration is a separate verification layer; these core tests alone do not
 claim responsiveness under a concurrent guest workload.
+
+Application coverage: the `test_writer`, `test_writer_dialog`, `test_sheet_ui`,
+`test_file_clipboard`, `test_storage_busy`, `test_native_launch` and
+`test_native_arguments` unittest modules check ordinary busy/release/retry
+flows, clean and dirty document bindings, uncommitted cell edits, pending owned
+copies/PDFs, source identity replacement, honest native-example messages and
+Terminal reads/scripts/native launch. These host tests do not claim a guest
+responsiveness result.

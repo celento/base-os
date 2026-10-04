@@ -30,6 +30,8 @@ void writer_release(void);
 int writer_scroll(int lines);
 int writer_tick(void);
 void writer_close(void);
+/* Save/export reject a temporary storage lease with their normal error result
+ * and a retry message; native dirty/binding/owned-retry state stays unchanged. */
 int writer_save(void);
 /* New names only, except the currently bound, identity-matching native file.
  * Existing unrelated names are rejected rather than silently overwritten. */

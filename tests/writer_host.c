@@ -16,6 +16,8 @@ static unsigned char clipboard[WRITER_TEXT_MAX + 1];
 static int write_failure, payload_failure, sync_failure, sync_count, write_count;
 static int create_count, delete_count, node_limit = 20;
 static unsigned storage_limit = 8u * 1024u * 1024u, node_cost;
+static int storage_busy;
+int fs_sync_busy(void) { return storage_busy; }
 static unsigned next_identity = 1;
 static unsigned file_limit = 2097152;
 typedef struct { int valid, folder, size; unsigned identity; char name[FS_NAME_LEN]; unsigned char *data; } File;
@@ -49,6 +51,7 @@ int fs_find_child(int parent, const char *name) {
     return -1;
 }
 int fs_create(int parent, const char *name) {
+    if (storage_busy) return FS_ERR_BUSY;
     create_count++;
     if (write_failure || parent != 0 || !name || !*name || strlen(name) >= FS_NAME_LEN || strchr(name, '/') || fs_find_child(parent, name) >= 0) return -1;
     for (int i = 1; i < 20; i++) if (!files[i].valid) {
@@ -59,6 +62,7 @@ int fs_create(int parent, const char *name) {
     return -1;
 }
 int fs_write(int id, const char *text, int length) {
+    if (storage_busy) return FS_ERR_BUSY;
     write_count++;
     if (write_failure || payload_failure || !fs_valid(id) || files[id].folder || length < 0 || (unsigned)length > file_limit) return -1;
     unsigned char *data = malloc((unsigned)length + 1); assert(data);
@@ -67,6 +71,7 @@ int fs_write(int id, const char *text, int length) {
     return length;
 }
 int fs_delete(int id) {
+    if (storage_busy) return FS_ERR_BUSY;
     delete_count++;
     if (!fs_valid(id) || files[id].folder) return -1;
     free(files[id].data); memset(&files[id], 0, sizeof files[id]); return 0;
@@ -571,9 +576,77 @@ static void test_drawing(const char *path) {
     }
     puts("Writer rendering: normal/minimum/offscreen clipping, toolbar hits and mouse selection passed");
 }
+static void test_storage_busy(void) {
+    load_fixture("Clean baseline");
+    int id = writer_file(); unsigned identity = writer_file_identity();
+    WriterBinding before, after; assert(writer_binding(&before));
+    int creates = create_count, writes_before = write_count, syncs = sync_count, count = fs_node_count();
+    storage_busy = 1;
+    assert(writer_save() == WRITER_SAVE_ERROR && !writer_dirty());
+    assert(writer_save_as(0, "fixture.bwr") == WRITER_SAVE_ERROR && !writer_dirty());
+    assert(writer_save_as(0, "lease.bwr") == WRITER_SAVE_ERROR);
+    assert(writer_export_rtf(0, "lease.rtf") < 0);
+    assert(writer_export_pdf(0, "lease.pdf", WRITER_PDF_LETTER) < 0);
+    assert(strstr(writer_status(), "Disk is saving; retry shortly"));
+    assert(create_count == creates && write_count == writes_before && sync_count == syncs && fs_node_count() == count);
+    assert(writer_file() == id && writer_file_identity() == identity);
+    assert(writer_binding(&after) && !memcmp(&before, &after, sizeof before));
+    assert(!writer_dirty() && writer_binding_matches(id, &before));
+    /* Private editing, reads and undo remain usable while disk RAM is leased. */
+    type("Draft "); assert(writer_dirty()); check_text("Draft Clean baseline");
+    assert(writer_save() == WRITER_SAVE_ERROR && writer_dirty());
+    assert(writer_binding(&after) && !memcmp(&before, &after, sizeof before));
+    assert(write_count == writes_before && sync_count == syncs);
+    storage_busy = 0;
+    assert(writer_save() == WRITER_SAVE_OK && !writer_dirty());
+    assert(writer_file() == id && writer_file_identity() == identity && fs_node_count() == count);
+
+    /* An owned failed-save name stays bound across busy retries, with no new file. */
+    type("Pending "); sync_failure = 1;
+    assert(writer_save_as(0, "lease.bwr") == WRITER_SAVE_ERROR);
+    int owned = writer_file(); unsigned owned_identity = writer_file_identity();
+    assert(owned != id && writer_dirty() && writer_binding(&before));
+    creates = create_count; writes_before = write_count; syncs = sync_count;
+    storage_busy = 1;
+    assert(writer_save() == WRITER_SAVE_ERROR);
+    assert(writer_save_as(0, "lease.bwr") == WRITER_SAVE_ERROR);
+    assert(writer_dirty() && writer_file() == owned && writer_file_identity() == owned_identity);
+    assert(writer_binding(&after) && !memcmp(&before, &after, sizeof before));
+    assert(create_count == creates && write_count == writes_before && sync_count == syncs);
+    storage_busy = sync_failure = 0;
+    assert(writer_save_as(0, "lease.bwr") == WRITER_SAVE_OK && !writer_dirty());
+    assert(create_count == creates && writer_file() == owned && writer_file_identity() == owned_identity);
+
+    /* The PDF retry owns its complete RAM export and still only syncs after busy. */
+    type("PDF "); sync_failure = 1;
+    assert(writer_export_pdf(0, "lease.pdf", WRITER_PDF_LETTER) < 0);
+    int pdf = fs_find_child(0, "lease.pdf"); assert(pdf >= 0);
+    unsigned pdf_identity = fs_identity(pdf);
+    creates = create_count; writes_before = write_count; syncs = sync_count;
+    storage_busy = 1;
+    assert(writer_export_pdf(0, "lease.pdf", WRITER_PDF_LETTER) < 0);
+    assert(strstr(writer_status(), "Disk is saving; retry shortly"));
+    assert(create_count == creates && write_count == writes_before && sync_count == syncs && writer_dirty());
+    storage_busy = sync_failure = 0;
+    assert(writer_export_pdf(0, "lease.pdf", WRITER_PDF_LETTER) == pdf);
+    assert(fs_identity(pdf) == pdf_identity && create_count == creates && write_count == writes_before);
+    assert(writer_dirty() && writer_file() == owned && writer_file_identity() == owned_identity);
+
+    /* Once released, preserve genuine source conflict and write-error messages. */
+    assert(fs_write(owned, "external", 8) == 8);
+    assert(writer_save() == WRITER_SAVE_NEEDS_NAME && strstr(writer_status(), "changed outside"));
+    assert(!memcmp(fs_data(owned), "external", 8));
+    assert(writer_open_file(id)); write_failure = 1;
+    assert(writer_save() == WRITER_SAVE_ERROR && strstr(writer_status(), "Save failed"));
+    write_failure = 0;
+    assert(writer_save() == WRITER_SAVE_OK && !writer_dirty());
+    assert(!fs_delete(pdf) && !fs_delete(owned));
+    puts("Writer storage lease: clean/dirty bindings, private edits, owned save/PDF retries and honest errors passed");
+}
 int main(int argc, char **argv) {
     files[0].valid = files[0].folder = 1; files[0].identity = 1;
     gfx_init(back, linear, 800, 600, 32, 3200);
+    test_storage_busy(); writer_close();
     test_editing(); test_history(); test_files(); test_binding_fingerprints(); test_pdf_export(); test_layout(); test_search(); test_viewport_reveal(); test_heading_coverage(); test_drawing(argc > 1 ? argv[1] : NULL);
     assert(polls > 100); assert(sync_count >= 4);
     for (int i = 1; i < 20; i++) if (files[i].valid) free(files[i].data);

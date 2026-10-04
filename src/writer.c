@@ -635,7 +635,9 @@ const unsigned char *writer_snapshot(unsigned *length) {
 static int save_to(int id) {
     unsigned length;
     if (!writer_snapshot(&length)) return WRITER_SAVE_ERROR;
-    if (fs_write(id, (const char *)ARENA->output, (int)length) < 0) {
+    int written = fs_write(id, (const char *)ARENA->output, (int)length);
+    if (written == FS_ERR_BUSY) { status("Disk is saving; retry shortly."); return WRITER_SAVE_ERROR; }
+    if (written < 0) {
         state.failed_save = 1; status("Save failed; the complete document remains open."); return WRITER_SAVE_ERROR;
     }
     /* Update the baseline immediately after the atomic RAM write, including
@@ -652,6 +654,7 @@ static int save_to(int id) {
     status("Saved and synchronized to disk."); return WRITER_SAVE_OK;
 }
 int writer_save(void) {
+    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return WRITER_SAVE_ERROR; }
     state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (!binding_valid()) { status("Choose Save As for a new native .bwr file."); return WRITER_SAVE_NEEDS_NAME; }
@@ -663,6 +666,7 @@ int writer_save(void) {
     return save_to(state.file);
 }
 int writer_save_as(int parent, const char *name) {
+    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return WRITER_SAVE_ERROR; }
     state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (!name || !native_name(name)) { status("Native documents use the .bwr filename extension."); return WRITER_SAVE_ERROR; }
@@ -691,6 +695,7 @@ int writer_save_as(int parent, const char *name) {
     return result;
 }
 int writer_export_rtf(int parent, const char *name) {
+    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return -1; }
     state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (!name || !extension(name, "rtf")) { status("RTF exports use the .rtf filename extension."); return -1; }
@@ -711,6 +716,7 @@ int writer_export_rtf(int parent, const char *name) {
     status("Exported RTF and synchronized to disk. Native save state is unchanged."); return id;
 }
 int writer_export_pdf(int parent, const char *name, unsigned paper) {
+    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return -1; }
     if (!state.initialized) writer_init();
     unsigned n = 0;
     if (name) while (n < FS_NAME_LEN && name[n] && name[n] != '/') n++;
