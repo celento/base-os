@@ -10,7 +10,9 @@ independent. BASIC and legacy synchronous `exec` keep direct drawing behavior.
 Eight maximum frames use 512,000 bytes in the explicitly asserted 512 KiB arena
 at `0x600000`–`0x680000`. This is in the existing E820-validated Paint-to-disk-DMA
 gap, with unchanged 64 MiB/default and 128 MiB/large requirements. Each Terminal
-now uses 91,512 bytes; all eight still fit before the existing script scratch.
+used 91,512 bytes in the original hourly04 publication implementation. The later
+complete-input overflow flag raises this to 91,516 bytes (732,128 for eight);
+all eight still fit before the existing script scratch.
 The bounded publication copy neither allocates nor polls/dispatches applications.
 The existing kernel renderer is unchanged.
 

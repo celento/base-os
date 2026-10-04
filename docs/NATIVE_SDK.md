@@ -201,9 +201,9 @@ field to zero or a callback. The renderer reads `term_canvas_width()` and
 packed stride. Native `ProgramIO.present` must be bounded and must not dispatch
 other applications; Terminal supplies a copy-only publication callback.
 
-A Terminal now occupies 91,512 bytes, including 320 scrollback rows and all
-64,000 possible canvas pixels. Eight use **732,096 bytes**, below the fixed
-786,432-byte terminal-state subarena, with 54,336 bytes spare before script
+A Terminal now occupies 91,516 bytes, including 320 scrollback rows, the complete-
+input overflow flag and all 64,000 possible canvas pixels. Eight use **732,128
+bytes**, below the fixed 786,432-byte terminal-state subarena, with 54,304 bytes spare before script
 scratch. The overall 1 MiB Terminal arena is unchanged. Published frames use
 512,000 bytes in a separately asserted 512 KiB reservation at `0x600000`–`0x680000`,
 in the existing Paint-to-DMA gap. No application-memory or machine-RAM increase
