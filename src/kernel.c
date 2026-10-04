@@ -3,6 +3,7 @@
  * VBE 1280x720 desktop, PS/2 mouse, RAM filesystem, apps
  */
 
+#include "canvas_view.h"
 #include "gfx.h"
 #include "build_info.h"
 #include "decimal.h"
@@ -3845,24 +3846,19 @@ static int term_text(const char *s, int x, int y, int col, int cols) {
  * A zero-height result retains the original eight-pixel canvas gap. */
 static int term_canvas_geometry(int ww,int wh,int source_w,int source_h,
                                 int *target_w,int *target_h) {
-    *target_w=*target_h=0;
-    int height=source_w>160&&wh>550?400:wh>360?200:100;
-    int available_h=wh-TITLE_H-2-TERM_PAD*2-EDIT_LINE_H*2-8;
-    int available_w=ww-2-TERM_PAD*2;
-    if(height>available_h)height=available_h;
-    if(height<=0||available_w<=0||source_w<=0||source_h<=0)return 0;
-    int width=source_w*height/source_h;
-    if(width>available_w){width=available_w;height=source_h*width/source_w;}
-    *target_w=width;*target_h=height;
-    return height+8;
+    CanvasView view;
+    int occupied=canvas_view_layout(&view,0,0,ww,wh,source_w,source_h,TITLE_H,TERM_PAD,EDIT_LINE_H);
+    *target_w=view.viewport_w;*target_h=view.viewport_h;
+    return occupied;
 }
 static int draw_term_canvas(int wx,int wy,int ww,int wh) {
     const unsigned char *canvas=term_canvas();
     if(!canvas)return 0;
     int source_w=term_canvas_width(),source_h=term_canvas_height();
-    int target_w,target_h;
-    int occupied=term_canvas_geometry(ww,wh,source_w,source_h,&target_w,&target_h);
-    int ax=wx+1+TERM_PAD,ay=wy+TITLE_H+1+TERM_PAD;
+    CanvasView view;
+    int occupied=canvas_view_layout(&view,wx,wy,ww,wh,source_w,source_h,TITLE_H,TERM_PAD,EDIT_LINE_H);
+    int target_w=view.viewport_w,target_h=view.viewport_h;
+    int ax=view.x,ay=view.y;
     for(int y=0;y<target_h;y++){
         int source_row=(y*source_h/target_h)*source_w;
         for(int x=0;x<target_w;x++)
