@@ -172,11 +172,12 @@ def run(build):
         session.key('ctrl-z'); check.expect(3, b'', 0)
         # Find/Replace are disabled and cannot type their shortcut letter into a cell.
         before = check.cell(53); session.key('ctrl-f'); session.key('ctrl-h'); assert check.cell(53) == before and check.state()['mode'] == 0
-        check.save_as('range.bsh'); expected = decode(contents(disk, '/Documents/range.bsh'))
+        check.save_as('range.bsh'); decode(contents(disk, '/Documents/range.bsh'))
         session.key('ctrl-shift-e'); check.name('range.csv')
         session.wait(lambda: not check.o.integer('name_dlg'), 'CSV export finished')
         assert contents(disk, '/Documents/range.csv') == b'12.5,25\r\n,\r\n12.5,25\r\n'
         pictures.append(str(session.screenshot('spreadsheet-grid-800x600.png')))
+        print('PASS: editing, formulas, private/external/empty clipboard, undo and exact native/CSV saves', flush=True)
         session.key('ctrl-w'); session.wait(lambda: not any(w['open'] and w['kind'] == SHEET for w in check.o.windows()), 'clean native close')
         session.launch('range.bsh'); check.expect(53, '=A1*2', 3, 25000)
         # Pending cell bytes trigger every replacement guard; Cancel is initial.
@@ -207,6 +208,7 @@ def run(build):
         session.wait(lambda: not check.o.integer('name_dlg'), 'quoted CSV exported')
         assert contents(disk, '/Documents/import-values.csv') == b'Name,Amount,Note\r\n"comma, quote """,12.5,"line1\nline2"\r\n=2+3,7,last\r\n'
         assert contents(disk, '/Documents/import.csv') == csv
+        print('PASS: New/Open/Close guards, rejected suffix and exact quoted CSV interchange', flush=True)
         check.save_as('imported.bsh'); session.key('ctrl-w'); session.launch('imported.bsh'); check.expect(28, b'line1\nline2', 1)
         # Resize to exact minimum using observed real window edge drag.
         win = check.owner(); check.move(win['x'] + win['w'] - 2, win['y'] + win['h'] - 2)
@@ -225,7 +227,8 @@ def run(build):
                 return False
         session.wait(recovered, 'pending edit and paired metadata committed', 60)
         assert check.state()['mode'] == 1 and check.cell(28)['kind'] == 0
-        baseline = disk.read_bytes()
+        baseline = disk.read_bytes(); (work / 'recovery-baseline.img').write_bytes(baseline)
+        print('PASS: minimum window and non-disruptive pending edit snapshot', flush=True)
         session.launch('terminal'); session.text('exec /Documents/change.bex'); session.key('ret')
         session.wait(lambda: contents(disk, '/Documents/source.bsh') == changed, 'normal native app changed the source')
         session.launch('spreadsheet'); session.key('ctrl-s')
@@ -234,6 +237,7 @@ def run(build):
         check.name('source.bsh'); assert check.o.integer('name_failed')
         pictures.append(str(session.screenshot('spreadsheet-source-conflict.png')))
         session.key('esc')
+        print('PASS: same-ID same-size live source conflict', flush=True)
     # Real reboots use stopped disposable disk copies. No live guest bytes change.
     for mode in ('matching', 'changed', 'missing-binding', 'mixed-draft'):
         target = work / (mode + '.img'); target.write_bytes(baseline)
@@ -260,6 +264,7 @@ def run(build):
                 check.name('recovered.bsh'); session.wait(lambda: not check.o.integer('name_dlg'), 'safe recovery copy saved')
                 assert contents(target, '/Documents/source.bsh') == before
             pictures.append(str(session.screenshot('spreadsheet-recovery-' + mode + '.png')))
+            print('PASS: recovery ' + mode, flush=True)
     unknown = work / 'unknown.img'; unknown.write_bytes(b'Ordinary unknown disk'.ljust(DATA_LAYOUT.sectors * 512, b'\0'))
     digest = hashlib.sha256(unknown.read_bytes()).hexdigest()
     with SheetSession(build, 'sheet-readonly', extra=['-drive', f'file={unknown},format=raw,index=0,if=ide']) as session:
