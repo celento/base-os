@@ -31,7 +31,7 @@ static int kernel_restored=1;
 static AudioStatus sound;
 static unsigned audio_pauses;
 static int slice_kind,slice_value;
-enum { SLICE_YIELD, SLICE_SLEEP, SLICE_EXIT, SLICE_STOP, SLICE_WAIT };
+enum { SLICE_YIELD, SLICE_SLEEP, SLICE_EXIT, SLICE_STOP, SLICE_WAIT, SLICE_STOP_YIELD, SLICE_STOP_EXIT };
 static ProcessBinding seen_binding;
 static ProcessHandle run_order[64];
 static unsigned runs;
@@ -82,9 +82,11 @@ static int process_resume(const uint32_t *frame){
     case SLICE_SLEEP:invoke(BOS_CALL_SLEEP,(unsigned)slice_value,0);break;
     case SLICE_EXIT:invoke(BOS_CALL_EXIT,(unsigned)slice_value,0);break;
     case SLICE_WAIT:invoke(BOS_CALL_SYNC_WAIT,BOS_HANDLE_TYPE_OPERATION|7,1000);break;
-    case SLICE_STOP:
+    case SLICE_STOP:case SLICE_STOP_YIELD:case SLICE_STOP_EXIT:
         assert(!process_request_stop(current_task->owner_id));
         assert(current_task->resources_live&&current_task->state==PROCESS_TASK_READY);
+        if(slice_kind==SLICE_STOP_YIELD)invoke(BOS_CALL_YIELD,0,0);
+        if(slice_kind==SLICE_STOP_EXIT)invoke(BOS_CALL_EXIT,27,0);
         /* Ordinary PIT suspension is not an explicit publication boundary. */
         {uint32_t timer[FRAME_WORDS]={0};timer[12]=32;timer[15]=0x1b;
          process_interrupt(timer);}
@@ -170,6 +172,18 @@ static void scheduling_and_lifetime(void){
     reap(b,PROCESS_EXIT_STOP,PROCESS_TASK_STOPPED);
     assert(kernel_restored&&fpu_saves==fpu_restores&&incoming==leaves);
 }
+static void deferred_boundaries(void){
+    /* An internal stop request made during an active slice is deferred. The
+     * same slice's explicit boundary keeps its normal publication contract. */
+    for(int mode=SLICE_STOP_YIELD;mode<=SLICE_STOP_EXIT;mode++){
+        ProcessHandle handle=create(4,1);slice_kind=mode;
+        unsigned copies=outgoing,pubs=publications,released_before=release_events;
+        assert(process_step(handle)&&outgoing==copies);
+        assert(publications==pubs+1&&release_events==released_before+2);
+        if(mode==SLICE_STOP_EXIT)reap(handle,PROCESS_EXIT_APP,27);
+        else reap(handle,PROCESS_EXIT_STOP,PROCESS_TASK_STOPPED);
+    }
+}
 static void capacity_and_exec(void){
     ProcessHandle handles[PROCESS_TASKS];
     for(unsigned i=0;i<PROCESS_TASKS;i++)handles[i]=create(PROCESS_TASKS-1-i,1);
@@ -195,7 +209,7 @@ static void capacity_and_exec(void){
     assert(last_release==abandoned&&stub_release_files==stub_release_sync);
 }
 int main(void){
-    owned_binding();scheduling_and_lifetime();capacity_and_exec();
-    puts("Process lifetime: independent records/slots, copied attachments, exact stale lookup, round-robin, sleep/wait/input, deferred cleanup/no final copy, retained completion, finite capacity and legacy exec passed.");
+    owned_binding();scheduling_and_lifetime();deferred_boundaries();capacity_and_exec();
+    puts("Process lifetime: independent records/slots, copied attachments, exact stale lookup, round-robin, sleep/wait/input, deferred cleanup/no final copy, active-stop publication/exit precedence, retained completion, finite capacity and legacy exec passed.");
     return 0;
 }
