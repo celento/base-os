@@ -26,7 +26,10 @@ from layout import constants
 C = constants()
 MAGIC = 0x46534f42
 SECTOR_SIZE = 512
-MAX_NODES = 64
+LEGACY_NODES = C['FS_LEGACY_NODES']
+MAX_NODES = C['FS_MAX_NODES']
+MAX_DEPTH = C['FS_MAX_DEPTH']
+PATH_LEN = C['FS_PATH_LEN']
 DATA_MARKER_MAGIC = C.get('DATA_MARKER_MAGIC', 0x44534f42)
 DATA_MARKER_VERSION = C.get('DATA_MARKER_VERSION', 1)
 DATA_DISK_SECTORS = C.get('DATA_DISK_SECTORS', 32768)
@@ -34,7 +37,7 @@ DATA_SLOT_SECTORS = C.get('DATA_SLOT_SECTORS', 16383)
 DATA_FIRST_LBA = C.get('DATA_FIRST_LBA', 1)
 DATA_SECOND_LBA = C.get('DATA_SECOND_LBA', 16384)
 DATA_FILE_LIMIT = 2097152
-DATA_TOTAL_LIMIT = (DATA_SLOT_SECTORS - 1) * SECTOR_SIZE - MAX_NODES * 40
+DATA_TOTAL_LIMIT = (DATA_SLOT_SECTORS - 1) * SECTOR_SIZE - LEGACY_NODES * 40
 EPOCH = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
 
 
@@ -47,6 +50,13 @@ class VolumeLayout:
     version: int
     file_limit: int
     total_limit: int
+    node_limit: int
+
+    def capacity(self, count):
+        """Preserve the full old v4 capacity; reserve extra records as needed."""
+        if self.kind == 'data':
+            return self.payload_limit - max(LEGACY_NODES, count) * 40
+        return self.total_limit
 
     @property
     def payload_limit(self):
@@ -55,10 +65,10 @@ class VolumeLayout:
 
 FLOPPY_LAYOUT = VolumeLayout('floppy', C['DISK_SECTORS'], C['FS_DISK_SECTORS'],
                              (C['FS_DISK_LBA'], C['FS_SECOND_LBA']), 3, 16383,
-                             (MAX_NODES - 1) * 16383)
+                             (LEGACY_NODES - 1) * 16383, LEGACY_NODES)
 DATA_LAYOUT = VolumeLayout('data', DATA_DISK_SECTORS, DATA_SLOT_SECTORS,
                            (DATA_FIRST_LBA, DATA_SECOND_LBA), 4,
-                           DATA_FILE_LIMIT, DATA_TOTAL_LIMIT)
+                           DATA_FILE_LIMIT, DATA_TOTAL_LIMIT, MAX_NODES)
 
 
 def data_marker():
@@ -99,7 +109,7 @@ def decode(data, slot, layout=None):
         return None
     magic, version, count, size, crc, gen, hcrc = struct.unpack_from('<7I', data, start)
     versions = (4,) if layout.kind == 'data' else (1, 2, 3)
-    if magic != MAGIC or version not in versions or not 1 <= count <= MAX_NODES:
+    if magic != MAGIC or version not in versions or not 1 <= count <= layout.node_limit:
         return None
     if version == 1 and slot:
         return None
@@ -119,13 +129,13 @@ def decode(data, slot, layout=None):
         ident, parent, directory, app, _, length, raw = struct.unpack_from('<HhBBHI24s', payload, pos)
         modified = struct.unpack_from('<I', payload, pos + 36)[0] if version >= 3 else 0
         pos += record
-        if (ident >= MAX_NODES or ident in nodes or parent < -1 or parent >= MAX_NODES
+        if (ident >= layout.node_limit or ident in nodes or parent < -1 or parent >= layout.node_limit
                 or directory > 1 or app > 1 or (directory and app)):
             return None
         if length > layout.file_limit or pos + length > len(payload) or ((directory or app) and length):
             return None
         total += length
-        if total > layout.total_limit or b'\0' not in raw:
+        if total > layout.capacity(count) or b'\0' not in raw:
             return None
         try:
             name = raw.split(b'\0', 1)[0].decode('ascii', errors='strict')
@@ -147,11 +157,14 @@ def decode(data, slot, layout=None):
         if key in siblings:
             return None
         siblings.add(key)
-        walk, seen = ident, set()
+        walk, seen, path_bytes = ident, set(), 0
         while walk:
             if walk in seen:
                 return None
             seen.add(walk)
+            path_bytes += len(nodes[walk]['name']) + 1
+            if len(seen) > MAX_DEPTH or path_bytes >= PATH_LEN:
+                return None
             walk = nodes[walk]['parent']
             if walk not in nodes or not nodes[walk]['directory']:
                 return None
@@ -172,6 +185,8 @@ def load(data):
 
 
 def resolve(nodes, path):
+    if len(path) >= PATH_LEN:
+        raise ValueError(f'Path must be shorter than {PATH_LEN} bytes')
     ident = 0
     for name in path.split('/'):
         if name in ('', '.'):
@@ -228,12 +243,13 @@ def commit(image, data, slot, generation, nodes, *, original=None):
     actual_slot, actual_generation, _ = load(data)
     if (slot, generation) != (actual_slot, actual_generation):
         raise ValueError('Snapshot changed; refusing stale update')
-    if not 1 <= len(nodes) <= MAX_NODES:
+    if not 1 <= len(nodes) <= layout.node_limit:
         raise ValueError('No free file slots')
     if any(len(n['data']) > layout.file_limit for n in nodes.values()):
         raise ValueError(f'File exceeds {layout.file_limit:,} bytes')
-    if sum(len(n['data']) for n in nodes.values()) > layout.total_limit:
-        raise ValueError(f'Volume full: total file data exceeds {layout.total_limit:,} bytes')
+    allowance = layout.capacity(len(nodes))
+    if sum(len(n['data']) for n in nodes.values()) > allowance:
+        raise ValueError(f'Volume full: total file data exceeds {allowance:,} bytes')
     payload = bytearray()
     for ident, n in sorted(nodes.items()):
         name = n['name'].encode('ascii')
@@ -283,9 +299,8 @@ def show_info(data):
     layout = disk_layout(data)
     print(f'Type: {layout.kind} ({len(data):,} bytes)')
     print(f'File limit: {layout.file_limit:,} bytes')
-    print(f'Total file-data limit: {layout.total_limit:,} bytes')
     print(f'Snapshot payload capacity: {layout.payload_limit:,} bytes')
-    print(f'Node limit: {MAX_NODES} (includes root, folders, and applications)')
+    print(f'Node limit: {layout.node_limit} (includes root, folders, and applications)')
     if layout.kind == 'data' and not any(data[SECTOR_SIZE:]):
         print('State: blank marked data disk; boot BaseOS once before importing')
         return
@@ -293,7 +308,9 @@ def show_info(data):
     used = sum(len(n['data']) for n in nodes.values())
     print(f'Active snapshot: {slot}; generation: {generation}')
     print(f'Used: {used:,} file bytes; {len(nodes)} nodes')
-    print(f'Remaining file-data allowance: {layout.total_limit - used:,} bytes')
+    allowance = layout.capacity(len(nodes))
+    print(f'Total file-data limit: {allowance:,} bytes')
+    print(f'Remaining file-data allowance: {allowance - used:,} bytes')
 
 
 def main():
@@ -337,6 +354,8 @@ def main():
                 with a.host.open('wb' if a.replace else 'xb') as out:
                     out.write(n['data'])
             else:
+                if len(a.path) >= PATH_LEN:
+                    raise ValueError(f'Path must be shorter than {PATH_LEN} bytes')
                 parent_path, _, name = a.path.rstrip('/').rpartition('/')
                 parent = resolve(nodes, parent_path)
                 if (not nodes[parent]['directory'] or name in ('', '.', '..')
@@ -346,7 +365,7 @@ def main():
                 if ident is not None and (a.command == 'mkdir' or not a.replace or nodes[ident]['directory'] or nodes[ident]['app']):
                     raise ValueError('Destination exists; use --replace for a data file')
                 if ident is None:
-                    ident = next((i for i in range(1, MAX_NODES) if i not in nodes), None)
+                    ident = next((i for i in range(1, layout.node_limit) if i not in nodes), None)
                 if ident is None:
                     raise ValueError('No free file slots')
                 content = b''

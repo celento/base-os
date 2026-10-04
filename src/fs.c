@@ -8,7 +8,8 @@
 #define FS_DISK_MAGIC   0x46534F42u   /* "BOSF" */
 #define FS_DISK_VERSION 3
 #define FS_DATA_VERSION 4
-#define FS_DATA_CAPACITY ((DATA_SLOT_SECTORS - 1) * SECTOR_SIZE - FS_MAX_NODES * 40)
+#define FS_DATA_PAYLOAD ((DATA_SLOT_SECTORS - 1) * SECTOR_SIZE)
+#define FS_DATA_CAPACITY (FS_DATA_PAYLOAD - FS_LEGACY_NODES * 40)
 
 typedef struct {
     char name[FS_NAME_LEN];
@@ -58,8 +59,11 @@ static int data_backend;
 static int data_problem;
 
 _Static_assert(sizeof(FsNode) * FS_MAX_NODES <= FS_CAPACITY, "FS arena overflow");
+_Static_assert(FS_MAX_NODES <= 32768, "node IDs exceed signed disk parents");
+_Static_assert(FS_MAX_DEPTH >= FS_LEGACY_NODES - 1, "old directory trees must remain readable");
+_Static_assert(FS_MAX_DEPTH * FS_NAME_LEN < FS_PATH_LEN, "canonical path buffer too small");
 _Static_assert(sizeof(DiskHeader) == 28 && sizeof(DiskNode) == 40, "disk ABI changed");
-_Static_assert(FS_SECTOR_SIZE + FS_MAX_NODES * (sizeof(DiskNode) + FS_MAX_SIZE - 1)
+_Static_assert(FS_SECTOR_SIZE + FS_LEGACY_NODES * (sizeof(DiskNode) + FS_MAX_SIZE - 1)
                <= FS_DISK_SECTORS * FS_SECTOR_SIZE, "floppy snapshot capacity too small");
 _Static_assert(FS_DATA_CAPACITY + FS_MAX_NODES <= FS_POOL_CAPACITY, "file arena overflow");
 _Static_assert(DATA_SLOT_SECTORS * FS_SECTOR_SIZE <= FS_IMG_CAPACITY, "data staging overflow");
@@ -72,9 +76,16 @@ _Static_assert(FS_SECOND_LBA >= FS_DISK_LBA + FS_DISK_SECTORS &&
 __attribute__((weak)) unsigned fs_clock(void) { return 0; }
 __attribute__((weak)) void fs_background_poll(void) {}
 unsigned fs_modified(int id) { return fs_valid(id) ? nodes[id].modified : 0; }
-unsigned fs_capacity(void) {
-    return data_backend ? FS_DATA_CAPACITY : (FS_MAX_NODES - 1) * (FS_MAX_SIZE - 1);
+int fs_node_limit(void) { return data_backend ? FS_MAX_NODES : FS_LEGACY_NODES; }
+/* Keep the original 64-node reservation even for small volumes. Additional
+ * records consume 40 bytes each; no old full v4 snapshot loses capacity. */
+unsigned fs_capacity_for_nodes(unsigned count) {
+    if (!count || count > (unsigned)fs_node_limit()) return 0;
+    if (!data_backend) return (FS_LEGACY_NODES - 1) * (FS_MAX_SIZE - 1);
+    if (count < FS_LEGACY_NODES) count = FS_LEGACY_NODES;
+    return FS_DATA_PAYLOAD - count * sizeof(DiskNode);
 }
+unsigned fs_capacity(void) { return fs_capacity_for_nodes(fs_node_count()); }
 unsigned fs_file_limit(void) { return data_backend ? FS_FILE_MAX : FS_MAX_SIZE - 1; }
 const char *fs_storage_name(void) { return data_backend ? "IDE data disk" : "Boot floppy"; }
 unsigned fs_used_bytes(void) {
@@ -135,9 +146,45 @@ static int valid_name(const char *name) {
     return n < FS_NAME_LEN;
 }
 
+/* Measure components, including a leading slash per component. Root has no
+ * components. A separate depth limit retains every valid old 64-node tree
+ * while bounding recursion and paths independently of the wider node table. */
+static int path_shape(int id, int *depth, int *bytes) {
+    *depth = *bytes = 0;
+    while (id > 0) {
+        if (!fs_valid(id) || ++*depth > FS_MAX_DEPTH) return -1;
+        *bytes += 1 + kstrlen(nodes[id].name);
+        if (*bytes >= FS_PATH_LEN) return -1;
+        id = nodes[id].parent;
+    }
+    return id == 0 ? 0 : -1;
+}
+
+/* Check a new node (id == -1), or every path in a moved/renamed/copied subtree,
+ * before changing anything. No descendant can become an ambiguous short path. */
+static int tree_fits(int id, int parent, const char *name) {
+    int depth, bytes;
+    if (path_shape(parent, &depth, &bytes) < 0) return 0;
+    ++depth; bytes += 1 + kstrlen(name);
+    if (depth > FS_MAX_DEPTH || bytes >= FS_PATH_LEN) return 0;
+    if (id < 0 || !nodes[id].is_dir) return 1;
+    for (int i = 1; i < fs_node_limit(); ++i) {
+        if (!nodes[i].used || i == id) continue;
+        int walk = i, below_depth = 0, below_bytes = 0;
+        while (walk > 0 && walk != id && below_depth < FS_MAX_DEPTH) {
+            ++below_depth;
+            below_bytes += 1 + kstrlen(nodes[walk].name);
+            walk = nodes[walk].parent;
+        }
+        if (walk == id && (depth + below_depth > FS_MAX_DEPTH ||
+                          bytes + below_bytes >= FS_PATH_LEN)) return 0;
+    }
+    return 1;
+}
+
 static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
     if (!valid_name(name)) return -1;
-    if (parent < 0 || parent >= FS_MAX_NODES || !nodes[parent].used)
+    if (parent < 0 || parent >= fs_node_limit() || !nodes[parent].used)
         return -1;
     if (!nodes[parent].is_dir)
         return -1;
@@ -146,7 +193,9 @@ static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
     if (kstrlen(name) <= 0 || kstrlen(name) >= FS_NAME_LEN)
         return -1;
 
-    for (int i = 0; i < FS_MAX_NODES; i++) {
+    if (!tree_fits(-1, parent, name) ||
+        fs_used_bytes() > fs_capacity_for_nodes(fs_node_count() + 1)) return -1;
+    for (int i = 0; i < fs_node_limit(); i++) {
         if (!nodes[i].used) {
             kmemset(&nodes[i], 0, (int)sizeof(FsNode));
             kstrcpy(nodes[i].name, name);
@@ -379,10 +428,10 @@ void fs_path(int id, char *out, int max) {
         return;
     }
 
-    int parts[FS_MAX_NODES];
+    int parts[FS_MAX_DEPTH];
     int n = 0;
     int cur = id;
-    while (cur > 0 && n < FS_MAX_NODES) {
+    while (cur > 0 && n < FS_MAX_DEPTH) {
         parts[n++] = cur;
         cur = nodes[cur].parent;
     }
@@ -402,7 +451,7 @@ void fs_path(int id, char *out, int max) {
 
 int fs_unique_file(int parent, char *out) {
     /* new1.txt, new2.txt, ... */
-    for (int n = 1; n < 100; n++) {
+    for (int n = 1; n <= fs_node_limit(); n++) {
         char name[FS_NAME_LEN];
         int pos = 0;
         name[pos++] = 'n';
@@ -440,8 +489,10 @@ static void numbered_name(char *out, const char *base, int n) {
         out[i] = 0;
         return;
     }
-    if (i > FS_NAME_LEN - 4)
-        i = FS_NAME_LEN - 4;
+    /* Up to three digits at the current 256-node limit. */
+    int digits = n >= 100 ? 3 : n >= 10 ? 2 : 1;
+    if (i > FS_NAME_LEN - 2 - digits)
+        i = FS_NAME_LEN - 2 - digits;
     out[i++] = ' ';
     char digs[4];
     int nd = 0;
@@ -457,7 +508,7 @@ static void numbered_name(char *out, const char *base, int n) {
 
 int fs_unique_dir(int parent, char *out) {
     const char *base = "untitled folder";
-    for (int n = 1; n < 100; n++) {
+    for (int n = 1; n <= fs_node_limit(); n++) {
         char name[FS_NAME_LEN];
         numbered_name(name, base, n);
         if (fs_find_child(parent, name) < 0) {
@@ -509,21 +560,22 @@ int fs_move(int id, int new_parent) {
     }
     if (nodes[id].parent == new_parent)
         return 0;
-    int clash = fs_find_child(new_parent, nodes[id].name);
+    char name[FS_NAME_LEN];
+    kstrcpy(name, nodes[id].name);
+    int clash = fs_find_child(new_parent, name);
     if (clash >= 0 && clash != id) {
-        char name[FS_NAME_LEN];
         int found = 0;
-        for (int n = 2; n < 100; n++) {
+        for (int n = 2; n <= fs_node_limit(); n++) {
             numbered_name(name, nodes[id].name, n);
             if (fs_find_child(new_parent, name) < 0) {
-                kstrcpy(nodes[id].name, name);
                 found = 1;
                 break;
             }
         }
-        if (!found)
-            return -1;
+        if (!found) return -1;
     }
+    if (!tree_fits(id, new_parent, name)) return -1;
+    kstrcpy(nodes[id].name, name);
     nodes[id].parent = new_parent;
     nodes[id].modified = fs_clock();
     fs_touched = 1;
@@ -608,7 +660,7 @@ static int copy_into(int id, int parent, const char *name) {
 int fs_unique_copy(int parent, const char *src, char *out) {
     if (!src || !out)
         return -1;
-    for (int n = 1; n < 100; n++) {
+    for (int n = 1; n <= fs_node_limit(); n++) {
         make_copy_name(out, src, n);
         if (fs_find_child(parent, out) < 0)
             return 0;
@@ -630,6 +682,7 @@ int fs_copy(int id, int parent) {
     char name[FS_NAME_LEN];
     if (fs_unique_copy(parent, nodes[id].name, name) < 0)
         return -1;
+    if (!tree_fits(id, parent, name)) return -1;
     int touched_before = fs_touched;
     int result = copy_into(id, parent, name);
     if (result < 0) fs_touched = touched_before;
@@ -645,6 +698,7 @@ int fs_rename(int id, const char *name) {
     int clash = fs_find_child(nodes[id].parent, name);
     if (clash >= 0 && clash != id)
         return -1;
+    if (!tree_fits(id, nodes[id].parent, name)) return -1;
     kstrcpy(nodes[id].name, name);
     nodes[id].modified = fs_clock();
     fs_touched = 1;
@@ -711,15 +765,16 @@ static void decode_node(DiskNode *d, const unsigned char *p, const DiskHeader *h
 
 /* Validate the complete graph before changing the live node table. */
 static int validate_payload(const DiskHeader *h, const unsigned char *img) {
-    unsigned ds = disk_node_size(h);
+    unsigned ds = disk_node_size(h), limit = fs_node_limit();
+    unsigned allowance = fs_capacity_for_nodes(h->count);
     unsigned offsets[FS_MAX_NODES] = {0};
     unsigned pos = FS_SECTOR_SIZE, end = pos + h->bytes, total = 0;
     for (unsigned n = 0; n < h->count; ++n) {
         DiskNode d;
         if (end - pos < ds) return -1;
         decode_node(&d, img + pos, h);
-        if (d.id >= FS_MAX_NODES || offsets[d.id] || d.parent < -1 ||
-            d.parent >= FS_MAX_NODES || d.is_dir > 1 || d.is_app > 1 ||
+        if (d.id >= limit || offsets[d.id] || d.parent < -1 ||
+            d.parent >= (int)limit || d.is_dir > 1 || d.is_app > 1 ||
             (d.is_dir && d.is_app) ||
             d.size > (h->version >= FS_DATA_VERSION ? FS_FILE_MAX : FS_MAX_SIZE - 1) ||
             d.size > end - pos - ds ||
@@ -733,7 +788,7 @@ static int validate_payload(const DiskHeader *h, const unsigned char *img) {
         if (d.id && (kstrcmp(d.name, ".") == 0 || kstrcmp(d.name, "..") == 0))
             return -1;
         if (!d.id && (d.parent != -1 || !d.is_dir || length)) return -1;
-        if (d.size > fs_capacity() - total) return -1;
+        if (d.size > allowance - total) return -1;
         total += d.size;
         offsets[d.id] = pos;
         pos += ds + d.size;
@@ -744,10 +799,13 @@ static int validate_payload(const DiskHeader *h, const unsigned char *img) {
         DiskNode node;
         decode_node(&node, img + offsets[id], h);
         int walk = id;
+        unsigned path_bytes = 0;
         for (unsigned steps = 0; walk != 0; ++steps) {
-            if (steps >= FS_MAX_NODES) return -1;
+            if (steps >= FS_MAX_DEPTH) return -1;
             DiskNode d, parent;
             decode_node(&d, img + offsets[walk], h);
+            path_bytes += 1 + kstrlen(d.name);
+            if (path_bytes >= FS_PATH_LEN) return -1;
             walk = d.parent;
             if (walk < 0 || !offsets[walk]) return -1;
             decode_node(&parent, img + offsets[walk], h);
@@ -782,7 +840,7 @@ static int read_slot(int slot, DiskHeader *h) {
                ? 1 : -1;
     }
     kmemcpy(h, img, sizeof(*h));
-    if (h->magic != FS_DISK_MAGIC || !h->count || h->count > FS_MAX_NODES ||
+    if (h->magic != FS_DISK_MAGIC || !h->count || h->count > (unsigned)fs_node_limit() ||
         h->bytes > (span - 1) * FS_SECTOR_SIZE ||
         h->bytes < h->count * disk_node_size(h)) return -1;
     if (data_backend) {

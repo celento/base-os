@@ -1,11 +1,10 @@
 #ifndef FS_H
 #define FS_H
 
-#define FS_MAX_NODES 64
+#include "layout.h"
 #define FS_NAME_LEN  24
 #define FS_MAX_SIZE  16384 /* Existing Editor, scripts and BEX buffer limit. */
 #define FS_FILE_MAX  2097152 /* Data-volume file limit, inclusive. */
-#define FS_PATH_LEN  1536
 
 int kstrlen(const char *s);
 int kstrcmp(const char *a, const char *b);
@@ -18,7 +17,10 @@ unsigned fs_clock(void);
 void fs_background_poll(void);
 unsigned fs_modified(int id);
 unsigned fs_identity(int id);
+/* File-data allowance for the current node count; extra IDE nodes cost 40 bytes. */
 unsigned fs_capacity(void);
+/* Same allowance for a projected total node count, or 0 outside this backend. */
+unsigned fs_capacity_for_nodes(unsigned count);
 unsigned fs_file_limit(void);
 const char *fs_storage_name(void);
 unsigned fs_used_bytes(void);
@@ -30,6 +32,8 @@ int fs_valid(int id);
 int fs_is_dir(int id);
 int fs_is_app(int id);
 int fs_node_count(void);
+/* Runtime limit: 64 on floppy, 256 on the IDE data volume. */
+int fs_node_limit(void);
 int fs_parent(int id);
 int fs_size(int id);
 const char *fs_name(int id);

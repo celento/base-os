@@ -180,14 +180,16 @@ class VolumeTests(VolumeHelpers, unittest.TestCase):
             self.assertLess(sum(len(n['data']) for n in volume.load(image.read_bytes())[2].values()), volume.DATA_TOTAL_LIMIT)
 
     def test_node_limit_no_writes(self):
-        with tempfile.TemporaryDirectory() as temp:
-            image = pathlib.Path(temp) / 'disk'
-            image.write_bytes(self.fixture(4, files=[(f'{i}.txt', b'') for i in range(62)]))
-            self.cli(image, 'mkdir', '/last')
-            before, backups = image.read_bytes(), set(image.parent.glob('*.bak'))
-            self.assertEqual(len(volume.load(before)[2]), 64)
-            self.cli(image, 'mkdir', '/one-too-many', ok=False)
-            self.assert_unchanged(image, before, backups)
+        for version, limit in ((3, volume.LEGACY_NODES), (4, volume.MAX_NODES)):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temp:
+                image = pathlib.Path(temp) / 'disk'
+                image.write_bytes(self.fixture(version, files=[(f'{i}.txt', b'') for i in range(limit - 2)]))
+                self.cli(image, 'mkdir', '/last')
+                before, backups = image.read_bytes(), set(image.parent.glob('*.bak'))
+                self.assertEqual(len(volume.load(before)[2]), limit)
+                self.assertIn(f'Node limit: {limit}', self.cli(image, 'info'))
+                self.cli(image, 'mkdir', '/one-too-many', ok=False)
+                self.assert_unchanged(image, before, backups)
 
     def test_corrupt_latest_falls_back(self):
         for version in (3, 4):
