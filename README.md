@@ -9,7 +9,7 @@ BaseOS runs in QEMU with 64 MiB of RAM. The desktop is rendered entirely in soft
 ## What you can do
 
 - Open up to eight windows. Move, resize, maximize, minimize or snap them; keep independent documents, folders and terminals open.
-- Edit documents up to 65,535 bytes with selection, clipboard, eight undo steps, and case-sensitive or insensitive find/replace. Draw with Paint's brushes, shapes, fill and text tools.
+- Edit documents up to 65,535 bytes with selection, clipboard, eight undo steps, and case-sensitive or insensitive find/replace. Changed documents have Save/Discard/Cancel on close; saving confirms disk synchronization. Draw with Paint's brushes, shapes, fill and text tools.
 - Store files up to 2 MiB on a separate 16 MiB data disk. Its dual snapshots hold about 8 MiB of file data; the filesystem has 64 total file, folder and application nodes. Existing boot-disk files migrate without changing the old snapshots.
 - Read HTTP pages in Browser, follow links, navigate history, and save complete HTML for offline reading. Download binary files with Browser’s Download button or Terminal while other apps keep running.
 - Play PCM WAV and MP3 through QEMU's SB16 device, with pause, resume, volume and a playlist. Play MPEG-1 program streams with synchronized MP2 audio; 48 kHz audio is resampled to 44.1 kHz for QEMU SB16. Exact bounds are in the media guides.
@@ -20,7 +20,7 @@ BaseOS runs in QEMU with 64 MiB of RAM. The desktop is rendered entirely in soft
 
 BaseOS is an educational custom BIOS/i386 OS, not a Linux distribution or a POSIX environment. Built-ins cooperate inside the kernel; each native task has a protected 64 KiB region and a bounded execution slice. Browser is HTTP-only: no TLS/HTTPS, JavaScript, CSS layout, forms, authentication or embedded web images. There is one network request at a time. Real network tests use controlled QEMU host fixtures; public upstream DNS did not respond in the development environment, so unrestricted internet access is not claimed. UEFI and general-purpose virtual-memory processes are not implemented.
 
-Detailed guides: [Browser](docs/BROWSER.md), [networking](docs/NETWORK.md), [downloads](docs/DOWNLOADS.md), [native SDK](FEATURES.md#building-a-c-application), [image formats](docs/IMAGE_FORMATS.md), [audio](docs/MEDIA.md), [video](docs/VIDEO.md), and the [technical reference](docs/TECHNICAL.md).
+Detailed guides: [Browser](docs/BROWSER.md), [networking](docs/NETWORK.md), [downloads](docs/DOWNLOADS.md), [native SDK](FEATURES.md#building-a-c-application), [image formats](docs/IMAGE_FORMATS.md), [Editor safety](docs/EDITOR_SAFETY.md), [task management](docs/SYSTEM_MONITOR.md), [audio](docs/MEDIA.md), [video](docs/VIDEO.md), and the [technical reference](docs/TECHNICAL.md).
 
 ## Screenshots
 
