@@ -74,9 +74,10 @@ It then allocates zeroed PHYS_USER_IMAGE, PHYS_PAGE_DIRECTORY and PHYS_PAGE_TABL
 frames. All allocation and copy work completes before a process handle is
 published. An ordinary capacity failure leaves output, other owners and pool
 accounting unchanged. A later allocation failure rolls back only that new owner.
-Neither the header/null page nor alignment/gap padding is mapped as user memory.
-Only actual declared text/data payload bytes are copied; BSS/workspace/stack
-start zero. Source file offsets and application pointers remain relative offsets.
+The header/null page, stack guard and undeclared gaps are absent from user mappings.
+Rounded text/data page tails remain mapped and zero-filled. Only actual declared
+text/data payload bytes are copied; BSS/workspace/stack start zero. Source file
+offsets and application pointers remain relative offsets.
 
 Every directory has supervisor identity mappings outside the one user aperture.
 Its only user PDE references the owned PT; text entries are present/user/read-only,
