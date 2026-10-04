@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import pathlib
 import subprocess
@@ -23,6 +24,26 @@ class BuildInfoTests(unittest.TestCase):
             MODULE.generate(root, root / 'out')
             self.assertEqual(header.stat().st_mtime_ns, before)
             self.assertIn('#define BASEOS_BUILD_DIRTY 0', header.read_text())
+
+    def test_exported_source_edits_and_deletions_are_dirty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'kernel.c'
+            source.write_bytes(b'original source')
+            info = {'revision': 'b' * 40, 'commit_epoch': 1791060000, 'dirty': False,
+                    'source_sha256': {'kernel.c': hashlib.sha256(source.read_bytes()).hexdigest()}}
+            (root / 'source-info.json').write_text(json.dumps(info))
+            self.assertFalse(MODULE.identity(root)['dirty'])
+            MODULE.generate(root, root / 'build')
+            self.assertFalse(MODULE.identity(root)['dirty'])
+            source.write_bytes(b'changed source')
+            self.assertTrue(MODULE.identity(root)['dirty'])
+            MODULE.generate(root, root / 'build')
+            self.assertIn('+changes', (root / 'build/build_info.h').read_text())
+            source.write_bytes(b'original source')
+            self.assertFalse(MODULE.identity(root)['dirty'])
+            source.unlink()
+            self.assertTrue(MODULE.identity(root)['dirty'])
 
     def test_git_changes_and_exact_revision(self):
         with tempfile.TemporaryDirectory() as directory:
