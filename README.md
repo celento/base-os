@@ -1,26 +1,30 @@
 # BaseOS
 
-A small hobby operating system written from scratch in C and x86 assembly. It boots directly into a graphical desktop with movable windows, persistent files, a text editor, Paint, a terminal, and games.
+A small hobby operating system written from scratch in C and x86 assembly. It boots directly into a graphical desktop with persistent files, document editing, HTTP browsing, media playback, and small protected native applications.
 
-BaseOS runs in QEMU with 64 MiB of RAM. The desktop is rendered entirely in software at 1280 × 720, using a 256-color backbuffer and antialiased bitmap fonts.
+BaseOS runs in QEMU with 64 MiB of RAM. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased bitmap fonts. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
 
 ![Files and Editor running side by side in BaseOS](screenshots/gallery/desktop.png)
 
 ## What you can do
 
-- Open up to eight windows. Move, resize, maximize, minimize, or snap them; keep separate documents, folders, and terminals open.
-- Write and save documents in Editor. Use clipboard shortcuts and undo/redo, or draw with Paint's brushes, shapes, fill, and text tools.
-- Browse files, rename and duplicate them, inspect their properties, and move them to Trash. Files persist on a separate data disk; existing boot-disk files migrate automatically.
-- Search apps and files from the Apps button or `Ctrl+Space`. Choose from eight desktop themes.
-- Explore the terminal with `help` and `man COMMAND`, run command scripts, write Tiny BASIC programs, or load small native x86 programs.
-- Play Snake, Wordle, Mines, 2048, and Breakout. Calculator, Todo, Clock, Calendar, Image Viewer, and System Monitor are also built in.
-- Resume window arrangements and editor/Paint drafts after a reboot. Exchange files with the host using the offline volume tool.
+- Open up to eight windows. Move, resize, maximize, minimize or snap them; keep independent documents, folders and terminals open.
+- Edit documents up to 65,535 bytes with selection, clipboard, eight undo steps, and case-sensitive or insensitive find/replace. Draw with Paint's brushes, shapes, fill and text tools.
+- Store files up to 2 MiB on a separate 16 MiB data disk. Its dual snapshots hold about 8 MiB of file data; the filesystem has 64 total file, folder and application nodes. Existing boot-disk files migrate without changing the old snapshots.
+- Read HTTP pages in Browser, follow links, navigate history, and save complete HTML for offline reading. Download binary files in the background from Terminal while other apps keep running.
+- Play PCM WAV and MP3 through QEMU's SB16 device, with pause, resume, volume and a playlist. MPEG-1 video is supported with the limits documented in the media guide.
+- View JPEG, PNG, BMP, GIF's first frame and BaseOS images, with fit, actual size, zoom, pan and transparency. Images are bounded to 1,024 pixels per side and 786,432 pixels total.
+- Build small C applications with the included SDK. Use Terminal's `start` command for independent long-running protected tasks with keyboard input, timers and persistent documents.
+- Run shell scripts, Tiny BASIC and the legacy synchronous `exec` interface. Calculator, Todo, Clock, Calendar, System Monitor and the original games remain included.
+- Search apps and files with `Ctrl+Space`; use the mouse wheel to scroll. Restore saved window arrangements and Editor/Paint drafts after reboot.
 
-Built-in apps run cooperatively inside the kernel. Native programs have a small protected user region and a watchdog. This is an educational OS with a custom filesystem and APIs, not a Linux distribution or a POSIX environment. Networking, UEFI boot, and a general-purpose process scheduler are not implemented.
+BaseOS is an educational custom BIOS/i386 OS, not a Linux distribution or a POSIX environment. Built-ins cooperate inside the kernel; each native task has a protected 64 KiB region and a bounded execution slice. Browser is HTTP-only: no TLS/HTTPS, JavaScript, CSS layout, forms, authentication or embedded web images. There is one network request at a time. Real network tests use controlled QEMU host fixtures; public upstream DNS did not respond in the development environment, so unrestricted internet access is not claimed. UEFI and general-purpose virtual-memory processes are not implemented.
+
+Detailed guides: [Browser](docs/BROWSER.md), [networking](docs/NETWORK.md), [downloads](docs/DOWNLOADS.md), [native SDK](FEATURES.md#building-a-c-application), [image formats](docs/IMAGE_FORMATS.md), and the [technical reference](docs/TECHNICAL.md).
 
 ## Screenshots
 
-These captures come from the running QEMU guest with sample documents and artwork. The desktop above and the five views below show the current interface.
+These captures come from the running QEMU guest with sample documents and artwork. These original gallery views show the base desktop. New feature captures are included with the development checkpoint.
 
 ### Paint
 
@@ -68,7 +72,7 @@ make run
 On Debian or Ubuntu:
 
 ```sh
-sudo apt install build-essential gcc-multilib nasm qemu-system-x86 python3 clang
+sudo apt install build-essential gcc-multilib nasm qemu-system-x86 qemu-system-gui python3
 make run
 ```
 
@@ -78,7 +82,7 @@ At the first boot with a newly marked data disk, BaseOS reads the existing flopp
 
 Normal rebuilds preserve the filesystem area and back up an existing image before changing it. `make clean` keeps both disk images and backups. Shut QEMU down before rebuilding its disk or using the host file exchange tool. Use **System → Shutdown** to flush pending saves before closing the emulator.
 
-The normal build uses checked-in font data. Regenerating it with `python3 tools/gen_font.py` additionally requires Pillow.
+Host and reference-media tests additionally need Clang, FFmpeg and Pillow (`python3-pil` on Debian). The normal build uses checked-in font data. Regenerating it with `python3 tools/gen_font.py` additionally requires Pillow.
 
 ## Start exploring
 
@@ -88,7 +92,9 @@ The normal build uses checked-in font data. Regenerating it with `python3 tools/
 | Switch windows | `Alt+Tab` |
 | Snap left / right | `Alt+Left` / `Alt+Right` |
 | Maximize / restore | `Alt+Enter` |
-| Save Editor or Paint | `Ctrl+S` |
+| Save Editor, Paint or a complete Browser page | `Ctrl+S` |
+| Find / replace in Editor | `Ctrl+F` / `Ctrl+H` |
+| Find next / previous | `F3` / `Shift+F3` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | List terminal commands | `help` |
 | Read a command's manual | `man basic` |
@@ -99,6 +105,7 @@ Try the included examples in Terminal:
 run /Programs/demo.sh
 basic /Programs/demo.bas
 exec /Programs/hello.bex
+start /Programs/counter.bex
 ```
 
 The [desktop and programming guide](FEATURES.md) covers all shortcuts, persistence behavior, file exchange, BASIC syntax, and the native-program ABI. The [technical reference](docs/TECHNICAL.md) covers hardware assumptions, disk recovery, memory layout, rendering, and regression checks.
@@ -110,11 +117,11 @@ make
 make test
 python3 tools/ui_test.py build
 python3 tools/input_test.py build
-python3 tools/data_volume_test.py build --keep
+python3 tools/data_volume_test.py build
 python3 tools/render_test.py build --optimized
 ```
 
-Host tests use AddressSanitizer and UndefinedBehaviorSanitizer. QEMU checks use disposable disk images. Additional boot, storage, and process-isolation checks are documented in the technical reference.
+Host tests use AddressSanitizer and UndefinedBehaviorSanitizer. If the host runs tests under ptrace, use `ASAN_OPTIONS=detect_leaks=0 make test`; this disables only unsupported LeakSanitizer, not the other sanitizers. QEMU checks use disposable disk images. Additional boot, storage, and process-isolation checks are documented in the technical reference.
 
 The compositor caches the background during window drags and uploads changed screen regions. A controlled headless QEMU benchmark rendered 20 drag frames in 31 timer ticks, about 45 FPS. This measures guest rendering, not a guaranteed display frame rate on every host.
 
@@ -123,7 +130,7 @@ The compositor caches the background during window drags and uploads changed scr
 | `src/` | Bootloader, kernel, graphics, filesystem, apps, and interpreters |
 | `tests/` | Host and QEMU regression fixtures |
 | `tools/` | Disk tools, font generation, test runners, and screenshot capture |
-| `examples/` | Native assembly example |
+| `examples/`, `sdk/` | Native assembly and C examples, application SDK |
 | `assets/` | Fonts, licenses, cursor, and artwork |
 | `screenshots/gallery/` | The six current README screenshots |
 | `docs/` | Technical reference |
@@ -133,4 +140,4 @@ To regenerate the gallery, run `python3 tools/gallery.py build`. It links a docu
 
 ## License
 
-MIT. The bundled Inter and JetBrains Mono fonts have their own [OFL licenses](assets/fonts/).
+MIT. The bundled Inter and JetBrains Mono fonts have their own [OFL licenses](assets/fonts/). Pinned third-party decoders retain their original licenses and notices: [minimp3](third_party/minimp3/), [stb_image](third_party/stb/) and [pl_mpeg](third_party/pl_mpeg/). Local patches and attribution are recorded alongside the vendored sources.

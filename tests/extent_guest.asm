@@ -5,7 +5,7 @@ global extent_guest
 extern kmain, platform_log
 extent_guest:
     jmp beyond_primary
-    times 135000 db 0x90
+    times EXTENT_PADDING db 0x90
 beyond_primary:
     push message
     call platform_log
