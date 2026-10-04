@@ -67,7 +67,7 @@ def prepare(build, work):
     runtime = build.parent
     # The application is built through this checkout's SDK, so establish it is
     # byte-identical to the supplied production build, independently of HEAD.
-    for name in ('sdk/baseos.h', 'sdk/baseos_abi.h', 'sdk/start.c', 'sdk/app.ld'):
+    for name in ('sdk/baseos.h', 'sdk/baseos_abi.h', 'sdk/start.c', 'sdk/app.ld', 'src/layout.h'):
         assert (ROOT / name).read_bytes() == (runtime / name).read_bytes(), name
     files, frozen = freeze(work)
     guest = ROOT / 'tests/process_memory_guest.c'
