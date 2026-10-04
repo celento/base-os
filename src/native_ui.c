@@ -21,6 +21,7 @@ static NativeUiHooks hooks;
 static unsigned next_serial;
 static BosHandle capture,hover;
 static unsigned swallowed,prior_buttons;
+static int in_route;
 _Static_assert(sizeof targets<=54u*1024u,"native UI queues exceed bounded BSS budget");
 _Static_assert(BOS_UI_BUTTON_LEFT==INPUT_LEFT && BOS_UI_BUTTON_RIGHT==INPUT_RIGHT,
                "pointer button adapter must be explicit if device bits change");
@@ -48,7 +49,7 @@ static void forget_capture(Target *t,unsigned physical){
     if(capture==t->target){
         /* Acquisition may already contain the final UP while older held MOVE
          * samples remain queued. Preserve the routed gesture tail as well. */
-        swallowed|=(physical|t->accepted)&BUTTONS;capture=0;
+        swallowed|=(physical|(in_route?0:t->accepted))&BUTTONS;capture=0;
     }
     t->accepted=0;t->suppressed|=physical&BUTTONS;
 }
@@ -58,8 +59,8 @@ static void revoke(Target *t,unsigned physical){
     t->revoked=1;t->head=t->count=t->reset_pending=0;
     t->position_valid=t->inside=t->modifiers=0;t->x=t->y=0;
 }
-static int next_sequence(Target *t){
-    if(t->sequence==~(uint64_t)0){NativeUiAcquired a;acquisition(&a);revoke(t,a.buttons);return 0;}
+static int next_sequence(Target *t,unsigned physical){
+    if(t->sequence==~(uint64_t)0){revoke(t,physical);return 0;}
     ++t->sequence;return 1;
 }
 static void snapshot_event(const Target *t,BosUiEventV1 *e,unsigned type,unsigned ticks){
@@ -87,7 +88,7 @@ static void reset_latch(Target *t,unsigned reason,unsigned ticks,unsigned physic
     }else{
         if(t->stream_epoch==~0u){revoke(t,physical);return;}
         if(reason!=BOS_UI_REASON_OPEN)++t->stream_epoch;
-        if(!next_sequence(t))return;
+        if(!next_sequence(t,physical))return;
         t->reset.reason=reason;t->reset.dropped=add_saturated(t->count,dropped);
         t->reset_pending=1;
     }
@@ -104,7 +105,7 @@ static int same_move(const BosUiEventV1 *a,const BosUiEventV1 *b){
 static int emit(Target *t,unsigned type,unsigned ticks,unsigned changed,int wheel,unsigned reason,unsigned physical){
     if(t->revoked)return 0;
     if(t->reset_pending){refresh_reset(t,ticks);return 0;}
-    if(!next_sequence(t))return 0;
+    if(!next_sequence(t,physical))return 0;
     BosUiEventV1 e;snapshot_event(t,&e,type,ticks);
     e.changed_buttons=changed;e.wheel_y=wheel;e.reason=reason;
     if(t->count){
@@ -173,7 +174,7 @@ static void target_info(const Target *t,BosUiTargetInfoV1 *out){
 }
 void native_ui_init(const NativeUiHooks *configured){
     for(unsigned i=0;i<BOS_UI_TARGETS_TOTAL;i++)targets[i]=(Target){0};
-    hooks=configured?*configured:(NativeUiHooks){0};capture=hover=0;swallowed=prior_buttons=0;
+    hooks=configured?*configured:(NativeUiHooks){0};capture=hover=0;swallowed=prior_buttons=0;in_route=0;
     /* next_serial deliberately survives reinitialization. */
 }
 int native_ui_available(void){return hooks.snapshot&&hooks.acquired&&hooks.focus;}
@@ -270,7 +271,7 @@ static int update_position(Target *t,const InputSample *sample){
     t->position_valid=1;t->x=x;t->y=y;t->inside=inside;t->modifiers=sample->modifiers;
     return changed;
 }
-unsigned native_ui_route(const InputSample *sample,BosHandle hit_target){
+static unsigned route_sample(const InputSample *sample,BosHandle hit_target){
     if(!sample||sample->kind!=INPUT_POINTER)return 0;
     unsigned physical=sample->buttons&BUTTONS,previous=prior_buttons;
     prior_buttons=physical;
@@ -299,7 +300,7 @@ unsigned native_ui_route(const InputSample *sample,BosHandle hit_target){
         }
     }
     if(!t&&was_swallowed){swallowed|=physical;return CONSUMED;}
-    if(!t&&hit&&(hit->reset_pending||sample->serial<=hit->fence)){
+    if(!t&&hit&&(hit->reset_pending||sample->serial<=hit->fence||(physical&hit->suppressed))){
         hit->suppressed|=physical;swallowed|=physical;return CONSUMED;
     }
     if(!t&&hit&&(!eligible(hit)||!canvas_view_contains(&hit->host.view,sample->x,sample->y)))hit=0;
@@ -331,5 +332,12 @@ unsigned native_ui_route(const InputSample *sample,BosHandle hit_target){
         emit(hit,BOS_UI_POINTER_WHEEL,sample->ticks,0,sample->wheel,0,physical);
         result|=NATIVE_UI_CONSUMED_WHEEL;
     }
+    return result;
+}
+
+unsigned native_ui_route(const InputSample *sample,BosHandle hit_target){
+    /* A cancellation while consuming this sample already observes its final
+     * release; external cancellation instead must retain the routed backlog. */
+    in_route=1;unsigned result=route_sample(sample,hit_target);in_route=0;
     return result;
 }

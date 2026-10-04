@@ -125,6 +125,13 @@ int main(void){
         desktop_input_turn();assert(!records&&!mouse_left);
         if(cause==2){event(0,a,BOS_UI_CANCEL);event(0,a,BOS_UI_GEOMETRY);no_event(0,a);}
     }
+    /* Opening between ordinary PS/2 packet bytes suppresses the already-held
+     * DOWN even when its completed sample has a newer serial than OPEN. */
+    fixture();input_mouse_byte(&device_input,9,130);assert(device_input.packet_n==1);
+    a=ui_open(0);event(0,a,BOS_UI_STATE_RESET);
+    input_mouse_byte(&device_input,0,130);input_mouse_byte(&device_input,0,130);input_mouse_byte(&device_input,0,130);
+    desktop_input_turn();assert(!records);move(760,540,1,0,131);assert(!records);
+    move(760,540,0,0,132);assert(!records);
     puts("Native UI desktop adapter: real point ownership, focus/capture, overlays, publication geometry, legacy exclusion and input-loss recovery passed.");
     return 0;
 }

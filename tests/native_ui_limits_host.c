@@ -34,7 +34,15 @@ int main(void){
     handle=opened();assert(handle!=next);t=by_handle(handle);
     t->stream_epoch=~0u;native_ui_input_loss(4,0,1);unchanged(handle);
     next=opened();assert(next!=handle);
-    native_ui_release_owner(owner.process);
+    t=by_handle(next);sample.serial=++acquired.serial;sample.buttons=acquired.buttons=1;
+    native_ui_route(&sample,next);assert(native_ui_read(&owner,next,&event)==BOS_OK);
+    assert(native_ui_read(&owner,next,&event)==BOS_OK);
+    t->sequence=~(uint64_t)0;sample.serial=++acquired.serial;sample.x++;sample.buttons=acquired.buttons=0;
+    native_ui_route(&sample,next);unchanged(next);
+    handle=opened();sample.serial=++acquired.serial;sample.buttons=acquired.buttons=1;
+    native_ui_route(&sample,handle);assert(native_ui_read(&owner,handle,&event)==BOS_OK&&event.type==BOS_UI_POINTER_MOVE);
+    assert(native_ui_read(&owner,handle,&event)==BOS_OK&&event.type==BOS_UI_POINTER_BUTTON&&event.buttons==1);
+    native_ui_release_owner(owner.process);acquired.buttons=0;
     /* A handle's final serial is legal and must never reappear after init. */
     next_serial=BOS_HANDLE_SERIAL_MAX-1;handle=opened();assert(handle==(BOS_HANDLE_TYPE_UI_TARGET|BOS_HANDLE_SERIAL_MAX));
     assert(native_ui_release(&owner,handle)==BOS_OK);native_ui_init(&config);
