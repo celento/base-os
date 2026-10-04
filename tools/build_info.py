@@ -1,9 +1,31 @@
 """Write stable build identity without changing an unchanged generated file."""
 import argparse
 import datetime
+import hashlib
 import json
 import pathlib
 import subprocess
+
+
+def exported_sources_changed(root, manifest):
+    """Check exported tracked bytes; generated build output is not source."""
+    if not isinstance(manifest, dict) or not manifest:
+        return True
+    for name, expected in manifest.items():
+        if not isinstance(name, str) or not isinstance(expected, str):
+            return True
+        relative = pathlib.PurePosixPath(name)
+        if relative.is_absolute() or '..' in relative.parts or not relative.parts:
+            return True
+        source = root / relative
+        try:
+            if source.is_symlink() or not source.resolve().is_relative_to(root):
+                return True
+            if hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+                return True
+        except OSError:
+            return True
+    return False
 
 
 def identity(root):
@@ -20,6 +42,8 @@ def identity(root):
         try:
             exported = json.loads((root / 'source-info.json').read_text())
             revision, epoch, dirty = exported['revision'], int(exported['commit_epoch']), bool(exported['dirty'])
+            if 'source_sha256' in exported:
+                dirty = dirty or exported_sources_changed(root, exported['source_sha256'])
         except (OSError, ValueError, KeyError, TypeError):
             revision, epoch, dirty = 'unknown', 0, False
     stamp = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
