@@ -4,8 +4,10 @@ This is compatibility-preserving groundwork for independent applications, not
 Win95/98 platform parity. It implements discoverable owner-bound file versions,
 conditional replacement and asynchronous IDE durability completion. ABI1.1 additionally supplies a versioned memory-info query. A separately gated
 BEX2 context can describe committed sparse private memory; BEX1 remains exact.
-It does not add directory enumeration, a general window/event API, IPC, user
-networking, threads or kernel preemption.
+The separately qualified hosted-UI increment adds an opt-in pointer endpoint for
+an existing native Terminal canvas. It does not add directory enumeration,
+independent window creation, keyboard-event delivery, IPC, user networking,
+threads or kernel preemption. See [hosted native UI](NATIVE_UI.md).
 
 ## Compatibility boundary
 
@@ -43,7 +45,7 @@ zeroed current structure if intentionally requesting only a prefix, read only
 fields covered by both sizes, and ignore unknown feature bits/reserved outputs.
 Future fields may be appended; incompatible meanings require a new major.
 
-Feature bits are:
+Feature bits are (unknown output bits must be ignored):
 
 - `BOS_FEATURE_VERSIONED_FILES`: open/info/read/conditional replace/close, with
   exclusive empty-file creation. Present in both task and `exec` contexts.
@@ -77,9 +79,13 @@ The desktop still has an **eight-window limit**, and applications have no
 process-creation/spawn syscall. This field is not a count of free desktop slots
 or a promise that the user can launch nine apps from the desktop.
 
+- `BOS_FEATURE_HOSTED_UI` (bit6): negotiated hosted-canvas pointer/event service
+  through call29. Advertised only for bound desktop tasks when the trusted
+  production desktop input hooks are available; absent for synchronous exec.
+
 ## Owned resources and errors
 
-Handles are opaque32-bit numbers. Process, file and operation allocation domains
+Handles are opaque32-bit numbers. Process, file, operation and UI-target allocation domains
 are distinct; each uses nonzero serials that never wrap or reset during a boot.
 Exhaustion fails closed. Applications must not derive meaning from their bits,
 write them to persistent storage for later reuse, or pass them to another app.
@@ -132,7 +138,9 @@ copies only the current structure. Errors never copy partial metadata.
 |27 file close|handle,0,0,0,0|`BOS_OK`|
 |28 memory info|output, capacity, requested version,0,0|`BOS_OK`; memory prefix|
 
-Call29 is reserved for a later UI service and is not implemented.
+Call29 is the negotiated UI gateway. Its independent operation namespace and
+64/96-byte layouts are specified in [hosted native UI](NATIVE_UI.md). Existing
+BEX1 syscall numbers, the96-byte general query and memory-info28 remain exact.
 
 File metadata is32 bytes: structure size, handle, file size, granted flags,
 opaque revision and three zero reserved words. Info capacities must be at least
