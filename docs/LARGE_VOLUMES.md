@@ -177,6 +177,37 @@ checks with an ordinary native app streaming a complete 16 MiB file in 4 KiB
 chunks. It retains exact images and serial logs with `--keep`, on failure or in
 compile-only mode. There are no intentional memory/CPU fault probes or fuzzing.
 
-At the initial implementation checkpoint, the focused host checks and full
-kernel/guest-fixture builds passed; the guest runner was prepared but had not
-yet been run. See the subsequent verification record before claiming guest QA.
+### Verified checkpoint: 2026-10-04
+
+On source revision `46b4f25`, GCC 14.2.0 and QEMU 10.0.13 TCG, all nine ordinary
+large-profile boots passed. Both full snapshots decoded independently with
+256 nodes and exactly **33,543,168 file bytes**, including an exact 16 MiB file.
+The normal native app streamed that complete file in 4,096 four-KiB reads,
+checked every byte and persisted its result. The existing desktop checks and
+saved Editor/Paint/window sessions also survived reboot. System Monitor's
+reported byte counts matched the filesystem's runtime values.
+
+All boot floppies, marker sectors and final reserved sectors stayed byte-exact.
+The full read-only reboot and the 64 MiB protected boot retained the entire
+large data-image hash. Floppy migration preserved names, contents, app flags
+and timestamps, then remounted without writing; explicit v4-to-v5 conversion
+kept the source bytes unchanged and mounted both new snapshots correctly.
+
+Two additional ordinary boots used the existing `data_volume_test.py` mode-2
+fixture with **64 MiB RAM and a default 16 MiB disk**. Its v3-to-v4 migration,
+2 MiB runtime file limit, exact file/timestamp and unchanged read-only restart
+passed. These supplement the large runner rather than replacing default QA.
+
+Twenty-six focused host checks passed: five large-profile tests, four legacy
+node-capacity tests, two independent CRC checks, one clipboard suite, ten
+ordinary existing host-exchange checks, three image/layout-preservation checks
+and the monitor layout/action suite extended to both large-profile capacities.
+C harnesses ran with AddressSanitizer and UBSan. No debugger observers,
+intentional memory/CPU fault probes or fuzzing were used.
+
+The production filesystem object grows from 13,428 to 14,259 text/read-only
+bytes (+831), with writable data/BSS unchanged at 4/1,096 bytes. The marker
+reader's measured production stack frame is 560 bytes; `fs_write` remains
+64 bytes and complete payload validation remains 1,248 bytes. This is a
+storage-only result; separately integrated consumers need their own runtime
+and ownership checks.
