@@ -1676,6 +1676,7 @@ static int win_open(int kind) {
 static void win_close(int i) {
     if (i < 0 || i >= MAX_WIN || !wins[i].open)
         return;
+    if(wins[i].kind==WK_TERM)term_task_close(i);
     if(wins[i].kind==WK_BROWSER)browser_close();
     if(wins[i].kind==WK_PLAYER)audio_stop();
     wins[i].open = 0;
@@ -3450,7 +3451,7 @@ static int term_text(const char *s, int x, int y, int col, int cols) {
 }
 
 static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
-    gui_draw_window(wx, wy, ww, wh, "Terminal", 0, inactive ? WIN_INACTIVE : 0);
+    gui_draw_window(wx, wy, ww, wh, term_task_running(context_slot)?"Terminal - native task":"Terminal", 0, inactive ? WIN_INACTIVE : 0);
     draw_rect(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1, gfx_gray(0x20));
 
     int ax = wx + 1 + TERM_PAD;
@@ -3469,7 +3470,8 @@ static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
     /* Reflow output to the current window width; manuals remain readable
      * even in a narrow terminal, and scrolling counts visual rows. */
     char live[TERM_COLS*2+16];
-    term_prompt(live,TERM_COLS+8);kstrcpy(live+kstrlen(live),term_input());
+    if(term_task_running(context_slot))kstrcpy(live,"Native task active. Ctrl+C stops; keys go to this task.");
+    else {term_prompt(live,TERM_COLS+8);kstrcpy(live+kstrlen(live),term_input());}
     int count=term_count(),total=0;
     for(int i=0;i<=count;i++){
         int len=kstrlen(i==count?live:term_get(i));
@@ -6241,6 +6243,14 @@ static void handle_key(void) {
     }
 
     if (fk == WK_TERM) {
+        if(term_task_running(context_slot)){
+            if(ctrl_down&&key_sc==0x2e){term_task_stop(context_slot);dirty=1;return;}
+            if(key_sc==0x49||key_sc==0x51){term_scroll(key_sc==0x49?8:-8);dirty=1;return;}
+            int input=key_sc==KEY_ENTER?13:key_sc==KEY_BACKSPACE?8:key_sc==KEY_ESC?27:
+                      (!ctrl_down&&!alt_down?(unsigned char)key_char:0);
+            if(input)term_task_key(context_slot,input);
+            return;
+        }
         if(key_sc==0x49||key_sc==0x51){term_scroll(key_sc==0x49?8:-8);dirty=1;return;}
         if(key_sc==KEY_UP||key_sc==KEY_DOWN){term_history(key_sc==KEY_UP?-1:1);dirty=1;return;}
         if(key_sc==KEY_TAB){term_complete();dirty=1;return;}
@@ -6529,6 +6539,7 @@ static void boot_splash(void) {
         net_poll();
         if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
         if(player_tick()&&find_open_kind(WK_PLAYER)>=0)dirty=1;
+        if(term_task_poll())dirty=1;
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();
@@ -6631,6 +6642,7 @@ static void install_examples(void){
     if(fs_find_child(dir,"hello.bex")<0){int id=fs_create(dir,"hello.bex");if(id>=0)fs_write(id,(const char *)native_example,sizeof native_example);}
     if(fs_find_child(dir,"hello-c.bex")<0){int id=fs_create(dir,"hello-c.bex");if(id>=0)fs_write(id,(const char *)sdk_hello,sizeof sdk_hello);}
     if(fs_find_child(dir,"notebook.bex")<0){int id=fs_create(dir,"notebook.bex");if(id>=0)fs_write(id,(const char *)sdk_notebook,sizeof sdk_notebook);}
+    if(fs_find_child(dir,"counter.bex")<0){int id=fs_create(dir,"counter.bex");if(id>=0)fs_write(id,(const char *)sdk_counter,sizeof sdk_counter);}
     const char *demo="10 PRINT \"BASIC: press a key while the picture draws\"\n20 LET A=0\n30 RECT A,A/2,8,8,A+32\n40 INKEY B\n50 IF B > 0 THEN 100\n60 WAIT 20\n70 LET A=A+2\n80 IF A < 150 THEN 30\n90 END\n100 PRINT B\n110 END\n";
     if(fs_find_child(dir,"demo.bas")<0){int id=fs_create(dir,"demo.bas");if(id>=0)fs_write(id,demo,kstrlen(demo));}
     const char *script="pwd\nls /\necho Scripts run one command per line.\ndf\n";
@@ -6809,6 +6821,7 @@ void kmain(void) {
         net_poll();
         if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
         if(player_tick()&&find_open_kind(WK_PLAYER)>=0)dirty=1;
+        if(term_task_poll())dirty=1;
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();
