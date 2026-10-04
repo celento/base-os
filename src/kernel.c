@@ -5,6 +5,7 @@
 
 #include "gfx.h"
 #include "decimal.h"
+#include "display.h"
 #include "platform.h"
 #include "history.h"
 #include "program.h"
@@ -104,6 +105,12 @@ uint8_t app_text;
 uint8_t app_text_dim;
 uint8_t app_chrome;
 uint8_t app_chrome_dk;
+static int display_pending = 0, display_previous = -1;
+static uint32_t display_deadline;
+static const char *display_message = "";
+static void display_revert(void);
+static void display_keep(void);
+static int display_request(int mode);
 static int saver_enabled = 1;
 static int saver_on = 0;
 static uint32_t last_input_frame = 0;
@@ -1324,6 +1331,7 @@ typedef struct {
 } Win;
 
 static Win wins[MAX_WIN];
+static Win display_saved_windows[MAX_WIN];
 static int wm_z;
 static int wm_seq;
 static int dragging_win = -1;
@@ -3552,7 +3560,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         break;
     case WK_SETTINGS:
         *w = 560;
-        *h = 360;
+        *h = 458;
         break;
     case WK_FILES:
         *w = 720;
@@ -5531,6 +5539,12 @@ static void handle_rclick(void) {
 }
 
 static void handle_click(void) {
+    if (display_pending) {
+        int x = (fb_w - 420) / 2, y = (fb_h - 150) / 2;
+        if (hit(mouse_x, mouse_y, x + 34, y + 98, 164, 30)) display_keep();
+        else if (hit(mouse_x, mouse_y, x + 222, y + 98, 164, 30)) display_revert();
+        return;
+    }
     if (name_dlg) {
         namedlg_click();
         return;
@@ -5695,6 +5709,11 @@ static void handle_click(void) {
 static void launcher_key(void);
 
 static void handle_key(void) {
+    if (display_pending) {
+        if (key_sc == KEY_ENTER) display_keep();
+        else if (key_sc == KEY_ESC) display_revert();
+        return;
+    }
     context_set(win_front());
     if (!name_dlg && !open_dlg && alt_down && key_sc == KEY_TAB) { win_cycle(); return; }
     if (!name_dlg && !open_dlg && alt_down && key_sc == KEY_ENTER) { win_arrange(win_front(),0); return; }
@@ -5908,6 +5927,7 @@ static void handle_key(void) {
     }
 
     if(fk==WK_SETTINGS){
+        if (key_char >= '1' && key_char <= '4') { display_request(key_char-'1'); return; }
         if(key_sc==KEY_TAB||key_sc==KEY_RIGHT||key_sc==KEY_DOWN)theme_set((theme_id+(shift_down?THEME_N-1:1))%THEME_N);
         else if(key_sc==KEY_LEFT||key_sc==KEY_UP)theme_set((theme_id+THEME_N-1)%THEME_N);
         else if(key_sc==KEY_SPACE){saver_enabled=!saver_enabled;saver_save();dirty=1;}
@@ -6097,7 +6117,12 @@ static void draw_about(int wx, int wy, int ww, int wh, int fl) {
     int y = oy + KILROY_ABOUT_H + 12;
     draw_string_bold("BaseOS", wx + (ww - uib_string_w("BaseOS")) / 2, y, ui_text);
     y += CHAR_H + 10;
-    draw_string_in_win("Version 0.8  |  1280x720  |  256 colors", wx, ww, y, ui_text);
+    char geometry[80], number[16];
+    kstrcpy(geometry, "Version 0.9  |  "); fmt_uint(number, fb_w);
+    kstrcpy(geometry + kstrlen(geometry), number); kstrcpy(geometry + kstrlen(geometry), "x");
+    fmt_uint(number, fb_h); kstrcpy(geometry + kstrlen(geometry), number);
+    kstrcpy(geometry + kstrlen(geometry), "  |  256 colors");
+    draw_string_in_win(geometry, wx, ww, y, ui_text);
     y += CHAR_H + 10;
     draw_string_in_win("(C) 2026 CCG", wx, ww, y, ui_text_dim);
 }
@@ -6137,6 +6162,14 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
         }
         draw_string("Start the screen saver after 90 seconds idle", bx + 28, by, ui_text);
     }
+    int ry = wy + TITLE_H + 270;
+    draw_string_bold("Display resolution", wx + 24, ry, ui_text);
+    for (int i = 0; i < DISPLAY_MODE_COUNT; ++i)
+        draw_button_styled(wx + 24 + i * 127, ry + 26, 119, 30,
+                           display_mode(i)->name, display_current_mode() == i);
+    draw_string_clip(display_message[0] ? display_message :
+                     "Keys 1-4 select a mode. Enter keeps it; Escape reverts.",
+                     wx + 24, ry + 66, ui_text_dim, wx + ww - 20);
     draw_string_bold("Appearance", wx + 24, wy + TITLE_H + 16, ui_text);
     draw_hline(wx + 24, wy + TITLE_H + 38, ww - 48, ui_chrome_dk);
     for (int i = 0; i < THEME_N; i++) {
@@ -6180,6 +6213,11 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
 }
 static void handle_settings_click(int wx, int wy, int ww, int wh) {
     (void)ww;
+    for (int i = 0; i < DISPLAY_MODE_COUNT; ++i) {
+        if (hit(mouse_x, mouse_y, wx + 24 + i * 127, wy + TITLE_H + 296, 119, 30)) {
+            display_request(i); return;
+        }
+    }
     {
         int bx, by;
         settings_saver_box(wx, wy, wh, &bx, &by);
@@ -6252,6 +6290,7 @@ static void boot_splash(void) {
     int shown = 0;
     while (1) {
         poll_time();
+        if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();
         int prog = (int)((frame_count - start) * bw / 150);
@@ -6365,6 +6404,87 @@ static void render_scene(void) {
                 draw_launcher();
                 draw_namedlg();
 }
+static void draw_display_confirmation(void) {
+    if (!display_pending) return;
+    int x = (fb_w - 420) / 2, y = (fb_h - 150) / 2;
+    shade_rect(0, 0, fb_w, fb_h, 1);
+    draw_round_rect(x, y, 420, 150, 10, COLOR_WHITE);
+    draw_round_frame(x, y, 420, 150, 10, ui_border);
+    draw_string_bold("Keep this display resolution?", x + 24, y + 20, ui_text);
+    char seconds[16], message[80];
+    unsigned ticks_left = display_deadline - timer_ticks();
+    fmt_uint(seconds, (ticks_left + TIMER_HZ - 1) / TIMER_HZ);
+    kstrcpy(message, "Reverting automatically in ");
+    kstrcpy(message + kstrlen(message), seconds);
+    kstrcpy(message + kstrlen(message), " seconds.");
+    draw_string(message, x + 24, y + 54, ui_text_dim);
+    draw_default_button(x + 34, y + 98, 164, 30, "Keep (Enter)");
+    draw_button(x + 222, y + 98, 164, 30, "Revert (Esc)");
+}
+
+static void display_refresh_layout(void) {
+    cursor_on = 0;
+    dragging_win = resizing_win = -1;
+    drag_cached = -1;
+    open_menu = MENU_NONE;
+    launcher_on = 0;
+    theme_apply();
+    icons_init();
+    for (int i = 0; i < MAX_WIN; ++i) if (wins[i].open) win_clamp(&wins[i]);
+    if (mouse_x >= fb_w) mouse_x = fb_w - 1;
+    if (mouse_y >= fb_h) mouse_y = fb_h - 1;
+    dirty = 1;
+}
+static int display_request(int mode) {
+    if (display_pending || mode == display_current_mode()) return 0;
+    int old = display_current_mode();
+    if (old < 0) { display_message = "Current mode cannot be restored safely."; return 0; }
+    kmemcpy(display_saved_windows, wins, sizeof wins);
+    cursor_restore();
+    if (!display_set_mode(mode)) {
+        display_message = "Resolution switching requires QEMU standard VGA.";
+        dirty = 1; return 0;
+    }
+    display_previous = old;
+    display_pending = 1;
+    display_deadline = timer_ticks() + 15 * TIMER_HZ;
+    display_message = "";
+    display_refresh_layout();
+    return 1;
+}
+static void display_revert(void) {
+    if (!display_pending) return;
+    cursor_on = 0;
+    if (!display_set_mode(display_previous)) {
+        display_message = "Could not restore the previous display mode.";
+        display_pending = 0; dirty = 1; return;
+    }
+    kmemcpy(wins, display_saved_windows, sizeof wins);
+    display_pending = 0;
+    display_refresh_layout();
+    platform_log("DISPLAY-REVERTED\n");
+}
+static void display_keep(void) {
+    if (!display_pending) return;
+    display_pending = 0;
+    int dir = fs_find_child(fs_root(), "prefs");
+    if (dir < 0) dir = fs_mkdir(fs_root(), "prefs");
+    int id = fs_find_child(dir, "display");
+    if (id < 0 && dir >= 0) id = fs_create(dir, "display");
+    char choice = (char)('0' + display_current_mode());
+    display_message = id >= 0 && fs_write(id, &choice, 1) == 1 ?
+                      "Resolution saved." : "Resolution applied, but could not save preference.";
+    dirty = 1;
+}
+static void display_load(void) {
+    int dir = fs_find_child(fs_root(), "prefs");
+    int id = fs_find_child(dir, "display");
+    if (id >= 0 && fs_size(id) == 1) {
+        int mode = fs_data(id)[0] - '0';
+        if (mode >= 0 && mode < DISPLAY_MODE_COUNT) display_set_mode(mode);
+    }
+}
+
 static void render_desktop_frame(void) {
     int moving=dragging_win>=0 && dragging_win==win_front() && drag_active && !open_dlg && !name_dlg && !launcher_on && open_menu<0;
     if(moving){
@@ -6400,6 +6520,7 @@ void kmain(void) {
     install_examples();
     theme_load();
     saver_load();
+    display_load();
     theme_apply();
     term_reset();
     kprint_debug("FS ready\n");
@@ -6432,6 +6553,7 @@ void kmain(void) {
 
     while (1) {
         poll_time();
+        if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();
 
@@ -6450,7 +6572,7 @@ void kmain(void) {
         }
         if (kqn > 0 || mouse_clicked || mouse_moved || mouse_rclicked)
             last_input_frame = frame_count;
-        else if (saver_enabled && frame_count - last_input_frame > SAVER_DELAY && !open_dlg)
+        else if (saver_enabled && !display_pending && frame_count - last_input_frame > SAVER_DELAY && !open_dlg)
             saver_start();
 
         while (kqn > 0) {
@@ -6594,7 +6716,7 @@ void kmain(void) {
             dirty = 1;
         }
 
-        if(frame_count-last_session>=5*TIMER_HZ&&frame_count-last_input_frame>=TIMER_HZ&&!mouse_left&&!name_dlg&&!open_dlg){session_save();last_session=frame_count;}
+        if(!display_pending&&frame_count-last_session>=5*TIMER_HZ&&frame_count-last_input_frame>=TIMER_HZ&&!mouse_left&&!name_dlg&&!open_dlg){session_save();last_session=frame_count;}
         if(drag_cached>=0 && dragging_win<0)dirty=1;
         if(mouse_moved&&dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
         int moved = mouse_moved;
@@ -6604,6 +6726,7 @@ void kmain(void) {
             cursor_restore();
             if (dirty) {
                 render_desktop_frame();
+                draw_display_confirmation();
                 redraw_count++;
                 dirty = 0;
                 cursor_save_draw();

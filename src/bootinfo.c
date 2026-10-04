@@ -92,3 +92,12 @@ _Static_assert(sizeof(MemoryRange) == 24 && __builtin_offsetof(BootInfo, map_cou
 _Static_assert(USER_BASE+USER_CAPACITY<=DRAG_CACHE,"user overlaps compositor");
 _Static_assert(DRAG_CACHE+DRAG_CAPACITY<=PRESENT_BASE,"drag overlaps presentation");
 _Static_assert(PRESENT_BASE+PRESENT_CAPACITY<=RAM_REQUIRED_END,"presentation beyond RAM");
+
+_Static_assert(DMA_BASE + DMA_CAPACITY <= AUDIO_DMA_BASE, "disk DMA overlaps audio");
+_Static_assert(AUDIO_DMA_BASE % 65536 == 0 && AUDIO_DMA_CAPACITY == 65536 &&
+               AUDIO_DMA_BASE + AUDIO_DMA_CAPACITY <= AUDIO_WORK_BASE &&
+               AUDIO_DMA_BASE + AUDIO_DMA_CAPACITY <= 0x1000000, "invalid audio DMA arena");
+_Static_assert(AUDIO_WORK_BASE + AUDIO_WORK_CAPACITY <= FS_IMG_BASE, "audio overlaps disk image");
+_Static_assert(PRESENT_BASE + PRESENT_CAPACITY <= NET_BASE, "presenter overlaps network");
+_Static_assert(NET_BASE + NET_CAPACITY <= BROWSER_BASE, "network overlaps browser");
+_Static_assert(BROWSER_BASE + BROWSER_CAPACITY <= RAM_REQUIRED_END, "browser exceeds RAM");
