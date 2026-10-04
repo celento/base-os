@@ -27,7 +27,7 @@ enum BosSyscall {
     BOS_CALL_SYNC_WAIT=21, BOS_CALL_SYNC_RELEASE=22, BOS_CALL_FILE_OPEN=23,
     BOS_CALL_FILE_INFO=24, BOS_CALL_FILE_READ_AT=25,
     BOS_CALL_FILE_REPLACE=26, BOS_CALL_FILE_CLOSE=27,
-    BOS_CALL_MEMORY_INFO=28 /* 29 reserved for a later UI service. */
+    BOS_CALL_MEMORY_INFO=28, BOS_CALL_UI=29
 };
 enum BosResult {
     BOS_OK=0, BOS_PENDING=1,
@@ -43,6 +43,7 @@ enum BosResult {
 #define BOS_FEATURE_MEMORY_INFO    (1u<<4)
 /* This execution context uses BEX2 sparse offsets; not a global exec promise. */
 #define BOS_FEATURE_BEX2           (1u<<5)
+#define BOS_FEATURE_HOSTED_UI      (1u<<6)
 #define BOS_CONTEXT_LEGACY_EXEC 1u
 #define BOS_CONTEXT_DESKTOP_TASK 2u
 
@@ -114,5 +115,91 @@ _Static_assert(sizeof(BosFileInfo)==32,"file info wire size");
 #define BOS_HANDLE_TYPE_PROCESS 0x10000000u
 #define BOS_HANDLE_TYPE_FILE 0x20000000u
 #define BOS_HANDLE_TYPE_OPERATION 0x30000000u
+#define BOS_HANDLE_TYPE_UI_TARGET 0x40000000u
 #define BOS_HANDLE_SERIAL_MAX 0x0fffffffu
+/* Opt-in pointer endpoint for the caller's existing hosted canvas. This does
+ * not create a window, allocate a surface, or replace the legacy byte keys. */
+#define BOS_UI_MAJOR 1u
+#define BOS_UI_MINOR 0u
+#define BOS_UI_QUERY_MIN_SIZE 16u
+#define BOS_UI_QUEUE_CAPACITY 64u
+#define BOS_UI_WAIT_MAX_MS 60000u
+#define BOS_UI_TARGETS_TOTAL 8u
+#define BOS_UI_KIND_HOSTED_CANVAS 1u
+enum BosUiOperation {
+    BOS_UI_QUERY=0, BOS_UI_HOST_OPEN=1, BOS_UI_INFO=2, BOS_UI_READ=3,
+    BOS_UI_WAIT=4, BOS_UI_RELEASE=5
+};
+#define BOS_UI_SUB_POINTER (1u<<0)
+#define BOS_UI_SUB_HOVER (1u<<1)
+#define BOS_UI_SUB_WHEEL (1u<<2)
+#define BOS_UI_CAP_HOSTED_CANVAS (1u<<0)
+#define BOS_UI_CAP_POINTER (1u<<1)
+#define BOS_UI_CAP_HOVER (1u<<2)
+#define BOS_UI_CAP_WHEEL (1u<<3)
+#define BOS_UI_CAP_IMPLICIT_CAPTURE (1u<<4)
+#define BOS_UI_CAP_BOUNDED_WAIT (1u<<5)
+#define BOS_UI_CAP_LEGACY_KEY_READINESS (1u<<6)
+#define BOS_UI_CAP_HOST_FORCED_CLOSE (1u<<7)
+#define BOS_UI_BUTTON_LEFT 1u
+#define BOS_UI_BUTTON_RIGHT 2u
+/* These distinguish left/right modifier keys; their OR is the logical key. */
+#define BOS_UI_MOD_LSHIFT (1u<<0)
+#define BOS_UI_MOD_RSHIFT (1u<<1)
+#define BOS_UI_MOD_LCTRL (1u<<2)
+#define BOS_UI_MOD_RCTRL (1u<<3)
+#define BOS_UI_MOD_LALT (1u<<4)
+#define BOS_UI_MOD_RALT (1u<<5)
+#define BOS_UI_MOD_SHIFT (BOS_UI_MOD_LSHIFT|BOS_UI_MOD_RSHIFT)
+#define BOS_UI_MOD_CTRL (BOS_UI_MOD_LCTRL|BOS_UI_MOD_RCTRL)
+#define BOS_UI_MOD_ALT (BOS_UI_MOD_LALT|BOS_UI_MOD_RALT)
+#define BOS_UI_WAIT_QUEUE 1u
+#define BOS_UI_WAIT_LEGACY_KEY 2u
+#define BOS_UI_STATE_FOCUSED (1u<<0)
+#define BOS_UI_STATE_AVAILABLE (1u<<1)
+#define BOS_UI_STATE_MINIMIZED (1u<<2)
+#define BOS_UI_STATE_BLOCKED (1u<<3)
+#define BOS_UI_STATE_CAPTURED (1u<<4)
+#define BOS_UI_STATE_POSITION_VALID (1u<<5)
+#define BOS_UI_EVENT_INSIDE 1u
+enum BosUiEventType {
+    BOS_UI_STATE_RESET=1, BOS_UI_POINTER_MOVE=2, BOS_UI_POINTER_BUTTON=3,
+    BOS_UI_POINTER_WHEEL=4, BOS_UI_CANCEL=5, BOS_UI_FOCUS=6,
+    BOS_UI_AVAILABILITY=7, BOS_UI_GEOMETRY=8
+};
+enum BosUiReason {
+    BOS_UI_REASON_NONE=0, BOS_UI_REASON_OPEN=1, BOS_UI_REASON_QUEUE_LOSS=2,
+    BOS_UI_REASON_INPUT_LOSS=3, BOS_UI_REASON_FOCUS=4,
+    BOS_UI_REASON_BLOCKED=5, BOS_UI_REASON_UNAVAILABLE=6,
+    BOS_UI_REASON_GEOMETRY=7, BOS_UI_REASON_SCENE=8
+};
+typedef struct {
+    bos_u32 size, major, minor, capabilities;
+    bos_u32 subscriptions_supported, buttons_supported, targets_per_process, targets_total;
+    bos_u32 queue_capacity, event_bytes, wait_max_ms, ticks_per_second;
+    bos_u32 context, reserved[3];
+} BosUiInfoV1;
+typedef struct {
+    bos_u32 size, major, minor, target;
+    bos_u32 kind, capabilities, subscriptions, state;
+    bos_u32 logical_w, logical_h, viewport_w, viewport_h;
+    bos_u32 geometry_epoch, stream_epoch, buttons, modifiers;
+    bos_i32 x,y;
+    bos_u32 queue_capacity, event_bytes, wait_max_ms, buttons_supported;
+    bos_u32 reserved[2];
+} BosUiTargetInfoV1;
+typedef struct {
+    bos_u32 size, major, type, flags;
+    bos_u32 target, sequence_lo, sequence_hi, ticks;
+    bos_u32 geometry_epoch, stream_epoch, logical_w, logical_h;
+    bos_i32 x,y;
+    bos_u32 buttons, changed_buttons, modifiers;
+    bos_i32 wheel_y;
+    bos_u32 reason, dropped, state, viewport_w, viewport_h, reserved;
+} BosUiEventV1;
+_Static_assert(sizeof(BosUiInfoV1)==64,"UI query wire size");
+_Static_assert(sizeof(BosUiTargetInfoV1)==96,"UI target wire size");
+_Static_assert(sizeof(BosUiEventV1)==96,"UI event wire size");
+_Static_assert(__builtin_offsetof(BosUiEventV1,x)==48 &&
+               __builtin_offsetof(BosUiEventV1,state)==80,"UI event wire offsets");
 #endif

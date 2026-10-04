@@ -48,7 +48,7 @@ class NativeRenderTests(unittest.TestCase):
             code += 'enum { TERM_RENDER_NONE, TERM_RENDER_FULL, TERM_RENDER_CANVAS };\n'
             code += function(source, 'term_task_render_action')
             (directory / 'native_render_kernel.inc').write_text(code)
-        self.run_host('native_render_host', prepare)
+        self.run_host('native_render_host', prepare, extra=(str(ROOT / 'src/canvas_view.c'),))
 
 
 if __name__ == '__main__':

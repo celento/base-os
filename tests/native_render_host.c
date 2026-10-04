@@ -5,6 +5,7 @@
 #include <string.h>
 #include "layout.h"
 #include "term.h"
+#include "canvas_view.h"
 #include "../assets/cursor_art.h"
 static uint8_t test_mirror[FB_CAPACITY];
 #undef PRESENT_BASE
