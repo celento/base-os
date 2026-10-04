@@ -1,7 +1,8 @@
-# Background IDE snapshot candidate
+# Background IDE snapshots
 
-This separate integration branch is reconstructed after the 11:08:52 UTC
-workspace replacement. It is not the hourly03 shipped runtime. See
+This implementation was reconstructed after the 11:08:52 UTC workspace
+replacement and verified for the hourly04 integration. It was not shipped in
+hourly03. See
 `docs/session-2026-10-04/RECOVERY.md` for old commit provenance and verification
 boundaries; old test results do not automatically validate reconstructed source.
 
@@ -30,8 +31,15 @@ Editor/Paint/Files report retry without losing private edits or names. Settings
 coalesces choices and Todo retains accepted changes while closed; both participate
 in shutdown preparation before session save and final disk synchronization.
 
-The REP INSW/OUTSW sector transfer candidate still needs new real-QEMU validation.
-Pre-reset 7 MiB concurrent save duration was 69.14 seconds despite responsive
-input and correct PCM. Throughput remains open. Large-profile responsiveness was
-not established. Serial records contain timing/generation/result only, not file
-names or payload bytes.
+Fresh QEMU checks verify REP sector transfers, default/large payload persistence,
+reboots, native input and every reference audio sample. Guarded rendering reduced
+one matched7MiB run from61.24s to27.97s and28MiB from147.49s to75.53s. These heavy
+benchmarks used128MiB RAM for both disk profiles and are single-run observations.
+The final stable-frame publication change repeated the default-disk workload at
+29.286s with complete frames and exact audio/data; no new large timing result is
+claimed for that final change. Default64MiB and large128MiB staged frame tests
+and packaged boots are distinct. Full-volume latency remains substantial.
+
+See `docs/SNAPSHOT_RESPONSIVENESS.md` and the checkpoint evidence for exact source
+hashes and test scope. Serial records contain timing/generation/result only,
+never file names or payload bytes.
