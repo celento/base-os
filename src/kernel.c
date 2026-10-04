@@ -32,6 +32,7 @@
 #include "font.h"
 #include "clock.h"
 #include "calendar.h"
+#include "calendar_agenda.h"
 #include "mines.h"
 #include "game2048.h"
 #include "breakout.h"
@@ -1776,6 +1777,12 @@ static void do_shutdown(void) {
         dirty=1;
         return;
     }
+    if (cal_agenda_prepare_shutdown() < 0) {
+        if (win_open(WK_CAL) < 0)
+            session_status="Shutdown paused. Open Calendar after closing a window.";
+        dirty=1;
+        return;
+    }
     session_save();
     if(session_status[0]){dirty=1;return;}
     if (fs_sync() < 0) {
@@ -2092,7 +2099,7 @@ static int menu_item_enabled(int m, int item) {
         }
         if (item == 4) { /* Save */
             int fk = front_kind();
-            return !open_dlg && (fk == WK_EDIT || fk == WK_PAINT || fk == WK_WRITER || fk == WK_SPREADSHEET || fk == WK_TODO);
+            return !open_dlg && (fk == WK_EDIT || fk == WK_PAINT || fk == WK_WRITER || fk == WK_SPREADSHEET || fk == WK_TODO || fk == WK_CAL);
         }
         if (item == 5) { /* Duplicate: Files + selected file/folder, not an app. */
             int id;
@@ -6032,6 +6039,8 @@ static void menu_activate(int m, int item) {
                 snake_reset();
             } else if (front_kind() == WK_WORDLE) {
                 wordle_new_game(frame_count);
+            } else if (front_kind() == WK_CAL) {
+                cal_new();dirty=1;
             } else if (front_kind() == WK_TODO) {
                 todo_focus_field();
             } else {
@@ -6047,7 +6056,9 @@ static void menu_activate(int m, int item) {
         } else if (item == 3) {
             close_front();
         } else if (item == 4) {
-            if (front_kind() == WK_TODO && !open_dlg) {
+            if (front_kind() == WK_CAL && !open_dlg) {
+                cal_agenda_retry_save();dirty=1;
+            } else if (front_kind() == WK_TODO && !open_dlg) {
                 todo_retry_save();dirty=1;
             } else if (front_kind() == WK_SPREADSHEET && !open_dlg) {
                 spreadsheet_save_document();
@@ -6951,7 +6962,7 @@ static void handle_key(void) {
             menu_activate(MENU_FILE, 0);
             return;
         }
-        if (key_sc == KEY_S && (front_kind() == WK_PAINT || front_kind() == WK_EDIT || front_kind() == WK_WRITER || front_kind() == WK_SPREADSHEET || front_kind() == WK_TODO)) {
+        if (key_sc == KEY_S && (front_kind() == WK_PAINT || front_kind() == WK_EDIT || front_kind() == WK_WRITER || front_kind() == WK_SPREADSHEET || front_kind() == WK_TODO || front_kind() == WK_CAL)) {
             menu_activate(MENU_FILE, 4);
             return;
         }
@@ -7196,16 +7207,22 @@ static void handle_key(void) {
         return;
     }
 
-    if (fk == WK_CAL || fk == WK_2048 || fk == WK_BREAKOUT || fk == WK_MINES ||
+    if (fk == WK_CAL) {
+        int result = cal_key(key_sc, key_char, (ctrl_down ? CAL_MOD_CTRL : 0) |
+                             (shift_down ? CAL_MOD_SHIFT : 0) | (alt_down ? CAL_MOD_ALT : 0));
+        if (result & CAL_CLOSE) close_front();
+        if (result & CAL_CHANGED) dirty = 1;
+        return;
+    }
+
+    if (fk == WK_2048 || fk == WK_BREAKOUT || fk == WK_MINES ||
         fk == WK_CLOCK || fk == WK_SYSMON) {
         if (key_sc == KEY_ESC) {
             close_front();
             return;
         }
         int changed = 0;
-        if (fk == WK_CAL)
-            changed = cal_key(key_sc);
-        else if (fk == WK_2048)
+        if (fk == WK_2048)
             changed = g2048_key(key_sc);
         else if (fk == WK_BREAKOUT)
             changed = bo_key(key_sc);
@@ -8151,6 +8168,7 @@ void kmain(void) {
         storage_poll();
         preferences_tick();
         if(todo_tick()&&find_open_kind(WK_TODO)>=0)dirty=1;
+        if(cal_agenda_tick()&&find_open_kind(WK_CAL)>=0)dirty=1;
         poll_time();
         audio_poll();
         net_poll();
