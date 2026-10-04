@@ -87,6 +87,9 @@ _Static_assert(PAINT_MEM + PAINT_CAPACITY <= DMA_BASE, "paint overlaps DMA");
 _Static_assert(DMA_BASE % 65536 == 0 && DMA_CAPACITY <= 65536 &&
                DMA_BASE + DMA_CAPACITY <= 0x1000000, "invalid ISA DMA arena");
 _Static_assert(DMA_BASE + DMA_CAPACITY <= DESK_CACHE, "DMA overlaps cache");
+_Static_assert(AUDIO_DMA_BASE + AUDIO_DMA_CAPACITY == SHEET_BASE, "audio DMA overlaps spreadsheet");
+_Static_assert(SHEET_BASE + SHEET_CAPACITY == DESK_CACHE, "spreadsheet overlaps desktop cache");
+_Static_assert(SHEET_CAPACITY >= 2824636, "spreadsheet arena too small");
 _Static_assert(DESK_CACHE + DESK_CAPACITY <= APPS_BASE, "cache overlaps apps");
 _Static_assert(APPS_BASE+APPS_CAPACITY<=PAGING_BASE,"apps overlap paging");
 _Static_assert(PAGING_BASE+PAGING_CAPACITY<=USER_BASE,"paging overlaps user");

@@ -2,9 +2,10 @@
 
 The bounded Spreadsheet client is implemented in `src/sheet.[ch]`. It uses the
 real formula engine and file codecs described in [SHEET_MODEL.md](SHEET_MODEL.md).
-The desktop owns its window, launcher, filename dialogs, Save/Discard/Cancel
-prompts and recovery sidecars. This guide describes the client module; its host
-checks do not claim QEMU or desktop integration has been completed.
+The desktop integrates its window, green grid icon, launcher, filename dialogs,
+Save/Discard/Cancel prompts and recovery sidecars. The app opens `.bsh` and `.csv`
+files; only one Spreadsheet window is open at a time. Saved window kind 23 is
+appended after Writer, preserving every earlier version-1 session kind.
 
 ## Grid and editing
 
@@ -162,3 +163,46 @@ No intentional memory-fault probes, fuzzing or QEMU instances are used here.
 A freestanding i386 build with production flags also checks unresolved symbols,
 object BSS and stack usage. Guest window/menu integration and real disk/session
 recovery testing remain the desktop integration owner's verification work.
+
+## Desktop recovery and examples
+
+`prefs/session` keeps its existing version-1 layout. `prefs/sheet-draft.bsh` is a
+complete native sheet including a pending cell edit, encoded without committing
+the live editor. Version-1 `prefs/sheet-binding` is 52 bytes: magic, version,
+valid flag, the original source's size/FNV-1a/CRC32 fingerprint, fingerprints of
+the entire session and draft, and the selection anchor. The session retains the
+source path and active cell. No runtime file identity is trusted after reboot.
+
+Only a matching sidecar/session/draft/current-source combination binds a recovered
+draft to its old file. Missing metadata, changed versions, changed drafts, changed
+session bytes or changed sources recover the intact sheet as an unbound dirty
+copy requiring a new Save As. Malformed native drafts report recovery failure.
+The source is never silently overwritten. Source fingerprints detect accidental
+change, not malicious replacement or cryptographic identity.
+
+Before any recovery write, the desktop preflights every new node, per-file size
+and projected byte capacity, including `prefs` and both new Spreadsheet records.
+All shrinking Editor/Writer/Spreadsheet drafts are written before growing/new
+drafts. Metadata and session follow. Shutdown stays on the desktop when recovery
+preparation or the verified disk sync fails.
+
+`Documents/budget.bsh` is an original illustrative household budget. Its formulas
+calculate planned total 1900, actual total 1836.35 and remaining 63.65; editing an
+input recalculates the totals. `budget.csv` has exactly the displayed values, and
+`Spreadsheet guide.txt` explains controls and limits. Installation never replaces
+existing names. These sample amounts are not personal financial information or
+advice.
+
+The exact production session functions run with the real filesystem and client
+under ASan/UBSan in `tests/test_sheet_recovery.py`. Coverage includes pending edit
+recovery without live mutation, matched save after reboot, changed/missing/mixed
+sidecars, full node/byte admission, and reclaiming a smaller sheet before growing
+an Editor draft. The sample's native formula totals and exact CSV bytes are also
+verified. The original focused Editor recovery suite remains unchanged in scope.
+
+The normal production input runner is `python3 tools/sheet_input_test.py build`.
+It operates fresh disposable disks with real PS/2 input and read-only bounded
+DWARF observations. It covers cell edit/cancel, formulas, range clipboard and
+undo, native reopening, exact quoted CSV, lifecycle guards, source conflicts,
+pending-edit recovery across reboots, read-only saves and minimum window sizing.
+It never modifies guest memory, opens a saved user disk, fuzzes or probes faults.

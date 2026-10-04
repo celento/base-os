@@ -236,3 +236,24 @@ python3 tools/data_volume_test.py build --keep
 ```
 
 Host tests use AddressSanitizer/UndefinedBehaviorSanitizer for C code and exercise filesystem migrations, undo/redo, BASIC parsing and execution limits, independent terminal state, paths, completion, scripts, and host exchange/locking. QEMU tests cover foundational boot/storage behavior, native faults and privileged operations, syscall bounds, watchdog recovery, independent app instances, BASIC/native execution, Paint history, and a complete session reboot. A further QEMU test types through the emulated PS/2 keyboard, opens Terminal through the launcher, and verifies BASIC INKEY during execution. Disk waits collect input without running app actions. Each QEMU test uses disposable images.
+
+## 12. Spreadsheet
+
+A single-instance 128-row, 26-column Spreadsheet is available from the green grid
+desktop icon, launcher and `.bsh`/`.csv` files. Its formula bar preserves source
+text while cells show calculated values or explicit errors. Arithmetic, A1
+references and SUM/AVG/MIN/MAX/COUNT work with three-decimal fixed-point values.
+Range copy/cut/paste, four-operation undo/redo, keyboard/mouse selection, address
+jumps and scrolling fit the 800 x 600 desktop and a 420 x 260 minimum client.
+
+Native BSH1 files retain formulas and kinds. CSV imports create unsaved native
+copies; CSV exports calculated values separately. Existing unrelated filenames,
+changed native sources and reused node IDs are protected. New/Open/Close share
+the conservative Save/Discard/Cancel guard. Versioned recovery snapshots include
+pending cell edits and pair the draft, saved session and original source before
+rebinding. Missing or changed metadata recovers a separate unsaved copy.
+
+An original small budget and plain-text guide are installed only when their
+filenames are absent. Limits are explicit: ASCII only, 95 bytes per cell, no
+charts, workbook tabs, Excel compatibility or relative-reference rewriting. See
+[Spreadsheet guide](docs/SHEET.md) and [format/formulas](docs/SHEET_MODEL.md).
