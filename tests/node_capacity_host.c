@@ -112,9 +112,17 @@ static void full_old_volume(void) {
     assert(fs_create(0, "no-free-nodes") == -1);
     int list[256]; assert(fs_list(0, list, 256) == 255 && list[254] == 255);
     assert(fs_list_files(list, 256) == 255 && list[254] == 255);
-    assert(fs_write(255, "last\0node", 9) == 9 && fs_sync() == 0);
+    assert(fs_write(255, "last\0node", 9) == 9);
+    unsigned growth = fs_capacity() - fs_used_bytes();
+    int filled_length = fs_size(1) + (int)growth;
+    assert(fs_write(1, (const char *)pattern, filled_length) == filled_length);
+    assert(fs_used_bytes() == 8377344u && fs_used_bytes() == fs_capacity());
+    assert(fs_write(254, "x", 1) == -1 && fs_size(254) == 0);
+    assert(fs_sync() == 0);
     reboot_data();
     assert(fs_node_count() == 256 && !memcmp(fs_data(255), "last\0node", 9));
+    assert(fs_used_bytes() == fs_capacity() && fs_size(1) == filled_length);
+    assert(!memcmp(fs_data(1), pattern, filled_length));
     assert(fs_delete(254) == 0 && fs_capacity() == 8377384u);
     assert(fs_create_app(0, "last-app") == 254 && fs_is_app(254));
     assert(fs_rename(255, "renamed") == 0 && fs_sync() == 0);
@@ -168,6 +176,40 @@ static void nested_mutation(void) {
     puts("node capacity: bounded create/move/copy/rename paths, rollback, recursive delete and reclaim passed");
 }
 
+static void deepest_copy(void) {
+    empty_data();
+    int parent = 0, first = -1;
+    for (int depth = 1; depth < FS_MAX_DEPTH; ++depth) {
+        parent = fs_mkdir(parent, longest_name); assert(parent > 0);
+        if (depth == 1) first = parent;
+    }
+    int leaf = fs_create(parent, longest_name); assert(leaf > 0);
+    assert(fs_write(leaf, (const char *)pattern, 2049) == 2049);
+    int copy = fs_copy(first, 0); assert(copy > 0 && fs_node_count() == 127);
+    int copied_leaf = copy;
+    for (int depth = 1; depth < FS_MAX_DEPTH; ++depth) {
+        copied_leaf = fs_find_child(copied_leaf, longest_name);
+        assert(copied_leaf > 0);
+    }
+    char path[FS_PATH_LEN]; fs_path(copied_leaf, path, sizeof(path));
+    assert(strlen(path) == 1512 && fs_resolve(0, path) == copied_leaf);
+    assert(fs_size(copied_leaf) == 2049 && !memcmp(fs_data(copied_leaf), pattern, 2049));
+    assert(fs_sync() == 0); reboot_data();
+    assert(fs_node_count() == 127 && fs_resolve(0, path) == copied_leaf);
+    int destination = fs_mkdir(0, "destination"); assert(destination > 0);
+    assert(fs_sync() == 0);
+    assert(fs_move(copy, destination) == -1 && fs_copy(copy, destination) == -1);
+    assert(fs_parent(copy) == 0 && !fs_needs_sync());
+    assert(fs_delete(first) == 0 && fs_node_count() == 65);
+    assert(!memcmp(fs_data(copied_leaf), pattern, 2049));
+    assert(fs_rename(copy, "renamed") == 0);
+    fs_path(copied_leaf, path, sizeof(path));
+    assert(strlen(path) == 1496 && fs_resolve(0, path) == copied_leaf);
+    assert(fs_sync() == 0); reboot_data();
+    assert(fs_resolve(0, path) == copied_leaf && !memcmp(fs_data(copied_leaf), pattern, 2049));
+    puts("node capacity: maximum-depth 63-component recursive copy/delete preserves exact bytes");
+}
+
 static void generated_names(void) {
     empty_data();
     char name[FS_NAME_LEN];
@@ -213,6 +255,6 @@ static void legacy_floppy_limit(void) {
 
 int main(void) {
     for (unsigned i = 0; i < sizeof(pattern); ++i) pattern[i] = (i * 37 + (i >> 16)) & 255;
-    legacy_paths(); full_old_volume(); nested_mutation(); generated_names(); legacy_floppy_limit();
+    legacy_paths(); full_old_volume(); nested_mutation(); deepest_copy(); generated_names(); legacy_floppy_limit();
     return 0;
 }
