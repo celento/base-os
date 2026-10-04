@@ -98,6 +98,7 @@ static void as_finish(unsigned slot,unsigned reason,int value){
 }
 static void as_stop(unsigned slot){
     unsigned began=timer_ticks();as_check(process_request_stop(as_handles[slot]),"AS inactive stop");
+    as_check(process_request_stop(as_handles[slot]),"AS repeated inactive close");
     as_max(&as_max_close,began);as_finish(slot,PROCESS_EXIT_STOP,PROCESS_TASK_STOPPED);
 }
 static void as_exit(unsigned slot,int code){
