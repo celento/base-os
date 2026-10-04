@@ -45,7 +45,11 @@ static unsigned state(const Target *t){
            (t->position_valid?BOS_UI_STATE_POSITION_VALID:0);
 }
 static void forget_capture(Target *t,unsigned physical){
-    if(capture==t->target){swallowed|=physical&BUTTONS;capture=0;}
+    if(capture==t->target){
+        /* Acquisition may already contain the final UP while older held MOVE
+         * samples remain queued. Preserve the routed gesture tail as well. */
+        swallowed|=(physical|t->accepted)&BUTTONS;capture=0;
+    }
     t->accepted=0;t->suppressed|=physical&BUTTONS;
 }
 static void revoke(Target *t,unsigned physical){
@@ -244,6 +248,8 @@ void native_ui_cancel_all(unsigned reason,unsigned ticks,unsigned physical){
     for(unsigned i=0;i<BOS_UI_TARGETS_TOTAL;i++)if(targets[i].target&&!targets[i].revoked){
         targets[i].suppressed&=physical;cancel(targets+i,reason,ticks,physical);
     }
+    /* This explicit barrier discards the prior routed backlog. */
+    swallowed&=physical;
 }
 void native_ui_input_loss(unsigned ticks,unsigned physical,unsigned dropped){
     prior_buttons=physical&BUTTONS;swallowed&=physical;
@@ -251,6 +257,7 @@ void native_ui_input_loss(unsigned ticks,unsigned physical,unsigned dropped){
         targets[i].suppressed&=physical;
         reset_latch(targets+i,BOS_UI_REASON_INPUT_LOSS,ticks,physical,dropped);
     }
+    swallowed&=physical;
 }
 static int eligible(const Target *t){
     return t&&!t->revoked&&!t->reset_pending&&(t->host.state&BOS_UI_STATE_AVAILABLE)&&
@@ -308,7 +315,7 @@ unsigned native_ui_route(const InputSample *sample,BosHandle hit_target){
         if(t->revoked||t->reset_pending)return CONSUMED;
         if(sample->wheel&&(t->subscriptions&BOS_UI_SUB_WHEEL))
             emit(t,BOS_UI_POINTER_WHEEL,sample->ticks,0,sample->wheel,0,physical);
-        if(!t->accepted&&capture==t->target)capture=0;
+        if(!t->accepted&&capture==t->target){capture=0;swallowed|=physical;}
         if(t->position_valid&&t->inside&&(t->subscriptions&BOS_UI_SUB_HOVER))hover=t->target;
         return CONSUMED;
     }
