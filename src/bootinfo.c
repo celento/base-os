@@ -115,3 +115,5 @@ _Static_assert(DOWNLOAD_BASE >= APPS_BASE && DOWNLOAD_BASE + DOWNLOAD_CAPACITY <
 
 _Static_assert(PAINT_HISTORY_BASE >= APPS_BASE && PAINT_HISTORY_BASE + PAINT_HISTORY_CAPACITY <= DOWNLOAD_BASE, "paint history overlaps downloads");
 _Static_assert(GFX_CACHE_BASE + GFX_CACHE_CAPACITY <= APPS_BASE + 0x300000, "graphics cache overlaps terminals");
+
+_Static_assert(TASK_INTERRUPT_STACK_BASE >= TASK_BASE && TASK_INTERRUPT_STACK_BASE + TASK_INTERRUPT_STACK_CAPACITY <= TASK_BASE + TASK_CAPACITY, "invalid task syscall stack");
