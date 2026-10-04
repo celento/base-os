@@ -12,10 +12,10 @@ def run(build):
         session.launch('budget.bsh'); check.expect(157, '=SUM(B2:B5)', 3, 1900000)
         check.expect(158, '=SUM(C2:C5)', 3, 1836350); check.expect(159, '=B7-C7', 3, 63650)
         win = check.owner(); x, y = win['x'] + 1, win['y'] + 33
-        check.move(x + 94, y + 128)
+        check.move(x + 94, y + 162)
         session.command('input-send-event', {'events': [{'type': 'btn', 'data': {'down': True, 'button': 'left'}}]})
         session.wait(lambda: check.state()['dragging'] == 1 and check.selected()['anchor'] == 26, 'cell drag began at A2')
-        check.move(x + 302, y + 176)
+        check.move(x + 302, y + 210)
         session.wait(lambda: check.selected()['caret'] == 80, 'cell range drag reaches C4')
         session.command('input-send-event', {'events': [{'type': 'btn', 'data': {'down': False, 'button': 'left'}}]})
         session.wait(lambda: check.state()['dragging'] == 0, 'mouse release ends range drag')
