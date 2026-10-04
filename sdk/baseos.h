@@ -135,4 +135,24 @@ static inline int bos_sync_compatible(unsigned allow_legacy_blocking) {
     int released=bos_sync_release(operation);
     return result==BOS_OK ? released : result;
 }
+/* Hosted pointer service. Drain events and bos_key(), explicitly present your
+ * frame, then wait. UI wait never publishes an unfinished working canvas. */
+static inline int bos_ui_query(BosUiInfoV1 *out,unsigned capacity) {
+    return bos_call(BOS_CALL_UI,BOS_UI_QUERY,BOS_UI_MAJOR,(unsigned)out,capacity,0);
+}
+static inline int bos_ui_host_open(unsigned subscriptions,BosUiTargetInfoV1 *out) {
+    return bos_call(BOS_CALL_UI,BOS_UI_HOST_OPEN,BOS_UI_MAJOR,(unsigned)out,sizeof *out,subscriptions);
+}
+static inline int bos_ui_info(BosHandle target,BosUiTargetInfoV1 *out) {
+    return bos_call(BOS_CALL_UI,BOS_UI_INFO,target,(unsigned)out,sizeof *out,0);
+}
+static inline int bos_ui_read(BosHandle target,BosUiEventV1 *out) {
+    return bos_call(BOS_CALL_UI,BOS_UI_READ,target,(unsigned)out,sizeof *out,0);
+}
+static inline int bos_ui_wait(BosHandle target,unsigned readiness,unsigned milliseconds) {
+    return bos_call(BOS_CALL_UI,BOS_UI_WAIT,target,readiness,milliseconds,0);
+}
+static inline int bos_ui_release(BosHandle target) {
+    return bos_call(BOS_CALL_UI,BOS_UI_RELEASE,target,0,0,0);
+}
 #endif

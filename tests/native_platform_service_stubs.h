@@ -3,6 +3,7 @@
 #include "../sdk/baseos_abi.h"
 #include "native_files.h"
 #include "native_sync.h"
+#include "native_ui_service_stubs.h"
 static unsigned stub_sync_calls,stub_file_calls,stub_release_files,stub_release_sync;
 static unsigned stub_owner,stub_handle,stub_offset,stub_length;
 static unsigned stub_last_released,stub_limit=2097152;

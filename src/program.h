@@ -78,6 +78,8 @@ int process_bind(ProcessHandle process,const ProcessIO *io);
 int process_unbind(ProcessHandle process);
 int process_start(ProcessHandle process);
 int process_status(ProcessHandle process);
+/* Complete copied binding and immediate stopping state, for owned services. */
+int process_binding_live(const ProcessBinding *binding);
 int process_get_result(ProcessHandle process,ProcessResult *out);
 int process_key(ProcessHandle process,int key);
 /* Returns 1 once stopped/inactive, 0 if its active slice must first return. */
