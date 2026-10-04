@@ -12,13 +12,12 @@
 #define SHEET_CAPACITY 0x2E0000
 #endif
 #define HISTORY 5u
-#define TOOL_H 34
+#define TOOL_H 68
 #define FORMULA_H 34
 #define HEADER_H 24
 #define FOOT_H 28
 #define SCROLL_H 14
 #define ROW_H 24
-#define COL_W 104
 #define ROW_W 42
 #define OUTPUT_CAPACITY SHEET_CSV_MAX_SIZE
 
@@ -29,7 +28,7 @@ typedef struct {
     unsigned char output[OUTPUT_CAPACITY];
     unsigned char clipboard[SPREADSHEET_CLIPBOARD_CAPACITY];
 } SpreadsheetArena;
-_Static_assert(sizeof(SpreadsheetArena) == 2824636u, "Spreadsheet footprint changed");
+_Static_assert(sizeof(SpreadsheetArena) == 2844916u, "Spreadsheet footprint changed");
 _Static_assert(sizeof(SpreadsheetArena) <= SHEET_CAPACITY, "Spreadsheet arena overflow");
 #ifdef SPREADSHEET_HOST_TEST
 static SpreadsheetArena host_arena;
@@ -45,7 +44,7 @@ static struct {
     int initialized, file, failed_save, has_binding, binding_conflict;
     unsigned identity;
     SpreadsheetBinding binding;
-    unsigned first_row, first_col, visible_rows, visible_cols;
+    unsigned first_row, first_col, visible_rows, scroll_x;
     int width, height, dragging, drag_kind, blink, last_blink;
     unsigned click_cell, click_tick;
     int click_valid;
@@ -92,22 +91,61 @@ static void selection(unsigned *r0, unsigned *c0, unsigned *r1, unsigned *c1) {
     *r0 = min_u(a / SHEET_COLS, b / SHEET_COLS); *r1 = max_u(a / SHEET_COLS, b / SHEET_COLS);
     *c0 = min_u(a % SHEET_COLS, b % SHEET_COLS); *c1 = max_u(a % SHEET_COLS, b % SHEET_COLS);
 }
+static unsigned column_width(unsigned col) {
+    unsigned width = SHEET_COLUMN_WIDTH_DEFAULT;
+    (void)sheet_get_column_width(document(), col, &width);
+    return width;
+}
+/* Every horizontal operation uses the same document-pixel coordinate system.
+ * scroll_x may split either edge column, including a 320px column at 360px
+ * minimum width. Never infer a column from a fixed-size division. */
+static unsigned column_start(unsigned col) {
+    unsigned x = 0;
+    for (unsigned c = 0; c < col; c++) x += column_width(c);
+    return x;
+}
+static unsigned column_at(unsigned x) {
+    unsigned c = 0;
+    while (c + 1 < SHEET_COLS) {
+        unsigned width = column_width(c);
+        if (x < width) break;
+        x -= width; c++;
+    }
+    return c;
+}
+static unsigned grid_width(void) {
+    return state.width > ROW_W + SCROLL_H ? (unsigned)(state.width - ROW_W - SCROLL_H) : 1u;
+}
+static unsigned max_scroll_x(void) {
+    unsigned total = column_start(SHEET_COLS), width = grid_width();
+    return total > width ? total - width : 0;
+}
+static void horizontal_scroll(unsigned x) {
+    state.scroll_x = min_u(x, max_scroll_x());
+    state.first_col = column_at(state.scroll_x);
+}
+static void scroll_column(int direction) {
+    unsigned col = column_at(state.scroll_x), start = column_start(col);
+    if (direction < 0) horizontal_scroll(state.scroll_x > start ? start : col ? column_start(col - 1) : 0);
+    else horizontal_scroll(column_start(col + 1));
+}
+static int column_left(unsigned col) { return ROW_W + (int)column_start(col) - (int)state.scroll_x; }
 static void geometry(int w, int h) {
     state.width = w; state.height = h;
-    state.visible_cols = (unsigned)max_u(1u, w > ROW_W + SCROLL_H ? (unsigned)(w - ROW_W - SCROLL_H) / COL_W : 1u);
     state.visible_rows = (unsigned)max_u(1u, h > TOOL_H + FORMULA_H + HEADER_H + FOOT_H + SCROLL_H ?
         (unsigned)(h - TOOL_H - FORMULA_H - HEADER_H - FOOT_H - SCROLL_H) / ROW_H : 1u);
-    state.visible_cols = min_u(state.visible_cols, SHEET_COLS);
     state.visible_rows = min_u(state.visible_rows, SHEET_ROWS);
-    state.first_col = min_u(state.first_col, SHEET_COLS - state.visible_cols);
+    horizontal_scroll(state.scroll_x);
     state.first_row = min_u(state.first_row, SHEET_ROWS - state.visible_rows);
 }
 static void reveal(void) {
     unsigned row = snapshot()->caret / SHEET_COLS, col = snapshot()->caret % SHEET_COLS;
+    unsigned left = column_start(col), right = left + column_width(col), width = grid_width();
     if (row < state.first_row) state.first_row = row;
     if (row >= state.first_row + state.visible_rows) state.first_row = row - state.visible_rows + 1;
-    if (col < state.first_col) state.first_col = col;
-    if (col >= state.first_col + state.visible_cols) state.first_col = col - state.visible_cols + 1;
+    if (left < state.scroll_x || right - left > width) horizontal_scroll(left);
+    else if (right > state.scroll_x + width) horizontal_scroll(right - width);
+    else horizontal_scroll(state.scroll_x);
     state.blink = 1;
 }
 static void move_to(unsigned row, unsigned col, int extend) {
@@ -172,11 +210,47 @@ static int undo(int redo) {
     if ((!redo && !state.current) || (redo && state.current + 1 >= state.count)) {
         status(redo ? "Nothing to redo." : "Nothing to undo."); return SPREADSHEET_CHANGED;
     }
-    state.current += redo ? 1 : (unsigned)-1; reveal(); status(redo ? "Redone." : "Undone.");
+    state.current += redo ? 1 : (unsigned)-1; geometry(state.width, state.height); reveal(); status(redo ? "Redone." : "Undone.");
+    return SPREADSHEET_CHANGED;
+}
+static int format_selection(SheetFormat format) {
+    if (!commit_edit()) return SPREADSHEET_CHANGED;
+    state.mode = 0; state.click_valid = 0;
+    unsigned r0, c0, r1, c1; selection(&r0, &c0, &r1, &c1); int changed = 0;
+    copy_bytes(&ARENA->staging, document(), sizeof(SheetDoc));
+    for (unsigned r = r0; r <= r1; r++) {
+        for (unsigned c = c0; c <= c1; c++) {
+            SheetFormat old; (void)sheet_get_format(document(), r, c, &old);
+            if (old != format) { sheet_set_format(&ARENA->staging, r, c, format); changed = 1; }
+        }
+        platform_poll();
+    }
+    if (changed) accept_staging();
+    static const char *messages[] = {
+        "General format. Original source and calculation precision are retained.",
+        "Fixed2: two decimal places. Display rounding does not change the stored value.",
+        "Currency: dollars, two decimal places. Display rounding does not change the value.",
+        "Percent: value times 100, two decimal places. Stored value is unchanged."
+    };
+    status(messages[format]); return SPREADSHEET_CHANGED;
+}
+static int resize_columns(int delta) {
+    if (!commit_edit()) return SPREADSHEET_CHANGED;
+    state.mode = 0; state.click_valid = 0;
+    unsigned r0, c0, r1, c1; selection(&r0, &c0, &r1, &c1); int changed = 0;
+    copy_bytes(&ARENA->staging, document(), sizeof(SheetDoc));
+    for (unsigned c = c0; c <= c1; c++) {
+        unsigned old = column_width(c);
+        unsigned width = delta ? (unsigned)clamp((int)old + delta, SHEET_COLUMN_WIDTH_MIN, SHEET_COLUMN_WIDTH_MAX) : SHEET_COLUMN_WIDTH_DEFAULT;
+        if (old != width) { sheet_set_column_width(&ARENA->staging, c, width); changed = 1; }
+    }
+    if (changed) { accept_staging(); geometry(state.width, state.height); reveal(); }
+    status(delta ? "Selected columns resized. Width 48-320px; Ctrl+- / Ctrl+= adjusts; Ctrl+0 resets." :
+                   "Selected column widths reset to 104px.");
     return SPREADSHEET_CHANGED;
 }
 
-/* Private clipboard: kind,length,source for each cell in row-major order.
+/* Private clipboard: kind,length,format,source for each cell in row-major order.
  * External representation is quoted TSV of displayed values. Measure both
  * representations before touching either clipboard, so no truncation occurs. */
 static unsigned field_size(const char *text, unsigned length) {
@@ -197,8 +271,8 @@ static int copy_selection(void) {
     for (unsigned r = r0; r <= r1; r++) {
         for (unsigned c = c0; c <= c1; c++) {
             const SheetCell *cell = sheet_cell(document(), r, c);
-            if (sheet_format(cell, value, sizeof value, &length)) return 0;
-            raw += 2u + cell->length; plain += field_size(value, length) + (c < c1 ? 1u : 0u);
+            if (sheet_format_display(document(), r, c, value, sizeof value, &length)) return 0;
+            raw += 3u + cell->length; plain += field_size(value, length) + (c < c1 ? 1u : 0u);
         }
         if (r < r1) plain++;
         platform_poll();
@@ -209,8 +283,7 @@ static int copy_selection(void) {
     unsigned b = 0;
     for (unsigned r = r0; r <= r1; r++) {
         for (unsigned c = c0; c <= c1; c++) {
-            const SheetCell *cell = sheet_cell(document(), r, c);
-            sheet_format(cell, value, sizeof value, &length); b += emit_field(ARENA->output + b, value, length);
+            sheet_format_display(document(), r, c, value, sizeof value, &length); b += emit_field(ARENA->output + b, value, length);
             if (c < c1) ARENA->output[b++] = '\t';
         }
         if (r < r1) ARENA->output[b++] = '\n';
@@ -223,6 +296,8 @@ static int copy_selection(void) {
         for (unsigned c = c0; c <= c1; c++) {
             const SheetCell *cell = sheet_cell(document(), r, c);
             ARENA->clipboard[a++] = cell->kind; ARENA->clipboard[a++] = cell->length;
+            SheetFormat format; (void)sheet_get_format(document(), r, c, &format);
+            ARENA->clipboard[a++] = (unsigned char)format;
             copy_bytes(ARENA->clipboard + a, cell->text, cell->length); a += cell->length;
         }
         platform_poll();
@@ -290,8 +365,9 @@ static void paste(void) {
         }
         unsigned p = 0;
         for (unsigned r = 0; r < rows; r++) for (unsigned c = 0; c < cols; c++) {
-            unsigned kind = ARENA->clipboard[p++], length = ARENA->clipboard[p++];
-            if (sheet_set(&ARENA->staging, row + r, col + c, (SheetKind)kind, (const char *)ARENA->clipboard + p, length)) {
+            unsigned kind = ARENA->clipboard[p++], length = ARENA->clipboard[p++], format = ARENA->clipboard[p++];
+            if (sheet_set(&ARENA->staging, row + r, col + c, (SheetKind)kind, (const char *)ARENA->clipboard + p, length) ||
+                sheet_set_format(&ARENA->staging, row + r, col + c, (SheetFormat)format)) {
                 status("Clipboard invalid. Nothing was changed."); return;
             }
             p += length;
@@ -302,11 +378,11 @@ static void paste(void) {
     sheet_recalculate(&ARENA->staging); accept_staging();
     snapshot()->anchor = row * SHEET_COLS + col;
     snapshot()->caret = (row + rows - 1) * SHEET_COLS + col + cols - 1; reveal();
-    status(own ? "Pasted exact sources/kinds. Formula references were not adjusted." : "Pasted TSV values. Formula-like fields are literal text.");
+    status(own ? "Pasted exact sources, kinds and formats. Formula references were not adjusted." : "Pasted TSV values. Formula-like fields are literal text.");
 }
 
 static void reset_view(void) {
-    state.first_row = state.first_col = 0; state.dragging = state.mode = state.edit_changed = state.click_valid = 0;
+    state.first_row = state.first_col = state.scroll_x = 0; state.dragging = state.mode = state.edit_changed = state.click_valid = 0;
     geometry(state.width, state.height); state.blink = 1;
 }
 void spreadsheet_new(void) {
@@ -542,8 +618,9 @@ static void edit_copy(int cut) {
     unsigned generation = spreadsheet_clipboard_set(state.edit + lo, hi - lo);
     if (!generation) { status("Clipboard rejected the copy. Selected edit text was not cut."); return; }
     ARENA->clipboard[0] = SHEET_TEXT; ARENA->clipboard[1] = (unsigned char)(hi - lo);
-    copy_bytes(ARENA->clipboard + 2, state.edit + lo, hi - lo);
-    state.clipboard_length = hi - lo + 2; state.clipboard_rows = state.clipboard_cols = 1;
+    ARENA->clipboard[2] = SHEET_FORMAT_GENERAL;
+    copy_bytes(ARENA->clipboard + 3, state.edit + lo, hi - lo);
+    state.clipboard_length = hi - lo + 3; state.clipboard_rows = state.clipboard_cols = 1;
     state.clipboard_text_length = hi - lo; state.clipboard_owned = 1;
     state.clipboard_generation = generation;
     if (cut) edit_replace("", 0);
@@ -554,7 +631,7 @@ static void edit_paste(void) {
     int n = spreadsheet_clipboard_get((char *)ARENA->output, SPREADSHEET_CLIPBOARD_CAPACITY, &generation);
     const char *text = (const char *)ARENA->output;
     if (n == -2 && state.clipboard_owned && generation && generation == state.clipboard_generation && state.clipboard_rows == 1 && state.clipboard_cols == 1) {
-        n = ARENA->clipboard[1]; text = (const char *)ARENA->clipboard + 2;
+        n = ARENA->clipboard[1]; text = (const char *)ARENA->clipboard + 3;
     }
     if (n < 0) { status("Clipboard unavailable or too large. Edit is unchanged."); return; }
     if (!n) { status("Clipboard is empty."); return; }
@@ -609,6 +686,8 @@ int spreadsheet_key(int sc, char ch, int modifiers) {
     if (ctrl && shift && sc == 0x12) return SPREADSHEET_REQUEST_EXPORT;
     if (ctrl && sc == 0x22) { open_address(); return SPREADSHEET_CHANGED; }
     if (ctrl && (sc == 0x2c || sc == 0x15)) return undo(sc == 0x15 || shift);
+    if (ctrl && sc >= 0x02 && sc <= 0x05) return format_selection((SheetFormat)(sc - 0x02));
+    if (ctrl && (sc == 0x0b || sc == 0x0c || sc == 0x0d)) return resize_columns(sc == 0x0b ? 0 : sc == 0x0c ? -16 : 16);
     if (state.mode) return edit_key(sc, ch, modifiers);
     if (ctrl) {
         switch (sc) {
@@ -697,7 +776,10 @@ static void number_text(unsigned n, char *out) {
 }
 typedef struct { int x, w; const char *text; } Button;
 static const Button buttons[] = {
-    {8, 48, "Save"}, {60, 66, "Save As"}, {130, 56, "CSV"}, {190, 48, "Undo"}, {242, 48, "Redo"}, {294, 48, "Edit"}, {346, 58, "Go to"}
+    {8, 48, "Save"}, {60, 62, "Save As"}, {126, 42, "CSV"}, {172, 46, "Undo"}, {222, 46, "Redo"}, {272, 38, "Edit"}, {314, 34, "Go"}
+};
+static const Button format_buttons[] = {
+    {8, 60, "General"}, {72, 48, "0.00"}, {124, 48, "$0.00"}, {176, 32, "%"}, {255, 24, "-"}, {323, 24, "+"}
 };
 static int editor_offset(int width) {
     int before = text_width(state.edit, state.edit_caret);
@@ -719,13 +801,16 @@ static void editor_draw(Clip all, Clip box) {
 }
 int spreadsheet_cell_position(unsigned row, unsigned col, int *x, int *y, int *w, int *h) {
     if (!state.initialized || row < state.first_row || col < state.first_col || row >= SHEET_ROWS || col >= SHEET_COLS) return 0;
-    int left = ROW_W + (int)(col - state.first_col) * COL_W, top = TOOL_H + FORMULA_H + HEADER_H + (int)(row - state.first_row) * ROW_H;
-    int right = state.width - SCROLL_H, bottom = state.height - FOOT_H - SCROLL_H;
+    int left = column_left(col), top = TOOL_H + FORMULA_H + HEADER_H + (int)(row - state.first_row) * ROW_H;
+    int right = left + (int)column_width(col), bottom = top + ROW_H;
+    if (left < ROW_W) left = ROW_W;
+    if (right > state.width - SCROLL_H) right = state.width - SCROLL_H;
+    if (bottom > state.height - FOOT_H - SCROLL_H) bottom = state.height - FOOT_H - SCROLL_H;
     if (left >= right || top >= bottom) return 0;
     if (x) *x = left;
     if (y) *y = top;
-    if (w) *w = right - left < COL_W ? right - left : COL_W;
-    if (h) *h = bottom - top < ROW_H ? bottom - top : ROW_H;
+    if (w) *w = right - left;
+    if (h) *h = bottom - top;
     return 1;
 }
 static void draw_scrollbars(Clip all) {
@@ -742,8 +827,9 @@ static void draw_scrollbars(Clip all) {
         label(all, "^", right + 3, top - 1, COLOR_DKGRAY); label(all, "v", right + 3, bottom - SCROLL_H - 2, COLOR_DKGRAY);
     }
     if (hw > 0) {
-        int size = (int)(state.visible_cols * (unsigned)hw / SHEET_COLS); if (size < 14) size = 14; if (size > hw) size = hw;
-        int pos = state.visible_cols < SHEET_COLS ? (int)(state.first_col * (unsigned)(hw - size) / (SHEET_COLS - state.visible_cols)) : 0;
+        unsigned total = column_start(SHEET_COLS), maximum = max_scroll_x();
+        int size = (int)(min_u(grid_width(), total) * (unsigned)hw / total); if (size < 14) size = 14; if (size > hw) size = hw;
+        int pos = maximum ? (int)(state.scroll_x * (unsigned)(hw - size) / maximum) : 0;
         rect(all, all.x + ROW_W + SCROLL_H + pos, bottom + 2, size, SCROLL_H - 4, thumb);
         label(all, "<", all.x + ROW_W + 3, bottom - 2, COLOR_DKGRAY); label(all, ">", right - SCROLL_H + 3, bottom - 2, COLOR_DKGRAY);
     }
@@ -762,7 +848,25 @@ void spreadsheet_draw(int x, int y, int w, int h) {
         frame(all, x + b->x, y + 5, b->w, 24, line);
         label(all, b->text, x + b->x + (b->w - ui_string_w(b->text)) / 2, y + 8, COLOR_DKGRAY);
     }
-    if (w >= 530) label(all, "Spreadsheet", x + 425, y + 8, COLOR_DKGRAY);
+    if (w >= 480) label(all, "Spreadsheet", x + 366, y + 8, COLOR_DKGRAY);
+    unsigned r0, c0, r1, c1; selection(&r0, &c0, &r1, &c1);
+    int uniform_format = document()->formats[r0 * SHEET_COLS + c0];
+    for (unsigned r = r0; r <= r1 && uniform_format >= 0; r++)
+        for (unsigned c = c0; c <= c1; c++)
+            if (document()->formats[r * SHEET_COLS + c] != uniform_format) { uniform_format = -1; break; }
+    for (unsigned i = 0; i < sizeof format_buttons / sizeof format_buttons[0]; i++) {
+        const Button *b = &format_buttons[i];
+        int selected = i < 4 && (int)i == uniform_format;
+        rect(all, x + b->x, y + 39, b->w, 24, selected ? gfx_rgb(211, 225, 246) : COLOR_WHITE);
+        frame(all, x + b->x, y + 39, b->w, 24, selected ? COLOR_BLUE : line);
+        label(all, b->text, x + b->x + (b->w - ui_string_w(b->text)) / 2, y + 42, COLOR_DKGRAY);
+    }
+    label(all, "Width", x + 214, y + 42, COLOR_DKGRAY);
+    unsigned width = column_width(c0); int mixed = 0;
+    for (unsigned c = c0 + 1; c <= c1; c++) if (column_width(c) != width) mixed = 1;
+    char width_text[11]; number_text(width, width_text);
+    label(intersect(all, (Clip){x + 283, y + 42, 36, 18}), mixed ? "..." : width_text, x + 283, y + 42, COLOR_DKGRAY);
+    if (w >= 610) label(all, "Ctrl+1..4 format; Ctrl+0 resets width", x + 366, y + 42, COLOR_DKGRAY);
     char address[5]; sheet_label(snapshot()->caret / SHEET_COLS, snapshot()->caret % SHEET_COLS, address, sizeof address);
     rect(all, x + 8, y + TOOL_H + 3, 70, 27, state.mode == 2 ? COLOR_BLUE : line);
     rect(all, x + 9, y + TOOL_H + 4, 68, 25, COLOR_WHITE);
@@ -778,14 +882,13 @@ void spreadsheet_draw(int x, int y, int w, int h) {
     else label_n(intersect(all, source), active->text, active->length, source.x, source.y, COLOR_DKGRAY);
     int grid_y = y + TOOL_H + FORMULA_H + HEADER_H, bottom = y + h - FOOT_H - SCROLL_H, right = x + w - SCROLL_H;
     Clip grid = intersect(all, (Clip){x, y + TOOL_H + FORMULA_H, w - SCROLL_H, bottom - y - TOOL_H - FORMULA_H});
-    unsigned r0, c0, r1, c1; selection(&r0, &c0, &r1, &c1);
     rect(grid, x, grid.y, ROW_W, HEADER_H, panel);
     for (unsigned c = state.first_col; c < SHEET_COLS; c++) {
-        int cx = x + ROW_W + (int)(c - state.first_col) * COL_W; if (cx >= right) break;
-        Clip head = intersect(grid, (Clip){cx, grid_y - HEADER_H, COL_W, HEADER_H});
-        rect(head, cx, grid_y - HEADER_H, COL_W, HEADER_H, c >= c0 && c <= c1 ? gfx_rgb(211, 225, 246) : panel);
-        char name[2] = {(char)('A' + c), 0}; label(head, name, cx + (COL_W - ui_advance(name[0])) / 2, grid_y - HEADER_H + 3, COLOR_DKGRAY);
-        frame(head, cx, grid_y - HEADER_H, COL_W, HEADER_H, line);
+        int cx = x + column_left(c), cw = (int)column_width(c); if (cx >= right) break;
+        Clip head = intersect(intersect(grid, (Clip){x + ROW_W, grid.y, right - x - ROW_W, grid.h}), (Clip){cx, grid_y - HEADER_H, cw, HEADER_H});
+        rect(head, cx, grid_y - HEADER_H, cw, HEADER_H, c >= c0 && c <= c1 ? gfx_rgb(211, 225, 246) : panel);
+        char name[2] = {(char)('A' + c), 0}; label(head, name, cx + (cw - ui_advance(name[0])) / 2, grid_y - HEADER_H + 3, COLOR_DKGRAY);
+        frame(head, cx, grid_y - HEADER_H, cw, HEADER_H, line);
     }
     for (unsigned r = state.first_row; r < SHEET_ROWS; r++) {
         int ry = grid_y + (int)(r - state.first_row) * ROW_H; if (ry >= bottom) break;
@@ -794,20 +897,30 @@ void spreadsheet_draw(int x, int y, int w, int h) {
         char number[11]; number_text(r + 1, number); label(head, number, x + ROW_W - ui_string_w(number) - 6, ry + 3, COLOR_DKGRAY);
         frame(head, x, ry, ROW_W, ROW_H, line);
         for (unsigned c = state.first_col; c < SHEET_COLS; c++) {
-            int cx = x + ROW_W + (int)(c - state.first_col) * COL_W; if (cx >= right) break;
-            Clip cell = intersect(grid, (Clip){cx, ry, COL_W, ROW_H});
+            int cx = x + column_left(c), cw = (int)column_width(c); if (cx >= right) break;
+            Clip cell = intersect(intersect(grid, (Clip){x + ROW_W, grid.y, right - x - ROW_W, grid.h}), (Clip){cx, ry, cw, ROW_H});
             int selected = r >= r0 && r <= r1 && c >= c0 && c <= c1;
-            rect(cell, cx, ry, COL_W, ROW_H, selected ? gfx_rgb(229, 239, 253) : COLOR_WHITE);
-            frame(cell, cx, ry, COL_W, ROW_H, line);
+            rect(cell, cx, ry, cw, ROW_H, selected ? gfx_rgb(229, 239, 253) : COLOR_WHITE);
+            frame(cell, cx, ry, cw, ROW_H, line);
             const SheetCell *v = sheet_cell(document(), r, c); char value[SHEET_TEXT_MAX + 1u]; unsigned length;
-            if (!sheet_format(v, value, sizeof value, &length)) {
+            if (!sheet_format_display(document(), r, c, value, sizeof value, &length)) {
                 int tx = cx + 5, width = text_width(value, length);
-                if (!v->error && (v->kind == SHEET_NUMBER || v->kind == SHEET_FORMULA)) tx = cx + COL_W - 6 - width;
-                Clip content = intersect(cell, (Clip){cx + 4, ry + 2, COL_W - 8, ROW_H - 4});
+                Clip content = intersect(cell, (Clip){cx + 4, ry + 2, cw - 8, ROW_H - 4});
+                if (!v->error && (v->kind == SHEET_NUMBER || v->kind == SHEET_FORMULA)) {
+                    tx = cx + cw - 6 - width;
+                    /* Never turn a clipped negative/large value into a plausible
+                     * different number, including partially visible columns. */
+                    if (tx < content.x || tx + width > content.x + content.w) {
+                        int advance = ui_advance('#');
+                        length = advance > 0 && content.w > 2 ? min_u(3u, (unsigned)(content.w - 2) / (unsigned)advance) : 0;
+                        for (unsigned i = 0; i < length; i++) value[i] = '#';
+                        width = text_width(value, length); tx = content.x + content.w - width - 2;
+                    }
+                }
                 label_n(content, value, length, tx, ry + 3, v->error ? COLOR_RED : COLOR_DKGRAY);
             }
             if (r * SHEET_COLS + c == snapshot()->caret) {
-                frame(cell, cx, ry, COL_W, ROW_H, COLOR_BLUE); frame(cell, cx + 1, ry + 1, COL_W - 2, ROW_H - 2, COLOR_BLUE);
+                frame(cell, cx, ry, cw, ROW_H, COLOR_BLUE); frame(cell, cx + 1, ry + 1, cw - 2, ROW_H - 2, COLOR_BLUE);
             }
         }
     }
@@ -825,7 +938,7 @@ static unsigned hit_cell(int w, int h, int mx, int my) {
     int right = w - SCROLL_H, bottom = h - FOOT_H - SCROLL_H;
     int px = clamp(mx, ROW_W, right > ROW_W ? right - 1 : ROW_W);
     int py = clamp(my, TOOL_H + FORMULA_H + HEADER_H, bottom > TOOL_H + FORMULA_H + HEADER_H ? bottom - 1 : TOOL_H + FORMULA_H + HEADER_H);
-    unsigned col = min_u(state.first_col + (unsigned)(px - ROW_W) / COL_W, SHEET_COLS - 1);
+    unsigned col = column_at(state.scroll_x + (unsigned)(px - ROW_W));
     unsigned row = min_u(state.first_row + (unsigned)(py - TOOL_H - FORMULA_H - HEADER_H) / ROW_H, SHEET_ROWS - 1);
     return row * SHEET_COLS + col;
 }
@@ -849,11 +962,17 @@ static void scrollbar_hit(int w, int h, int mx, int my, int vertical) {
         }
     } else {
         int start = ROW_W, end = w - SCROLL_H;
-        if (mx < start + SCROLL_H) state.first_col = state.first_col ? state.first_col - 1 : 0;
-        else if (mx >= end - SCROLL_H) state.first_col = min_u(state.first_col + 1, SHEET_COLS - state.visible_cols);
+        if (mx < start + SCROLL_H) scroll_column(-1);
+        else if (mx >= end - SCROLL_H) scroll_column(1);
         else {
+            unsigned total = column_start(SHEET_COLS), maximum = max_scroll_x();
             int span = end - start - 2 * SCROLL_H;
-            state.first_col = span > 0 ? (unsigned)clamp((mx - start - SCROLL_H) * (int)(SHEET_COLS - state.visible_cols) / span, 0, SHEET_COLS - state.visible_cols) : 0;
+            int size = span > 0 ? (int)(min_u(grid_width(), total) * (unsigned)span / total) : 0;
+            if (size < 14) size = 14;
+            if (size > span) size = span;
+            int travel = span - size;
+            int offset = clamp(mx - start - SCROLL_H - size / 2, 0, travel > 0 ? travel : 0);
+            horizontal_scroll(travel > 0 ? (unsigned)offset * maximum / (unsigned)travel : 0);
         }
     }
 }
@@ -871,6 +990,11 @@ int spreadsheet_click(int x, int y, int w, int h, int mx, int my, int modifiers)
             else open_address();
             return SPREADSHEET_CHANGED;
         }
+    }
+    if (my >= 39 && my < 63) {
+        for (unsigned i = 0; i < sizeof format_buttons / sizeof format_buttons[0]; i++)
+            if (mx >= format_buttons[i].x && mx < format_buttons[i].x + format_buttons[i].w)
+                return i < 4 ? format_selection((SheetFormat)i) : resize_columns(i == 4 ? -16 : 16);
     }
     if (my >= TOOL_H + 3 && my < TOOL_H + FORMULA_H - 4) {
         if (mx >= 8 && mx < 78) { open_address(); return SPREADSHEET_CHANGED; }
@@ -918,8 +1042,8 @@ int spreadsheet_drag(int x, int y, int w, int h, int mx, int my) {
         else if (my >= h - FOOT_H - SCROLL_H) spreadsheet_scroll(1);
     }
     if (state.drag_kind != 5) {
-        if (mx < ROW_W && state.first_col) state.first_col--;
-        else if (mx >= w - SCROLL_H) state.first_col = min_u(state.first_col + 1, SHEET_COLS - state.visible_cols);
+        if (mx < ROW_W) scroll_column(-1);
+        else if (mx >= w - SCROLL_H) scroll_column(1);
     }
     unsigned at = hit_cell(w, h, mx, my);
     if (state.drag_kind == 5) at = at / SHEET_COLS * SHEET_COLS + SHEET_COLS - 1;
