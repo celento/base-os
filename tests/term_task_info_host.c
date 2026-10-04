@@ -35,6 +35,7 @@ static int executable(const char *name){
     int id=fs_create(fs_root(),name);assert(id>=0);
     assert(fs_write(id,(const char *)bex,sizeof bex)==sizeof bex);return id;
 }
+#ifndef TERM_TASK_FIXTURE_ONLY
 int main(void){
     reset();int first=executable("counter.bex");executable("another.bex");
     term_select(0);term_reset();now=70;command("start /counter.bex");
@@ -97,3 +98,5 @@ int main(void){
     assert(!strcmp(expected,actual));
     puts("task metadata: copied names, live status/lifetime, selection preservation, busy start, stop/exit/close/reset and restart identities passed");
 }
+
+#endif

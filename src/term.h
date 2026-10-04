@@ -14,7 +14,10 @@ void term_scroll(int delta);
 int term_scroll_offset(void);
 int term_cwd(void);
 void term_set_cwd(int id);
+/* Pixels use the active width as their tightly packed row stride. */
 const unsigned char *term_canvas(void);
+int term_canvas_width(void);
+int term_canvas_height(void);
 
 /* Scrollback, oldest first. */
 int term_count(void);

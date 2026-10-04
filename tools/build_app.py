@@ -26,8 +26,9 @@ def build(source, output):
                         '-z','noexecstack','-o',str(elf),*objects],check=True)
         subprocess.run([tool('objcopy'),'-O','binary',str(elf),str(output)],check=True)
     data=output.read_bytes();magic,entry,length,reserved=struct.unpack_from('<4I',data)
-    assert magic==0x31584542 and 16<=entry<len(data)==length and not reserved and length<=16383
-    print(f'{output}: {length} bytes, BEX1 entry 0x{entry:x}')
+    assert magic==0x31584542 and 16<=entry<len(data)==length and not reserved and length<=49152
+    print(f'{output}: {length} bytes, BEX1 entry 0x{entry:x}' +
+          (' (IDE data disk required for files over 16383 bytes)' if length>16383 else ''))
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source',type=pathlib.Path);parser.add_argument('output',type=pathlib.Path)

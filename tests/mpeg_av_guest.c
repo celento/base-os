@@ -34,7 +34,7 @@ static void native_begin(int first){
     wins[native_second].x=28;wins[native_second].y=374;wins[native_second].w=450;wins[native_second].h=278;
     require_av(term_task_running(native_first)&&term_task_running(native_second),"MPEG native counters did not start");
     term_task_key(native_first,'+');term_task_key(native_first,'+');term_task_key(native_second,'+');
-    ProgramIO io={native_quiet,native_pixel,0,0};
+    ProgramIO io={native_quiet,native_pixel,0,0,0};
     require_av(!process_task_start(6,mpeg_fpu_a,sizeof mpeg_fpu_a,&io),"MPEG x87 task A");
     require_av(!process_task_start(7,mpeg_fpu_b,sizeof mpeg_fpu_b,&io),"MPEG x87 task B");
 }

@@ -11,6 +11,7 @@ int process_result;
 static int active;
 static uint32_t began;
 static const ProgramIO *output;
+static unsigned canvas_width,canvas_height;
 /* Only ring-3 execution is preempted. Syscalls finish atomically on the kernel
  * stack before the desktop regains control. Task images never overlap USER_BASE. */
 #define TASK_KEYS 32
@@ -23,6 +24,7 @@ typedef struct {
     FpuState fpu;
     ProgramIO io;
     uint32_t wake;
+    unsigned canvas_width,canvas_height;
     int state, result, fpu_ready;
     unsigned key_head, key_count;
     unsigned char keys[TASK_KEYS];
@@ -97,7 +99,7 @@ void process_init(void){
     __asm__ volatile("ltr %%ax"::"a"(0x28):"memory");
 }
 static int valid_image(const void *file,unsigned bytes,uint32_t h[4]) {
-    if(!file||bytes<16||bytes>16383u)return 0;
+    if(!file||bytes<16||bytes>PROCESS_IMAGE_LIMIT)return 0;
     kmemcpy(h,file,16);
     return h[0]==0x31584542&&h[1]>=16&&h[1]<bytes&&h[2]==bytes&&!h[3];
 }
@@ -107,6 +109,7 @@ int process_run(const void *file,unsigned bytes,const ProgramIO *io){
     protect_memory();
     kmemset((void *)USER_BASE,0,USER_CAPACITY);
     kmemcpy((void *)USER_BASE,file,bytes);
+    canvas_width=PROGRAM_CANVAS_DEFAULT_WIDTH;canvas_height=PROGRAM_CANVAS_DEFAULT_HEIGHT;
     output=io;process_result=0;began=timer_ticks();current_task=0;active=1;
     int resume_audio=audio_status()->state==AUDIO_PLAYING;
     if(resume_audio)audio_pause(1);
@@ -131,6 +134,7 @@ int process_task_start(int owner,const void *file,unsigned bytes,const ProgramIO
     task->frame[8]=task->frame[9]=task->frame[10]=task->frame[11]=0x23;
     task->frame[14]=h[1];task->frame[15]=0x1b;task->frame[16]=0x202;
     task->frame[17]=USER_CAPACITY-16;task->frame[18]=0x23;
+    task->canvas_width=PROGRAM_CANVAS_DEFAULT_WIDTH;task->canvas_height=PROGRAM_CANVAS_DEFAULT_HEIGHT;
     task->state=PROCESS_TASK_READY;
     return 0;
 }
@@ -150,6 +154,7 @@ int process_task_step(int owner) {
     if(task->state!=PROCESS_TASK_READY)return 0;
     protect_memory();
     kmemcpy((void *)USER_BASE,task->image,USER_CAPACITY);
+    canvas_width=task->canvas_width;canvas_height=task->canvas_height;
     output=&task->io;current_task=task;active=1;process_result=0;
     fpu_enter(task);
     process_resume(task->frame);
@@ -215,16 +220,20 @@ static int document_parent(int parent) {
     return 0;
 }
 static int file_call(unsigned call,unsigned path_offset,unsigned path_length,
-                     unsigned buffer,unsigned length) {
+                     unsigned buffer,unsigned length,unsigned offset) {
     char path[129];
     if(!user_path(path_offset,path_length,path)) return -1;
-    if(call!=8 && (length>4096 || !user_range(buffer,length))) return -1;
+    unsigned limit=call==15?PROCESS_DOCUMENT_MAX:PROCESS_FILE_CHUNK_MAX;
+    if(call!=8 && (length>limit || !user_range(buffer,length))) return -1;
     int id=fs_resolve(fs_root(),path);
-    if(call==6 || call==8) {
+    if(call==6 || call==8 || call==13) {
         if(!fs_valid(id)||fs_is_dir(id)||fs_is_app(id)) return -1;
         if(call==8) return fs_size(id);
-        unsigned size=(unsigned)fs_size(id);if(size>length)size=length;
-        kmemcpy((void *)(USER_BASE+buffer),fs_data(id),(int)size);
+        unsigned size=(unsigned)fs_size(id);
+        /* Subtract before adding: even an offset near UINT_MAX is a safe EOF. */
+        if(offset>=size)return 0;
+        size-=offset;if(size>length)size=length;
+        kmemcpy((void *)(USER_BASE+buffer),fs_data(id)+offset,(int)size);
         return (int)size;
     }
     char name[FS_NAME_LEN];int parent=fs_destination(fs_root(),path,name);
@@ -275,9 +284,9 @@ int process_interrupt(uint32_t *r){
         if(current_task)task_suspend(r,PROCESS_TASK_READY);
         if(output->present)output->present();
     }
-    else if(call>=6&&call<=8)r[7]=(unsigned)file_call(call,a,b,c,d);
+    else if(call>=6&&call<=8)r[7]=(unsigned)file_call(call,a,b,c,d,0);
     else if(call==9){
-        if(c>160||d>100){r[7]=(unsigned)-1;return 1;}
+        if(c>canvas_width||d>canvas_height){r[7]=(unsigned)-1;return 1;}
         for(unsigned y=0;y<d;y++)for(unsigned x=0;x<c;x++)
             output->plot((int)(a+x),(int)(b+y),(int)e);
         r[7]=0;
@@ -293,7 +302,22 @@ int process_interrupt(uint32_t *r){
         task_suspend(r,PROCESS_TASK_READY);
     }
     else if(call==12)r[7]=current_task?(unsigned)(current_task-tasks)+1:0;
+    else if(call==13)r[7]=(unsigned)file_call(call,a,b,c,d,e);
+    else if(call==14){
+        int supported=(a==PROGRAM_CANVAS_DEFAULT_WIDTH&&b==PROGRAM_CANVAS_DEFAULT_HEIGHT)||
+                      (a==PROGRAM_CANVAS_MAX_WIDTH&&b==PROGRAM_CANVAS_MAX_HEIGHT);
+        if(!supported||!output->resize||output->resize((int)a,(int)b)){
+            r[7]=(unsigned)-1;return 1;
+        }
+        canvas_width=a;canvas_height=b;
+        if(current_task){current_task->canvas_width=a;current_task->canvas_height=b;}
+        r[7]=0;
+    }
+    else if(call==15)r[7]=(unsigned)file_call(call,a,b,c,d,0);
+    else if(call==16)r[7]=(unsigned)fs_sync();
     else r[7]=(unsigned)-1;
     return 1;
 }
 _Static_assert(USER_CAPACITY==65536,"native ABI needs a 64KB segment");
+
+_Static_assert(PROCESS_IMAGE_LIMIT+16384u==USER_CAPACITY,"reserve 16 KiB above native image");

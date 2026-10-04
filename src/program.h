@@ -2,7 +2,21 @@
 #define PROGRAM_H
 #include <stdint.h>
 /* Callbacks operate only on the owning terminal's bounded canvas/output. */
-typedef struct { void (*print)(const char *); void (*plot)(int,int,int); int (*key)(void); void (*present)(void); } ProgramIO;
+#define PROCESS_IMAGE_LIMIT 49152u
+#define PROCESS_FILE_CHUNK_MAX 4096u
+#define PROCESS_DOCUMENT_MAX 32768u
+#define PROGRAM_CANVAS_DEFAULT_WIDTH 160u
+#define PROGRAM_CANVAS_DEFAULT_HEIGHT 100u
+#define PROGRAM_CANVAS_MAX_WIDTH 320u
+#define PROGRAM_CANVAS_MAX_HEIGHT 200u
+typedef struct {
+    void (*print)(const char *);
+    void (*plot)(int,int,int);
+    int (*key)(void);
+    void (*present)(void);
+    /* Optional; a successful resize explicitly clears and activates the canvas. */
+    int (*resize)(int width,int height);
+} ProgramIO;
 int basic_run(const char *source, int length, const ProgramIO *io);
 void process_init(void);
 int process_run(const void *file, unsigned bytes, const ProgramIO *io);

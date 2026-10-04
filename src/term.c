@@ -13,7 +13,8 @@ typedef struct {
     int task_dirty;
     char task_name[TERM_TASK_NAME_LEN];
     unsigned task_started, task_instance;
-    unsigned char canvas[160*100];
+    int canvas_width,canvas_height;
+    unsigned char canvas[PROGRAM_CANVAS_MAX_WIDTH*PROGRAM_CANVAS_MAX_HEIGHT];
 } Terminal;
 #ifndef TERM_MEMORY
 #define TERM_MEMORY (APPS_BASE+0x300000)
@@ -26,13 +27,19 @@ _Static_assert(sizeof(Terminal)*8<=0xC0000,"terminal arena overflow");
 #define T (terms[selected])
 void term_select(int slot){if(slot>=0&&slot<8)selected=slot;}
 static void push(const char *s){T.task_dirty=1;int slot=(T.head+T.count)%TERM_LINES;if(T.count<TERM_LINES)T.count++;else T.head=(T.head+1)%TERM_LINES;int i=0;while(s[i]&&i<TERM_COLS){T.lines[slot][i]=s[i];i++;}T.lines[slot][i]=0;}
-void term_reset(void){process_task_clear(selected);kmemset(&T,0,sizeof T);T.cwd=fs_root();T.cwd_identity=fs_identity(T.cwd);push("Type help for commands; man NAME for examples.");push("Page Up / Page Down scroll through output.");}
+static void canvas_reset(void){
+    kmemset(T.canvas,0,sizeof T.canvas);T.canvas_on=0;
+    T.canvas_width=PROGRAM_CANVAS_DEFAULT_WIDTH;T.canvas_height=PROGRAM_CANVAS_DEFAULT_HEIGHT;
+}
+void term_reset(void){process_task_clear(selected);kmemset(&T,0,sizeof T);canvas_reset();T.cwd=fs_root();T.cwd_identity=fs_identity(T.cwd);push("Type help for commands; man NAME for examples.");push("Page Up / Page Down scroll through output.");}
 int term_count(void){return T.count;}
 const char *term_get(int i){return i>=0&&i<T.count?T.lines[(T.head+i)%TERM_LINES]:"";}
 const char *term_input(void){return T.input;}
 int term_cwd(void){if(!fs_is_dir(T.cwd)||fs_identity(T.cwd)!=T.cwd_identity){T.cwd=fs_root();T.cwd_identity=fs_identity(T.cwd);}return T.cwd;}
 void term_set_cwd(int id){if(fs_is_dir(id)){T.cwd=id;T.cwd_identity=fs_identity(id);}}
 const unsigned char *term_canvas(void){return T.canvas_on?T.canvas:0;}
+int term_canvas_width(void){return T.canvas_width;}
+int term_canvas_height(void){return T.canvas_height;}
 void term_prompt(char *out,int max){char path[FS_PATH_LEN];fs_path(term_cwd(),path,sizeof path);int p=0;for(int i=0;path[i]&&p<max-3;i++)out[p++]=path[i];if(max>2){out[p++]='>';out[p++]=' ';out[p]=0;}}
 void term_char(char c){T.scroll=0;if(c>=32&&c<=126&&T.len<TERM_COLS){T.input[T.len++]=c;T.input[T.len]=0;}}
 void term_backspace(void){T.scroll=0;if(T.len)T.input[--T.len]=0;}
@@ -139,7 +146,18 @@ static int download_command(int cwd,const char *url,const char *remaining,int qu
     push("Download started in background. Use downloads for status; cancel to stop.");return 0;
 }
 static void cat(int id){char row[81];int n=0;for(int i=0;i<fs_size(id);i++){char c=fs_data(id)[i];if(c=='\r')continue;if(c=='\n'){row[n]=0;push(row);n=0;continue;}row[n++]=c>=32&&c<=126?c:'.';if(n==80){row[n]=0;push(row);n=0;}}if(n){row[n]=0;push(row);}}
-static void plot(int x,int y,int color){if(x>=0&&x<160&&y>=0&&y<100){T.task_dirty=1;T.canvas_on=1;T.canvas[y*160+x]=(unsigned char)color;}}
+static void plot(int x,int y,int color){
+    if(x>=0&&x<T.canvas_width&&y>=0&&y<T.canvas_height){
+        T.task_dirty=1;T.canvas_on=1;T.canvas[y*T.canvas_width+x]=(unsigned char)color;
+    }
+}
+static int canvas_resize(int width,int height){
+    if(!((width==(int)PROGRAM_CANVAS_DEFAULT_WIDTH&&height==(int)PROGRAM_CANVAS_DEFAULT_HEIGHT)||
+         (width==(int)PROGRAM_CANVAS_MAX_WIDTH&&height==(int)PROGRAM_CANVAS_MAX_HEIGHT)))return -1;
+    kmemset(T.canvas,0,sizeof T.canvas);
+    T.canvas_width=width;T.canvas_height=height;T.canvas_on=1;T.task_dirty=1;
+    return 0;
+}
 int term_task_running(int slot){
     int state=process_task_status(slot);
     return state==PROCESS_TASK_READY||state==PROCESS_TASK_SLEEPING;
@@ -210,7 +228,7 @@ static int execute(const char *s,int depth,int *budget){
     int cwd=term_cwd(),id=arg[0]?fs_resolve(cwd,arg):cwd;
     if(!kstrcmp(cmd,"help")||!kstrcmp(cmd,"man"))return manual(arg);
     else if(!kstrcmp(cmd,"echo"))push(s);
-    else if(!kstrcmp(cmd,"clear")){T.head=T.count=T.canvas_on=0;}
+    else if(!kstrcmp(cmd,"clear")){T.head=T.count=0;canvas_reset();}
     else if(!kstrcmp(cmd,"net"))print_network();
     else if(!kstrcmp(cmd,"download"))return download_command(cwd,arg,p,quote!=0);
     else if(!kstrcmp(cmd,"downloads")){
@@ -248,20 +266,20 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"stop")){if(!term_task_running(selected))push("No native task in this terminal.");else term_task_stop(selected);}
     else if(!kstrcmp(cmd,"start")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
-        ProgramIO io={push,plot,0,0};
+        ProgramIO io={push,plot,0,0,canvas_resize};
         if(process_task_start(selected,fs_data(id),fs_size(id),&io)){
             push("Cannot start: this terminal is busy or the BEX1 file is invalid.");return -1;
         }
         kstrcpy(T.task_name,fs_name(id));T.task_started=timer_ticks();
         if(!++next_task_instance)++next_task_instance;
         T.task_instance=next_task_instance;
-        kmemset(T.canvas,0,sizeof T.canvas);T.canvas_on=0;
+        canvas_reset();
         push("Native task started. Ctrl+C stops; close ends it.");
     }
     else if(!kstrcmp(cmd,"basic")||!kstrcmp(cmd,"exec")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
         if(term_task_running(selected)){push("Stop this terminal's native task first.");return -1;}
-        ProgramIO io={push,plot,program_key,program_present};kmemset(T.canvas,0,sizeof T.canvas);T.canvas_on=0;
+        ProgramIO io={push,plot,program_key,program_present,canvas_resize};canvas_reset();
         int rc=!kstrcmp(cmd,"basic")?basic_run(fs_data(id),fs_size(id),&io):process_run(fs_data(id),fs_size(id),&io);
         if(rc){push("Program stopped (error, fault, or execution limit).");return -1;}push("Program finished.");
     }else return -1;return 0;
