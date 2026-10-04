@@ -35,7 +35,8 @@ const char *fs_storage_name(void);
 unsigned fs_used_bytes(void);
 int fs_resolve(int cwd, const char *path);
 int fs_destination(int cwd, const char *path, char *name);
-void fs_init(void);
+/* Reconfiguration refuses an in-flight snapshot without touching its arenas. */
+int fs_init(void);
 int fs_root(void);
 int fs_valid(int id);
 int fs_is_dir(int id);
@@ -53,7 +54,9 @@ int fs_find_child(int parent, const char *name);
 int fs_mkdir(int parent, const char *name);
 int fs_create(int parent, const char *name);
 int fs_create_app(int parent, const char *name);
-/* Atomic: writes all bytes, or returns -1 without changing the file. */
+/* Mutators return FS_ERR_BUSY without side effects while a snapshot owns RAM. */
+#define FS_ERR_BUSY (-2)
+/* Atomic: writes all bytes, or returns a negative error without changing it. */
 int fs_write(int id, const char *data, int len);
 int fs_read(int id, char *out, int max);
 int fs_list(int parent, int *ids, int max);
@@ -65,7 +68,7 @@ int fs_unique_copy(int parent, const char *src, char *out);
 int fs_child_count(int parent);
 int fs_move(int id, int new_parent);
 int fs_delete(int id);
-void fs_empty_dir(int parent);
+int fs_empty_dir(int parent);
 int fs_copy(int id, int parent);
 int fs_rename(int id, const char *name);
 
@@ -73,7 +76,33 @@ int fs_save_disk(void);
 #define FS_LOAD_BLANK 1
 int fs_load_disk(void);
 int fs_needs_sync(void);
+/* One async owner plus an independent blocking join/result slot. A retained
+ * async result never prevents a later blocking sync. Tickets survive completion
+ * until explicitly released. Remount/reinitialization invalidates them; counters
+ * never wrap/reuse.
+ * request: 0 accepted, -1 unavailable, FS_ERR_BUSY during a job or while the
+ * sole async result slot is retained. Rejected requests leave *ticket unchanged.
+ * It does no IDE serialization/I/O. Floppy requests retain synchronous behavior.
+ * result: FS_SYNC_PENDING, 0 fully verified durable, -1 failed, or STALE.
+ * release: 0 released, BUSY while running, STALE for another owner.
+ * A clean request still has an immediately durable, releasable ticket. */
+typedef struct { unsigned incarnation, serial; } FsSyncTicket;
+#define FS_SYNC_PENDING 1
+#define FS_SYNC_STALE (-3)
+int fs_sync_request(FsSyncTicket *ticket);
+int fs_sync_result(FsSyncTicket ticket);
+int fs_sync_release(FsSyncTicket ticket);
+int fs_sync_busy(void);
+/* One bounded CPU quantum or ATA poll (at most 8 sectors). MORE means that
+ * callers should schedule another quantum, WAIT means hardware is pending.
+ * Neither step nor device polling dispatches applications or retains a stack. */
+enum FsSyncProgress { FS_SYNC_IDLE, FS_SYNC_WAIT, FS_SYNC_MORE, FS_SYNC_FINISHED };
+enum FsSyncProgress fs_sync_step(void);
+/* Blocking compatibility: joins an existing snapshot, never queued-success.
+ * It does not consume an explicit async owner's terminal result. */
 int fs_sync(void);
+/* IDE: request only, progressed with fs_sync_step; owns/reaps its own result.
+ * Floppy: blocking compatibility path. Existing failure backoff is preserved. */
 void fs_autosync(void);
 const char *fs_storage_status(void);
 

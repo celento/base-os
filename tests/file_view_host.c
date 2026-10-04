@@ -17,6 +17,7 @@ static unsigned char pool_arena[FS_POOL_CAPACITY];
 #define FS_POOL_BASE ((uintptr_t)pool_arena)
 int platform_memory_range_available(uint32_t base, uint32_t end) { (void)base; (void)end; return 0; }
 #include "../src/fs.c"
+#include "ata_async_stub.h"
 #include "file_clipboard.h"
 #include "file_view.h"
 

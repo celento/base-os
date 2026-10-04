@@ -16,6 +16,7 @@ static unsigned char node_arena[FS_CAPACITY], image_arena[FS_IMG_CAPACITY], pool
 #define FS_IMG_BASE ((uintptr_t)image_arena)
 #define FS_POOL_BASE ((uintptr_t)pool_arena)
 #include "../src/fs.c"
+#include "ata_async_stub.h"
 static unsigned char floppy[DISK_SECTORS * SECTOR_SIZE], ide[DATA_DISK_SECTORS * SECTOR_SIZE];
 static int ide_present;
 void platform_poll(void) {}
