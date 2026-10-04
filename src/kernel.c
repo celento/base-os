@@ -2937,9 +2937,12 @@ static void handle_calc_click(int wx, int wy, int ww, int wh) {
 #define PAINT_NTOOLS   7
 #define PAINT_NWELL    12
 #define PAINT_NWELL2   16
-_Static_assert(PAINT_W * PAINT_H <= 0x4000, "paint canvas overlaps viewer");
+#define PAINT_FILL_OFFSET 0x4000
+_Static_assert(PAINT_W * PAINT_H <= PAINT_FILL_OFFSET, "paint canvas overlaps fill queue");
+_Static_assert(PAINT_W * PAINT_H <= 0x10000, "paint fill index overflow");
+_Static_assert(PAINT_FILL_OFFSET + sizeof(uint16_t) * PAINT_W * PAINT_H <= 0xC000,
+               "paint fill queue overlaps save staging");
 _Static_assert(0xC000 + 8 + PAINT_W * PAINT_H <= PAINT_CAPACITY, "paint staging overflow");
-_Static_assert(0x8000 + 2 * PAINT_W * PAINT_H <= PAINT_CAPACITY, "paint fill stack overflow");
 
 #define PT_PENCIL  0
 #define PT_FILL    1
@@ -3140,30 +3143,37 @@ static void paint_commit_shape(void) {
 static void paint_flood(int sx, int sy, uint8_t nc) {
     if (sx < 0 || sy < 0 || sx >= PAINT_W || sy >= PAINT_H)
         return;
-    uint8_t oc = paint_pix[sy * PAINT_W + sx];
+    int start = sy * PAINT_W + sx;
+    uint8_t oc = paint_pix[start];
     if (oc == nc)
         return;
-    uint16_t *st = (uint16_t *)(PAINT_MEM + 0x8000);
-    int sp = 0;
-    st[sp++] = (uint16_t)(sx + sy * PAINT_W);
-    int n = 0;
-    int cap = PAINT_W * PAINT_H;
-    while (sp > 0 && n < cap) {
-        int p = st[--sp];
-        if (paint_pix[p] != oc)
-            continue;
-        paint_pix[p] = nc;
-        n++;
+    uint16_t *queue = (uint16_t *)(PAINT_MEM + PAINT_FILL_OFFSET);
+    int head = 0, tail = 0;
+    /* Mark on enqueue: every pixel enters at most once, so the fixed queue
+     * needs at most PAINT_W * PAINT_H entries without dropping any neighbors.
+     * Canvas, queue, save staging and undo history all have separate storage. */
+    paint_pix[start] = nc;
+    queue[tail++] = (uint16_t)start;
+    while (head < tail) {
+        int p = queue[head++];
         int x = p % PAINT_W;
         int y = p / PAINT_W;
-        if (x > 0 && sp < cap - 1)
-            st[sp++] = (uint16_t)(p - 1);
-        if (x < PAINT_W - 1 && sp < cap - 1)
-            st[sp++] = (uint16_t)(p + 1);
-        if (y > 0 && sp < cap - 1)
-            st[sp++] = (uint16_t)(p - PAINT_W);
-        if (y < PAINT_H - 1 && sp < cap - 1)
-            st[sp++] = (uint16_t)(p + PAINT_W);
+        if (x > 0 && paint_pix[p - 1] == oc) {
+            paint_pix[p - 1] = nc;
+            queue[tail++] = (uint16_t)(p - 1);
+        }
+        if (x < PAINT_W - 1 && paint_pix[p + 1] == oc) {
+            paint_pix[p + 1] = nc;
+            queue[tail++] = (uint16_t)(p + 1);
+        }
+        if (y > 0 && paint_pix[p - PAINT_W] == oc) {
+            paint_pix[p - PAINT_W] = nc;
+            queue[tail++] = (uint16_t)(p - PAINT_W);
+        }
+        if (y < PAINT_H - 1 && paint_pix[p + PAINT_W] == oc) {
+            paint_pix[p + PAINT_W] = nc;
+            queue[tail++] = (uint16_t)(p + PAINT_W);
+        }
     }
 }
 
@@ -3592,6 +3602,9 @@ static void handle_paint_click(int wx, int wy, int ww, int wh) {
     if (!paint_mouse_logical(wx, wy, ww, wh, mouse_x, mouse_y, &lx, &ly))
         return;
 
+    /* A same-color fill is a no-op, including the undo/redo chain. */
+    if (paint_tool == PT_FILL && paint_pix[ly * PAINT_W + lx] == paint_color)
+        return;
     history_record(&paint_history,paint_pix);
     if (paint_tool == PT_PENCIL) {
         paint_stamp(lx, ly, paint_brush - 1, paint_color);
