@@ -396,6 +396,16 @@ class Session(DesktopSession):
                 raise AssertionError(('Visible text not recognized; screenshots retained', texts, absent, event))
             time.sleep(.08)
 
+    def accepted_name_frame(self, *texts, generation=None, absent=()):
+        """Reuse acceptance pixels so OCR does not consume another pending interval."""
+        event = self.last_accepted_name_frame
+        content = normalized(event['ocr'])
+        assert all(normalized(t) in content for t in texts), ('Accepted frame text missing', texts, event)
+        assert all(normalized(t) not in content for t in absent), ('Accepted dialog remained visible', event)
+        if generation is not None:
+            assert generation in event['pending_generations'], ('Accepted frame was not pending', generation, event)
+        return event
+
     def idle(self):
         self.wait(lambda: not pending_generations(self.serial()), 'All serial boundaries durable', self.timeout)
 
@@ -460,6 +470,7 @@ class Session(DesktopSession):
             event = self.frame('name-submit-' + filename)
             content = normalized(event['ocr'])
             if normalized(title) not in content:
+                self.last_accepted_name_frame = event
                 if not self.asynchronous:
                     return None
                 generation = self.new_job(prior)
@@ -594,24 +605,31 @@ def source_evidence(build):
 
 
 def writer_first(session, asynchronous):
-    session.boot(); session.idle(); session.launch('writer')
+    session.boot(); session.idle()
+    # Prepare the other ordinary window before the measured save. Switching to
+    # it and changing one character stays meaningful even on a fast IDE boundary.
+    session.launch('editor'); session.key('alt-ret'); session.text('OTHER LIVE')
+    session.visible('other-window-before-save', 'OTHER LIVE')
+    session.launch('writer')
     session.key('alt-ret')  # Maximize this first-open window through normal input.
     session.text('ALPHA'); session.visible('writer-before-save', 'ALPHA')
     generation = session.name_dialog('ctrl-shift-s', 'Save document as', 'async.bwr')
-    session.visible('writer-save-accepted', 'ALPHA', 'Saving' if asynchronous else 'Saved',
-                    generation=generation if asynchronous else None, absent=('Save document as',))
+    accepted = session.accepted_name_frame('ALPHA', 'Saving' if asynchronous else 'Saved',
+                                           generation=generation if asynchronous else None,
+                                           absent=('Save document as',))
     began = session.text('Z')
     private = session.visible('writer-private-edit', 'ALPHAZ',
                               generation=generation if asynchronous else None, since=began)
-    session.launch('editor'); session.key('alt-ret'); began = session.text('OTHER LIVE')
-    other = session.visible('other-window-live', 'OTHER LIVE',
+    session.key('ctrl-tab'); began = session.text('X')
+    other = session.visible('other-window-live', 'OTHER LIVEX',
                             generation=generation if asynchronous else None, since=began)
     session.launch('writer'); session.visible('writer-returned', 'ALPHAZ')
     durable = session.durable(generation)
     session.visible('writer-submitted-baseline', 'ALPHAZ', 'Unsaved')
     recovery = session.recovery_boundary(generation)
     session.frame('writer-recovery-durable')
-    return dict(save=durable, private_edit=private, other_window=other, recovery_jobs=recovery)
+    return dict(save=durable, save_accepted=accepted, private_edit=private,
+                other_window=other, recovery_jobs=recovery)
 
 
 def writer_rest(session, asynchronous):
