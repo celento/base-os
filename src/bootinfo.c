@@ -26,6 +26,11 @@ static int available(uint32_t base, uint32_t end) {
     }
     return 1;
 }
+int platform_memory_range_available(uint32_t base, uint32_t end) {
+    if (base >= end || !boot_info->map_count || boot_info->map_count > E820_MAX)
+        return 0;
+    return available(base, end);
+}
 void platform_validate_memory(void) {
     extern char __kernel_end[];
     if (!boot_info->map_count || boot_info->map_count > E820_MAX)
@@ -127,3 +132,8 @@ _Static_assert(PAINT_HISTORY_BASE >= APPS_BASE && PAINT_HISTORY_BASE + PAINT_HIS
 _Static_assert(GFX_CACHE_BASE + GFX_CACHE_CAPACITY <= APPS_BASE + 0x300000, "graphics cache overlaps terminals");
 
 _Static_assert(TASK_INTERRUPT_STACK_BASE >= TASK_BASE && TASK_INTERRUPT_STACK_BASE + TASK_INTERRUPT_STACK_CAPACITY <= TASK_BASE + TASK_CAPACITY, "invalid task syscall stack");
+
+_Static_assert(RAM_REQUIRED_END <= FS_LARGE_POOL_BASE &&
+               FS_LARGE_POOL_BASE + FS_LARGE_POOL_CAPACITY <= FS_LARGE_IMG_BASE &&
+               FS_LARGE_IMG_BASE + FS_LARGE_IMG_CAPACITY == RAM_LARGE_REQUIRED_END,
+               "optional filesystem arenas overlap existing reservations");

@@ -77,6 +77,12 @@
 #define VIDEO_BASE 0x3600000
 #define VIDEO_CAPACITY 0x900000
 #define RAM_REQUIRED_END 0x3F00000
+/* Optional large-volume arenas. Selected only after a complete E820 check. */
+#define FS_LARGE_POOL_BASE 0x3F00000
+#define FS_LARGE_POOL_CAPACITY 0x2000000
+#define FS_LARGE_IMG_BASE 0x5F00000
+#define FS_LARGE_IMG_CAPACITY 0x2000000
+#define RAM_LARGE_REQUIRED_END 0x7F00000
 #define FS_DISK_LBA 384
 #define FS_DISK_SECTORS 2400
 #define FS_SECOND_LBA 2784
@@ -87,5 +93,11 @@
 #define DATA_SECOND_LBA 16384
 #define DATA_MARKER_MAGIC 0x44534F42
 #define DATA_MARKER_VERSION 1
+/* Distinct, explicitly initialized geometry; never resize an existing disk. */
+#define DATA_LARGE_DISK_SECTORS 131072
+#define DATA_LARGE_SLOT_SECTORS 65535
+#define DATA_LARGE_FIRST_LBA 1
+#define DATA_LARGE_SECOND_LBA 65536
+#define DATA_LARGE_MARKER_VERSION 2
 #define SECTOR_SIZE 512
 #endif

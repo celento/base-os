@@ -168,3 +168,11 @@ The native syscall stack lives inside the supervisor-only task arena rather than
 kernel BSS. Its 64 KiB budget accommodates device-only MP3 decoding during ordinary
 file operations; compiler stack-usage output reports about17 KiB for that decoder
 alone. GUI/file callbacks are never dispatched reentrantly from device polling.
+
+## Optional large data-volume profile
+
+The unchanged default machine is 64 MiB RAM with a 16 MiB v4 IDE volume.
+An explicitly selected 128 MiB/64 MiB profile adds marker v2, snapshot v5,
+16 MiB files and about 32 MiB total payload using independently E820-validated
+high arenas. No existing image is automatically resized or converted. See
+[large-volume creation, copy migration, memory contracts and checks](LARGE_VOLUMES.md).

@@ -6,7 +6,7 @@ python3 tools/volume.py build/baseos-data.img export /Pictures/picture.bmp pictu
 python3 tools/volume.py build/baseos.img ls /docs
 python3 tools/volume.py build/baseos.img mkdir /Projects
 
-Both legacy floppy snapshots and explicitly marked 16 MiB data disks are supported.
+Legacy floppy snapshots and explicitly marked 16 MiB or 64 MiB data disks are supported.
 Create a new data image with init_data.py, then boot BaseOS once before importing.
 """
 import argparse
@@ -38,6 +38,8 @@ DATA_FIRST_LBA = C.get('DATA_FIRST_LBA', 1)
 DATA_SECOND_LBA = C.get('DATA_SECOND_LBA', 16384)
 DATA_FILE_LIMIT = 2097152
 DATA_TOTAL_LIMIT = (DATA_SLOT_SECTORS - 1) * SECTOR_SIZE - LEGACY_NODES * 40
+LARGE_DATA_FILE_LIMIT = 16777216
+LARGE_DATA_TOTAL_LIMIT = (C['DATA_LARGE_SLOT_SECTORS'] - 1) * SECTOR_SIZE - LEGACY_NODES * 40
 EPOCH = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
 
 
@@ -51,6 +53,7 @@ class VolumeLayout:
     file_limit: int
     total_limit: int
     node_limit: int
+    marker_version: int = 0
 
     def capacity(self, count):
         """Preserve the full old v4 capacity; reserve extra records as needed."""
@@ -68,23 +71,36 @@ FLOPPY_LAYOUT = VolumeLayout('floppy', C['DISK_SECTORS'], C['FS_DISK_SECTORS'],
                              (LEGACY_NODES - 1) * 16383, LEGACY_NODES)
 DATA_LAYOUT = VolumeLayout('data', DATA_DISK_SECTORS, DATA_SLOT_SECTORS,
                            (DATA_FIRST_LBA, DATA_SECOND_LBA), 4,
-                           DATA_FILE_LIMIT, DATA_TOTAL_LIMIT, MAX_NODES)
+                           DATA_FILE_LIMIT, DATA_TOTAL_LIMIT, MAX_NODES, DATA_MARKER_VERSION)
+LARGE_DATA_LAYOUT = VolumeLayout('data', C['DATA_LARGE_DISK_SECTORS'], C['DATA_LARGE_SLOT_SECTORS'],
+                                 (C['DATA_LARGE_FIRST_LBA'], C['DATA_LARGE_SECOND_LBA']), 5,
+                                 LARGE_DATA_FILE_LIMIT, LARGE_DATA_TOTAL_LIMIT, MAX_NODES,
+                                 C['DATA_LARGE_MARKER_VERSION'])
+DATA_PROFILES = {'default': DATA_LAYOUT, 'large': LARGE_DATA_LAYOUT}
 
 
-def data_marker():
-    """The complete, explicitly opted-in data-disk marker sector."""
-    header = struct.pack('<6I', DATA_MARKER_MAGIC, DATA_MARKER_VERSION,
-                         DATA_DISK_SECTORS, DATA_SLOT_SECTORS,
-                         DATA_FIRST_LBA, DATA_SECOND_LBA)
+def data_layout(profile='default'):
+    try:
+        return DATA_PROFILES[profile]
+    except KeyError:
+        raise ValueError('Unknown data profile; choose default or large') from None
+
+
+def data_marker(profile='default'):
+    """The explicitly opted-in marker; no-argument calls retain exact v1 bytes."""
+    layout = data_layout(profile)
+    header = struct.pack('<6I', DATA_MARKER_MAGIC, layout.marker_version,
+                         layout.sectors, layout.slot_sectors, *layout.lbas)
     return (header + struct.pack('<I', zlib.crc32(header))).ljust(SECTOR_SIZE, b'\0')
 
 
 def disk_layout(data):
-    """Recognize a disk without treating an arbitrary raw image as writable."""
-    if len(data) == DATA_DISK_SECTORS * SECTOR_SIZE:
-        if data[:SECTOR_SIZE] != data_marker():
-            raise ValueError('Invalid or missing data-disk marker; refusing this image')
-        return DATA_LAYOUT
+    """Recognize only exact known geometry and complete checksummed markers."""
+    for profile, layout in DATA_PROFILES.items():
+        if len(data) == layout.sectors * SECTOR_SIZE:
+            if data[:SECTOR_SIZE] != data_marker(profile):
+                raise ValueError('Invalid or missing data-disk marker; refusing this image')
+            return layout
     if len(data) in (2880 * SECTOR_SIZE, C['DISK_SECTORS'] * SECTOR_SIZE):
         return FLOPPY_LAYOUT
     raise ValueError('Unrecognized image size; refusing this image')
@@ -108,7 +124,7 @@ def decode(data, slot, layout=None):
     if len(data) < start + layout.slot_sectors * SECTOR_SIZE:
         return None
     magic, version, count, size, crc, gen, hcrc = struct.unpack_from('<7I', data, start)
-    versions = (4,) if layout.kind == 'data' else (1, 2, 3)
+    versions = (layout.version,) if layout.kind == 'data' else (1, 2, 3)
     if magic != MAGIC or version not in versions or not 1 <= count <= layout.node_limit:
         return None
     if version == 1 and slot:
@@ -138,7 +154,7 @@ def decode(data, slot, layout=None):
         if total > layout.capacity(count) or b'\0' not in raw:
             return None
         try:
-            name = raw.split(b'\0', 1)[0].decode('ascii', errors='strict')
+            name = raw.split(b'\0', 1)[0].decode('latin1')
         except UnicodeError:
             return None
         if '/' in name or (ident and name in ('', '.', '..')):
@@ -224,6 +240,33 @@ def sync_directory(directory):
         os.close(fd)
 
 
+def encode_snapshot(nodes, layout, generation):
+    """Serialize recognized profile bounds; callers validate the entire graph
+    with decode before publishing. Latin-1 round-trips the kernel's byte names."""
+    if layout not in (FLOPPY_LAYOUT, DATA_LAYOUT, LARGE_DATA_LAYOUT):
+        raise ValueError('Unrecognized snapshot layout')
+    if not 1 <= len(nodes) <= layout.node_limit:
+        raise ValueError('No free file slots')
+    if any(len(n['data']) > layout.file_limit for n in nodes.values()):
+        raise ValueError(f'File exceeds {layout.file_limit:,} bytes')
+    allowance = layout.capacity(len(nodes))
+    if sum(len(n['data']) for n in nodes.values()) > allowance:
+        raise ValueError(f'Volume full: total file data exceeds {allowance:,} bytes')
+    payload = bytearray()
+    for ident, n in sorted(nodes.items()):
+        name = n['name'].encode('latin1')
+        if len(name) >= 24 or b'\0' in name:
+            raise ValueError('Invalid file name')
+        payload += struct.pack('<HhBBHI24sI', ident, n['parent'], n['directory'], n['app'], 0,
+                               len(n['data']), name, n['modified']) + n['data']
+    if len(payload) > layout.payload_limit:
+        raise ValueError('Volume full')
+    header = struct.pack('<6I', MAGIC, layout.version, len(nodes), len(payload),
+                         zlib.crc32(payload), generation & 0xffffffff)
+    header += struct.pack('<I', zlib.crc32(header))
+    return header, payload
+
+
 def commit(image, data, slot, generation, nodes, *, original=None):
     """Back up and replace only the older snapshot, never the current snapshot.
 
@@ -243,25 +286,7 @@ def commit(image, data, slot, generation, nodes, *, original=None):
     actual_slot, actual_generation, _ = load(data)
     if (slot, generation) != (actual_slot, actual_generation):
         raise ValueError('Snapshot changed; refusing stale update')
-    if not 1 <= len(nodes) <= layout.node_limit:
-        raise ValueError('No free file slots')
-    if any(len(n['data']) > layout.file_limit for n in nodes.values()):
-        raise ValueError(f'File exceeds {layout.file_limit:,} bytes')
-    allowance = layout.capacity(len(nodes))
-    if sum(len(n['data']) for n in nodes.values()) > allowance:
-        raise ValueError(f'Volume full: total file data exceeds {allowance:,} bytes')
-    payload = bytearray()
-    for ident, n in sorted(nodes.items()):
-        name = n['name'].encode('ascii')
-        if len(name) >= 24 or b'\0' in name:
-            raise ValueError('Invalid file name')
-        payload += struct.pack('<HhBBHI24sI', ident, n['parent'], n['directory'], n['app'], 0,
-                               len(n['data']), name, n['modified']) + n['data']
-    if len(payload) > layout.payload_limit:
-        raise ValueError('Volume full')
-    header = struct.pack('<6I', MAGIC, layout.version, len(nodes), len(payload),
-                         zlib.crc32(payload), (generation + 1) & 0xffffffff)
-    header += struct.pack('<I', zlib.crc32(header))
+    header, payload = encode_snapshot(nodes, layout, generation + 1)
     start = layout.lbas[1 - slot] * SECTOR_SIZE
     updated = bytearray(data)
     updated[start:start + SECTOR_SIZE] = header.ljust(SECTOR_SIZE, b'\0')
@@ -298,6 +323,7 @@ def commit(image, data, slot, generation, nodes, *, original=None):
 def show_info(data):
     layout = disk_layout(data)
     print(f'Type: {layout.kind} ({len(data):,} bytes)')
+    print(f'Snapshot version: {layout.version}')
     print(f'File limit: {layout.file_limit:,} bytes')
     print(f'Snapshot payload capacity: {layout.payload_limit:,} bytes')
     print(f'Node limit: {layout.node_limit} (includes root, folders, and applications)')

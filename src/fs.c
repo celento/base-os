@@ -8,6 +8,8 @@
 #define FS_DISK_MAGIC   0x46534F42u   /* "BOSF" */
 #define FS_DISK_VERSION 3
 #define FS_DATA_VERSION 4
+#define FS_LARGE_DATA_VERSION 5
+#define FS_LARGE_DATA_PAYLOAD ((DATA_LARGE_SLOT_SECTORS - 1) * SECTOR_SIZE)
 #define FS_DATA_PAYLOAD ((DATA_SLOT_SECTORS - 1) * SECTOR_SIZE)
 #define FS_DATA_CAPACITY (FS_DATA_PAYLOAD - FS_LEGACY_NODES * 40)
 
@@ -55,7 +57,11 @@ static unsigned sync_failures;
 static unsigned last_sync_attempt;
 static int save_failed;
 static unsigned pool_used;
-static int data_backend;
+/* Backend selects the wire format. Arena selection is deliberately separate:
+ * blank-disk migration temporarily reads the floppy into the selected pool. */
+static int data_backend; /* 0 floppy, 1 default IDE, 2 large IDE */
+static uintptr_t pool_base, image_base;
+static unsigned pool_capacity, image_capacity;
 static int data_problem;
 
 _Static_assert(sizeof(FsNode) * FS_MAX_NODES <= FS_CAPACITY, "FS arena overflow");
@@ -73,6 +79,14 @@ _Static_assert(FS_DISK_SECTORS * FS_SECTOR_SIZE <= FS_IMG_CAPACITY, "staging ove
 _Static_assert(FS_SECOND_LBA >= FS_DISK_LBA + FS_DISK_SECTORS &&
                FS_SECOND_LBA + FS_DISK_SECTORS <= DISK_SECTORS, "disk layout overlap");
 
+_Static_assert(FS_LARGE_DATA_PAYLOAD - FS_LEGACY_NODES * 40 + FS_MAX_NODES <=
+               FS_LARGE_POOL_CAPACITY, "large file arena overflow");
+_Static_assert(DATA_LARGE_SLOT_SECTORS * SECTOR_SIZE <= FS_LARGE_IMG_CAPACITY,
+               "large staging overflow");
+_Static_assert(DATA_LARGE_FIRST_LBA + DATA_LARGE_SLOT_SECTORS == DATA_LARGE_SECOND_LBA &&
+               DATA_LARGE_SECOND_LBA + DATA_LARGE_SLOT_SECTORS + 1 == DATA_LARGE_DISK_SECTORS,
+               "large data slot overlap");
+
 __attribute__((weak)) unsigned fs_clock(void) { return 0; }
 __attribute__((weak)) void fs_background_poll(void) {}
 unsigned fs_modified(int id) { return fs_valid(id) ? nodes[id].modified : 0; }
@@ -83,11 +97,17 @@ unsigned fs_capacity_for_nodes(unsigned count) {
     if (!count || count > (unsigned)fs_node_limit()) return 0;
     if (!data_backend) return (FS_LEGACY_NODES - 1) * (FS_MAX_SIZE - 1);
     if (count < FS_LEGACY_NODES) count = FS_LEGACY_NODES;
-    return FS_DATA_PAYLOAD - count * sizeof(DiskNode);
+    return (fs_large_profile() ? FS_LARGE_DATA_PAYLOAD : FS_DATA_PAYLOAD) - count * sizeof(DiskNode);
 }
 unsigned fs_capacity(void) { return fs_capacity_for_nodes(fs_node_count()); }
-unsigned fs_file_limit(void) { return data_backend ? FS_FILE_MAX : FS_MAX_SIZE - 1; }
-const char *fs_storage_name(void) { return data_backend ? "IDE data disk" : "Boot floppy"; }
+int fs_large_profile(void) { return data_backend == 2; }
+int fs_large_arenas_available(void) {
+    return platform_memory_range_available(FS_LARGE_POOL_BASE, RAM_LARGE_REQUIRED_END);
+}
+unsigned fs_file_limit(void) {
+    return fs_large_profile() ? FS_LARGE_FILE_MAX : data_backend ? FS_FILE_MAX : FS_MAX_SIZE - 1;
+}
+const char *fs_storage_name(void) { return fs_large_profile() ? "Large IDE data disk" : data_backend ? "IDE data disk" : "Boot floppy"; }
 unsigned fs_used_bytes(void) {
     unsigned n = 0;
     for (int i = 0; i < FS_MAX_NODES; ++i) if (nodes[i].used) n += nodes[i].size;
@@ -134,6 +154,19 @@ void kmemset(void *d, int v, int n) {
     n&=3;
 #endif
     for(int i=0;i<n;i++)dd[i]=(unsigned char)v;
+}
+
+/* Large byte operations keep device-only work bounded just like CRC scans.
+ * This helper is for nonoverlapping byte spans, never live GUI callbacks. */
+static void copy_bytes(void *destination, const void *source, unsigned length) {
+    unsigned char *d = destination;
+    const unsigned char *s = source;
+    while (length) {
+        unsigned n = length > 4096 ? 4096 : length;
+        kmemcpy(d, s, n);
+        d += n; s += n; length -= n;
+        if (n == 4096) fs_background_poll();
+    }
 }
 
 static int valid_name(const char *name) {
@@ -220,6 +253,8 @@ void fs_init(void) {
     save_failed = 0;
     pool_used = 0;
     data_backend = data_problem = 0;
+    pool_base = FS_POOL_BASE; image_base = FS_IMG_BASE;
+    pool_capacity = FS_POOL_CAPACITY; image_capacity = FS_IMG_CAPACITY;
     nodes = (FsNode *)FS_BASE;
     kmemset(nodes, 0, (int)sizeof(FsNode) * FS_MAX_NODES);
 
@@ -291,7 +326,7 @@ int fs_parent(int id) { return fs_valid(id) ? nodes[id].parent : -1; }
 int fs_size(int id) { return fs_valid(id) ? nodes[id].size : 0; }
 const char *fs_name(int id) { return fs_valid(id) ? nodes[id].name : ""; }
 const char *fs_data(int id) {
-    return fs_valid(id) && nodes[id].size ? (const char *)FS_POOL_BASE + nodes[id].offset : "";
+    return fs_valid(id) && nodes[id].size ? (const char *)pool_base + nodes[id].offset : "";
 }
 
 int fs_find_child(int parent, const char *name) {
@@ -320,7 +355,7 @@ int fs_create_app(int parent, const char *name) {
 static void release_data(int id) {
     if (!nodes[id].size) return;
     unsigned offset = nodes[id].offset, bytes = nodes[id].size + 1;
-    unsigned char *pool = (unsigned char *)FS_POOL_BASE;
+    unsigned char *pool = (unsigned char *)pool_base;
     for (unsigned i = offset; i < pool_used - bytes; ++i) {
         pool[i] = pool[i + bytes];
         if((i & 4095u)==4095u)fs_background_poll();
@@ -337,19 +372,21 @@ int fs_write(int id, const char *data, int len) {
     if ((unsigned)len > fs_capacity() - (fs_used_bytes() - nodes[id].size)) return -1;
     unsigned previous = nodes[id].size ? nodes[id].size + 1 : 0;
     unsigned required = len ? (unsigned)len + 1 : 0;
-    if (required > FS_POOL_CAPACITY - (pool_used - previous)) return -1;
+    if (required > pool_capacity - (pool_used - previous)) return -1;
     /* fs_write(dst, fs_data(src), n), self-overwrite, and fs_copy all work even
      * when compaction moves the source. Staging is idle outside disk commits. */
     uintptr_t source = (uintptr_t)data;
-    if (len && source >= FS_POOL_BASE && source < FS_POOL_BASE + FS_POOL_CAPACITY) {
-        unsigned offset = source - FS_POOL_BASE;
+    if (len && source >= pool_base && source - pool_base < pool_capacity) {
+        unsigned offset = source - pool_base;
         if (offset > pool_used || (unsigned)len > pool_used - offset) return -1;
-        kmemcpy((void *)FS_IMG_BASE, data, len);
-        data = (const char *)FS_IMG_BASE;
+        copy_bytes((void *)image_base, data, len);
+        data = (const char *)image_base;
     }
+    if (len && source >= image_base && source - image_base < image_capacity &&
+        (unsigned)len > image_capacity - (source - image_base)) return -1;
     if (len && len == nodes[id].size) {
         /* Common autosaves and media overwrites need no arena movement. */
-        kmemcpy((char *)FS_POOL_BASE + nodes[id].offset, data, len);
+        copy_bytes((char *)pool_base + nodes[id].offset, data, len);
         nodes[id].modified = fs_clock();
         fs_touched = 1;
         return len;
@@ -357,8 +394,8 @@ int fs_write(int id, const char *data, int len) {
     release_data(id);
     if (len) {
         nodes[id].offset = pool_used;
-        char *destination = (char *)FS_POOL_BASE + pool_used;
-        kmemcpy(destination, data, len);
+        char *destination = (char *)pool_base + pool_used;
+        copy_bytes(destination, data, len);
         destination[len] = 0;
         pool_used += required;
     }
@@ -375,7 +412,7 @@ int fs_read(int id, char *out, int max) {
     int n = nodes[id].size;
     if (n > max - 1)
         n = max - 1;
-    kmemcpy(out, fs_data(id), n);
+    copy_bytes(out, fs_data(id), n);
     out[n] = 0;
     return n;
 }
@@ -766,10 +803,16 @@ static unsigned crc32(const void *data, unsigned n) {
 }
 
 static unsigned slot_lba(int slot) {
-    return data_backend ? (slot ? DATA_SECOND_LBA : DATA_FIRST_LBA)
+    return fs_large_profile() ? (slot ? DATA_LARGE_SECOND_LBA : DATA_LARGE_FIRST_LBA)
+                        : data_backend ? (slot ? DATA_SECOND_LBA : DATA_FIRST_LBA)
                         : (slot ? FS_SECOND_LBA : FS_DISK_LBA);
 }
-static unsigned slot_sectors(void) { return data_backend ? DATA_SLOT_SECTORS : FS_DISK_SECTORS; }
+static unsigned slot_sectors(void) {
+    return fs_large_profile() ? DATA_LARGE_SLOT_SECTORS : data_backend ? DATA_SLOT_SECTORS : FS_DISK_SECTORS;
+}
+static unsigned snapshot_version(void) {
+    return fs_large_profile() ? FS_LARGE_DATA_VERSION : data_backend ? FS_DATA_VERSION : FS_DISK_VERSION;
+}
 static unsigned volume_sectors(void) { return data_backend ? ata_sector_count() : disk_sector_count(); }
 static int volume_read(unsigned lba, void *buffer, int sectors) {
     return data_backend ? ata_read(lba, buffer, sectors) : disk_read(lba, buffer, sectors);
@@ -781,17 +824,33 @@ static int volume_flush(void) { return data_backend ? ata_flush() : 0; }
 
 /* Only this explicit format marker grants permission to use the optional disk.
  * A blank generic hard disk is NOT a blank BaseOS volume. */
+/* Read the marker on the required kernel stack, without borrowing either
+ * filesystem arena. A 64 MiB guest never touches optional high memory. */
 static int valid_data_marker(void) {
-    if (ata_sector_count() != DATA_DISK_SECTORS) return 0;
-    unsigned *marker = (unsigned *)FS_IMG_BASE;
+    unsigned sectors = ata_sector_count();
+    if (sectors != DATA_DISK_SECTORS && sectors != DATA_LARGE_DISK_SECTORS) return 0;
+    unsigned marker[SECTOR_SIZE / sizeof(unsigned)];
     if (ata_read(0, marker, 1) < 0) return 0;
-    if (marker[0] != DATA_MARKER_MAGIC || marker[1] != DATA_MARKER_VERSION ||
-        marker[2] != DATA_DISK_SECTORS || marker[3] != DATA_SLOT_SECTORS ||
-        marker[4] != DATA_FIRST_LBA || marker[5] != DATA_SECOND_LBA ||
+    int large = sectors == DATA_LARGE_DISK_SECTORS;
+    if (marker[0] != DATA_MARKER_MAGIC ||
+        marker[1] != (large ? DATA_LARGE_MARKER_VERSION : DATA_MARKER_VERSION) ||
+        marker[2] != sectors ||
+        marker[3] != (large ? DATA_LARGE_SLOT_SECTORS : DATA_SLOT_SECTORS) ||
+        marker[4] != (large ? DATA_LARGE_FIRST_LBA : DATA_FIRST_LBA) ||
+        marker[5] != (large ? DATA_LARGE_SECOND_LBA : DATA_SECOND_LBA) ||
         marker[6] != crc32(marker, 24)) return 0;
     for (unsigned i = 28; i < SECTOR_SIZE; ++i)
         if (((unsigned char *)marker)[i]) return 0;
-    return 1;
+    return large ? 2 : 1;
+}
+
+/* Copy seeded/live bytes before changing what their offsets refer to. Both
+ * regions are independently reserved; migration never switches this back. */
+static void select_large_arenas(void) {
+    if (pool_base != FS_LARGE_POOL_BASE)
+        copy_bytes((void *)FS_LARGE_POOL_BASE, (const void *)pool_base, pool_used);
+    pool_base = FS_LARGE_POOL_BASE; pool_capacity = FS_LARGE_POOL_CAPACITY;
+    image_base = FS_LARGE_IMG_BASE; image_capacity = FS_LARGE_IMG_CAPACITY;
 }
 
 static unsigned disk_node_size(const DiskHeader *h) { return h->version >= 3 ? 40 : 36; }
@@ -813,7 +872,7 @@ static int validate_payload(const DiskHeader *h, const unsigned char *img) {
         if (d.id >= limit || offsets[d.id] || d.parent < -1 ||
             d.parent >= (int)limit || d.is_dir > 1 || d.is_app > 1 ||
             (d.is_dir && d.is_app) ||
-            d.size > (h->version >= FS_DATA_VERSION ? FS_FILE_MAX : FS_MAX_SIZE - 1) ||
+            d.size > fs_file_limit() ||
             d.size > end - pos - ds ||
             ((d.is_dir || d.is_app) && d.size)) return -1;
         int length = 0;
@@ -859,13 +918,16 @@ static int validate_payload(const DiskHeader *h, const unsigned char *img) {
 }
 
 static int all_zero(const unsigned char *p, unsigned n) {
-    for (unsigned i = 0; i < n; ++i) if (p[i]) return 0;
+    for (unsigned i = 0; i < n; ++i) {
+        if (p[i]) return 0;
+        if ((i & 4095u) == 4095u) fs_background_poll();
+    }
     return 1;
 }
 
 /* 0 valid, 1 wholly blank, -1 corrupt, -2 I/O error. Never modifies nodes. */
 static int read_slot(int slot, DiskHeader *h) {
-    unsigned char *img = (unsigned char *)FS_IMG_BASE;
+    unsigned char *img = (unsigned char *)image_base;
     unsigned lba = slot_lba(slot);
     unsigned span = slot_sectors();
     if (lba + span > volume_sectors()) return -2;
@@ -881,7 +943,7 @@ static int read_slot(int slot, DiskHeader *h) {
         h->bytes > (span - 1) * FS_SECTOR_SIZE ||
         h->bytes < h->count * disk_node_size(h)) return -1;
     if (data_backend) {
-        if (h->version != FS_DATA_VERSION || h->header_sum != crc32(h, 24)) return -1;
+        if (h->version != snapshot_version() || h->header_sum != crc32(h, 24)) return -1;
     } else if (h->version == 1 && slot == 0) {
         h->generation = 0;
     } else if ((h->version != 2 && h->version != FS_DISK_VERSION) ||
@@ -895,7 +957,7 @@ static int read_slot(int slot, DiskHeader *h) {
 }
 
 static void import_payload(const DiskHeader *h) {
-    const unsigned char *img = (const unsigned char *)FS_IMG_BASE;
+    const unsigned char *img = (const unsigned char *)image_base;
     unsigned pos = FS_SECTOR_SIZE;
     kmemset(nodes, 0, sizeof(FsNode) * FS_MAX_NODES);
     pool_used = 0;
@@ -914,8 +976,8 @@ static void import_payload(const DiskHeader *h) {
         nd->modified = d.modified;
         if (d.size) {
             nd->offset = pool_used;
-            char *destination = (char *)FS_POOL_BASE + pool_used;
-            kmemcpy(destination, img + pos, d.size);
+            char *destination = (char *)pool_base + pool_used;
+            copy_bytes(destination, img + pos, d.size);
             destination[d.size] = 0;
             pool_used += d.size + 1;
         }
@@ -959,20 +1021,25 @@ int fs_load_disk(void) {
     data_backend = data_problem = 0;
     int probe = ata_probe();
     if (probe == 0) return load_volume();
-    if (probe > 0 && valid_data_marker()) {
-        data_backend = 1;
+    int profile = probe > 0 ? valid_data_marker() : 0;
+    if (profile == 2 && !fs_large_arenas_available()) {
+        data_problem = 2;
+        platform_log("FS large data disk requires usable RAM through 127 MiB; disk untouched\n");
+    } else if (profile) {
+        if (profile == 2) select_large_arenas();
+        data_backend = profile;
         int result = load_volume();
         if (result == 0) {
-            platform_log("FS mounted IDE data disk\n");
+            platform_log(profile == 2 ? "FS mounted large IDE data disk\n" : "FS mounted IDE data disk\n");
             return 0;
         }
         if (result == FS_LOAD_BLANK) {
-            /* The new disk is positively marked and wholly blank. Read the
-             * boot volume completely before making it a migration source. */
+            /* The new disk is positively marked and wholly blank. Keep its
+             * selected arenas while reading old floppy offsets and bytes. */
             data_backend = 0;
             int source = load_volume();
             if (source >= 0 && (writable || disk_sector_count() == 2880)) {
-                data_backend = 1;
+                data_backend = profile;
                 writable = 1;
                 active_slot = -1;
                 generation = sync_failures = save_failed = 0;
@@ -991,7 +1058,7 @@ int fs_load_disk(void) {
      * The boot files remain accessible as a read-only recovery view. */
     data_backend = 0;
     int fallback = load_volume();
-    data_problem = 1;
+    if (!data_problem) data_problem = 1;
     writable = 0;
     platform_log("FS data disk unavailable; boot files are read-only\n");
     return fallback < 0 ? fallback : -1;
@@ -1000,10 +1067,10 @@ int fs_load_disk(void) {
 static int save_snapshot(void) {
     if (!fs_touched) return 0;
     if (!writable) return -1;
-    unsigned char *img = (unsigned char *)FS_IMG_BASE;
+    unsigned char *img = (unsigned char *)image_base;
     unsigned pos = FS_SECTOR_SIZE;
     DiskHeader h = { .magic = FS_DISK_MAGIC,
-                     .version = data_backend ? FS_DATA_VERSION : FS_DISK_VERSION,
+                     .version = snapshot_version(),
                      .generation = generation + 1 };
     for (int i = 0; i < FS_MAX_NODES; ++i) {
         if (!nodes[i].used) continue;
@@ -1014,7 +1081,7 @@ static int save_snapshot(void) {
         if (d.size > fs_file_limit() || pos + sizeof(d) + d.size >
             slot_sectors() * FS_SECTOR_SIZE) return -1;
         kmemcpy(img + pos, &d, sizeof(d)); pos += sizeof(d);
-        kmemcpy(img + pos, fs_data(i), d.size); pos += d.size;
+        copy_bytes(img + pos, fs_data(i), d.size); pos += d.size;
         h.count++;
     }
     h.bytes = pos - FS_SECTOR_SIZE;
@@ -1069,6 +1136,7 @@ void fs_autosync(void) {
     fs_save_disk();
 }
 const char *fs_storage_status(void) {
+    if (data_problem == 2) return "Large disk needs 128 MiB RAM; boot files read-only";
     if (data_problem) return "Data disk unavailable; boot files read-only";
     if (!writable) return "Disk protected; changes in RAM only";
     if (save_failed) return "Save failed; changes in RAM only";
