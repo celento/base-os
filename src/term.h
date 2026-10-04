@@ -20,6 +20,10 @@ void term_set_cwd(int id);
 const unsigned char *term_canvas(void);
 int term_canvas_width(void);
 int term_canvas_height(void);
+/* Visible frame dimensions for an explicit owner, without changing selection.
+ * Returns 1 when present; otherwise returns 0 and clears both outputs. Native
+ * working-frame changes stay hidden until publication, as in term_canvas(). */
+int term_canvas_size(int slot, int *width, int *height);
 
 /* Scrollback, oldest first. */
 int term_count(void);

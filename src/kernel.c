@@ -8075,14 +8075,19 @@ static enum FsSyncProgress storage_poll(void) {
     return progress;
 }
 
+/* Partial repaint and canvas-only occlusion both need unchanged composition.
+ * In particular, a drag cache may contain pixels hidden in the current scene. */
+static int client_scene_stable(void) {
+    return !dirty&&!name_dlg&&!edit_close_dlg&&!open_dlg&&
+        !launcher_on&&open_menu<0&&!display_pending&&!saver_on&&
+        dragging_win<0&&resizing_win<0&&drag_cached<0&&!fm_dragging&&!fm_drag_active&&!fm_renaming&&
+        !edit_dragging&&!paint_dragging&&!paint_shape_drag&&!mouse_left;
+}
 /* Only an unchanged front client can be repainted without rebuilding the
  * scene. Keep video, audio progress and native canvas guards in one place. */
 static int partial_client_ready(int slot) {
     return slot>=0&&slot<MAX_WIN&&wins[slot].open&&!wins[slot].min&&
-        slot==win_front()&&!dirty&&!name_dlg&&!edit_close_dlg&&!open_dlg&&
-        !launcher_on&&open_menu<0&&!display_pending&&!saver_on&&
-        dragging_win<0&&resizing_win<0&&drag_cached<0&&!fm_dragging&&!fm_drag_active&&!fm_renaming&&
-        !edit_dragging&&!paint_dragging&&!paint_shape_drag&&!mouse_left;
+        slot==win_front()&&client_scene_stable();
 }
 /* Suppress buffer updates only when the whole terminal, including its border,
  * fits in a higher window's opaque client interior. The eight-pixel inset
@@ -8099,6 +8104,26 @@ static int window_content_hidden(int slot) {
     }
     return 0;
 }
+/* CANVAS-only updates cannot change text, layout, chrome or taskbar labels.
+ * Test their exact scaled damage rectangle, using the owner's published frame
+ * rather than the selected Terminal. Retain the same conservative opaque
+ * client insets as whole-window occlusion; never trust rounded edge pixels. */
+static int term_canvas_hidden(int slot) {
+    const Win *w=&wins[slot];
+    int source_w,source_h,target_w,target_h;
+    if(!term_canvas_size(slot,&source_w,&source_h))return 0;
+    term_canvas_geometry(w->w,w->h,source_w,source_h,&target_w,&target_h);
+    if(target_w<=0||target_h<=0)return 0;
+    int x=w->x+1+TERM_PAD,y=w->y+TITLE_H+1+TERM_PAD;
+    for(int i=0;i<MAX_WIN;i++){
+        const Win *cover=&wins[i];
+        if(!cover->open||cover->min||cover->z<=w->z)continue;
+        if(x>=cover->x+8&&y>=cover->y+TITLE_H+1&&
+           x+target_w<=cover->x+cover->w-8&&
+           y+target_h<=cover->y+cover->h-8)return 1;
+    }
+    return 0;
+}
 enum { TERM_RENDER_NONE, TERM_RENDER_FULL, TERM_RENDER_CANVAS };
 static int term_task_render_action(TermTaskUpdate update) {
     int slot=update.slot;
@@ -8107,6 +8132,8 @@ static int term_task_render_action(TermTaskUpdate update) {
     /* A hidden task can still change its visible taskbar label on exit. */
     if(update.flags&TERM_TASK_LIFECYCLE)return TERM_RENDER_FULL;
     if(window_content_hidden(slot))return TERM_RENDER_NONE;
+    if(update.flags==TERM_TASK_CANVAS&&client_scene_stable()&&term_canvas_hidden(slot))
+        return TERM_RENDER_NONE;
     if(update.flags==TERM_TASK_CANVAS&&partial_client_ready(slot))return TERM_RENDER_CANVAS;
     return TERM_RENDER_FULL;
 }

@@ -55,6 +55,16 @@ void term_set_cwd(int id){if(fs_is_dir(id)){T.cwd=id;T.cwd_identity=fs_identity(
 const unsigned char *term_canvas(void){return T.canvas_buffered?(T.published_on?published_canvases[selected]:0):(T.canvas_on?T.canvas:0);}
 int term_canvas_width(void){return T.canvas_buffered?T.published_width:T.canvas_width;}
 int term_canvas_height(void){return T.canvas_buffered?T.published_height:T.canvas_height;}
+int term_canvas_size(int slot,int *width,int *height){
+    if(width)*width=0;
+    if(height)*height=0;
+    if(slot<0||slot>=PROCESS_TASKS||!width||!height)return 0;
+    const Terminal *t=&terms[slot];
+    if(!(t->canvas_buffered?t->published_on:t->canvas_on))return 0;
+    *width=t->canvas_buffered?t->published_width:t->canvas_width;
+    *height=t->canvas_buffered?t->published_height:t->canvas_height;
+    return 1;
+}
 void term_prompt(char *out,int max){char path[FS_PATH_LEN];fs_path(term_cwd(),path,sizeof path);int p=0;for(int i=0;path[i]&&p<max-3;i++)out[p++]=path[i];if(max>2){out[p++]='>';out[p++]=' ';out[p]=0;}}
 void term_char(char c){T.scroll=0;if(c>=32&&c<=126){if(T.len<TERM_COLS){T.input[T.len++]=c;T.input[T.len]=0;}else T.input_overflow=1;}}
 void term_backspace(void){T.scroll=0;if(T.len)T.input[--T.len]=0;if(!T.len)T.input_overflow=0;}
