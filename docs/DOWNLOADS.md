@@ -112,3 +112,16 @@ A second QEMU boot and host volume decoding verify exact saved bytes. Evidence
 includes serial logs, packet captures, HTTP request paths, captured audio,
 a framebuffer screenshot, and a SHA-256 digest. No normal persistent image is
 read or modified.
+
+### Production desktop input regression
+
+`python3 tools/download_input_test.py build` boots the unmodified production
+kernel twice with disposable disks and drives its launcher, Terminal, and
+Browser through QMP-generated PS/2 keystrokes. It checks visible download
+progress and cancellation, an exact 2 MiB transfer surviving Terminal
+close/reopen, existing-file rejection, actual Browser Ctrl+S routing, unique
+page names, and reopening the saved page after reboot without an HTTP request.
+QMP memory observations are read-only; no app entry points or private kernel
+functions are invoked. The host independently decodes the saved volume and
+compares every binary and HTML byte. The printed evidence directories contain
+screenshots, serial logs, the disposable data image, and verification hashes.
