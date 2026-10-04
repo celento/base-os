@@ -42,6 +42,7 @@ int writer_read_only(void);
 int writer_file(void);
 unsigned writer_file_identity(void);
 unsigned writer_length(void);
+unsigned writer_word_count(void);
 unsigned writer_caret(void);
 unsigned writer_anchor(void);
 /* Recovery is native-format bytes; autosaving does not mark the document saved.

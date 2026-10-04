@@ -79,6 +79,7 @@ static void select_range(unsigned lo, unsigned hi) {
 }
 static void check_text(const char *text) {
     const WriterDoc *d = writer_document();
+    if (d->length != strlen(text) || memcmp(d->text, text, d->length < strlen(text) ? d->length : strlen(text))) fprintf(stderr, "Expected [%s], got [%.*s] length %u: %s\n", text, (int)d->length, d->text, d->length, writer_status());
     assert(d->length == strlen(text)); assert(!memcmp(d->text, text, d->length));
     assert(!writer_doc_validate(d));
 }
@@ -223,6 +224,61 @@ static void test_layout(void) {
     key(0x48, 0); assert(writer_position(writer_caret(), &x1, &y1, &h)); assert(y1 == 0);
     puts("Writer geometry: proportional wrapping, alignment, headings, navigation and max-capacity lines passed");
 }
+
+static void search_fields(const char *query, const char *replacement) {
+    key(0x23, WRITER_MOD_CTRL); key(0x1e, WRITER_MOD_CTRL); key(0x0e, 0); type(query);
+    key(0x0f, 0); key(0x1e, WRITER_MOD_CTRL); key(0x0e, 0); type(replacement);
+}
+static void test_search(void) {
+    load_fixture("Cat cat\nCAT\nend cat");
+    select_range(0, 3); key(0x30, WRITER_MOD_CTRL);
+    select_range(4, 7); key(0x16, WRITER_MOD_CTRL);
+    select_range(8, 11); key(0x17, WRITER_MOD_CTRL); key(0x02, WRITER_MOD_CTRL); key(0x13, WRITER_MOD_CTRL);
+    prior = *writer_document();
+    assert(writer_word_count() == 5);
+    search_fields("cat", "dogs"); key(0x1c, WRITER_MOD_CTRL | WRITER_MOD_SHIFT);
+    check_text("dogs dogs\ndogs\nend dogs");
+    const WriterDoc *d = writer_document();
+    for (int i = 0; i < 4; i++) assert(d->style[i] == WRITER_STYLE_BOLD);
+    for (int i = 5; i < 9; i++) assert(d->style[i] == WRITER_STYLE_UNDERLINE);
+    for (int i = 10; i < 14; i++) assert(d->style[i] == WRITER_STYLE_ITALIC);
+    assert(d->paragraph[10] == 6 && writer_word_count() == 5);
+    key(0x2c, WRITER_MOD_CTRL); compare_docs(&prior, writer_document());
+    key(0x15, WRITER_MOD_CTRL); check_text("dogs dogs\ndogs\nend dogs");
+    key(0x01, 0);
+    /* Find wraps in both directions without changing the document. */
+    key(0x47, WRITER_MOD_CTRL); key(0x21, WRITER_MOD_CTRL); key(0x1e, WRITER_MOD_CTRL); type("dogs");
+    key(0x1c, 0); assert(writer_anchor() == 0 && writer_caret() == 4);
+    key(0x3d, 0); assert(writer_anchor() == 5 && writer_caret() == 9);
+    key(0x3d, WRITER_MOD_SHIFT); assert(writer_anchor() == 0 && writer_caret() == 4);
+    key(0x3d, WRITER_MOD_SHIFT); assert(writer_anchor() == 19 && writer_caret() == 23);
+    key(0x01, 0);
+    /* A single replacement inherits the first match byte's character style. */
+    search_fields("dogs", "x"); key(0x1c, WRITER_MOD_CTRL); key(0x01, 0);
+    check_text("dogs dogs\ndogs\nend x"); assert(writer_document()->style[19] == prior.style[15]);
+    /* Case sensitivity is a real control, shared by drawing and hit testing. */
+    load_fixture("Cat cat CAT"); search_fields("cat", "dog"); writer_draw(0,0,420,260);
+    assert(writer_click(0,0,420,260,120,210,0) & WRITER_CHANGED);
+    key(0x1c, WRITER_MOD_CTRL | WRITER_MOD_SHIFT); key(0x01, 0); check_text("Cat dog CAT");
+    /* Exact case control is persistent; switch back for subsequent checks. */
+    key(0x23, WRITER_MOD_CTRL); writer_draw(0,0,420,260);
+    assert(writer_click(0,0,420,260,120,210,0) & WRITER_CHANGED); key(0x01, 0);
+    /* Empty replacement keeps empty paragraphs and their heading/alignment. */
+    load_fixture("cat\ncat\n"); select_range(4,7); key(0x02,WRITER_MOD_CTRL); key(0x13,WRITER_MOD_CTRL);
+    search_fields("cat", ""); key(0x1c, WRITER_MOD_CTRL | WRITER_MOD_SHIFT); key(0x01, 0);
+    check_text("\n\n"); assert(writer_document()->paragraph[1] == 6);
+    /* Final-size preflight rejects growth atomically; no phantom undo entry. */
+    writer_new(); memset(clipboard, 'a', 32760); clipboard_length = 32760; clipboard[32760] = 0; clipboard_generation++;
+    key(0x2f, WRITER_MOD_CTRL); prior = *writer_document(); search_fields("a", "aa");
+    key(0x1c, WRITER_MOD_CTRL | WRITER_MOD_SHIFT); compare_docs(&prior, writer_document());
+    key(0x2c, WRITER_MOD_CTRL); check_text(""); key(0x01, 0);
+    /* Search-field paste does not silently truncate or discard selected input. */
+    load_fixture("needle retained"); search_fields("needle", "x"); key(0x0f, 0); key(0x1e, WRITER_MOD_CTRL);
+    memset(clipboard, 'q', 64); clipboard_length = 64; clipboard[64] = 0; clipboard_generation++;
+    key(0x2f, WRITER_MOD_CTRL); key(0x1c, 0); assert(writer_anchor() == 0 && writer_caret() == 6);
+    key(0x01, 0);
+    puts("Writer search: wrapping/case, style-preserving single/all replacement, atomic limits and field editing passed");
+}
 static void write_ppm(const char *path) {
     FILE *f = fopen(path, "wb"); assert(f); fprintf(f, "P6\n800 600\n255\n");
     for (unsigned i = 0; i < sizeof back; i++) {
@@ -243,6 +299,13 @@ static void test_drawing(const char *path) {
         memset(back, COLOR_MAGENTA, sizeof back); writer_draw(x,y,w,h);
         for (int py = 0; py < 600; py++) for (int px = 0; px < 800; px++)
             if (px < x || px >= x+w || py < y || py >= y+h) assert(back[py*800+px] == COLOR_MAGENTA);
+        for (int mode = 0; mode < 2; mode++) {
+            key(mode ? 0x23 : 0x21, WRITER_MOD_CTRL);
+            memset(back, COLOR_MAGENTA, sizeof back); writer_draw(x,y,w,h);
+            for (int py = 0; py < 600; py++) for (int px = 0; px < 800; px++)
+                if (px < x || px >= x+w || py < y || py >= y+h) assert(back[py*800+px] == COLOR_MAGENTA);
+            key(0x01, 0);
+        }
     }
     memset(back, COLOR_LTGRAY, sizeof back); writer_draw(30,20,720,520);
     /* Shared toolbar geometry: B click toggles current selection, no text hit. */
@@ -254,13 +317,18 @@ static void test_drawing(const char *path) {
     unsigned anchor = writer_anchor(); assert(writer_drag(30,20,720,520,180,130) & WRITER_CHANGED);
     assert(writer_anchor() == anchor && writer_caret() != anchor); writer_release();
     assert(!writer_drag(30,20,720,520,200,180));
-    if (path) { select_range(17,31); writer_draw(30,20,720,520); write_ppm(path); }
+    if (path) {
+        select_range(17,31); writer_draw(30,20,720,520); write_ppm(path);
+        char search_path[256]; snprintf(search_path, sizeof(search_path), "%s-search.ppm", path);
+        search_fields("document", "draft"); key(0x1c,0);
+        memset(back, COLOR_LTGRAY, sizeof back); writer_draw(30,20,420,260); write_ppm(search_path);
+    }
     puts("Writer rendering: normal/minimum/offscreen clipping, toolbar hits and mouse selection passed");
 }
 int main(int argc, char **argv) {
     files[0].valid = files[0].folder = 1; files[0].identity = 1;
     gfx_init(back, linear, 800, 600, 32, 3200);
-    test_editing(); test_history(); test_files(); test_layout(); test_drawing(argc > 1 ? argv[1] : NULL);
+    test_editing(); test_history(); test_files(); test_layout(); test_search(); test_drawing(argc > 1 ? argv[1] : NULL);
     assert(polls > 100); assert(sync_count >= 4);
     for (int i = 1; i < 20; i++) if (files[i].valid) free(files[i].data);
     puts("All Writer host functional checks passed.");

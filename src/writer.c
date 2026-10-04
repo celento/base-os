@@ -46,6 +46,12 @@ static struct {
     int initialized, file, failed_save, clipboard_owned, dragging;
     unsigned identity;
     unsigned group_kind, group_caret, group_ticks, group_count;
+    unsigned stats_revision, words;
+    struct {
+        int open, replacing, focus, field, exact;
+        unsigned caret[2], anchor[2];
+        char text[2][64];
+    } search;
     int width, content_height, scroll, viewport_height, desired_x;
     int layout_valid, blink, last_blink, hit_affinity;
     char title[64], status[112];
@@ -353,7 +359,178 @@ static void move_hit(int x, int y, int extend, int vertical) {
     move_to(pos, extend, vertical); snapshot()->affinity = (unsigned)affinity; reveal();
 }
 
+static unsigned string_length(const char *text) { unsigned n = 0; while (text[n]) n++; return n; }
+static void append_number(char *text, unsigned capacity, unsigned number) {
+    char digits[12]; unsigned count = 0, used = string_length(text);
+    do { digits[count++] = (char)('0' + number % 10); number /= 10; } while (number);
+    while (count && used + 1 < capacity) text[used++] = digits[--count];
+    text[used] = 0;
+}
+unsigned writer_word_count(void) {
+    if (!state.initialized) return 0;
+    if (state.stats_revision != snapshot()->revision) {
+        const WriterDoc *d = document(); int previous_word = 0;
+        state.words = 0;
+        for (unsigned i = 0; i < d->length; i++) {
+            int word = d->text[i] != ' ' && d->text[i] != '\t' && d->text[i] != '\n';
+            if (word && !previous_word) state.words++;
+            previous_word = word;
+            if (!(i & 4095u)) platform_poll();
+        }
+        state.stats_revision = snapshot()->revision;
+    }
+    return state.words;
+}
+static int search_height(void) { return state.search.open ? (state.search.replacing ? 92 : 62) : 0; }
+static unsigned folded(unsigned c) { return !state.search.exact && c >= 'A' && c <= 'Z' ? c + 32 : c; }
+static int search_match(unsigned at) {
+    const WriterDoc *d = document(); unsigned n = string_length(state.search.text[0]);
+    if (!n || at > d->length || n > d->length - at) return 0;
+    for (unsigned i = 0; i < n; i++) if (folded(d->text[at + i]) != folded((unsigned char)state.search.text[0][i])) return 0;
+    return 1;
+}
+static void search_open(int replacing) {
+    state.group_kind = 0;
+    state.search.open = state.search.focus = 1; state.search.replacing = replacing; state.search.field = 0;
+    unsigned lo = selection_low(), hi = selection_high();
+    if (hi > lo && hi - lo < sizeof(state.search.text[0])) {
+        int valid = 1;
+        for (unsigned i = lo; i < hi; i++) if (document()->text[i] < 32) valid = 0;
+        if (valid) {
+            for (unsigned i = lo; i < hi; i++) state.search.text[0][i - lo] = (char)document()->text[i];
+            state.search.text[0][hi - lo] = 0;
+        }
+    }
+    state.search.anchor[0] = 0; state.search.caret[0] = string_length(state.search.text[0]);
+    status(replacing ? "Find and replace: Enter finds; Ctrl+Enter replaces; Ctrl+Shift+Enter replaces all." : "Find: Enter/F3 next, Shift+Enter/F3 previous. Escape closes.");
+}
+static int search_find(int direction) {
+    unsigned n = string_length(state.search.text[0]);
+    if (!n) { status("Enter text to find."); return 0; }
+    const WriterDoc *d = document();
+    if (n > d->length) { status("Text not found."); return 0; }
+    unsigned last = d->length - n;
+    int start = direction < 0 ? (int)selection_low() - 1 : (int)snapshot()->caret;
+    if (start < 0) start = (int)last;
+    if ((unsigned)start > last) start = 0;
+    unsigned at = (unsigned)start;
+    do {
+        if (search_match(at)) {
+            move_to(at + n, 0, 0); snapshot()->anchor = at;
+            status("Match selected."); return 1;
+        }
+        if (direction < 0) at = at ? at - 1 : last;
+        else at = at < last ? at + 1 : 0;
+        if (!(at & 511u)) platform_poll();
+    } while (at != (unsigned)start);
+    status("Text not found."); return 0;
+}
+static void search_replace_one(void) {
+    unsigned n = string_length(state.search.text[0]), r = string_length(state.search.text[1]);
+    if (!n) { status("Enter text to find before replacing."); return; }
+    unsigned lo = selection_low(), hi = selection_high();
+    if (hi - lo != n || !search_match(lo)) {
+        if (!search_find(1)) return;
+        lo = selection_low(); hi = selection_high();
+    }
+    for (unsigned i = 0; i < r; i++) ARENA->output[i] = document()->style[lo];
+    if (replace(lo, hi, (const unsigned char *)state.search.text[1], r, ARENA->output, 0, 0)) {
+        search_find(1); status("Replaced one match; following match selected when available.");
+    }
+}
+static void search_replace_all(void) {
+    unsigned q = string_length(state.search.text[0]), r = string_length(state.search.text[1]);
+    if (!q) { status("Enter text to find before replacing."); return; }
+    const WriterDoc *d = document(); unsigned matches = 0;
+    for (unsigned i = 0; i < d->length;) {
+        if (search_match(i)) { matches++; i += q; } else i++;
+        if (!(i & 511u)) platform_poll();
+    }
+    if (!matches) { status("No matching text to replace."); return; }
+    unsigned removed = matches * q, added = matches * r;
+    if (added > WRITER_TEXT_MAX - (d->length - removed)) {
+        status("Replacement exceeds 32,768 bytes. Nothing was changed."); return;
+    }
+    WriterDoc *out = &ARENA->staging; unsigned written = 0, para = d->paragraph[0];
+    for (unsigned i = 0; i < d->length;) {
+        if (is_start(d, i)) para = d->paragraph[i];
+        if (search_match(i)) {
+            for (unsigned j = 0; j < r; j++) {
+                out->paragraph[written] = !written || out->text[written - 1] == '\n' ? (unsigned char)para : 0;
+                out->text[written] = (unsigned char)state.search.text[1][j];
+                out->style[written++] = d->style[i];
+            }
+            i += q;
+        } else {
+            out->paragraph[written] = !written || out->text[written - 1] == '\n' ? (unsigned char)para : 0;
+            out->text[written] = d->text[i]; out->style[written++] = d->style[i++];
+        }
+        if (!(i & 511u)) platform_poll();
+    }
+    out->length = written; out->style[written] = d->style[d->length];
+    out->paragraph[written] = !written ? d->paragraph[0] : out->text[written - 1] == '\n' ? d->paragraph[d->length] : 0;
+    if (writer_doc_validate(out)) { status("Replacement could not be represented safely."); return; }
+    accept_staging(0, snapshot()->typing_style, 0); reveal();
+    char message[64] = ""; append_number(message, sizeof(message), matches);
+    unsigned end = string_length(message); text_copy(message + end, sizeof(message) - end, " replacements. Undo restores all text and styles.");
+    status(message);
+}
+static int search_field_replace(const unsigned char *inserted, unsigned n) {
+    unsigned field = (unsigned)state.search.field, a = state.search.anchor[field], b = state.search.caret[field];
+    unsigned lo = a < b ? a : b, hi = a > b ? a : b;
+    char *text = state.search.text[field]; unsigned length = string_length(text);
+    if (n > 63u - (length - (hi - lo))) { status("Search fields hold at most 63 ASCII characters. Nothing was changed."); return 0; }
+    for (unsigned i = 0; i < n; i++) if (inserted[i] < 32 || inserted[i] > 126) {
+        status("Search fields accept printable ASCII only. Nothing was changed."); return 0;
+    }
+    char next[64]; unsigned used = 0;
+    for (unsigned i = 0; i < lo; i++) next[used++] = text[i];
+    for (unsigned i = 0; i < n; i++) next[used++] = (char)inserted[i];
+    for (unsigned i = hi; i < length; i++) next[used++] = text[i];
+    next[used] = 0; text_copy(text, 64, next);
+    state.search.caret[field] = state.search.anchor[field] = lo + n;
+    return 1;
+}
+static int search_key(int sc, char ch, int modifiers) {
+    unsigned f = (unsigned)state.search.field;
+    char *text = state.search.text[f]; unsigned length = string_length(text), pos = state.search.caret[f];
+    int control = modifiers & WRITER_MOD_CTRL, shift = modifiers & WRITER_MOD_SHIFT;
+    if (sc == 0x0f) {
+        state.search.field = state.search.replacing ? 1 - (int)f : 0;
+        f = (unsigned)state.search.field; state.search.anchor[f] = 0; state.search.caret[f] = string_length(state.search.text[f]);
+    } else if (sc == 0x1c) {
+        if (control && state.search.replacing) { if (shift) search_replace_all(); else search_replace_one(); }
+        else search_find(shift ? -1 : 1);
+    } else if (control && sc == 0x1e) { state.search.anchor[f] = 0; state.search.caret[f] = length; }
+    else if (control && (sc == 0x2e || sc == 0x2d)) {
+        unsigned lo = min_u(pos, state.search.anchor[f]), hi = pos > state.search.anchor[f] ? pos : state.search.anchor[f];
+        if (hi > lo) {
+            writer_clipboard_set(text + lo, hi - lo); state.clipboard_owned = 0;
+            if (sc == 0x2d) search_field_replace(0, 0);
+        }
+    } else if (control && sc == 0x2f) {
+        unsigned generation;
+        int n = writer_clipboard_get((char *)ARENA->output, WRITER_TEXT_MAX + 1u, &generation);
+        if (n < 0) status("Clipboard is unavailable or too large for a search field.");
+        else search_field_replace(ARENA->output, (unsigned)n);
+    } else if (sc == 0x4b || sc == 0x4d || sc == 0x47 || sc == 0x4f) {
+        if (sc == 0x4b && pos) pos--; else if (sc == 0x4d && pos < length) pos++;
+        else if (sc == 0x47) pos = 0; else if (sc == 0x4f) pos = length;
+        state.search.caret[f] = pos; if (!shift) state.search.anchor[f] = pos;
+    } else if (sc == 0x0e || sc == 0x53) {
+        if (pos == state.search.anchor[f]) {
+            if (sc == 0x0e && pos) state.search.anchor[f]--;
+            else if (sc == 0x53 && pos < length) state.search.anchor[f]++;
+        }
+        search_field_replace(0, 0);
+    } else if (!control && (unsigned char)ch >= 32 && (unsigned char)ch <= 126) {
+        unsigned char byte = (unsigned char)ch; search_field_replace(&byte, 1);
+    }
+    return WRITER_CHANGED;
+}
+
 void writer_new(void) {
+    state.search.open = state.search.focus = 0;
     state.group_kind = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); writer_doc_init(&s->doc);
@@ -398,6 +575,7 @@ int writer_open_file(int id) {
         status(native ? "Invalid or unsupported .bwr document; current work is unchanged." :
                         "Import rejected: ASCII with LF/CRLF breaks, at most 32,768 normalized bytes."); return 0;
     }
+    state.search.open = state.search.focus = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); copy_bytes(&s->doc, &ARENA->staging, sizeof(WriterDoc));
     s->caret = s->anchor = s->affinity = 0; s->typing_style = s->doc.style[s->doc.length];
@@ -489,6 +667,7 @@ int writer_restore(const unsigned char *data, unsigned length, int file, unsigne
     state.group_kind = 0;
     if (!state.initialized) writer_init();
     if (writer_native_decode(&ARENA->staging, data, length)) { status("Invalid recovery document; current work is unchanged."); return 0; }
+    state.search.open = state.search.focus = 0;
     state.first = state.current = 0; state.count = 1;
     Snapshot *s = snapshot(); copy_bytes(&s->doc, &ARENA->staging, sizeof(WriterDoc));
     s->affinity = 0; s->caret = min_u(caret, s->doc.length); s->anchor = min_u(anchor, s->doc.length);
@@ -529,6 +708,11 @@ int writer_key(int sc, char ch, int modifiers) {
     if (!state.initialized) writer_init();
     int control = modifiers & WRITER_MOD_CTRL, extend = modifiers & WRITER_MOD_SHIFT;
     if (modifiers & WRITER_MOD_ALT) return 0;
+    if (control && (sc == 0x21 || sc == 0x23)) { search_open(sc == 0x23); return WRITER_CHANGED; }
+    if (sc == 0x3d) { if (!state.search.open) search_open(0); search_find(extend ? -1 : 1); return WRITER_CHANGED; }
+    if (state.search.open && sc == 0x01) { state.search.open = state.search.focus = 0; return WRITER_CHANGED; }
+    if (state.search.open && state.search.focus && !(control && (sc == 0x1f || sc == 0x2c || sc == 0x15)))
+        return search_key(sc, ch, modifiers);
     if (control) {
         switch (sc) {
         case 0x1f: state.group_kind = 0; return extend ? WRITER_REQUEST_SAVE_AS : WRITER_REQUEST_SAVE;
@@ -643,6 +827,91 @@ static void glyph(Clip clip, unsigned char ch, int x, int y, unsigned style, uns
 static void label(Clip c, const char *text, int x, int y, unsigned char color) {
     while (*text) { glyph(c, (unsigned char)*text, x, y, 0, 0, color); x += ui_advance(*text++); if (x >= c.x + c.w) break; }
 }
+
+typedef struct { short x, w; const char *label; } SearchButton;
+static const SearchButton search_buttons[] = {
+    {8, 48, "Prev"}, {60, 48, "Next"}, {112, 36, "Aa"},
+    {152, 62, "Replace"}, {218, 42, "All"}, {264, 52, "Close"}
+};
+static int search_offset(unsigned field, int available) {
+    int prefix = 0;
+    for (unsigned i = 0; i < state.search.caret[field]; i++) prefix += ui_advance(state.search.text[field][i]);
+    return prefix >= available ? prefix - available + 8 : 0;
+}
+static void draw_search(Clip all) {
+    if (!state.search.open) return;
+    int top = all.y + all.h - FOOT_H - search_height();
+    rect(all, all.x, top, all.w, search_height(), gfx_rgb(237, 241, 247));
+    unsigned rows = state.search.replacing ? 2 : 1;
+    for (unsigned f = 0; f < rows; f++) {
+        int y = top + 4 + (int)f * 30;
+        label(all, f ? "With" : "Find", all.x + 8, y + 3, COLOR_DKGRAY);
+        rect(all, all.x + 52, y, all.w - 60, 25, state.search.focus && (unsigned)state.search.field == f ? COLOR_BLUE : COLOR_GRAY);
+        rect(all, all.x + 53, y + 1, all.w - 62, 23, COLOR_WHITE);
+        Clip field = {all.x + 57, y + 3, all.w - 70, 19};
+        if (field.x < all.x) field.x = all.x;
+        if (field.x + field.w > all.x + all.w) field.w = all.x + all.w - field.x;
+        if (field.y < all.y) field.y = all.y;
+        if (field.y + field.h > all.y + all.h) field.h = all.y + all.h - field.y;
+        int x = field.x - search_offset(f, field.w);
+        unsigned a = state.search.anchor[f], b = state.search.caret[f];
+        unsigned lo = a < b ? a : b, hi = a > b ? a : b;
+        const char *text = state.search.text[f];
+        for (unsigned i = 0; text[i]; i++) {
+            int selected = state.search.focus && (unsigned)state.search.field == f && i >= lo && i < hi;
+            int width = ui_advance(text[i]);
+            if (selected) rect(field, x, field.y, width, field.h, COLOR_BLUE);
+            glyph(field, (unsigned char)text[i], x, field.y, 0, 0, selected ? COLOR_WHITE : COLOR_DKGRAY);
+            x += width;
+        }
+        if (state.search.focus && (unsigned)state.search.field == f && lo == hi && state.blink) {
+            int caret_x = field.x - search_offset(f, field.w);
+            for (unsigned i = 0; i < b; i++) caret_x += ui_advance(text[i]);
+            rect(field, caret_x, field.y, 1, field.h, COLOR_BLACK);
+        }
+    }
+    int y = top + 4 + (int)rows * 30;
+    for (unsigned i = 0; i < sizeof search_buttons / sizeof search_buttons[0]; i++) {
+        if ((i == 3 || i == 4) && !state.search.replacing) continue;
+        const SearchButton *b = &search_buttons[i]; int selected = i == 2 && state.search.exact;
+        rect(all, all.x + b->x, y, b->w, 24, selected ? COLOR_BLUE : COLOR_WHITE);
+        label(all, b->label, all.x + b->x + (b->w - ui_string_w(b->label)) / 2, y + 3, selected ? COLOR_WHITE : COLOR_DKGRAY);
+    }
+}
+static int search_click(int x, int y, int w, int h, int mx, int my, int modifiers) {
+    if (!state.search.open) return 0;
+    int top = y + h - FOOT_H - search_height();
+    if (my < top || my >= y + h - FOOT_H) return 0;
+    unsigned rows = state.search.replacing ? 2 : 1;
+    state.group_kind = 0; state.dragging = 0;
+    for (unsigned f = 0; f < rows; f++) {
+        int fy = top + 4 + (int)f * 30;
+        if (mx >= x + 52 && mx < x + w - 8 && my >= fy && my < fy + 25) {
+            int local = mx - x - 57 + search_offset(f, w - 70), used = 0;
+            unsigned pos = 0; const char *text = state.search.text[f];
+            while (text[pos]) {
+                int width = ui_advance(text[pos]); if (local < used + (width + 1) / 2) break;
+                used += width; pos++;
+            }
+            state.search.focus = 1; state.search.field = (int)f; state.search.caret[f] = pos;
+            if (!(modifiers & WRITER_MOD_SHIFT)) state.search.anchor[f] = pos;
+            return WRITER_CHANGED;
+        }
+    }
+    int by = top + 4 + (int)rows * 30;
+    for (unsigned i = 0; i < sizeof search_buttons / sizeof search_buttons[0]; i++) {
+        if ((i == 3 || i == 4) && !state.search.replacing) continue;
+        const SearchButton *b = &search_buttons[i];
+        if (mx >= x + b->x && mx < x + b->x + b->w && my >= by && my < by + 24) {
+            if (i == 0 || i == 1) search_find(i ? 1 : -1);
+            else if (i == 2) { state.search.exact = !state.search.exact; status(state.search.exact ? "Search is case-sensitive." : "Search ignores ASCII letter case."); }
+            else if (i == 3) search_replace_one(); else if (i == 4) search_replace_all();
+            else state.search.open = state.search.focus = 0;
+            return WRITER_CHANGED;
+        }
+    }
+    return WRITER_CHANGED;
+}
 typedef struct { short x, y, w; const char *name; unsigned action; } Button;
 /* Both drawing and hit testing consume this same bounded toolbar geometry. */
 static const Button buttons[] = {
@@ -650,7 +919,7 @@ static const Button buttons[] = {
     {108, 5, 54, "Body", 4}, {166, 5, 76, "Heading", 5},
     {252, 5, 54, "Undo", 9}, {310, 5, 54, "Redo", 10},
     {8, 35, 54, "Left", 6}, {66, 35, 68, "Center", 7}, {138, 35, 60, "Right", 8},
-    {208, 35, 58, "Save", 11}, {270, 35, 88, "Export RTF", 12}
+    {208, 35, 58, "Save", 11}, {270, 35, 88, "Export RTF", 12}, {366, 35, 46, "Find", 13}
 };
 static int button_active(unsigned action) {
     unsigned style = snapshot()->typing_style, para = paragraph_at(document(), snapshot()->caret);
@@ -666,10 +935,11 @@ static int button_action(unsigned action) {
     if (action >= 6 && action <= 8) return format_paragraph(WRITER_ALIGN_MASK, action - 6);
     if (action == 9 || action == 10) return undo(action == 10);
     if (action == 11) return WRITER_REQUEST_SAVE;
-    return WRITER_REQUEST_EXPORT;
+    if (action == 12) return WRITER_REQUEST_EXPORT;
+    search_open(0); return WRITER_CHANGED;
 }
 static void geometry(int w, int h) {
-    state.viewport_height = h - TOOL_H - FOOT_H - 16;
+    state.viewport_height = h - TOOL_H - FOOT_H - 16 - search_height();
     if (state.viewport_height < 24) state.viewport_height = 24;
     writer_layout(w - 2 * PAGE_PAD - 18);
 }
@@ -686,7 +956,7 @@ void writer_draw(int x, int y, int w, int h) {
         rect(all, x + b->x, y + b->y, b->w, 25, active ? COLOR_BLUE : COLOR_WHITE);
         label(all, b->name, x + b->x + (b->w - ui_string_w(b->name)) / 2, y + b->y + 3, active ? COLOR_WHITE : COLOR_DKGRAY);
     }
-    Clip page = {x + 8, y + TOOL_H + 8, w - 24, h - TOOL_H - FOOT_H - 16};
+    Clip page = {x + 8, y + TOOL_H + 8, w - 24, h - TOOL_H - FOOT_H - 16 - search_height()};
     rect(all, page.x, page.y, page.w, page.h, COLOR_WHITE);
     Clip content = {x + PAGE_PAD, page.y, state.width + 4, page.h};
     if (content.x + content.w > page.x + page.w) content.w = page.x + page.w - content.x;
@@ -710,7 +980,7 @@ void writer_draw(int x, int y, int w, int h) {
         if (line->end < d->length && d->text[line->end] == '\n' && line->end >= lo && line->end < hi)
             rect(content, base + used, py, 5, line->height, COLOR_BLUE);
     }
-    if (state.blink && lo == hi) {
+    if (state.blink && lo == hi && !(state.search.open && state.search.focus)) {
         int cx, cy, height; writer_position(snapshot()->caret, &cx, &cy, &height);
         rect(content, content.x + cx, content.y + cy - state.scroll + 2, 1, height - 4, COLOR_BLACK);
     }
@@ -722,37 +992,49 @@ void writer_draw(int x, int y, int w, int h) {
         int top = state.scroll * (page.h - thumb) / (state.content_height - page.h);
         rect(all, track_x, track_y + top, 5, thumb, COLOR_GRAY);
     }
+    draw_search(all);
     rect(all, x, y + h - FOOT_H, w, FOOT_H, gfx_rgb(237, 241, 247));
     char foot[112]; const char *prefix = writer_dirty() ? "Unsaved | " : "Saved | ";
     text_copy(foot, sizeof(foot), prefix);
     unsigned offset = 0; while (foot[offset]) offset++;
     text_copy(foot + offset, sizeof(foot) - offset, state.status);
-    label(all, foot, x + 8, y + h - FOOT_H + 4, COLOR_DKGRAY);
+    char counts[48] = ""; append_number(counts, sizeof(counts), writer_word_count());
+    unsigned used = string_length(counts); text_copy(counts + used, sizeof(counts) - used, " words | ");
+    append_number(counts, sizeof(counts), d->length);
+    used = string_length(counts); text_copy(counts + used, sizeof(counts) - used, " bytes");
+    int stats_w = ui_string_w(counts);
+    Clip foot_clip = {x + 8, y + h - FOOT_H, w - stats_w - 28, FOOT_H};
+    label(foot_clip, foot, x + 8, y + h - FOOT_H + 4, COLOR_DKGRAY);
+    label(all, counts, x + w - stats_w - 8, y + h - FOOT_H + 4, COLOR_DKGRAY);
 }
 int writer_click(int x, int y, int w, int h, int mx, int my, int modifiers) {
     if (!state.initialized) writer_init();
     if (mx < x || mx >= x + w || my < y || my >= y + h) return 0;
     geometry(w, h);
+    int searched = search_click(x, y, w, h, mx, my, modifiers); if (searched) return searched;
     for (unsigned i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
         const Button *b = &buttons[i];
         if (mx >= x + b->x && mx < x + b->x + b->w && my >= y + b->y && my < y + b->y + 25) {
+            state.search.focus = 0;
             int result = button_action(b->action); reveal(); return result;
         }
     }
     int top = y + TOOL_H + 8;
-    if (my < top || my >= y + h - FOOT_H - 8) return 0;
+    if (my < top || my >= y + h - FOOT_H - 8 - search_height()) return 0;
+    state.search.focus = 0;
     if (mx >= x + w - 18) {
         int range = state.content_height - state.viewport_height;
         if (range > 0) state.scroll = clamp((my - top) * range / state.viewport_height, 0, range);
         return WRITER_CHANGED;
     }
+    state.search.focus = 0;
     move_hit(mx - x - PAGE_PAD, my - top + state.scroll, modifiers & WRITER_MOD_SHIFT, 0);
     state.dragging = 1; return WRITER_CHANGED;
 }
 int writer_drag(int x, int y, int w, int h, int mx, int my) {
     if (!state.dragging) return 0;
     geometry(w, h);
-    int top = y + TOOL_H + 8, bottom = y + h - FOOT_H - 8;
+    int top = y + TOOL_H + 8, bottom = y + h - FOOT_H - 8 - search_height();
     if (my < top) writer_scroll(-1); else if (my >= bottom) writer_scroll(1);
     move_hit(mx - x - PAGE_PAD, my - top + state.scroll, 1, 0);
     return WRITER_CHANGED;
