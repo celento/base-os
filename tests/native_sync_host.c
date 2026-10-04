@@ -148,6 +148,27 @@ static void retained_results_do_not_starve(void) {
     assert(!fs_init() && !fs_load_disk()); expect_value("third version");
     native_sync_owner_release(owner(1)); native_sync_owner_release(owner(2));
 }
+static void old_completion_and_new_autosave(void) {
+    setup(); write_new("old completed boundary"); unsigned a, b;
+    assert(!native_sync_begin(owner(1), &a)); drain(0);
+    assert(ticket_owned && sync_results[2].occupied);
+    clear_trace(); write_new("new autosave boundary"); fs_autosync();
+    assert(fs_sync_busy() && sync_autosave && sync_job.subscribers == 1);
+    /* Old coordinator ticket was completed, even though another commit is now
+     * busy. Collect that old outcome, then join exactly the new leased state. */
+    assert(!native_sync_begin(owner(2), &b));
+    assert(!native_sync_poll(owner(1), a));
+    assert(native_sync_poll(owner(2), b) == BOS_PENDING && sync_job.subscribers == 5);
+    assert(fs_write(file(), "too late", 8) == FS_ERR_BUSY);
+    drain(1); protocol(); assert(!native_sync_poll(owner(2), b));
+    assert(!fs_init() && !fs_load_disk()); expect_value("new autosave boundary");
+    native_sync_owner_release(owner(1)); native_sync_owner_release(owner(2));
+    /* The reserved internal FS subscriber rejects a duplicate owner; it never
+     * lends a raw ticket to the coordinator or alters the output on BUSY. */
+    FsSyncTicket other; assert(!fs_sync_request_owned(&other)); b = 777;
+    assert(native_sync_begin(owner(1), &b) == BOS_E_BUSY && b == 777);
+    assert(!ticket_owned && !live_records() && !fs_sync_release(other));
+}
 static void clean_protected_failure_and_remount(void) {
     setup(); unsigned a, b, out = 0x12345678;
     assert(!native_sync_begin(owner(1), &a) && !native_sync_poll(owner(1), a));
@@ -215,7 +236,8 @@ static void capacity_and_exhaustion(void) {
 }
 int main(void) {
     two_clients_and_boundary(); close_exit_and_reuse(); join_autosave_and_explicit();
-    retained_results_do_not_starve(); clean_protected_failure_and_remount();
+    retained_results_do_not_starve(); old_completion_and_new_autosave();
+    clean_protected_failure_and_remount();
     unsupported_floppy(); capacity_and_exhaustion();
     puts("native sync ownership, joins, boundaries, cleanup and bounded progress passed");
     return 0;
