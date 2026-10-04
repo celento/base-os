@@ -3,10 +3,10 @@
 #include <stdint.h>
 #include "address_space.h"
 #include "executable.h"
-/* Staged loader gate. Enabled only in explicitly identified verification builds
- * until ordinary compatibility/private-space runtime gates have passed. */
+/* Source-identified enabled verification candidate. Release support requires
+ * ordinary private-space/mixed-format gates; see docs/ADDRESS_SPACES.md. */
 #ifndef BASEOS_BEX2_ENABLED
-#define BASEOS_BEX2_ENABLED 0
+#define BASEOS_BEX2_ENABLED 1
 #endif
 #define PROCESS_PRIVATE_PAGE_LIMIT 1024u
 /* Callbacks operate only on the owning terminal's bounded canvas/output. */

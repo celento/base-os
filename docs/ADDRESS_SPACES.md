@@ -61,7 +61,7 @@ built with no warnings; initialized bytes506412, packed342551. NativeTask remain
 
 # Gated private address spaces: C3b
 
-The loader remains off by default in this prerequisite. BASEOS_BEX2_ENABLED is
+The disabled prerequisite03a79e7 keeps the loader off. BASEOS_BEX2_ENABLED is
 an explicit source gate. Enabling the candidate is a separately identified
 commit after C3a compatibility readiness; release support still requires the
 ordinary mixed-format guest gates. The SDK defaults to BEX1, and no seeded app
@@ -116,3 +116,12 @@ rejection/retry without executing guest instructions. The default disabled
 kernel ELF/packed build passed warning-free:509964 initialized bytes,345087
 packed bytes. i386 NativeTask is4704 bytes; eight records end at0x03009300,
 well below0x03090000 metadata. No QEMU was run by the implementation task.
+
+## Enabled verification candidate
+
+This subsequent candidate sets BASEOS_BEX2_ENABLED=1 in tracked source. Its clean
+rebuild reproduces the enabled runtime without hidden compile overrides. C3a's
+separate legacy guest readiness is reported complete; C3b mixed-format/private
+mapping guest gates are still pending at candidate creation. This candidate is
+not a release-support claim. The disabled prerequisite03a79e7 and independently
+usable C3a+hardening commits remain explicit rollback points.
