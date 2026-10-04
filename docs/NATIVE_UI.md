@@ -208,9 +208,12 @@ capability has been added.
   and dimensions together; BASIC/exec retain unbuffered drawing.
 - `app_view` owns the exact process/slot/generation tuple, copied name/document,
   start time, dirty classifications and output policy. Generations survive
-  Terminal resets and WM slot reuse. Trusted I/O additionally requires the
-  process binding to remain live; a stopping or retained-DONE owner cannot
-  mutate a view. The hosted sink copies directly into the explicit Terminal's
+  Terminal resets and WM slot reuse. Trusted I/O additionally requires READY or
+  SLEEPING lifetime; EXITING, retained-DONE and reused owners cannot mutate a
+  view. A deferred Stop immediately revokes UI eligibility, but preserves an
+  already-active slice's explicit publication/output boundaries until return,
+  including nonzero APP exit precedence. The Stop request itself never publishes.
+  The hosted sink copies directly into the explicit Terminal's
   scrollback without changing selection or retaining text pointers.
 - `app_view_poll_update` is the only desktop scheduler/completion consumer;
   retained DONE results are drained before another process slice. Historical
@@ -244,8 +247,12 @@ of this extraction.
 
 New normal-operation tests cover direct view initialization before any Terminal,
 explicit copied output and metadata, preserved command/history/input-loss state,
-NONE-output print/completion, retained-DONE/deferred-Stop I/O refusal, common
-poller compatibility and generation persistence. Existing publication, native
-binding, rectangle, input, launch, resource-lifetime and renderer suites remain
+NONE-output print/completion, retained-DONE I/O refusal, deferred-close storage
+retention, common poller compatibility and generation persistence. The real
+process+view integration gate checks actual published pixels after deferred
+Stop followed by present/yield/sleep/explicit exit, immediate UI ineligibility,
+APP exit precedence, nonpublishing timer/error/idle Stop and stale output refusal.
+Existing publication, native binding, rectangle, input, launch, resource-lifetime
+and renderer suites remain
 the behavioral regressions. Exact final host/guest qualification is recorded
 separately; this description alone is not guest qualification.

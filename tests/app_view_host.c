@@ -55,13 +55,10 @@ int main(void){
     result=app_view_poll_update();assert(result.slot==2&&steps[2]==before+1);
     result=term_task_poll_update();assert(result.slot==2&&steps[2]==before+2);
     assert(term_task_poll()&&steps[2]==before+3);
-    /* An active deferred stop revokes I/O immediately, before record cleanup. */
-    stop_deferred[2]=1;assert(!app_view_close(2));io=callbacks[2];
-    assert(app_view_binding_matches(&io.binding)&&!process_binding_live(&io.binding));
-    stopped_view=views[2];stopped_text=terms[2];
-    io.print(&io.binding,"Stopping output");io.plot(&io.binding,0,0,99);io.present(&io.binding);
+    /* Deferred close cannot detach storage or reuse its identity. The real
+     * process+view integration test covers same-active-slice output boundaries. */
+    stop_deferred[2]=1;stopped_view=views[2];assert(!app_view_close(2));
     assert(!memcmp(&views[2],&stopped_view,sizeof stopped_view));
-    assert(!memcmp(&terms[2],&stopped_text,sizeof stopped_text));
     stop_deferred[2]=0;assert(app_view_close(2));unsigned generation=views[2].binding.generation;
     /* Clearing/resetting Terminal command state cannot restart view identity. */
     term_select(2);term_reset();assert(views[2].binding.generation==generation);

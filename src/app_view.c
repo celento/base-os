@@ -63,7 +63,13 @@ static AppView *binding_identity(const ProcessBinding *binding){
 int app_view_binding_matches(const ProcessBinding *binding){return binding_identity(binding)!=0;}
 static AppView *binding_view(const ProcessBinding *binding){
     AppView *v=binding_identity(binding);
-    return v&&process_binding_live(binding)?v:0;
+    if(!v)return 0;
+    /* UI eligibility ends immediately on a Stop request, but an already-active
+     * slice retains its ordinary output/publication contract until it returns.
+     * Only trusted process callbacks reach here; their exact attachment and
+     * runnable/sleeping lifetime, not UI eligibility, authorize output. */
+    int state=process_status(binding->process);
+    return state==PROCESS_TASK_READY||state==PROCESS_TASK_SLEEPING?v:0;
 }
 static void native_print(const ProcessBinding *binding,const char *text){
     AppView *t=binding_view(binding);if(t)view_write((int)binding->slot,text);
