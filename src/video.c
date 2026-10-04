@@ -214,6 +214,26 @@ static int demux_step(void) {
     return 0;
 }
 
+/* Typical program streams use tiny 2 KiB PES packets. Taking one desktop
+ * tick for each packet makes a legal 2 MiB clip take many seconds to prepare.
+ * Batch up to 16 small units within 32 KiB, or consume one larger legal unit.
+ * The largest single payload is still bounded by the 16-bit PES length. */
+static int demux_poll(void) {
+    unsigned begin=cursor;
+    for (unsigned units=0;units<16;++units) {
+        if (units && file_bytes-cursor>=4 && start_code(SOURCE+cursor)) {
+            unsigned type=SOURCE[cursor+3],bytes=4;
+            if (type==0xba) bytes=12;
+            else if (type!=0xb9 && file_bytes-cursor>=6) bytes=6+be16(SOURCE+cursor+4);
+            if (bytes>SCAN_BUDGET-(cursor-begin)) break;
+        }
+        int changed=demux_step();
+        if (changed || phase || status.state!=VIDEO_LOADING) return changed;
+        if (cursor-begin>=SCAN_BUDGET) break;
+    }
+    return 0;
+}
+
 /* Validate every sequence header before constructing the decoder. Resolution
  * or rate changes, MPEG-2 extensions, and D pictures are outside this bounded
  * MPEG-1 contract. Picture counting gives exact frame-based duration without
@@ -391,7 +411,7 @@ static unsigned audio_clock_ms(void) {
 }
 int video_poll(void) {
     if (status.state==VIDEO_LOADING) {
-        if (!phase) return demux_step();
+        if (!phase) return demux_poll();
         if (phase==1) return scan_step();
         if (phase==2) return audio_scan_step();
         if (phase==3) return prepare_decoders();

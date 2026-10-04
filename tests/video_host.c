@@ -11,6 +11,7 @@
 
 uint8_t video_test_arena[VIDEO_CAPACITY];
 static uint32_t now;
+static unsigned source_bytes;
 uint32_t timer_ticks(void) { return now; }
 static AudioStatus no_audio;
 const AudioStatus *audio_status(void) { return &no_audio; }
@@ -37,7 +38,7 @@ static void play_owned(const char *path) {
     assert(input);
     assert(!fseek(input, 0, SEEK_END));
     long size = ftell(input);
-    assert(size > 0 && size <= VIDEO_MAX_FILE_BYTES);
+    assert(size > 0 && size <= VIDEO_MAX_FILE_BYTES);source_bytes=(unsigned)size;
     rewind(input);
     uint8_t *data = malloc((size_t)size);
     assert(data && fread(data, 1, (size_t)size, input) == (size_t)size);
@@ -148,7 +149,7 @@ static int reject_valid_unsupported(const char *path) {
     FILE *input = fopen(path, "rb");
     assert(input && !fseek(input, 0, SEEK_END));
     long size = ftell(input);
-    assert(size > 0 && size <= VIDEO_MAX_FILE_BYTES);
+    assert(size > 0 && size <= VIDEO_MAX_FILE_BYTES);source_bytes=(unsigned)size;
     rewind(input);
     uint8_t *data = malloc((size_t)size);
     assert(data && fread(data, 1, (size_t)size, input) == (size_t)size);
@@ -187,11 +188,12 @@ int main(int argc, char **argv) {
     assert(output);
     play_owned(argv[1]);
     if (controls) check_loading_pause();
-    unsigned count = 0, polls = 0, first_tick = 0, paused = 0, late = 0;
+    unsigned count = 0, polls = 0, loading_polls = 0, first_tick = 0, paused = 0, late = 0;
     unsigned previous_position = 0, max_arena = 0;
     while (video_status()->state != VIDEO_FINISHED) {
         const VideoStatus *s = video_status();
         assert(s->state == VIDEO_LOADING || s->state == VIDEO_PLAYING);
+        if (s->state==VIDEO_LOADING) ++loading_polls;
         if (controls && count >= 10 && !paused) {
             check_pause();
             paused = 1;
@@ -214,6 +216,9 @@ int main(int argc, char **argv) {
         if (s->arena_bytes > max_arena) max_arena = s->arena_bytes;
         assert(s->displayed_frames >= count && s->displayed_frames <= count + 1);
         if (s->state != VIDEO_LOADING) {
+            /* Ordinary 2 KiB MPEG-PS packets must be batched. One packet per
+             * 70-Hz desktop turn made a valid 1.6 MiB clip time out on open. */
+            assert(loading_polls<=source_bytes/16384u+32u);
             assert(s->width == width && s->height == height);
             if (argc==11) assert(s->aspect_num*number(argv[10])==s->aspect_den*number(argv[9]));
             assert(s->fps_num == fps_num && s->fps_den == fps_den);
