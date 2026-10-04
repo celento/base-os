@@ -166,15 +166,17 @@ int main(void){
     fresh();key(0x1e,1);pointer(0,0,1,0,2);key(0x30,3);desktop_program_input(1);
     assert(desktop_program_key()=='b' && !records && !mouse_left);
     key(0x2e,4);pointer(3,0,1,0,5);desktop_program_input(0);
-    assert(!input_pending(&device_input) && desktop_input_turn()==0 && !records && mouse_x==403);
-    pointer(0,0,1,0,6);pointer(0,0,0,0,7);desktop_input_turn();assert(!records);
-    key(0x20,8);desktop_input_turn();assert(records==1 && record[0].value=='d');
+    assert(input_pending(&device_input) && desktop_input_turn()==2 && records==1 && record[0].value=='c' && mouse_x==403);
+    pointer(0,0,1,0,6);pointer(0,0,0,0,7);desktop_input_turn();assert(records==1);
+    key(0x20,8);desktop_input_turn();assert(records==2 && record[1].value=='d');
+    fresh();for(unsigned i=0;i<100;++i)key(i==99?0x30:0x1e,i);
+    assert(desktop_program_key()=='b' && !input_pending(&device_input));
     fresh();acquire_tail=1100;desktop_program_input(0);assert(input_tail_pending && acquire_tail==76);
     key(0x1e,1);assert(desktop_input_turn()==INPUT_BATCH && input_tail_pending && !records);
     assert(desktop_input_turn()==INPUT_BATCH && input_tail_pending);
     assert(desktop_input_turn()==INPUT_BATCH && !input_tail_pending && !acquire_tail && !records);
     key(0x30,2);desktop_input_turn();assert(records==1 && record[0].value=='b');
-    puts("Desktop synchronous owner: INKEY and unconsumed program backlog do not replay passed.");
+    puts("Desktop synchronous owner: INKEY last-character snapshot, keyboard typeahead and pointer fencing passed.");
     puts("All production desktop input checks passed.");
     return 0;
 }
