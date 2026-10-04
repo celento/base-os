@@ -14,7 +14,9 @@
 #include "browser.h"
 #include "player.h"
 #include "writer.h"
+#include "sheet.h"
 #include "example_docs.h"
+#include "example_sheet.h"
 #include "file_clipboard.h"
 #include "video.h"
 #include "image_viewer.h"
@@ -664,6 +666,7 @@ enum {
     ICON_BROWSER,
     ICON_PLAYER,
     ICON_WRITER,
+    ICON_SPREADSHEET,
     ICON_TRASH,
     ICON_COUNT
 };
@@ -685,6 +688,23 @@ static const char icon_writer16[] =
     "   #........#   "
     "   ##########   "
     "                "
+    "                ";
+static const char icon_sheet16[] =
+    "  ############  "
+    "  #..........#  "
+    "  ############  "
+    "  #..#...#...#  "
+    "  #..#...#...#  "
+    "  ############  "
+    "  #..#...#...#  "
+    "  #..#...#...#  "
+    "  ############  "
+    "  #..#...#...#  "
+    "  #..#...#...#  "
+    "  ############  "
+    "  #..#...#...#  "
+    "  #..#...#...#  "
+    "  ############  "
     "                ";
 static const char icon_calc16[];
 static const char icon_paint16[];
@@ -729,6 +749,7 @@ static void icons_init(void) {
     icon_set(ICON_BROWSER, "Browser", icon_browser16, 0x2476C9);
     icon_set(ICON_PLAYER, "Media Player", icon_player16, 0xDC587A);
     icon_set(ICON_WRITER, "Writer", icon_writer16, 0x557DD1);
+    icon_set(ICON_SPREADSHEET, "Spreadsheet", icon_sheet16, 0x228653);
     icon_set(ICON_TRASH, "Trash", icon_trash, 0x9CA3AF);
 
     int col_w = 96;
@@ -801,6 +822,12 @@ static void draw_app_symbol(int id,int x,int y,uint8_t ink) {
         symbol_box(x+2,y+2,28,28,14,ink);
         symbol_box(x+10,y+2,12,28,6,ink);
         draw_rect(x+3,y+10,26,2,ink);draw_rect(x+3,y+21,26,2,ink);break;
+    case ICON_SPREADSHEET:
+        symbol_box(x+2,y+2,28,28,3,ink);
+        draw_rect(x+3,y+8,26,2,ink);
+        for(int j=0;j<2;j++)draw_rect(x+3,y+16+j*7,26,1,ink);
+        for(int j=0;j<2;j++)draw_rect(x+11+j*9,y+10,1,19,ink);
+        break;
     case ICON_WRITER:
         symbol_box(x+5,y+1,23,30,3,ink);
         draw_rect(x+10,y+7,13,4,ink);
@@ -1419,7 +1446,8 @@ enum WinKind {
     WK_PROPERTIES,
     WK_BROWSER,
     WK_PLAYER,
-    WK_WRITER
+    WK_WRITER,
+    WK_SPREADSHEET
 };
 
 /* Max 8 windows: kind, x, y, w, h, z. seq is taskbar creation order. */
@@ -1599,6 +1627,13 @@ int writer_clipboard_get(char *text, unsigned capacity, unsigned *generation) {
     return clip_len;
 }
 
+unsigned spreadsheet_clipboard_set(const char *text, unsigned length) {
+    return writer_clipboard_set(text, length);
+}
+int spreadsheet_clipboard_get(char *text, unsigned capacity, unsigned *generation) {
+    return writer_clipboard_get(text, capacity, generation);
+}
+
 #define TERM_WIN_W   640
 #define TERM_WIN_H   400
 #define TERM_PAD     12
@@ -1657,7 +1692,8 @@ static void edit_close_cancel(void) {
 static int edit_close_valid(void) {
     return edit_close_owner >= 0 && edit_close_owner < MAX_WIN &&
         wins[edit_close_owner].open &&
-        (wins[edit_close_owner].kind == WK_EDIT || wins[edit_close_owner].kind == WK_WRITER) &&
+        (wins[edit_close_owner].kind == WK_EDIT || wins[edit_close_owner].kind == WK_WRITER ||
+         wins[edit_close_owner].kind == WK_SPREADSHEET) &&
         wins[edit_close_owner].seq == edit_close_seq;
 }
 static int pick_cwd = 0;
@@ -1668,7 +1704,7 @@ static int pick_selected = 0;
 static uint32_t pick_last_click_frame = 0;
 static int pick_last_click_item = -1;
 static int pick_pics_only = 0;
-static int pick_writer, pick_owner = -1, pick_owner_seq;
+static int pick_writer, pick_sheet, pick_owner = -1, pick_owner_seq;
 
 static uint32_t icon_last_frame = 0;
 static int icon_last = -1;
@@ -1774,6 +1810,7 @@ static void win_minimum(Win *w, int *mw, int *mh) {
     else if(w->kind==WK_BROWSER){*mw=BROWSER_MIN_W+2;*mh=BROWSER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_PLAYER){*mw=PLAYER_MIN_W+2;*mh=PLAYER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_WRITER){*mw=WRITER_MIN_W+2;*mh=WRITER_MIN_H+TITLE_H+2;}
+    else if(w->kind==WK_SPREADSHEET){*mw=SPREADSHEET_MIN_W+2;*mh=SPREADSHEET_MIN_H+TITLE_H+2;}
     else { int x, y; layout_window(w->kind, &x, &y, mw, mh); }
 }
 static void win_clamp(Win *w) {
@@ -1844,6 +1881,7 @@ static int win_open(int kind) {
     if (kind == WK_BROWSER) browser_init();
     if (kind == WK_PLAYER) player_init();
     if (kind == WK_WRITER) writer_init();
+    if (kind == WK_SPREADSHEET) spreadsheet_init();
     if (kind == WK_SYSMON) sysmon_reset();
     wins[slot].kind = kind;
     wins[slot].open = 1;
@@ -1868,6 +1906,7 @@ static void win_close(int i) {
     if(wins[i].kind==WK_BROWSER)browser_close();
     if(wins[i].kind==WK_PLAYER)player_close();
     if(wins[i].kind==WK_WRITER)writer_close();
+    if(wins[i].kind==WK_SPREADSHEET)spreadsheet_close();
     wins[i].open = 0;
     context_set(win_front());
     if (dragging_win == i) {
@@ -1880,17 +1919,22 @@ static void win_close(int i) {
 /* An action owns its window and source-file incarnations throughout Save As. */
 static void document_finish(int owner, int action, int target, unsigned identity) {
     if (action == DOCUMENT_CLOSE) { win_close(owner); return; }
-    if (owner < 0 || owner >= MAX_WIN || !wins[owner].open || wins[owner].kind != WK_WRITER) return;
+    if (owner < 0 || owner >= MAX_WIN || !wins[owner].open ||
+        (wins[owner].kind != WK_WRITER && wins[owner].kind != WK_SPREADSHEET)) return;
     context_set(owner);
-    if (action == DOCUMENT_NEW) writer_new();
-    else if (fs_valid(target) && fs_identity(target) == identity && writer_open_file(target))
+    int sheet = wins[owner].kind == WK_SPREADSHEET;
+    if (action == DOCUMENT_NEW) { if(sheet)spreadsheet_new();else writer_new(); }
+    else if (fs_valid(target) && fs_identity(target) == identity &&
+        (sheet ? spreadsheet_open_file(target) : writer_open_file(target)))
         fm_set_cwd(fs_parent(target));
     dirty = 1;
 }
 static void document_request(int i, int action, int target) {
     if (i < 0 || i >= MAX_WIN || !wins[i].open || edit_close_owner >= 0) return;
     Document *doc = &window_state[i].doc;
-    int needs_save = wins[i].kind == WK_WRITER ?
+    int needs_save = wins[i].kind == WK_SPREADSHEET ?
+        (spreadsheet_dirty() || (spreadsheet_file() >= 0 && fs_identity(spreadsheet_file()) != spreadsheet_file_identity())) :
+        wins[i].kind == WK_WRITER ?
         (writer_dirty() || (writer_file() >= 0 && fs_identity(writer_file()) != writer_file_identity())) :
         wins[i].kind == WK_EDIT && !(doc->saved_ok &&
         (doc->file < 0 || fs_identity(doc->file) == doc->identity));
@@ -1909,6 +1953,7 @@ static void document_request(int i, int action, int target) {
     dragging_win = resizing_win = -1;
     drag_active = fm_dragging = fm_drag_active = edit_dragging = 0;
     writer_release();
+    spreadsheet_release();
     dirty = 1;
 }
 static void win_request_close(int i) { document_request(i, DOCUMENT_CLOSE, -1); }
@@ -1964,6 +2009,10 @@ static int menu_item_enabled(int m, int item) {
                 return clip_is_number();
             return 0;
         }
+        if (front_kind() == WK_SPREADSHEET) {
+            if (item == 0 || item == 1) return 1;
+            return item == 2 && clip_generation != 0 && file_clipboard_mode()==FILE_CLIPBOARD_NONE;
+        }
         if (front_kind() == WK_WRITER) {
             if (item == 0 || item == 1) return writer_caret() != writer_anchor();
             return item == 2 && clip_len > 0;
@@ -1987,7 +2036,7 @@ static int menu_item_enabled(int m, int item) {
         }
         if (item == 4) { /* Save */
             int fk = front_kind();
-            return !open_dlg && (fk == WK_EDIT || fk == WK_PAINT || fk == WK_WRITER);
+            return !open_dlg && (fk == WK_EDIT || fk == WK_PAINT || fk == WK_WRITER || fk == WK_SPREADSHEET);
         }
         if (item == 5) { /* Duplicate: Files + selected file/folder, not an app. */
             int id;
@@ -2377,6 +2426,22 @@ static void writer_result(int result) {
     if (result & WRITER_REQUEST_SAVE_AS) namedlg_open(2, "untitled.bwr");
     if (result & WRITER_REQUEST_EXPORT) namedlg_open(3, "document.rtf");
 }
+static int spreadsheet_save_document(void) {
+    int had_binding = spreadsheet_file() >= 0;
+    int result = spreadsheet_save();
+    if (result == SPREADSHEET_SAVE_NEEDS_NAME) {
+        namedlg_open(4, "untitled.bsh");
+        if (had_binding) name_failed = 1;
+    }
+    dirty = 1;
+    return result == SPREADSHEET_SAVE_OK;
+}
+static void spreadsheet_result(int result) {
+    if (result & SPREADSHEET_CHANGED) dirty = 1;
+    if (result & SPREADSHEET_REQUEST_SAVE) spreadsheet_save_document();
+    if (result & SPREADSHEET_REQUEST_SAVE_AS) namedlg_open(4, "untitled.bsh");
+    if (result & SPREADSHEET_REQUEST_EXPORT) namedlg_open(5, "spreadsheet.csv");
+}
 static void edit_close_choose(int choice) {
     if (!edit_close_valid()) { edit_close_cancel(); return; }
     int owner = edit_close_owner, action = document_action, target = document_target;
@@ -2384,7 +2449,8 @@ static void edit_close_choose(int choice) {
     if (choice == 2) { edit_close_cancel(); return; }
     if (choice == 1) { edit_close_cancel(); document_finish(owner, action, target, identity); return; }
     context_set(owner);
-    if (wins[owner].kind == WK_WRITER ? writer_save_document() : edit_save()) {
+    if (wins[owner].kind == WK_SPREADSHEET ? spreadsheet_save_document() :
+        wins[owner].kind == WK_WRITER ? writer_save_document() : edit_save()) {
         edit_close_cancel();
         document_finish(owner, action, target, identity);
     } else if (name_dlg) {
@@ -3886,6 +3952,16 @@ static void open_writer(int file) {
     }
     dirty = 1;
 }
+static void open_spreadsheet(int file) {
+    int slot = win_open(WK_SPREADSHEET);
+    if (slot < 0) return;
+    if (file >= 0) document_request(slot, DOCUMENT_OPEN, file);
+    else if (!fs_is_dir(fm_cwd) || fm_cwd == fs_root()) {
+        int docs = fs_find_child(fs_root(), "Documents");
+        fm_set_cwd(fs_is_dir(docs) ? docs : fs_root());
+    }
+    dirty = 1;
+}
 static void open_fs_file(int id) {
     if (!fs_valid(id))
         return;
@@ -3893,8 +3969,10 @@ static void open_fs_file(int id) {
     if(fs_is_app(id)&&!kstrcmp(n,"Browser")){open_browser(-1);return;}
     if(fs_is_app(id)&&!kstrcmp(n,"Media Player")){open_player(-1);return;}
     if(fs_is_app(id)&&!kstrcmp(n,"Writer")){open_writer(-1);return;}
+    if(fs_is_app(id)&&!kstrcmp(n,"Spreadsheet")){open_spreadsheet(-1);return;}
     if(!fs_is_dir(id)&&!fs_is_app(id)){
         if(file_extension(n,".bwr")){open_writer(id);return;}
+        if(file_extension(n,".bsh")||file_extension(n,".csv")){open_spreadsheet(id);return;}
         if(file_extension(n,".html")||file_extension(n,".htm")){open_browser(id);return;}
         if(file_extension(n,".wav")||file_extension(n,".wave")||file_extension(n,".mp3")||file_extension(n,".mpg")||file_extension(n,".mpeg")){open_player(id);return;}
     }
@@ -3978,6 +4056,8 @@ static void open_fs_file(int id) {
 
 static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     switch (kind) {
+    case WK_SPREADSHEET:
+        *w=SPREADSHEET_W+2;*h=SPREADSHEET_H+TITLE_H+2;break;
     case WK_WRITER:
         *w=WRITER_W+2;*h=WRITER_H+TITLE_H+2;break;
     case WK_BROWSER:
@@ -4352,6 +4432,8 @@ static void do_empty_trash(void) {
 }
 
 static int od_row_enabled(int id) {
+    if (pick_sheet) return fs_is_dir(id) || (!fs_is_app(id) &&
+        (file_extension(fs_name(id),".bsh") || file_extension(fs_name(id),".csv")));
     if (pick_writer) return !fs_is_app(id);
     if (!pick_pics_only)
         return 1;
@@ -4395,6 +4477,7 @@ static void start_open_dialog(int pics_only) {
     pick_pics_only = pics_only;
     pick_owner = win_front();
     pick_writer = pick_owner >= 0 && wins[pick_owner].kind == WK_WRITER && !pics_only;
+    pick_sheet = pick_owner >= 0 && wins[pick_owner].kind == WK_SPREADSHEET && !pics_only;
     pick_owner_seq = pick_owner >= 0 ? wins[pick_owner].seq : 0;
     pick_cwd = fs_root();
     pick_selected = 0;
@@ -4421,8 +4504,9 @@ static void od_open_selected(void) {
         return;
     }
     open_dlg = 0;
-    if (pick_writer) {
-        if (pick_owner >= 0 && wins[pick_owner].open && wins[pick_owner].kind == WK_WRITER &&
+    if (pick_writer || pick_sheet) {
+        if (pick_owner >= 0 && wins[pick_owner].open &&
+            wins[pick_owner].kind == (pick_sheet ? WK_SPREADSHEET : WK_WRITER) &&
             wins[pick_owner].seq == pick_owner_seq) document_request(pick_owner, DOCUMENT_OPEN, id);
     } else open_fs_file(id);
 }
@@ -4889,6 +4973,7 @@ static const char *win_app_name(int kind) {
     case WK_BROWSER: return "Browser";
     case WK_PLAYER: return "Media Player";
     case WK_WRITER: return "Writer";
+    case WK_SPREADSHEET: return "Spreadsheet";
     default: return "App";
     }
 }
@@ -5030,6 +5115,8 @@ static void draw_tb_icon(int kind, int x, int y, uint8_t invert) {
         draw_icon16(x,y,icon_player16,invert);
     else if(kind == WK_WRITER)
         draw_icon16(x,y,icon_writer16,invert);
+    else if(kind == WK_SPREADSHEET)
+        draw_icon16(x,y,icon_sheet16,idx24(0x228653));
     else if (kind == WK_FILES)
         draw_icon16(x, y, icon_folder16, invert);
     else if (kind == WK_CLOCK)
@@ -5164,6 +5251,9 @@ static void draw_window_contents(Win *w, int inactive) {
     } else if (w->kind == WK_BREAKOUT) {
         gui_draw_window(wx, wy, ww, wh, "Breakout", 0, fl);
         bo_draw(wx, wy + TITLE_H + 1);
+    } else if (w->kind == WK_SPREADSHEET) {
+        gui_draw_window(wx,wy,ww,wh,spreadsheet_title(),0,fl);
+        spreadsheet_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
     } else if (w->kind == WK_WRITER) {
         gui_draw_window(wx,wy,ww,wh,writer_title(),0,fl);
         writer_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
@@ -5541,6 +5631,7 @@ static void icon_open(int id) {
     case ICON_BROWSER: open_browser(-1); break;
     case ICON_PLAYER: open_player(-1); break;
     case ICON_WRITER: open_writer(-1); break;
+    case ICON_SPREADSHEET: open_spreadsheet(-1); break;
     case ICON_TRASH: open_files(trash_id >= 0 ? trash_id : fs_root()); break;
     default: break;
     }
@@ -5570,7 +5661,7 @@ static void menu_activate(int m, int item) {
     if (m == MENU_FILE) {
         if (item == 0) {
             open_dlg = 0;
-            if (front_kind() == WK_WRITER) {
+            if (front_kind() == WK_WRITER || front_kind() == WK_SPREADSHEET) {
                 document_request(win_front(), DOCUMENT_NEW, -1);
             } else if (front_kind() == WK_PAINT) {
                 paint_clear();
@@ -5593,7 +5684,9 @@ static void menu_activate(int m, int item) {
         } else if (item == 3) {
             close_front();
         } else if (item == 4) {
-            if (front_kind() == WK_WRITER && !open_dlg) {
+            if (front_kind() == WK_SPREADSHEET && !open_dlg) {
+                spreadsheet_save_document();
+            } else if (front_kind() == WK_WRITER && !open_dlg) {
                 writer_save_document();
             } else if (front_kind() == WK_PAINT && !open_dlg) {
                 paint_save();
@@ -5611,6 +5704,9 @@ static void menu_activate(int m, int item) {
     if (m == MENU_EDITM) {
         if (front_kind() == WK_FILES) {
             files_clipboard_action(item);
+        } else if (front_kind() == WK_SPREADSHEET) {
+            const int keys[] = {0x2d, 0x2e, 0x2f};
+            if (item >= 0 && item < 3) spreadsheet_result(spreadsheet_key(keys[item], 0, SPREADSHEET_MOD_CTRL));
         } else if (front_kind() == WK_WRITER) {
             const int keys[] = {0x2d, 0x2e, 0x2f};
             if (item >= 0 && item < 3) writer_result(writer_key(keys[item], 0, WRITER_MOD_CTRL));
@@ -5979,7 +6075,9 @@ static void namedlg_commit(void) {
     int ok = name_target == 0 ? edit_write_named(name_buf) :
              name_target == 1 ? paint_write_named(name_buf) :
              name_target == 2 ? writer_save_as(parent, name_buf) == WRITER_SAVE_OK :
-                                writer_export_rtf(parent, name_buf) >= 0;
+             name_target == 3 ? writer_export_rtf(parent, name_buf) >= 0 :
+             name_target == 4 ? spreadsheet_save_as(parent, name_buf) == SPREADSHEET_SAVE_OK :
+                                spreadsheet_export_csv(parent, name_buf) >= 0;
     if (ok) {
         int owner = name_owner;
         namedlg_close();
@@ -6003,7 +6101,8 @@ static void draw_edit_close(void) {
     draw_string_bold(document_action == DOCUMENT_CLOSE ? "Save changes before closing?"
         : "Save changes before replacing?", x + 22, y + 20, ui_text);
     const Document *doc = &window_state[edit_close_owner].doc;
-    const char *name = wins[edit_close_owner].kind == WK_WRITER ? writer_title() :
+    const char *name = wins[edit_close_owner].kind == WK_SPREADSHEET ? spreadsheet_title() :
+        wins[edit_close_owner].kind == WK_WRITER ? writer_title() :
         doc->file >= 0 && fs_identity(doc->file) == doc->identity
                      ? fs_name(doc->file) : "untitled";
     draw_string_clip(name, x + 22, y + 50, ui_text, x + 438);
@@ -6045,15 +6144,18 @@ static void draw_namedlg(void) {
     draw_shadow(x, y, w, h);
     draw_round_rect(x - 1, y - 1, w + 2, h + 2, 11, ui_border);
     draw_round_rect(x, y, w, h, 10, COLOR_WHITE);
-    draw_string_bold(name_target == 3 ? "Export rich text (RTF)" :
+    draw_string_bold(name_target == 5 ? "Export values (CSV)" :
+                     name_target == 4 ? "Save spreadsheet as" :
+                     name_target == 3 ? "Export rich text (RTF)" :
                      name_target == 1 ? "Save picture as" : "Save document as",
                      x + 22, y + 20, ui_text);
     char location[FS_NAME_LEN + 16];
     kstrcpy(location, "Folder: ");
     kstrcpy(location + 8, fs_is_dir(fm_cwd) && fm_cwd != fs_root() ? fs_name(fm_cwd) : "/");
     const char *message = name_failed ?
-        (name_target >= 2 ? writer_status() : name_failure_message ? name_failure_message :
+        (name_target >= 4 ? spreadsheet_status() : name_target >= 2 ? writer_status() : name_failure_message ? name_failure_message :
          "Save failed. Check storage and file name.") :
+        name_target == 5 ? "Other apps may run formula-like CSV text." :
         name_target == 1 ? "Saved to the Pictures folder" : location;
     draw_string_clip(message, x + 22, y + 20 + CHAR_H + 6, ui_text_dim, x + w - 22);
     int fx = x + 22, fy = y + 64, fw = w - 44, fh = 34;
@@ -6255,6 +6357,9 @@ static void handle_click(void) {
         }
         else if(w->kind==WK_BROWSER){
             if(browser_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
+        }else if(w->kind==WK_SPREADSHEET){
+            spreadsheet_result(spreadsheet_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,
+                mouse_x,mouse_y,(ctrl_down?SPREADSHEET_MOD_CTRL:0)|(shift_down?SPREADSHEET_MOD_SHIFT:0)));
         }else if(w->kind==WK_WRITER){
             writer_result(writer_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,
                 mouse_x,mouse_y,(ctrl_down?WRITER_MOD_CTRL:0)|(shift_down?WRITER_MOD_SHIFT:0)));
@@ -6315,7 +6420,8 @@ static void handle_wheel(int amount) {
        (target<0||wins[i].z>wins[target].z))target=i;
     if(target<0)return;
     int original=win_front();context_set(target);Win *w=&wins[target];
-    if(w->kind==WK_WRITER)writer_scroll(amount*3);
+    if(w->kind==WK_SPREADSHEET)spreadsheet_scroll(amount*3);
+    else if(w->kind==WK_WRITER)writer_scroll(amount*3);
     else if(w->kind==WK_BROWSER)browser_scroll(amount*3);
     else if(w->kind==WK_VIEW)image_viewer_scroll(amount*3);
     else if(w->kind==WK_TERM)term_scroll(-amount*3);
@@ -6367,6 +6473,13 @@ static void handle_key(void) {
         launcher_key();
         return;
     }
+    if (front_kind()==WK_SPREADSHEET && !open_dlg && open_menu<0 &&
+        !(alt_down || (ctrl_down && (key_sc==KEY_SPACE || key_sc==KEY_TAB ||
+          key_sc==KEY_M || key_sc==KEY_W || key_sc==KEY_N || key_sc==0x18)) || key_sc==0x44)) {
+        spreadsheet_result(spreadsheet_key(key_sc,key_char,(ctrl_down?SPREADSHEET_MOD_CTRL:0)|
+            (shift_down?SPREADSHEET_MOD_SHIFT:0)));
+        return;
+    }
     if (front_kind()==WK_WRITER && !open_dlg && open_menu<0 &&
         !(alt_down || (ctrl_down && (key_sc==KEY_SPACE || key_sc==KEY_TAB ||
           key_sc==KEY_M || key_sc==KEY_W || key_sc==KEY_N || key_sc==0x18)) || key_sc==0x44)) {
@@ -6413,7 +6526,7 @@ static void handle_key(void) {
             menu_activate(MENU_FILE, 0);
             return;
         }
-        if (key_sc == KEY_S && (front_kind() == WK_PAINT || front_kind() == WK_EDIT || front_kind() == WK_WRITER)) {
+        if (key_sc == KEY_S && (front_kind() == WK_PAINT || front_kind() == WK_EDIT || front_kind() == WK_WRITER || front_kind() == WK_SPREADSHEET)) {
             menu_activate(MENU_FILE, 4);
             return;
         }
@@ -7017,6 +7130,16 @@ typedef struct {
 } SavedEditorBindings;
 #define EDITOR_BINDING_MAGIC 0x31424445u
 _Static_assert(sizeof(SavedEditorBindings)==248,"Editor recovery binding ABI changed");
+/* Paired to the exact v1 session and native draft. Runtime node identities
+ * are never persisted or trusted across reboot. */
+typedef struct {
+    unsigned magic, version, valid;
+    SpreadsheetBinding source;
+    EditorBinding session, draft;
+    unsigned anchor;
+} SavedSheetBinding;
+#define SHEET_BINDING_MAGIC 0x31425342u
+_Static_assert(sizeof(SavedSheetBinding)==52,"Spreadsheet recovery binding ABI changed");
 static int session_ready;
 
 static int session_put(int dir,const char *name,const void *data,int size){
@@ -7037,6 +7160,11 @@ static void session_save(void){
     unsigned writer_size=0;
     const unsigned char *writer_draft=0;
     int writer_slot=find_open_kind(WK_WRITER);
+    unsigned sheet_size=0;
+    const unsigned char *sheet_draft=0;
+    int sheet_slot=find_open_kind(WK_SPREADSHEET);
+    SavedSheetBinding sheet_binding;kmemset(&sheet_binding,0,sizeof sheet_binding);
+    sheet_binding.magic=SHEET_BINDING_MAGIC;sheet_binding.version=1;
     SavedWriterBinding binding={WRITER_BINDING_MAGIC,1,0,{0,0,0}};
     SavedEditorBindings editors;kmemset(&editors,0,sizeof editors);
     editors.magic=EDITOR_BINDING_MAGIC;editors.version=1;editors.count=MAX_WIN;
@@ -7046,17 +7174,27 @@ static void session_save(void){
         if(!writer_draft){session_status="Writer recovery could not be prepared.";return;}
         binding.valid=(unsigned)writer_binding(&binding.source);
     }
+    if(sheet_slot>=0){
+        sheet_draft=spreadsheet_snapshot(&sheet_size);
+        if(!sheet_draft){session_status="Spreadsheet recovery could not be prepared.";return;}
+        /* Only non-mutating getters follow until the borrowed bytes are copied. */
+        sheet_binding.valid=(unsigned)spreadsheet_binding(&sheet_binding.source);
+        sheet_binding.anchor=spreadsheet_anchor();
+        edit_fingerprint(sheet_draft,sheet_size,&sheet_binding.draft);
+    }
     int needed=dir<0?1:0,projected=(int)fs_used_bytes();
     if(dir>=0&&!fs_is_dir(dir))goto failure;
-    for(int i=-5;i<MAX_WIN;i++){
+    for(int i=-7;i<MAX_WIN;i++){
         char draft[]="draft0.txt";const char *name;
-        if(i==-5){if(editor_slot<0)continue;name="editor-bindings";}
+        if(i==-7){if(sheet_slot<0)continue;name="sheet-binding";}
+        else if(i==-6){if(sheet_slot<0)continue;name="sheet-draft.bsh";}
+        else if(i==-5){if(editor_slot<0)continue;name="editor-bindings";}
         else if(i==-4){if(writer_slot<0)continue;name="writer-binding";}
         else if(i==-3){if(writer_slot<0)continue;name="writer-draft.bwr";}
         else if(i==-2)name="session";
         else if(i==-1){if(!paint_ready)continue;name="paint-draft";}
         else {if(!wins[i].open||wins[i].kind!=WK_EDIT)continue;draft[5]+=(char)i;name=draft;}
-        int size=i==-5?(int)sizeof(editors):i==-4?(int)sizeof(binding):i==-3?(int)writer_size:i==-2?(int)sizeof(SavedSession):i==-1?PAINT_W*PAINT_H:window_state[i].doc.len;
+        int size=i==-7?(int)sizeof(sheet_binding):i==-6?(int)sheet_size:i==-5?(int)sizeof(editors):i==-4?(int)sizeof(binding):i==-3?(int)writer_size:i==-2?(int)sizeof(SavedSession):i==-1?PAINT_W*PAINT_H:window_state[i].doc.len;
         if(size<0||(unsigned)size>fs_file_limit())goto failure;
         int id=fs_find_child(dir,name);
         if(id<0)needed++;
@@ -7065,7 +7203,7 @@ static void session_save(void){
             int old_size=fs_size(id);
             /* Small metadata is committed last, so do not spend space
              * that an unusually large older metadata file might free later. */
-            projected-=(i==-5||i==-4||i==-2||i==-1)&&old_size>size?size:old_size;
+            projected-=(i==-7||i==-5||i==-4||i==-2||i==-1)&&old_size>size?size:old_size;
         }
         projected+=size;
     }
@@ -7077,9 +7215,10 @@ static void session_save(void){
         Win *w=&wins[i];SavedWindow *v=&snap.win[i];
         if(!w->open||w->kind==WK_PROPERTIES)continue;
         context_set(i);v->open=1;v->kind=w->kind;v->x=w->x;v->y=w->y;v->w=w->w;v->h=w->h;v->min=w->min;v->z=w->z;
-        int id=w->kind==WK_EDIT?edit_file:w->kind==WK_WRITER?writer_file():w->kind==WK_FILES?fm_cwd:w->kind==WK_TERM?term_cwd():-1;
+        int id=w->kind==WK_EDIT?edit_file:w->kind==WK_SPREADSHEET?spreadsheet_file():w->kind==WK_WRITER?writer_file():w->kind==WK_FILES?fm_cwd:w->kind==WK_TERM?term_cwd():-1;
         if(w->kind==WK_EDIT && !edit_binding_valid())id=-1;
         if(w->kind==WK_WRITER && fs_identity(id)!=writer_file_identity())id=-1;
+        if(w->kind==WK_SPREADSHEET && fs_identity(id)!=spreadsheet_file_identity())id=-1;
         if(fs_valid(id))fs_path(id,v->path,sizeof v->path);
         if(w->kind==WK_EDIT){
             v->caret=edit_caret;
@@ -7087,14 +7226,23 @@ static void session_save(void){
             edit_fingerprint(edit_buf,(unsigned)edit_len,&editors.win[i].draft);
         }
         else if(w->kind==WK_WRITER)v->caret=(int)writer_caret();
+        else if(w->kind==WK_SPREADSHEET)v->caret=(int)spreadsheet_caret();
     }
     /* Pair the sidecar with both v1 metadata and each complete draft. If a
      * future write failure leaves mixed recovery generations, they cannot
      * authorize saving another slot's draft over a formerly bound source. */
     edit_fingerprint(&snap,sizeof snap,&editors.session);
+    edit_fingerprint(&snap,sizeof snap,&sheet_binding.session);
     /* Reclaim smaller drafts first, so the preflight's total-space promise
      * also holds when one document grows while another becomes shorter. */
-    for(int growing=0;growing<2;growing++)for(int i=-1;i<MAX_WIN;i++){
+    for(int growing=0;growing<2;growing++)for(int i=-2;i<MAX_WIN;i++){
+        if(i==-2){
+            if(sheet_slot<0)continue;
+            int old=fs_find_child(dir,"sheet-draft.bsh"),old_size=old<0?0:fs_size(old);
+            if((old<0||(int)sheet_size>=old_size)!=growing)continue;
+            if(session_put(dir,"sheet-draft.bsh",sheet_draft,(int)sheet_size)<0)goto failure;
+            continue;
+        }
         if(i==-1){
             if(writer_slot<0)continue;
             int old=fs_find_child(dir,"writer-draft.bwr"),old_size=old<0?0:fs_size(old);
@@ -7108,6 +7256,7 @@ static void session_save(void){
         if((old<0||edit_len>=old_size)!=growing)continue;
         if(session_put(dir,name,edit_buf,edit_len)<0)goto failure;
     }
+    if(sheet_slot>=0 && session_put(dir,"sheet-binding",&sheet_binding,sizeof sheet_binding)<0)goto failure;
     if(editor_slot>=0 && session_put(dir,"editor-bindings",&editors,sizeof editors)<0)goto failure;
     if(writer_slot>=0 && session_put(dir,"writer-binding",&binding,sizeof binding)<0)goto failure;
     if(paint_ready && session_put(dir,"paint-draft",paint_pix,PAINT_W*PAINT_H)<0)goto failure;
@@ -7128,12 +7277,35 @@ static void session_restore(void){
         }
         if(snap.magic==0x53534542&&snap.version==1)for(int i=0;i<MAX_WIN;i++){
             SavedWindow *v=&snap.win[i];v->path[FS_PATH_LEN-1]=0;
-            if(!v->open||v->kind<0||v->kind>WK_WRITER||v->kind==WK_PROPERTIES||v->w<1||v->h<1||v->w>4096||v->h>4096||v->x<0||v->x>4096||v->y<0||v->y>4096)continue;
+            if(!v->open||v->kind<0||v->kind>WK_SPREADSHEET||v->kind==WK_PROPERTIES||v->w<1||v->h<1||v->w>4096||v->h>4096||v->x<0||v->x>4096||v->y<0||v->y>4096)continue;
             int slot=win_open(v->kind);if(slot<0)break;Win *w=&wins[slot];w->x=v->x;w->y=v->y;w->w=v->w;w->h=v->h;w->min=!!v->min;w->z=v->z>=0&&v->z<100000?v->z:slot;win_clamp(w);
             if(w->z>wm_z)wm_z=w->z;
             int target=v->path[0]?fs_resolve(fs_root(),v->path):-1;
             if(v->kind==WK_FILES){fm_set_cwd(fs_is_dir(target)?target:fs_root());fm_refresh();}
             if(v->kind==WK_TERM)term_set_cwd(target);
+            if(v->kind==WK_SPREADSHEET){
+                if(fs_valid(target)&&!fs_is_dir(target)&&!fs_is_app(target))spreadsheet_open_file(target);
+                int draft=fs_find_child(dir,"sheet-draft.bsh");
+                if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)){
+                    unsigned caret=v->caret>=0?(unsigned)v->caret:0,anchor=caret;
+                    int source=-1,metadata=fs_find_child(dir,"sheet-binding");
+                    SavedSheetBinding binding;
+                    if(metadata>=0&&!fs_is_dir(metadata)&&!fs_is_app(metadata)&&fs_size(metadata)==sizeof binding){
+                        kmemcpy(&binding,fs_data(metadata),sizeof binding);
+                        if(binding.magic==SHEET_BINDING_MAGIC&&binding.version==1&&
+                           edit_fingerprint_matches(&snap,sizeof snap,&binding.session)&&
+                           edit_fingerprint_matches(fs_data(draft),(unsigned)fs_size(draft),&binding.draft)){
+                            anchor=binding.anchor;
+                            if(binding.valid==1&&spreadsheet_binding_matches(target,&binding.source))source=target;
+                        }
+                    }
+                    if(!spreadsheet_restore((const unsigned char *)fs_data(draft),(unsigned)fs_size(draft),
+                        source,fs_identity(source),1,caret,anchor))
+                        session_status="Spreadsheet recovery could not be restored.";
+                }
+                int docs=fs_find_child(fs_root(),"Documents");
+                fm_set_cwd(fs_valid(target)?fs_parent(target):fs_is_dir(docs)?docs:fs_root());
+            }
             if(v->kind==WK_WRITER){
                 if(fs_valid(target)&&!fs_is_dir(target)&&!fs_is_app(target))writer_open_file(target);
                 int draft=fs_find_child(dir,"writer-draft.bwr");
@@ -7187,9 +7359,22 @@ static void install_examples(void){
     if(fs_find_child(fs_root(),"Browser")<0)fs_create_app(fs_root(),"Browser");
     if(fs_find_child(fs_root(),"Media Player")<0)fs_create_app(fs_root(),"Media Player");
     if(fs_find_child(fs_root(),"Writer")<0)fs_create_app(fs_root(),"Writer");
+    if(fs_find_child(fs_root(),"Spreadsheet")<0)fs_create_app(fs_root(),"Spreadsheet");
     int media=fs_find_child(fs_root(),"Media");if(media<0)media=fs_mkdir(fs_root(),"Media");
     if(media>=0&&fs_find_child(media,"chime.wav")<0){int id=fs_create(media,"chime.wav");if(id>=0)fs_write(id,(const char *)audio_example,sizeof audio_example);}
     int docs=fs_find_child(fs_root(),"Documents");
+    if(docs>=0&&fs_find_child(docs,"budget.bsh")<0){
+        unsigned size=example_budget_sheet((unsigned char *)edit_scratch,EDIT_BUF_SIZE);
+        if(size){int id=fs_create(docs,"budget.bsh");if(id>=0&&fs_write(id,edit_scratch,(int)size)!=(int)size)fs_delete(id);}
+    }
+    if(docs>=0&&fs_find_child(docs,"budget.csv")<0){
+        int id=fs_create(docs,"budget.csv");
+        if(id>=0&&fs_write(id,example_budget_csv,kstrlen(example_budget_csv))!=kstrlen(example_budget_csv))fs_delete(id);
+    }
+    if(docs>=0&&fs_find_child(docs,"Spreadsheet guide.txt")<0){
+        int id=fs_create(docs,"Spreadsheet guide.txt");
+        if(id>=0&&fs_write(id,example_sheet_guide,kstrlen(example_sheet_guide))!=kstrlen(example_sheet_guide))fs_delete(id);
+    }
     if(docs>=0&&fs_find_child(docs,"welcome.html")<0){
         const char *page="<title>BaseOS guide</title><h1>BaseOS guide</h1><p>Open several apps from the desktop or Ctrl+Space. Alt+Tab changes windows.</p><h2>Browser</h2><p>Use HTTP addresses or file:///Documents/welcome.html. HTTPS, JavaScript and CSS layout are not supported. Never enter passwords over HTTP.</p><h2>Media Player</h2><p>Open /Media/chime.wav. WAV PCM and MP3 playback use the QEMU Sound Blaster 16.</p><h2>Make an app</h2><p>Terminal can run exec /Programs/hello-c.bex and exec /Programs/notebook.bex. The host C SDK is in the source archive.</p>";
         int id=fs_create(docs,"welcome.html");if(id>=0)fs_write(id,page,kstrlen(page));
@@ -7391,6 +7576,7 @@ void kmain(void) {
         }
         if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
         if(writer_tick()&&find_open_kind(WK_WRITER)>=0)dirty=1;
+        if(spreadsheet_tick()&&find_open_kind(WK_SPREADSHEET)>=0)dirty=1;
         int player_update=player_tick();
         int player_slot=find_open_kind(WK_PLAYER);
         if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
@@ -7500,6 +7686,7 @@ void kmain(void) {
                 files_drop();
             edit_dragging = 0;
             writer_release();
+            spreadsheet_release();
             paint_mouse_up();
         }
 
@@ -7550,6 +7737,11 @@ void kmain(void) {
             !name_dlg && !edit_close_dlg && !launcher_on && open_menu < 0 && dragging_win < 0) {
             Win *w = &wins[win_front()];
             if (writer_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
+        }
+        if (front_kind() == WK_SPREADSHEET && mouse_left && mouse_moved && !open_dlg &&
+            !name_dlg && !edit_close_dlg && !launcher_on && open_menu < 0 && dragging_win < 0) {
+            Win *w = &wins[win_front()];
+            if (spreadsheet_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
         }
         if ((front_kind() == WK_EDIT && !open_dlg && edit_sel_a == edit_sel_b) ||
             fm_renaming) {
