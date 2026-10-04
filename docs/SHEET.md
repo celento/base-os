@@ -12,12 +12,12 @@ appended after Writer, preserving every earlier version-1 session kind.
 ## Grid and editing
 
 - One sheet, **26 columns × 128 rows**, **A1 through Z128**.
-- Default client size **720 × 520**, minimum **420 × 260**. All drawing is clipped
+- Default client size **720 × 520**, minimum **360 × 260**. All drawing is clipped
   to the client and each cell; ordinary text never spills into adjacent cells.
 - Click a cell to select it. Shift-click, Shift+arrows or a mouse drag selects a
   rectangular range. Click a column/row header to select that whole column/row;
   the top-left corner or Ctrl+A selects the entire grid. Escape collapses a range.
-- The address field shows the active cell. Click it, choose **Go to**, or press
+- The address field shows the active cell. Click it, choose **Go**, or press
   **Ctrl+G**; enter a complete A1 address and press Enter. Invalid addresses keep
   the field open and leave the selection unchanged.
 - Typing begins a replacement for the active cell. **F2**, **Edit**, a double
@@ -33,7 +33,9 @@ appended after Writer, preserving every earlier version-1 session kind.
   the current active cell.
 - Delete or Backspace in the grid clears the selected range in one operation.
   Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes. There are **four undo operations**,
-  grouped by committed cell/range edits. A new edit discards the redo branch.
+  grouped by committed cell/range edits, formatting, or column-width changes.
+  A new edit discards the redo branch. Reapplying the same format or resizing
+  past a width limit does not consume an undo operation.
   Ctrl+Z while a cell/address edit is open cancels that pending edit first.
 
 Each cell holds at most **95 ASCII bytes**. Over-limit typing/paste is rejected
@@ -44,7 +46,10 @@ by F2 editing, native files and quoted clipboard interchange.
 Numbers have **three fixed decimal places** and a checked range of
 **−2,147,483.648 through +2,147,483.647**. Trailing source zeroes are retained in
 native files even when the displayed value omits them. Numeric/formula values
-are right aligned; text is left aligned. Formula errors are visible in red:
+are right aligned; text is left aligned. A numeric value that does not fit its
+visible cell is represented by `###` (fewer hashes in a tiny visible fragment),
+so clipping never hides its sign or magnitude to show a misleading number.
+Its exact source remains in the formula bar. Formula errors are visible in red:
 `#SYNTAX!`, `#REF!`, `#DIV/0!`, `#OVERFLOW!`, `#PRECISION!`, `#VALUE!`, `#CYCLE!`
 and `#DEPTH!`. Saving a formula with an error is allowed; it remains editable.
 
@@ -56,6 +61,35 @@ start typing a new value. SUM, AVG, MIN, MAX and COUNT support rectangular range
 see [the formula language](SHEET_MODEL.md#formula-language) for exact coercion,
 precision, nesting and reference semantics. Values always come from that engine.
 
+## Display formats and column widths
+
+The second toolbar row applies **General**, **0.00** (Fixed2), **$0.00**
+(Currency), or **%** (Percent) to every cell in the current selection. The
+corresponding shortcuts are **Ctrl+1**, **Ctrl+2**, **Ctrl+3**, and **Ctrl+4**.
+A blue button marks a uniform selection; a mixed selection has no highlighted
+format button. Empty cells can be formatted before entering a value.
+
+General displays the original three-place calculation result without trailing
+zeroes. Fixed2 and Currency round display to two decimal places, halfway away
+from zero; Currency uses dollars, such as `-$12.50`. Percent displays the value
+times 100 with two decimal places: `0.125` becomes `12.50%`. None of these changes
+stored values, formula calculation precision, or exact source text. Text and
+formula errors keep their ordinary display. Editing or clearing a cell retains
+its format; copying a private cell/range also carries the format.
+
+**Width − / +** changes all columns touched by the selection by **16 pixels**,
+within **48–320 pixels**. The default is **104 pixels**. Use **Ctrl+- / Ctrl+=**
+for the same adjustment and **Ctrl+0** to reset the selected columns to 104.
+The toolbar shows the shared width, or `...` for mixed widths. These controls
+fit the minimum 360-pixel client; header clicks still select entire columns.
+
+Formats and widths have ordinary undo/redo, dirty-state tracking, native save,
+and recovery. Applying a control while editing commits the source first as a
+separate undo step. Horizontal scrolling, hit testing, selection, and cell
+clipping use the actual column widths, including partly visible columns.
+Native files with display metadata use [BSH1 version 2](SHEET_FORMAT.md);
+default-metadata files keep the original version-1 encoding.
+
 ## Clipboard
 
 Ctrl+C copies a selection and Ctrl+X copies then clears it. A failed publication
@@ -65,19 +99,21 @@ not repeat a value to fill a selected rectangle. A successful range paste select
 its resulting rectangle and is one undo step.
 
 Self-owned copies preserve exact source text, number spelling, formulas, EMPTY
-versus explicit empty TEXT, and cell kinds. **Relative formula references are not
-rewritten**: copying `=A1*2` anywhere leaves the exact formula `=A1*2`. There are
+versus explicit empty TEXT, cell kinds, and display formats. Column widths are not
+copied. **Relative formula references are not rewritten**: copying `=A1*2` anywhere leaves the exact formula `=A1*2`. There are
 no absolute `$` references or fill-handle semantics.
 
-The shared text representation is **TSV of calculated display values**. Fields
+The shared text representation is **TSV of formatted display values**, including
+currency symbols and percent signs. External text pastes keep the destination
+format and import such decorated values as literal text. Fields
 containing TAB, CR, LF or quotes are quoted, and embedded quotes are doubled.
 When another app owns the clipboard, complete decimals import as NUMBER; all
 other nonempty fields, including `=...` and apostrophes, import as literal TEXT.
 Quoted TSV supports embedded line breaks inside one cell. Empty fields clear a
 cell; a final row terminator adds no extra row. Ragged rows affect only the fields
 actually present. Clipboard text is at most **65,535 bytes**, and the separate
-private kind/source record is bounded to **65,536 bytes**; oversized selections,
-cells and pastes extending beyond Z128 are rejected atomically. Select a smaller
+private kind/format/source record is bounded to **65,536 bytes**; oversized
+selections, cells and pastes extending beyond Z128 are rejected atomically. Select a smaller
 range when either copy representation is too large. An unavailable shared
 clipboard never falls back to stale private data.
 
@@ -92,7 +128,9 @@ clipboard never falls back to stale private data.
   document. Opening a `.csv` imports an editable, dirty **unbound copy**. Save
   then requires a new `.bsh`, so the CSV source is never overwritten.
 - **CSV / Ctrl+Shift+E** creates a new **`.csv` value export**. It preserves the
-  native binding and dirty status; calculated values replace formula sources.
+  native binding and dirty status; unformatted calculated values replace formula
+  sources. Currency/percent symbols, display rounding, and column widths are
+  deliberately excluded so numeric CSV interchange retains full precision.
   CSV cannot retain exact text/number kinds or distinguish explicit empty text.
   **Formula-like literal text is exported verbatim and another spreadsheet
   program may execute it.** BaseOS CSV import keeps it literal. CSV quoting
@@ -115,9 +153,10 @@ All public client functions are prefixed `spreadsheet_` to avoid colliding with
 API and borrowed buffer lifetimes.
 
 The fixed arena starts at **0x720000**, after SB16 DMA, with **0x2E0000 bytes**
-reserved before `DESK_CACHE`. Its exact **2,824,636-byte** footprint is asserted:
+reserved before `DESK_CACHE`. Its exact **2,844,916-byte** footprint is asserted:
 
-- Five document snapshots, each including selection and revision metadata
+- Five document snapshots, each including formats, widths, selection and revision
+  metadata
 - One staging model
 - 642,432-byte maximum CSV/native output scratch
 - 65,536-byte private clipboard record
@@ -158,6 +197,13 @@ and quoted/external TSV, failed copy/Cut publication and retained old private
 records, maximum-cell/copy limits, native files, safe CSV import/export, source
 identity and same-ID/same-size external changes, failed writes/syncs, source
 binding fingerprints, non-disruptive recovery and aliased snapshot restore.
+Format/width coverage includes uniform and mixed ranges, empty formatted cells,
+no-op and clamped history, all minimum-width toolbar buttons, pending-edit
+commits, private-copy formatting, clear/edit retention, version-2 native files,
+CSV's unchanged numeric values, and pending-edit recovery with metadata. Variable
+column widths are checked through pointer hits, partial columns, header selection,
+scroll arrows, end-of-grid navigation, and pixel-identical `###` overflow for
+positive, negative, and formula values that do not fit.
 Every pixel outside normal/minimum/tiny/offscreen client rectangles is checked
 unchanged. Python independently verifies saved BSH1 records and exported CSV.
 No intentional memory-fault probes, fuzzing or QEMU instances are used here.

@@ -37,7 +37,7 @@ class SheetUITests(unittest.TestCase):
     def test_sanitized_ordinary_workflows(self):
         self.assertIn('All Spreadsheet UI host functional checks passed.', self.result.stdout)
         for section in ('editing', 'navigation', 'history', 'clipboard', 'files',
-                        'bindings', 'recovery', 'rendering'):
+                        'bindings', 'recovery', 'rendering', 'formatting', 'geometry'):
             self.assertIn(f'Spreadsheet {section}:', self.result.stdout)
 
     def test_native_ui_saved_source_kinds_independently(self):
@@ -71,6 +71,38 @@ class SheetUITests(unittest.TestCase):
         self.assertEqual(rows, [
             ['Item', 'Amount'], ['Rent', '12.5'], ['Total', '25'],
             ['=2+3', '007'], ['comma, "quoted"', "'literal"],
+        ])
+
+    def test_formatted_native_ui_metadata_independently(self):
+        data = (self.directory / 'ui-formatted.bsh').read_bytes()
+        self.assertEqual(struct.unpack_from('<4sHHHHI', data),
+                         (b'BSH1', 2, 0, 128, 26, 8))
+        self.assertEqual(struct.unpack_from('<26H', data, 16), (104,) * 25 + (320,))
+        cursor, previous, records = 68, -1, {}
+        for _ in range(8):
+            index, kind, length, display = struct.unpack_from('<HBBB', data, cursor)
+            cursor += 5
+            self.assertLess(previous, index)
+            self.assertLess(index, 128 * 26)
+            self.assertIn(kind, (0, 1, 2, 3))
+            self.assertIn(display, (0, 1, 2, 3))
+            records[divmod(index, 26)] = (kind, display, data[cursor:cursor + length].decode('ascii'))
+            cursor += length
+            previous = index
+        self.assertEqual(cursor, len(data))
+        self.assertEqual(records, {
+            (0, 0): (2, 2, '12.5000'), (0, 1): (3, 2, '=A1*2'),
+            (1, 0): (1, 2, '=1+2'), (1, 1): (1, 2, "'literal"),
+            (2, 0): (1, 0, ''), (3, 3): (2, 3, '0.125'),
+            (3, 4): (1, 0, '12.50%'), (127, 25): (0, 3, ''),
+        })
+
+    def test_formatted_csv_keeps_numeric_interchange(self):
+        with (self.directory / 'ui-formatted.csv').open(encoding='ascii', newline='') as source:
+            rows = list(csv.reader(source, strict=True))
+        self.assertEqual(rows, [
+            ['12.5', '25', '', '', ''], ['=1+2', "'literal", '', '', ''],
+            ['', '', '', '', ''], ['', '', '', '0.125', '12.50%'],
         ])
 
 

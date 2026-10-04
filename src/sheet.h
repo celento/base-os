@@ -23,6 +23,9 @@ void spreadsheet_init(void);
 void spreadsheet_new(void);
 int spreadsheet_open_file(int id);
 void spreadsheet_draw(int x, int y, int w, int h);
+/* Ctrl+1..4 applies General/Fixed2/Currency/Percent to the selection.
+ * Ctrl+- / Ctrl+= adjusts selected columns by 16px within 48..320; Ctrl+0
+ * restores 104px. Metadata controls commit pending source first and are undoable. */
 int spreadsheet_key(int scancode, char character, int modifiers);
 int spreadsheet_click(int x, int y, int w, int h, int mx, int my, int modifiers);
 int spreadsheet_drag(int x, int y, int w, int h, int mx, int my);
@@ -68,9 +71,11 @@ unsigned spreadsheet_first_col(void);
  * nonzero generation changing on EVERY write, including identical bytes.
  * set returning zero rejects the copy without changing shared clipboard bytes. get returns
  * full byte length (no required NUL) or -1 for unavailable/oversize. Self-owned
- * copies preserve kinds/sources in a private 64KiB bounded record; external
+ * copies preserve kinds/sources/formats in a private 64KiB bounded record; external
  * TSV imports numeric fields as NUMBER and all other fields as literal TEXT.
- * Relative formula references are NOT rewritten on copy/paste. */
+ * Column widths stay at the destination. External TSV uses formatted display
+ * values; symbols/percent signs import as literal text. Relative formula
+ * references are NOT rewritten on copy/paste. */
 unsigned spreadsheet_clipboard_set(const char *text, unsigned length);
 int spreadsheet_clipboard_get(char *text, unsigned capacity, unsigned *generation);
 #endif

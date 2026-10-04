@@ -126,6 +126,8 @@ static void compare_docs(const SheetDoc *a, const SheetDoc *b) {
         assert(!memcmp(x->text, y->text, x->length + 1u));
         assert(x->value == y->value && x->error == y->error);
     }
+    assert(!memcmp(a->formats, b->formats, sizeof a->formats));
+    assert(!memcmp(a->column_widths, b->column_widths, sizeof a->column_widths));
     assert(!sheet_validate(a) && !sheet_validate(b));
 }
 static int make_file(const char *name, const void *data, unsigned size) {
@@ -464,8 +466,8 @@ static void write_ppm(const char *directory) {
 static void test_drawing(const char *directory) {
     basic_fixture(); load_fixture();
     enter("C1", "long text to clip inside one cell"); enter("D2", "=1/0");
-    const int boxes[][4] = {{30,20,720,520}, {30,20,420,260}, {-12,-10,420,260},
-        {730,540,420,260}, {30,20,160,120}, {30,20,1,1}, {30,20,0,0}, {-900,-800,420,260}};
+    const int boxes[][4] = {{30,20,720,520}, {30,20,360,260}, {-12,-10,360,260},
+        {730,540,360,260}, {30,20,160,120}, {30,20,1,1}, {30,20,0,0}, {-900,-800,360,260}};
     for (unsigned i = 0; i < sizeof boxes / sizeof boxes[0]; i++) {
         int x = boxes[i][0], y = boxes[i][1], w = boxes[i][2], h = boxes[i][3];
         select_2x2("A1"); check_clip(x,y,w,h);
@@ -493,6 +495,140 @@ static void test_drawing(const char *directory) {
     ticks += 71; (void)spreadsheet_tick();
     memset(back, COLOR_LTGRAY, sizeof back); select_2x2("A1"); spreadsheet_draw(30,20,720,520); write_ppm(directory);
     puts("Spreadsheet rendering: every-pixel client clipping, normal/minimum/small/offscreen, address/edit fields and mouse range passed");
+}
+static void format(unsigned row, unsigned col, SheetFormat expected, const char *display) {
+    SheetFormat actual; char text[SHEET_TEXT_MAX + 1u]; unsigned length;
+    assert(!sheet_get_format(spreadsheet_document(), row, col, &actual)); assert(actual == expected);
+    assert(!sheet_format_display(spreadsheet_document(), row, col, text, sizeof text, &length));
+    assert(length == strlen(display) && !strcmp(text, display));
+}
+static void width(unsigned col, unsigned expected) {
+    unsigned actual; assert(!sheet_get_column_width(spreadsheet_document(), col, &actual)); assert(actual == expected);
+}
+static void toolbar(int x, int y) {
+    assert(spreadsheet_click(30,20,360,260,30+x,20+y,0) & SPREADSHEET_CHANGED);
+    spreadsheet_release();
+}
+static void test_format_controls(const char *directory) {
+    /* Blank and no-op metadata changes do not manufacture dirty revisions. */
+    spreadsheet_new(); key(0x02, SPREADSHEET_MOD_CTRL); key(0x0b, SPREADSHEET_MOD_CTRL);
+    assert(!spreadsheet_dirty()); key(0x2c, SPREADSHEET_MOD_CTRL); assert(strstr(spreadsheet_status(), "Nothing"));
+    basic_fixture(); load_fixture(); select_2x2("A1"); prior = *spreadsheet_document();
+    key(0x04, SPREADSHEET_MOD_CTRL);
+    format(0,0,SHEET_FORMAT_CURRENCY,"$12.50"); format(0,1,SHEET_FORMAT_CURRENCY,"$25.00");
+    format(1,0,SHEET_FORMAT_CURRENCY,"=1+2"); format(1,1,SHEET_FORMAT_CURRENCY,"'literal");
+    assert(!memcmp(prior.cells, spreadsheet_document()->cells, sizeof prior.cells));
+    key(0x04, SPREADSHEET_MOD_CTRL); key(0x2c, SPREADSHEET_MOD_CTRL);
+    compare_docs(&prior, spreadsheet_document()); assert(!spreadsheet_dirty());
+    key(0x15, SPREADSHEET_MOD_CTRL); format(0,0,SHEET_FORMAT_CURRENCY,"$12.50");
+    key(0x0d, SPREADSHEET_MOD_CTRL); width(0,120); width(1,120); width(2,104);
+    key(0x2c, SPREADSHEET_MOD_CTRL); width(0,104); width(1,104);
+    format(0,0,SHEET_FORMAT_CURRENCY,"$12.50");
+    key(0x15, SPREADSHEET_MOD_CTRL); width(0,120); width(1,120);
+    for (unsigned i = 0; i < 30; i++) key(0x0c, SPREADSHEET_MOD_CTRL);
+    width(0,48); width(1,48); key(0x2c, SPREADSHEET_MOD_CTRL); width(0,56);
+    for (unsigned i = 0; i < 30; i++) key(0x0d, SPREADSHEET_MOD_CTRL);
+    width(0,320); width(1,320); key(0x2c, SPREADSHEET_MOD_CTRL); width(0,312);
+    key(0x0b, SPREADSHEET_MOD_CTRL); width(0,104); width(1,104);
+    /* Every pointer control remains available at the minimum client width. */
+    jump("A1"); spreadsheet_draw(30,20,360,260);
+    toolbar(100,50); format(0,0,SHEET_FORMAT_FIXED2,"12.50");
+    toolbar(145,50); format(0,0,SHEET_FORMAT_CURRENCY,"$12.50");
+    toolbar(190,50); format(0,0,SHEET_FORMAT_PERCENT,"1250.00%");
+    toolbar(35,50); format(0,0,SHEET_FORMAT_GENERAL,"12.5");
+    toolbar(335,50); width(0,120); toolbar(265,50); width(0,104);
+    toolbar(330,17); assert(strstr(spreadsheet_status(),"Go to")); key(0x01,0);
+    /* Applying a format commits pending source as its own undo step. */
+    key(0x04,SPREADSHEET_MOD_CTRL); type("9.876"); key(0x03,SPREADSHEET_MOD_CTRL);
+    assert(!spreadsheet_editing()); cell(0,0,SHEET_NUMBER,"9.876",9876,SHEET_OK);
+    format(0,0,SHEET_FORMAT_FIXED2,"9.88"); key(0x2c,SPREADSHEET_MOD_CTRL);
+    format(0,0,SHEET_FORMAT_CURRENCY,"$9.88"); key(0x2c,SPREADSHEET_MOD_CTRL);
+    cell(0,0,SHEET_NUMBER,"12.5000",12500,SHEET_OK); format(0,0,SHEET_FORMAT_CURRENCY,"$12.50");
+    /* Private copies carry format, exact source and kind, never column width. */
+    key(0x2e,SPREADSHEET_MOD_CTRL); assert(!strcmp((const char *)clipboard,"$12.50"));
+    jump("D4"); key(0x2f,SPREADSHEET_MOD_CTRL); format(3,3,SHEET_FORMAT_CURRENCY,"$12.50"); width(3,104);
+    cell(3,3,SHEET_NUMBER,"12.5000",12500,SHEET_OK);
+    key(0x53,0); format(3,3,SHEET_FORMAT_CURRENCY,"");
+    type("0.125"); key(0x1c,0); jump("D4"); key(0x05,SPREADSHEET_MOD_CTRL);
+    format(3,3,SHEET_FORMAT_PERCENT,"12.50%");
+    key(0x2e,SPREADSHEET_MOD_CTRL); assert(!strcmp((const char *)clipboard,"12.50%"));
+    spreadsheet_clipboard_set((const char *)clipboard,clipboard_length);
+    jump("E4"); key(0x2f,SPREADSHEET_MOD_CTRL); cell(3,4,SHEET_TEXT,"12.50%",0,SHEET_OK);
+    /* Metadata-only cells and widths survive native save and pending recovery. */
+    jump("Z128"); key(0x05,SPREADSHEET_MOD_CTRL);
+    for (unsigned i = 0; i < 20; i++) key(0x0d,SPREADSHEET_MOD_CTRL);
+    width(25,320); format(127,25,SHEET_FORMAT_PERCENT,"");
+    assert(spreadsheet_save_as(0,"formatted.bsh") == SPREADSHEET_SAVE_OK); int saved = spreadsheet_file();
+    assert(!spreadsheet_dirty()); prior = *spreadsheet_document();
+    dump_file(directory,"ui-formatted.bsh",saved);
+    int csv = spreadsheet_export_csv(0,"formatted.csv"); assert(csv > 0);
+    dump_file(directory,"ui-formatted.csv",csv);
+    spreadsheet_new(); assert(spreadsheet_open_file(saved)); compare_docs(&prior,spreadsheet_document());
+    jump("D4"); type("0.875"); unsigned length;
+    const unsigned char *draft = spreadsheet_snapshot(&length); assert(draft && spreadsheet_editing());
+    assert(!sheet_native_decode(&decoded,draft,length));
+    assert(decoded.formats[3*SHEET_COLS+3] == SHEET_FORMAT_PERCENT && decoded.column_widths[25] == 320);
+    compare_docs(&prior,spreadsheet_document());
+    assert(spreadsheet_restore(draft,length,-1,0,1,3*SHEET_COLS+3,0));
+    format(3,3,SHEET_FORMAT_PERCENT,"87.50%"); width(25,320); assert(spreadsheet_dirty());
+    puts("Spreadsheet formatting: range metadata, no-op/clamped history, minimum toolbar, rich copy, native and recovery passed");
+}
+static void test_variable_width_geometry(void) {
+    sheet_init(&fixture);
+    assert(!sheet_set_column_width(&fixture,0,320)); assert(!sheet_set_column_width(&fixture,1,48));
+    assert(!sheet_set_column_width(&fixture,2,160)); assert(!sheet_set_column_width(&fixture,25,320));
+    assert(!sheet_set(&fixture,0,0,SHEET_TEXT,"Wide cell source",16));
+    assert(!sheet_recalculate(&fixture)); load_fixture(); spreadsheet_draw(30,20,360,260);
+    int x,y,w,h; assert(spreadsheet_cell_position(0,0,&x,&y,&w,&h));
+    assert(x==42 && y==126 && w==304 && h==24); assert(!spreadsheet_cell_position(0,1,NULL,NULL,NULL,NULL));
+    jump("B1"); assert(spreadsheet_first_col()==0);
+    assert(spreadsheet_cell_position(0,0,&x,&y,&w,&h)); assert(x==42 && w==256);
+    assert(spreadsheet_cell_position(0,1,&x,&y,&w,&h)); assert(x==298 && w==48);
+    assert(spreadsheet_click(30,20,360,260,30+x+w/2,20+y+h/2,0) & SPREADSHEET_CHANGED);
+    assert(spreadsheet_caret()==1); spreadsheet_release();
+    assert(spreadsheet_click(30,20,360,260,30+x+w/2,20+114,0) & SPREADSHEET_CHANGED);
+    assert(spreadsheet_anchor()==1 && spreadsheet_caret()==127*SHEET_COLS+1); spreadsheet_release();
+    jump("A1");
+    assert(spreadsheet_click(30,20,360,260,30+340,20+225,0) & SPREADSHEET_CHANGED);
+    assert(spreadsheet_first_col()==1); spreadsheet_release();
+    assert(spreadsheet_cell_position(0,1,&x,&y,&w,&h)); assert(x==42 && w==48);
+    assert(spreadsheet_click(30,20,360,260,30+48,20+225,0) & SPREADSHEET_CHANGED);
+    assert(spreadsheet_first_col()==0); spreadsheet_release();
+    /* Partial leading columns never paint over row labels; mixed widths clip everywhere. */
+    jump("C1");
+    const int boxes[][4] = {{30,20,360,260},{30,20,720,520},{-12,-10,360,260},{730,540,360,260},{30,20,160,120}};
+    for (unsigned i=0;i<sizeof boxes/sizeof boxes[0];i++) check_clip(boxes[i][0],boxes[i][1],boxes[i][2],boxes[i][3]);
+    spreadsheet_draw(30,20,360,260); jump("Z128");
+    assert(spreadsheet_cell_position(127,25,&x,&y,&w,&h)); assert(x>=42 && x+w<=346 && w==304);
+    key(0x0c,SPREADSHEET_MOD_CTRL); width(25,304);
+    assert(spreadsheet_cell_position(127,25,&x,&y,&w,&h)); assert(w==304);
+    key(0x2c,SPREADSHEET_MOD_CTRL); width(25,320);
+    assert(spreadsheet_cell_position(127,25,&x,&y,&w,&h)); assert(w==304);
+    /* An overwide positive/negative number and a formula render identical ###,
+     * while the complete original source is still available to the editor. */
+    static unsigned char overflow[48*24];
+    sheet_init(&fixture); assert(!sheet_set_column_width(&fixture,0,48));
+    assert(!sheet_set(&fixture,0,0,SHEET_NUMBER,"-1234567.89",11));
+    assert(!sheet_recalculate(&fixture)); load_fixture(); spreadsheet_draw(30,20,360,260);
+    assert(spreadsheet_cell_position(0,0,&x,&y,&w,&h)); assert(w==48 && h==24);
+    unsigned ink=0;
+    for (int yy=0;yy<h;yy++) for (int xx=0;xx<w;xx++) {
+        unsigned char pixel=back[(20+y+yy)*800+30+x+xx]; overflow[yy*w+xx]=pixel;
+        if (xx>=4 && xx<w-4 && yy>=3 && yy<h-3 && pixel==COLOR_DKGRAY) ink++;
+    }
+    assert(ink>0);
+    assert(!sheet_set(&fixture,0,0,SHEET_NUMBER,"1234567.89",10));
+    assert(!sheet_recalculate(&fixture)); load_fixture(); spreadsheet_draw(30,20,360,260);
+    for (int yy=0;yy<h;yy++) for (int xx=0;xx<w;xx++)
+        assert(overflow[yy*w+xx]==back[(20+y+yy)*800+30+x+xx]);
+    assert(!sheet_set(&fixture,0,0,SHEET_FORMULA,"=-1234567.89",12));
+    assert(!sheet_recalculate(&fixture)); load_fixture(); spreadsheet_draw(30,20,360,260);
+    for (int yy=0;yy<h;yy++) for (int xx=0;xx<w;xx++)
+        assert(overflow[yy*w+xx]==back[(20+y+yy)*800+30+x+xx]);
+    cell(0,0,SHEET_FORMULA,"=-1234567.89",-1234567890,SHEET_OK);
+    key(0x3c,0); key(0x1e,SPREADSHEET_MOD_CTRL); key(0x2e,SPREADSHEET_MOD_CTRL);
+    assert(!strcmp((const char *)clipboard,"=-1234567.89")); key(0x01,0);
+    puts("Spreadsheet geometry: variable-width hits, partial columns, headers, scroll arrows, end reveal and clipping passed");
 }
 static void test_storage_busy(void) {
     basic_fixture(); int id = load_fixture();
@@ -559,6 +695,7 @@ int main(int argc, char **argv) {
     test_editing(); test_navigation(); test_history(); test_clipboard(); test_clipboard_edges();
     test_files(argc > 1 ? argv[1] : NULL); test_bindings(); test_recovery();
     test_drawing(argc > 1 ? argv[1] : NULL);
+    test_format_controls(argc > 1 ? argv[1] : NULL); test_variable_width_geometry();
     assert(polls > 100 && sync_count >= 4);
     for (int i = 1; i < FILE_COUNT; i++) if (files[i].valid) free(files[i].data);
     puts("All Spreadsheet UI host functional checks passed."); return 0;
