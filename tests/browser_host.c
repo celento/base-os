@@ -215,6 +215,38 @@ static void test_browser_download_ownership(void){
     assert(browser_tick());assert(!download_button_enabled(1));assert(strstr(B.download_text,"replaced"));assert(!strstr(B.download_text,"/terminal.bin"));
     cancel_download();browser_close();assert(busy&&cancels==before);download_cancel();
 }
+static void test_browser_download_storage_wait(void){
+    reset_browser_data_volume();start_address_download("http://example.com/wait.bin");
+    FsSyncTicket ticket;assert(fs_sync_request(&ticket)==0&&fs_sync_busy());
+    finish_binary(20037);unsigned owned=B.download_id;
+    assert(download_active()&&B.download_state==DOWNLOAD_ACTIVE&&download_button_enabled(1));
+    assert(strstr(B.download_text,"waiting for disk saving")&&strstr(B.download_text,"20037 bytes"));
+    assert(strstr(B.download_text,"Cancel discards")&&fs_resolve(0,"/Downloads/wait.bin")<0);
+    browser_close();assert(download_active());browser_init();assert(B.download_id==owned);
+    /* Loading a readable page uses the shared network result while the
+     * complete binary remains private to the waiting download. */
+    browser_open("http://example.com/article");complete(example_html,"text/html");
+    assert(result.request_id!=owned&&!download_tick()&&download_active());
+    unsigned turns=0;while(fs_sync_busy()){assert(!download_tick());assert(fs_sync_step()!=FS_SYNC_IDLE);assert(++turns<100000);}
+    assert(fs_sync_result(ticket)==0&&fs_sync_release(ticket)==0);
+    assert(download_tick()&&browser_tick()&&B.download_state==DOWNLOAD_DONE&&!download_button_enabled(1));
+    assert(strstr(B.download_text,"RAM")&&strstr(B.download_text,"pending"));
+    int id=fs_resolve(0,"/Downloads/wait.bin");assert(id>0&&fs_size(id)==20037);
+    for(unsigned i=0;i<20037;i++)assert((unsigned char)fs_data(id)[i]==((i*37+91)&255));
+    assert(browser_can_save()&&strstr(B.text,"Readable & clickable"));
+    /* The real Cancel control remains enabled during the storage wait and
+     * must not cancel a later page request owned by Browser itself. */
+    start_address_download("http://example.com/cancel-wait.bin");
+    assert(fs_sync_request(&ticket)==0&&fs_sync_busy());finish_binary(43);
+    browser_open("http://example.com/next");unsigned page=result.request_id;int before=cancels;
+    browser_draw(40,30,360,200);B.download_visible=1;
+    browser_click(40,30,360,200,download_button_x(40,1)+5,30+85);
+    assert(download_status()->state==DOWNLOAD_CANCELLED&&!download_active()&&busy&&browser_loading());
+    assert(cancels==before&&result.request_id==page&&strstr(B.download_text,"No file was saved"));
+    assert(fs_sync()==0&&fs_sync_result(ticket)==0&&fs_sync_release(ticket)==0);
+    complete("Next page","text/plain");assert(!download_tick());
+    assert(fs_resolve(0,"/Downloads/cancel-wait.bin")<0);
+}
 static void test_browser_download_mouse_and_bounds(void){
     reset_browser();browser_open("http://example.com/index");complete("<a href='/sound.wav?x=1#track'>Download sound</a><p>Read while downloading</p>","text/html");
     browser_draw(40,30,360,200);int before=starts_count;
@@ -243,7 +275,7 @@ static void write_preview(const char *path){
 }
 int main(int argc,char **argv){
     gfx_init(back,linear,1024,768,32,4096);
-    test_url_resolution();test_document_and_async();test_navigation();test_address_and_clicks();test_redirects_and_ownership();test_scroll_reflow_and_bounds();test_save_original_pages();test_download_names();test_browser_binary_download();test_browser_download_ownership();test_browser_download_mouse_and_bounds();
+    test_url_resolution();test_document_and_async();test_navigation();test_address_and_clicks();test_redirects_and_ownership();test_scroll_reflow_and_bounds();test_save_original_pages();test_download_names();test_browser_binary_download();test_browser_download_ownership();test_browser_download_storage_wait();test_browser_download_mouse_and_bounds();
     if(argc>1)write_preview(argv[1]);
     puts("browser: HTTP lifecycle, HTML rendering, links, navigation, address editing, redirects, local files, scrolling and client-area bounds passed");return 0;
 }

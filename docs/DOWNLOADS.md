@@ -28,6 +28,15 @@ Only one network operation can run at a time. A busy Browser or another Terminal
 operation is never cancelled to start a download, and download cancellation
 checks the HTTP request ID before touching the network.
 
+If a disk snapshot is being saved when the response completes, the download
+stays active and reports that it is waiting for disk saving to finish. Its
+complete bytes remain in the private arena, with no destination created yet.
+The network is free for other apps, but a second download is still rejected.
+Cancel discards only this waiting download, without stopping the disk save or
+another app's network request. After disk saving finishes or fails, the next
+desktop turn rechecks the destination and saves the complete response in RAM.
+Disk failure/protection remains visible separately from complete RAM data.
+
 The complete response is kept in a bounded private arena. No destination file
 exists while it is pending. Only complete HTTP 2xx responses can be committed;
 network errors, incomplete responses, cancellation, size overflow, non-2xx
@@ -96,7 +105,8 @@ bar. The built-in home/error documents are not saved as fetched page sources.
 - No compressed responses, cookies, credentials, authentication, uploads,
   resumable transfers, multiple concurrent downloads, or background queue.
 - Every network request retains the existing 15-second total deadline. A slow
-  server can therefore fail before reaching the 2 MiB file limit.
+  server can therefore fail before reaching the 2 MiB file limit. Once the body
+  is complete, time waiting for a disk-save lease is not a network timeout.
 - Public DNS/HTTP access is unverified in the development cloud. Tests use only
   a loopback HTTP fixture, through the real QEMU RTL8139/user-network path.
 
@@ -109,11 +119,32 @@ A zero start result means accepted; minus one means rejected, with a reason in
 `download_last_error()`. The active job is preserved by a rejected start.
 
 Call `download_tick()` immediately after `net_poll()` in the normal desktop
-loop. It returns nonzero when visible status or files change. Never call it from
+loop, before another app can replace the shared HTTP result. Keep calling it
+while storage work progresses, including after the network becomes idle. It
+returns nonzero when visible status or files change. Never call it from
 an IRQ, `platform_poll()`, or while retaining borrowed `fs_data()` pointers: a
 completed transfer can mutate/compact filesystem storage. The file commit is
 serialized with ordinary app actions and does not perform a synchronous disk
 flush. The arena is `DOWNLOAD_BASE = 0xB30000`, capacity `0x210000`.
+
+Waiting uses an internal completion latch rather than a new public enum value:
+`DOWNLOAD_ACTIVE` and `download_active()` continue to include every cancellable
+job and preserve the one-download limit. `http_state == NET_HTTP_DONE` means
+the validated complete response is waiting for storage, with the original
+request ID, HTTP status and byte count frozen in `DownloadStatus`. The latch
+adds four bytes of control state; it allocates no new body or snapshot arena.
+Later ticks and cancellation no longer consult the shared network result for
+that job. Invalid/incomplete/non-2xx responses still fail before the wait.
+
+The lease check precedes the complete create/write/rollback operation. After
+the lease clears, folder identity/path, new-name-only policy and current space
+limits are revalidated before any mutation. A retained completed sync ticket
+does not hold the mutation lease. `DOWNLOAD_DONE` still means that every byte
+reached the RAM filesystem; it is never reported merely because HTTP completed
+or storage accepted a request. Normal autosave must subsequently persist these
+new bytes, and the existing message reports pending, failed/protected or
+verified synchronized storage. No new scheduler hook is needed beyond the
+existing download tick and top-level `fs_sync_step()` progress.
 
 `browser_can_save()` reports whether a complete original page is available.
 `browser_save_page(cwd, path)` saves to an explicit, non-existing path and returns
@@ -137,6 +168,16 @@ tests verify original byte preservation, unique Save destinations, incomplete
 page rejection, reboot, Ctrl+S, actual Save hit testing, direct binary downloads,
 link selection, progress/cancellation, ownership, unique safe download names,
 RAM-versus-disk results, and client-area bounds.
+
+The download and Browser host tests also exercise real incremental filesystem
+tickets: complete 2 MiB and empty responses held behind a lease, unchanged
+filesystem state while waiting, subsequent HTTP result reuse and timeout,
+one-download admission, cancellation without disturbing another request or
+snapshot, late destination collision/rename/move/identity changes, exact bytes
+after release, old-snapshot failures, later download-save failure/retry, and
+durable-only status after verified sync and remount. Browser's progress panel
+shows the wait message and keeps its owned Cancel action available. These are
+ordinary host fixtures with ASan/UBSan, not evidence of concurrent guest timing.
 
 The QEMU test creates disposable floppy and 16 MiB data disks. It downloads
 20,037-byte and exact 2 MiB binary fixtures through RTL8139, checks cancellation
