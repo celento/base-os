@@ -17,8 +17,8 @@ BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data p
 - Read HTTP pages in Browser, follow links, navigate history, and save complete HTML for offline reading. Download binary files with Browser’s Download button or Terminal while other apps keep running.
 - Play PCM WAV and MP3 through QEMU's SB16 device, with pause, resume, volume and a playlist. Play MPEG-1 program streams with synchronized MP2 audio; 48 kHz audio is resampled to 44.1 kHz for QEMU SB16. Exact bounds are in the media guides.
 - View JPEG, PNG, BMP, GIF's first frame and BaseOS images, with fit, actual size, zoom, pan and transparency. Images are bounded to 1,024 pixels per side and 786,432 pixels total.
-- Build C applications up to 48 KiB with the included host SDK, keeping a 64 KiB process region and 16 KiB stack reserve. Native tasks can stream 2 MiB files, replace 32 KiB documents with explicit sync, and use an optional 320x200 canvas. The included DocStats app counts a document and displays its byte histogram.
-- Run shell scripts, Tiny BASIC and the legacy synchronous `exec` interface. Calculator, Todo, Clock, Calendar and the original games remain included. System Monitor lists native tasks with Show and Stop controls, alongside resource and window information.
+- Build C applications up to 48 KiB with the included host SDK, keeping a 64 KiB process region and 16 KiB stack reserve. Native tasks can stream files in bounded chunks (2 MiB by default, 16 MiB on the large profile), replace 32 KiB documents with explicit sync, and use an optional 320x200 canvas. The included DocStats app counts a document and displays its byte histogram.
+- Launch `.bex` native apps directly from Files or the `Ctrl+Space` search; each opens its own protected Terminal task. Run shell scripts, Tiny BASIC and the legacy synchronous `exec` interface. Calculator, Todo, Clock, Calendar and the original games remain included. System Monitor lists native tasks with Show and Stop controls, alongside resource and window information.
 - Search apps and files with `Ctrl+Space`; use the mouse wheel to scroll. Restore saved window arrangements and Editor/Paint/Writer/Spreadsheet drafts after reboot.
 
 BaseOS is an educational custom BIOS/i386 OS, not a Linux distribution or a POSIX environment. Built-ins cooperate inside the kernel; each native task has a protected 64 KiB region and a bounded execution slice. Browser is HTTP-only: no TLS/HTTPS, JavaScript, CSS layout, forms, authentication or embedded web images. There is one network request at a time. Real network tests use controlled QEMU host fixtures; public upstream DNS did not respond in the development environment, so unrestricted internet access is not claimed. UEFI and general-purpose virtual-memory processes are not implemented.
@@ -114,6 +114,11 @@ Host and reference-media tests additionally need Clang, FFmpeg and Pillow (`pyth
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | List terminal commands | `help` |
 | Read a command's manual | `man basic` |
+
+Open `Programs/counter.bex`, `notebook.bex` or `docstats.bex` from Files, or search
+for their filenames with `Ctrl+Space`. Counter and Notebook explicitly synchronize
+before showing Saved. Existing disks keep their installed example binaries; see
+the SDK guide before deliberately replacing an older example.
 
 Try the included examples in Terminal:
 
