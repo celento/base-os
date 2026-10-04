@@ -19,9 +19,9 @@ callbacks, keyboard events, or a graceful-close/save handshake.
 ## Coordinated additive allocations
 
 The preceding qualified baseline used general ABI 1.1 and independently negotiated UI
-1.0. The candidate uses general ABI **1.2** and UI **1.1**, with no new syscall:
+1.0. The qualified increment uses general ABI **1.2** and UI **1.1**, with no new syscall:
 
-| Namespace | Candidate allocation |
+| Namespace | Allocation |
 |---|---|
 | BEX2 required flags | `BOS_BEX2_FLAG_NATIVE_WINDOW_V1 = 0x1` |
 | Minimum GUI required ABI minor | `BOS_BEX2_NATIVE_WINDOW_ABI_MINOR = 2` |
@@ -65,10 +65,10 @@ negotiation, endpoint open/reopen and kind/capability validation for the GUI
 build. Its drawing model, event consumer, cancellation, signed coordinates and
 wait loop are shared. Producer regression tests retain the frozen default BEX1
 and unflagged BEX2 Pointer bytes and the unflagged BEX2 minor-1 requirement.
-The candidate's example installer adds `/Programs/pointer-window.bex` only when
+The example installer adds `/Programs/pointer-window.bex` only when
 that name is absent, alongside `/Programs/pointer.bex`.
 
-| Input and context | Candidate dispatch |
+| Input and context | Dispatch |
 |---|---|
 | BEX1 or unflagged BEX2 from Files/Launcher/Open | Existing hosted Terminal route |
 | GUI-flagged BEX2 from Files/Launcher/Open | One independent native primary window |
