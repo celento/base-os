@@ -71,7 +71,7 @@ static PhysmemStats stats(void) {
 static int candidate(uint32_t frame) {
     return (frame >= 0x00510000 && frame < 0x00600000) ||
            (frame >= 0x00680000 && frame < 0x00700000) ||
-           (frame >= 0x00f02000 && frame < 0x01000000) ||
+           (frame >= 0x00f03000 && frame < 0x01000000) ||
            (frame >= 0x01650000 && frame < 0x01700000) ||
            (frame >= 0x07f00000 && frame < PHYS_MANAGED_END);
 }
@@ -117,7 +117,7 @@ static void unchanged(PhysmemStats before) {
 }
 static void profile_maps(void) {
     const unsigned ends[] = {64u << 20, 128u << 20, 256u << 20, 512u << 20};
-    const unsigned totals[] = {798, 1054, 33822, 33822};
+    const unsigned totals[] = {797, 1053, 33821, 33821};
     for (unsigned i = 0; i < 4; ++i) {
         MemoryRange map[] = {{0, 0x9fc00, 1, 1}, {0x9fc00, 0x60400, 2, 1},
                              {0x100000, ends[i] - 0x100000, 1, 1},
@@ -141,7 +141,7 @@ static void profile_maps(void) {
     assert(kinds[FS_POOL_BASE / PHYS_PAGE_BYTES] == PHYS_UNAVAILABLE);
     assert(kinds[FS_LARGE_POOL_BASE / PHYS_PAGE_BYTES] == PHYS_UNAVAILABLE);
     assert(kinds[FS_LARGE_IMG_BASE / PHYS_PAGE_BYTES] == PHYS_UNAVAILABLE);
-    puts("owned pages: 64/128/256 MiB counts 798/1054/33822; 512 MiB remains ceiling-bounded");
+    puts("owned pages: 64/128/256 MiB counts 797/1053/33821; 512 MiB remains ceiling-bounded");
 }
 static void map_unions(void) {
     /* Unsorted, overlapping and adjacent descriptors jointly cover full pages;
@@ -178,7 +178,7 @@ static void map_unions(void) {
 static void descriptor_bounds(void) {
     MemoryRange map[E820_MAX] = {{0x100000, (64u << 20) - 0x100000, 1, 1}};
     initialize(map, E820_MAX, &normal_video);
-    assert(stats().total == 798);
+    assert(stats().total == 797);
     fresh();
     assert(physmem_core_init(&core, owners, kinds, map, 0, &normal_video, zero_page, &zero_calls) == PHYS_INVALID);
     assert(physmem_core_init(&core, owners, kinds, map, E820_MAX + 1, &normal_video, zero_page, &zero_calls) == PHYS_INVALID);
@@ -188,7 +188,7 @@ static void descriptor_bounds(void) {
         assert(owners[pfn] == 0x55555555 && kinds[pfn] == 0x55);
     map[1].attributes = 0;
     assert(physmem_core_init(&core, owners, kinds, map, 2, &normal_video, zero_page, &zero_calls) == PHYS_OK);
-    assert(stats().total == 798);
+    assert(stats().total == 797);
     puts("owned pages: descriptor count/overflow bounds fail without metadata writes");
 }
 static void framebuffer_exclusion(void) {
@@ -196,16 +196,16 @@ static void framebuffer_exclusion(void) {
     BootInfo video = normal_video;
     video.lfb = 0x08000001;
     initialize(&map, 1, &video);
-    assert(stats().total == 33822 - 1025); /* Unaligned 4 MiB, rounded outward. */
+    assert(stats().total == 33821 - 1025); /* Unaligned 4 MiB, rounded outward. */
     assert(kinds[0x08000000 / PHYS_PAGE_BYTES] == PHYS_UNAVAILABLE);
     assert(kinds[0x08400000 / PHYS_PAGE_BYTES] == PHYS_UNAVAILABLE);
     assert(kinds[0x08401000 / PHYS_PAGE_BYTES] == PHYS_FREE);
     video.pitch = 8192; video.height = 1024;
     initialize(&map, 1, &video);
-    assert(stats().total == 33822 - 2049);
+    assert(stats().total == 33821 - 2049);
     video = normal_video; video.lfb = 0xffc00000;
     initialize(&map, 1, &video); /* Exact 4 GiB exclusive end is representable. */
-    assert(stats().total == 33822);
+    assert(stats().total == 33821);
     fresh(); video.lfb = 0xffc00001;
     assert(physmem_core_init(&core, owners, kinds, &map, 1, &video, zero_page, &zero_calls) == PHYS_INVALID);
     assert(!core.ready && owners[0] == 0x55555555);
@@ -214,7 +214,7 @@ static void framebuffer_exclusion(void) {
 static void ownership_and_capacity(void) {
     MemoryRange map = {0x100000, (64u << 20) - 0x100000, 1, 1};
     initialize(&map, 1, &normal_video);
-    uint32_t a[798], b[16], more[16];
+    uint32_t a[797], b[16], more[16];
     allocate(alice, PHYS_BEX1_BACKING, 300, a);
     assert(a[239] == 0x005ff000 && a[240] == 0x00680000);
     allocate(bob, PHYS_PAGE_TABLE, 16, b);
@@ -241,11 +241,11 @@ static void ownership_and_capacity(void) {
     unchanged(before);
     assert(physmem_core_release_owner(&core, alice) == PHYS_OK);
     assert(physmem_core_release_owner(&core, alice) == PHYS_OK); /* Cleanup is idempotent. */
-    assert(stats().free == 798 && stats().high_water == 336);
+    assert(stats().free == 797 && stats().high_water == 336);
     /* Used contents survive release but are cleared for the next fresh owner. */
     memset(contents[a[0] / PHYS_PAGE_BYTES], 0xb7, PHYS_PAGE_BYTES);
     allocate(carol, PHYS_BEX1_BACKING, 790, a);
-    assert(stats().free == 8 && stats().allocated == 790);
+    assert(stats().free == 7 && stats().allocated == 790);
     before = save_state();
     uint32_t output[16];
     for (unsigned i = 0; i < 16; ++i) output[i] = 0xcafebabe;
@@ -254,33 +254,33 @@ static void ownership_and_capacity(void) {
     unchanged(before);
     assert(zero_calls == before_zero);
     for (unsigned i = 0; i < 16; ++i) assert(output[i] == 0xcafebabe);
-    allocate(carol, PHYS_BEX1_BACKING, 8, a + 790);
-    assert(stats().free == 0 && stats().allocated == 798 && stats().high_water == 798);
+    allocate(carol, PHYS_BEX1_BACKING, 7, a + 790);
+    assert(stats().free == 0 && stats().allocated == 797 && stats().high_water == 797);
     before = save_state();
     assert(physmem_core_alloc(&core, bob, PHYS_BEX1_BACKING, 1, output) == PHYS_CAPACITY);
     assert(physmem_core_release(&core, bob, PHYS_PAGE_TABLE, b, 16) == PHYS_NOT_OWNED);
     unchanged(before); /* A former owner's stale list cannot free reused frames. */
-    assert(physmem_core_release(&core, carol, PHYS_BEX1_BACKING, a, 798) == PHYS_OK);
-    assert(stats().free == 798 && stats().allocated == 0);
+    assert(physmem_core_release(&core, carol, PHYS_BEX1_BACKING, a, 797) == PHYS_OK);
+    assert(stats().free == 797 && stats().allocated == 0);
     assert(physmem_core_owner_pages(&core, alice) == 0 && physmem_core_owner_pages(&core, carol) == 0);
     allocate(bob, PHYS_PAGE_DIRECTORY, 16, output);
     assert(physmem_core_release_owner(&core, bob) == PHYS_OK);
-    assert(stats().free == 798 && stats().allocated == 0);
+    assert(stats().free == 797 && stats().allocated == 0);
     puts("owned pages: disjoint allocation, deferred output, zero/reuse, owner isolation and exact capacity cleanup passed");
 }
 static void high_pages_and_batch_limit(void) {
     MemoryRange map = {0x100000, (128u << 20) - 0x100000, 1, 1};
     initialize(&map, 1, &normal_video);
-    uint32_t large[PHYS_BATCH_MAX], tail[30];
+    uint32_t large[PHYS_BATCH_MAX], tail[29];
     allocate(alice, PHYS_PAGE_DIRECTORY, PHYS_BATCH_MAX, large);
-    assert(large[797] == 0x016ff000 && large[798] == 0x07f00000);
-    assert(stats().free == 30 && stats().allocated == PHYS_BATCH_MAX);
-    allocate(bob, PHYS_PAGE_TABLE, 30, tail);
-    assert(stats().free == 0 && stats().allocated == 1054);
+    assert(large[796] == 0x016ff000 && large[797] == 0x07f00000);
+    assert(stats().free == 29 && stats().allocated == PHYS_BATCH_MAX);
+    allocate(bob, PHYS_PAGE_TABLE, 29, tail);
+    assert(stats().free == 0 && stats().allocated == 1053);
     assert(physmem_core_release_owner(&core, alice) == PHYS_OK);
-    assert(physmem_core_owner_pages(&core, bob) == 30);
-    assert(physmem_core_release(&core, bob, PHYS_PAGE_TABLE, tail, 30) == PHYS_OK);
-    assert(stats().free == 1054 && stats().allocated == 0 && stats().high_water == 1054);
+    assert(physmem_core_owner_pages(&core, bob) == 29);
+    assert(physmem_core_release(&core, bob, PHYS_PAGE_TABLE, tail, 29) == PHYS_OK);
+    assert(stats().free == 1053 && stats().allocated == 0 && stats().high_water == 1053);
     puts("owned pages: maximum 1024-frame batch and optional high frames release to exact baseline");
 }
 static void argument_contract(void) {
@@ -305,7 +305,7 @@ static void argument_contract(void) {
 
 /* Execute only the original table-construction prefix from protect_memory.
  * Tests provide host tables; CR0/CR3/CR4 and all guest addresses remain unused. */
-static uint32_t host_tables[2048] __attribute__((aligned(PHYS_PAGE_BYTES)));
+static uint32_t host_tables[3072] __attribute__((aligned(PHYS_PAGE_BYTES)));
 static int paging_ready;
 #undef PAGING_BASE
 #define PAGING_BASE ((uintptr_t)host_tables)
@@ -314,6 +314,7 @@ static void identity_reachability(void) {
     MemoryRange map = {0x100000, PHYS_MANAGED_END - 0x100000, 1, 1};
     initialize(&map, 1, &normal_video);
     protect_memory();
+    for(unsigned i=0;i<1024;i++)assert(host_tables[2048+i]==((i<<22)|0x83));
     for (unsigned pfn = 0; pfn < PHYS_PAGE_COUNT; ++pfn) {
         if (kinds[pfn] != PHYS_FREE) continue;
         uint32_t frame = pfn * PHYS_PAGE_BYTES;

@@ -1,6 +1,7 @@
 #ifndef PROGRAM_H
 #define PROGRAM_H
 #include <stdint.h>
+#include "address_space.h"
 /* Callbacks operate only on the owning terminal's bounded canvas/output. */
 #define PROCESS_IMAGE_LIMIT 49152u
 #define PROCESS_FILE_CHUNK_MAX 4096u

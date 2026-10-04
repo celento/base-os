@@ -23,7 +23,7 @@ _Static_assert(PHYS_KIND_LIMIT < CLAIM_BIT, "page kinds overlap transient claim 
     X(sheet, SHEET_BASE, SHEET_CAPACITY) \
     X(desktop_cache, DESK_CACHE, DESK_CAPACITY) \
     X(apps_including_subarenas_and_slack, APPS_BASE, APPS_CAPACITY) \
-    X(compatibility_paging, PAGING_BASE, PAGING_CAPACITY) \
+    X(native_paging_roots, PAGING_BASE, PAGING_CAPACITY) \
     X(whole_user_aperture_alias, USER_BASE, USER_APERTURE_CAPACITY) \
     X(drag_cache, DRAG_CACHE, DRAG_CAPACITY) \
     X(presentation, PRESENT_BASE, PRESENT_CAPACITY) \

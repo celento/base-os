@@ -31,6 +31,7 @@ static jmp_buf returned;
 static unsigned incoming,outgoing,incoming_bytes,outgoing_bytes,leaves,fpu_saves,fpu_restores,publications;
 static unsigned release_events,last_release;
 static int kernel_restored=1;
+static unsigned root_is_user,root_entries,root_restores;
 static AudioStatus sound;
 static unsigned audio_pauses;
 static int slice_kind,slice_value;
@@ -62,19 +63,25 @@ static int file_call(unsigned call,unsigned a,unsigned b,unsigned c,unsigned d,u
     (void)call;(void)a;(void)b;(void)c;(void)d;(void)e;return -1;
 }
 static void released(unsigned owner){
-    assert(owner&&!active&&kernel_restored);
+    assert(owner&&!active&&kernel_restored&&!root_is_user);
     release_events++;last_release=owner;
 }
 static void backing_released(unsigned owner){
-    assert(owner&&!active&&kernel_restored);
+    assert(owner&&!active&&kernel_restored&&!root_is_user);
     assert(physmem_core_owner_pages(&backing_core,owner)==TASK_BACKING_PAGES);
 }
-static void protect_memory(void){}
+static void protect_memory(void){assert(!root_is_user);}
+static void process_user_context(const NativeTask *task){
+    assert(active&&task==current_task&&!root_is_user);root_is_user=1;root_entries++;
+}
+static void process_kernel_context(void){
+    assert(active&&root_is_user);root_is_user=0;root_restores++;
+}
 static void fpu_enter(NativeTask *task){
     assert(active&&kernel_restored&&task==current_task);kernel_restored=0;fpu_saves++;
 }
 static void fpu_leave(NativeTask *task){
-    assert(active&&!kernel_restored&&task==current_task);
+    assert(active&&!kernel_restored&&task==current_task&&!root_is_user);
     assert(!task||task->resources_live);
     assert(!task||physmem_core_owner_pages(&backing_core,task->owner_id)==16);
     kernel_restored=1;fpu_restores++;
@@ -344,7 +351,7 @@ static void failed_attachment_and_reset(void){
 int main(int argc,char **argv){
     unsigned ram=argc>1?(unsigned)atoi(argv[1]):64;
     not_ready();host_physmem_init(ram);
-    assert(host_physmem_stats().total==(ram==64?798u:1054u));
+    assert(host_physmem_stats().total==(ram==64?797u:1053u));
     owned_binding();scheduling_and_lifetime();deferred_boundaries();capacity_and_exec();scattered_copy();finite_backing_capacity();failed_attachment_and_reset();
     assert(backing_allocations==backing_releases&&!host_physmem_stats().allocated);
     printf("BEX1 owned backing: %u MiB, %u total/free pages, 16 per task, real scattered-page copy, finite exhaustion, rollback and reset passed.\n",ram,host_physmem_stats().free);
