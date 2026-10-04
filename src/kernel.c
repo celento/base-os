@@ -1542,6 +1542,19 @@ static const CalcKey calc_keys[] = {
 
 static int open_dlg = 0;
 static int name_dlg = 0;
+/* A close request owns a window incarnation, never whichever app draws last. */
+static int edit_close_owner = -1, edit_close_seq;
+static int edit_close_dlg, edit_close_focus, edit_close_failed;
+static void edit_close_cancel(void) {
+    edit_close_owner = -1;
+    edit_close_dlg = edit_close_failed = 0;
+    dirty = 1;
+}
+static int edit_close_valid(void) {
+    return edit_close_owner >= 0 && edit_close_owner < MAX_WIN &&
+        wins[edit_close_owner].open && wins[edit_close_owner].kind == WK_EDIT &&
+        wins[edit_close_owner].seq == edit_close_seq;
+}
 static int pick_cwd = 0;
 static int pick_focus, pick_first;
 static int pick_ids[FS_MAX_NODES];
@@ -1737,6 +1750,10 @@ static int win_open(int kind) {
 static void win_close(int i) {
     if (i < 0 || i >= MAX_WIN || !wins[i].open)
         return;
+    if (i == edit_close_owner) {
+        name_dlg = 0;
+        edit_close_cancel();
+    }
     if(wins[i].kind==WK_VIEW)image_viewer_close();
     if(wins[i].kind==WK_TERM)term_task_close(i);
     if(wins[i].kind==WK_BROWSER)browser_close();
@@ -1747,6 +1764,28 @@ static void win_close(int i) {
         dragging_win = -1;
         drag_active = 0;
     }
+    dirty = 1;
+}
+
+/* All user-facing close routes pass here; win_close remains force teardown. */
+static void win_request_close(int i) {
+    if (i < 0 || i >= MAX_WIN || !wins[i].open || edit_close_owner >= 0)
+        return;
+    Document *doc = &window_state[i].doc;
+    if (wins[i].kind != WK_EDIT || (doc->saved_ok &&
+        (doc->file < 0 || fs_identity(doc->file) == doc->identity))) {
+        win_close(i);
+        return;
+    }
+    win_focus(i);
+    edit_close_owner = i;
+    edit_close_seq = wins[i].seq;
+    edit_close_dlg = 1;
+    edit_close_focus = 2; /* Enter starts on Cancel, never Discard. */
+    edit_close_failed = 0;
+    open_menu = MENU_NONE;
+    dragging_win = resizing_win = -1;
+    drag_active = fm_dragging = fm_drag_active = edit_dragging = 0;
     dirty = 1;
 }
 
@@ -1846,7 +1885,7 @@ static int menu_item_enabled(int m, int item) {
 static void close_front(void) {
     int i = win_front();
     if (i >= 0)
-        win_close(i);
+        win_request_close(i);
     open_dlg = 0;
     edit_dragging = 0;
     fm_dragging = 0;
@@ -1961,7 +2000,8 @@ static void edit_clear(void) {
     edit_caret = 0;
     edit_buf[0] = 0;
     edit_file = -1;
-    edit_saved_ok = 0;
+    edit_identity = 0;
+    edit_saved_ok = 1; /* An untouched empty document has nothing to lose. */
     edit_scroll = 0;
     edit_dragging = 0;
     edit_sel_collapse();
@@ -2123,16 +2163,22 @@ static int edit_search_click(int wx,int wy,int ww,int wh){
 static void namedlg_open(int target, const char *initial);
 
 static int edit_write_named(const char *name) {
-    int parent = fs_valid(fm_cwd) ? fm_cwd : fs_root();
+    int parent = fs_is_dir(fm_cwd) ? fm_cwd : fs_root();
     int id = fs_find_child(parent, name);
-    if (id < 0)
+    int created = id < 0;
+    if (created)
         id = fs_create(parent, name);
     if (id < 0)
         return 0;
-    if (fs_write(id, edit_buf, edit_len) < 0)
+    if (fs_write(id, edit_buf, edit_len) != edit_len) {
+        if (created) fs_delete(id);
         return 0;
+    }
     edit_file = id;
-    edit_identity=fs_identity(id);
+    edit_identity = fs_identity(id);
+    edit_saved_ok = 0;
+    if (fs_sync() < 0)
+        return 0; /* Keep the live document until the disk commit is verified. */
     edit_saved_ok = 1;
     if (find_open_kind(WK_FILES) >= 0)
         fm_refresh();
@@ -2140,15 +2186,39 @@ static int edit_write_named(const char *name) {
 }
 
 static int edit_save(void) {
-    if(edit_file>=0 && fs_identity(edit_file)!=edit_identity)edit_file=-1;
+    if (edit_file >= 0 && fs_identity(edit_file) != edit_identity) {
+        edit_file = -1;
+        edit_saved_ok = 0;
+    }
     if (edit_file < 0) {
         namedlg_open(0, "untitled.txt");
-        return 1;
+        return 0; /* A pending Save As is not a completed save. */
     }
-    if (fs_write(edit_file, edit_buf, edit_len) < 0)
+    if (fs_write(edit_file, edit_buf, edit_len) != edit_len)
+        return 0;
+    edit_saved_ok = 0;
+    if (fs_sync() < 0)
         return 0;
     edit_saved_ok = 1;
     return 1;
+}
+
+static void edit_close_choose(int choice) {
+    if (!edit_close_valid()) { edit_close_cancel(); return; }
+    int owner = edit_close_owner;
+    if (choice == 2) { edit_close_cancel(); return; }
+    if (choice == 1) { edit_close_cancel(); win_close(owner); return; }
+    context_set(owner);
+    if (edit_save()) {
+        edit_close_cancel();
+        win_close(owner);
+    } else if (name_dlg) {
+        edit_close_dlg = 0; /* Retain the owner while Save As is pending. */
+    } else {
+        edit_close_failed = 1;
+        edit_close_focus = 2;
+    }
+    dirty = 1;
 }
 
 static void open_files(int cwd) {
@@ -4456,7 +4526,7 @@ static void draw_open_dialog(void) {
 static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
     char title[40];
     char info[112];
-    if (edit_file >= 0) {
+    if (edit_file >= 0 && fs_identity(edit_file) == edit_identity) {
         const char *nm = fs_name(edit_file);
         int t = 0;
         while (nm[t] && t < 28) {
@@ -4915,7 +4985,7 @@ static void taskbar_layout(void) {
 
 static int taskbar_hover = -2;
 static int taskbar_hover_at(void) {
-    if(open_dlg||name_dlg||launcher_on||mouse_y<TASKBAR_Y)return -2;
+    if(open_dlg||name_dlg||edit_close_dlg||launcher_on||mouse_y<TASKBAR_Y)return -2;
     if(hit(mouse_x,mouse_y,8,TASKBAR_Y+4,90,TASKBAR_H-8))return -1;
     taskbar_layout();
     for(int t=0;t<tb_n;t++)if(hit(mouse_x,mouse_y,tb_x[t],TASKBAR_Y+4,tb_w[t],TASKBAR_H-8))return tb_id[t];
@@ -5600,11 +5670,13 @@ static void sysinfo_fill(SysInfo *si) {
 static int name_target = 0;
 static char name_buf[FS_NAME_LEN];
 static int name_len = 0;
-static int name_focus;
+static int name_focus, name_failed, name_owner, name_owner_seq;
 
 static void namedlg_open(int target, const char *initial) {
     name_dlg = 1;
-    name_focus = 0;
+    name_focus = name_failed = 0;
+    name_owner = context_slot;
+    name_owner_seq = wins[name_owner].seq;
     name_target = target;
     name_len = 0;
     for (int i = 0; initial && initial[i] && i < FS_NAME_LEN - 1; i++)
@@ -5615,6 +5687,7 @@ static void namedlg_open(int target, const char *initial) {
 
 static void namedlg_close(void) {
     name_dlg = 0;
+    edit_close_cancel(); /* Canceling Save As also cancels the close request. */
     dirty = 1;
 }
 
@@ -5633,13 +5706,66 @@ static void namedlg_buttons(int x, int y, int w, int h, int *sx, int *cx, int *b
 }
 
 static void namedlg_commit(void) {
+    if (name_owner < 0 || name_owner >= MAX_WIN || !wins[name_owner].open ||
+        wins[name_owner].seq != name_owner_seq) { namedlg_close(); return; }
+    context_set(name_owner);
     name_buf[name_len] = 0;
-    if (name_len == 0)
-        return;
+    if (name_len == 0) { name_failed = 1; dirty = 1; return; }
+    int close_after = edit_close_valid() && edit_close_owner == name_owner;
     int ok = name_target == 0 ? edit_write_named(name_buf)
                               : paint_write_named(name_buf);
-    if (ok)
+    if (ok) {
+        int owner = name_owner;
         namedlg_close();
+        if (close_after) win_close(owner);
+    } else { name_failed = 1; dirty = 1; }
+}
+
+static void edit_close_geom(int *x, int *y) {
+    *x = (fb_w - 460) / 2;
+    *y = (fb_h - 184) / 2;
+}
+
+static void draw_edit_close(void) {
+    if (!edit_close_dlg) return;
+    int x, y;
+    edit_close_geom(&x, &y);
+    shade_rect(0, 0, fb_w, fb_h, 1);
+    draw_shadow(x, y, 460, 184);
+    draw_round_rect(x - 1, y - 1, 462, 186, 11, ui_border);
+    draw_round_rect(x, y, 460, 184, 10, COLOR_WHITE);
+    draw_string_bold("Save changes before closing?", x + 22, y + 20, ui_text);
+    const Document *doc = &window_state[edit_close_owner].doc;
+    const char *name = doc->file >= 0 && fs_identity(doc->file) == doc->identity
+                     ? fs_name(doc->file) : "untitled";
+    draw_string_clip(name, x + 22, y + 50, ui_text, x + 438);
+    draw_string(edit_close_failed ? "Save failed. Your document is still open."
+                                 : "Your unsaved changes will be lost if discarded.",
+                x + 22, y + 82, ui_text_dim);
+    const char *labels[] = {"Save", "Discard", "Cancel"};
+    for (int i = 0; i < 3; i++) {
+        int bx = x + 126 + 106 * i;
+        if (i == edit_close_focus) draw_default_button(bx, y + 132, 96, BTN_H, labels[i]);
+        else draw_button(bx, y + 132, 96, BTN_H, labels[i]);
+    }
+}
+
+static void edit_close_click(void) {
+    int x, y;
+    edit_close_geom(&x, &y);
+    for (int i = 0; i < 3; i++)
+        if (hit(mouse_x, mouse_y, x + 126 + 106 * i, y + 132, 96, BTN_H)) {
+            edit_close_choose(i); return;
+        }
+    /* Outside clicks cannot silently discard or dismiss a close request. */
+}
+
+static void edit_close_key(void) {
+    if (key_sc == KEY_ESC) edit_close_cancel();
+    else if (key_sc == KEY_TAB) {
+        edit_close_focus = (edit_close_focus + (shift_down ? 2 : 1)) % 3;
+        dirty = 1;
+    } else if (key_sc == KEY_ENTER) edit_close_choose(edit_close_focus);
 }
 
 static void draw_namedlg(void) {
@@ -5653,8 +5779,9 @@ static void draw_namedlg(void) {
     draw_round_rect(x, y, w, h, 10, COLOR_WHITE);
     draw_string_bold(name_target == 0 ? "Save document as" : "Save picture as",
                      x + 22, y + 20, ui_text);
-    draw_string(name_target == 0 ? "Name your file in the current folder"
-                                 : "Saved to the Pictures folder",
+    draw_string(name_failed ? "Save failed. Check storage and file name."
+                            : name_target == 0 ? "Name your file in the current folder"
+                                               : "Saved to the Pictures folder",
                 x + 22, y + 20 + CHAR_H + 6, ui_text_dim);
     int fx = x + 22, fy = y + 64, fw = w - 44, fh = 34;
     draw_round_rect(fx, fy, fw, fh, 7, ui_accent);
@@ -5707,7 +5834,7 @@ static void namedlg_key(void) {
 }
 
 static void handle_rclick(void) {
-    if (launcher_on || open_dlg || open_menu >= 0)
+    if (display_pending || name_dlg || edit_close_dlg || launcher_on || open_dlg || open_menu >= 0)
         return;
     int i = win_front();
     if (i < 0)
@@ -5726,6 +5853,7 @@ static void handle_click(void) {
         else if (hit(mouse_x, mouse_y, x + 222, y + 98, 164, 30)) display_revert();
         return;
     }
+    if (edit_close_dlg) { edit_close_click(); return; }
     if (name_dlg) {
         namedlg_click();
         return;
@@ -5817,7 +5945,7 @@ static void handle_click(void) {
             return;
         }
         if (close_hit(w->x, w->y)) {
-            win_close(i);
+            win_request_close(i);
             return;
         }
         if (hit(mouse_x, mouse_y, w->x, w->y, w->w, TITLE_H)) {
@@ -5873,7 +6001,7 @@ static void handle_click(void) {
             sysinfo_fill(&si);
             SysmonAction action=sysmon_click(w->x,w->y+TITLE_H+1,w->w,w->h-TITLE_H-1,mouse_x,mouse_y,&si);
             if(action.kind==SYSMON_ACTION_REDRAW)dirty=1;
-            else if(action.kind==SYSMON_ACTION_CLOSE_WINDOW)win_close(action.owner);
+            else if(action.kind==SYSMON_ACTION_CLOSE_WINDOW)win_request_close(action.owner);
             else if(action.kind==SYSMON_ACTION_SHOW_TERMINAL||action.kind==SYSMON_ACTION_STOP_TASK){
                 int owner=action.owner;TermTaskInfo live;
                 if(owner>=0&&owner<MAX_WIN&&wins[owner].open&&wins[owner].kind==WK_TERM&&
@@ -5904,7 +6032,7 @@ static void handle_click(void) {
 }
 
 static void handle_wheel(int amount) {
-    if(!amount||name_dlg||open_dlg||launcher_on||open_menu>=0||display_pending)return;
+    if(!amount||name_dlg||edit_close_dlg||open_dlg||launcher_on||open_menu>=0||display_pending)return;
     int target=-1;
     for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&!wins[i].min&&
        hit(mouse_x,mouse_y,wins[i].x,wins[i].y+TITLE_H,wins[i].w,wins[i].h-TITLE_H)&&
@@ -5931,6 +6059,7 @@ static void handle_key(void) {
         else if (key_sc == KEY_ESC) display_revert();
         return;
     }
+    if (edit_close_dlg) { edit_close_key(); return; }
     context_set(win_front());
     if(front_kind()==WK_EDIT)edit_manual_scroll=0;
     if(front_kind()==WK_FILES)fm_manual_scroll=0;
@@ -6721,6 +6850,7 @@ static void render_scene(void) {
                 draw_rename_overlay();
                 draw_launcher();
                 draw_namedlg();
+                draw_edit_close();
 }
 static void draw_display_confirmation(void) {
     if (!display_pending) return;
@@ -6804,7 +6934,7 @@ static void display_load(void) {
 }
 
 static void render_desktop_frame(void) {
-    int moving=dragging_win>=0 && dragging_win==win_front() && drag_active && !open_dlg && !name_dlg && !launcher_on && open_menu<0;
+    int moving=dragging_win>=0 && dragging_win==win_front() && drag_active && !open_dlg && !name_dlg && !edit_close_dlg && !launcher_on && open_menu<0;
     if(moving){
         if(drag_cached!=dragging_win){
             render_skip=dragging_win;render_scene();render_skip=-1;
@@ -6905,7 +7035,7 @@ void kmain(void) {
         }
         if (kqn > 0 || mouse_clicked || mouse_moved || mouse_rclicked || mouse_wheel)
             last_input_frame = frame_count;
-        else if (saver_enabled && !display_pending && video_status()->state!=VIDEO_PLAYING && video_status()->state!=VIDEO_LOADING && frame_count - last_input_frame > SAVER_DELAY && !open_dlg)
+        else if (saver_enabled && !display_pending && video_status()->state!=VIDEO_PLAYING && video_status()->state!=VIDEO_LOADING && frame_count - last_input_frame > SAVER_DELAY && !open_dlg && !name_dlg && !edit_close_dlg)
             saver_start();
 
         while (kqn > 0) {
@@ -7050,7 +7180,7 @@ void kmain(void) {
             dirty = 1;
         }
 
-        if(!display_pending&&frame_count-last_session>=5*TIMER_HZ&&frame_count-last_input_frame>=TIMER_HZ&&!mouse_left&&!name_dlg&&!open_dlg){session_save();last_session=frame_count;}
+        if(!display_pending&&frame_count-last_session>=5*TIMER_HZ&&frame_count-last_input_frame>=TIMER_HZ&&!mouse_left&&!name_dlg&&!edit_close_dlg&&!open_dlg){session_save();last_session=frame_count;}
         if(drag_cached>=0 && dragging_win<0)dirty=1;
         if(mouse_moved&&dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
         int moved = mouse_moved;
@@ -7058,7 +7188,7 @@ void kmain(void) {
         /* A frame update may touch only the unobscured player client. Menus,
          * dialogs, moving windows and ordinary dirty state take the full path. */
         int playback_only=player_update==PLAYER_VIDEO_FRAME&&player_slot>=0&&
-            !wins[player_slot].min&&player_slot==win_front()&&!name_dlg&&!open_dlg&&
+            !wins[player_slot].min&&player_slot==win_front()&&!name_dlg&&!edit_close_dlg&&!open_dlg&&
             !launcher_on&&open_menu<0&&!display_pending&&!saver_on&&
             dragging_win<0&&resizing_win<0&&!fm_dragging;
         if(player_update==PLAYER_VIDEO_FRAME&&player_slot>=0&&!wins[player_slot].min&&!playback_only)dirty=1;
