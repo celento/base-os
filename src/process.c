@@ -226,8 +226,12 @@ static int file_call(unsigned call,unsigned path_offset,unsigned path_length,
     }
     char name[FS_NAME_LEN];int parent=fs_destination(fs_root(),path,name);
     if(!document_parent(parent)) return -1;
-    if(id<0)id=fs_create(parent,name);
-    return id<0?-1:fs_write(id,(const char *)(USER_BASE+buffer),(int)length);
+    int created=id<0;
+    if(created)id=fs_create(parent,name);
+    if(id<0)return -1;
+    int result=fs_write(id,(const char *)(USER_BASE+buffer),(int)length);
+    if(result<0&&created)fs_delete(id);
+    return result;
 }
 /* Offsets match InterruptFrame: 8 registers, four segment slots, vector/error,
  * then EIP, CS, EFLAGS and the user SS/ESP on a privilege transition. */

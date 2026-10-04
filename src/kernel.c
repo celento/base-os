@@ -11,6 +11,7 @@
 #include "net.h"
 #include "browser.h"
 #include "player.h"
+#include "image_viewer.h"
 #include "audio_example.h"
 #include "platform.h"
 #include "history.h"
@@ -1042,7 +1043,8 @@ static int mouse_rclicked = 0;
 static int mouse_moved = 0;
 static int mouse_ok = 0;
 
-static uint8_t mouse_pkt[3];
+static uint8_t mouse_pkt[4];
+static int mouse_packet_bytes=3,mouse_wheel=0,mouse_type=0;
 static int mouse_pkt_n = 0;
 
 static uint8_t cursor_saved[CURSOR_W * CURSOR_H];
@@ -1111,6 +1113,13 @@ void mouse_init(void) {
 
     if (!mouse_cmd(0xF6))
         return;
+    /* QEMU's IntelliMouse negotiation: 200, 100, 80 samples/second. */
+    mouse_packet_bytes=3;mouse_type=0;
+    if(mouse_cmd(0xF3)&&mouse_cmd(200)&&mouse_cmd(0xF3)&&mouse_cmd(100)&&
+       mouse_cmd(0xF3)&&mouse_cmd(80)&&mouse_cmd(0xF2)&&mouse_wait_read()){
+        mouse_type=inb(0x60);
+        if(mouse_type==3||mouse_type==4)mouse_packet_bytes=4;
+    }
     if (!mouse_cmd(0xF4))
         return;
 
@@ -1124,10 +1133,17 @@ static void mouse_handle_byte(uint8_t b) {
         return;
 
     mouse_pkt[mouse_pkt_n++] = b;
-    if (mouse_pkt_n < 3)
+    if (mouse_pkt_n < mouse_packet_bytes)
         return;
     mouse_pkt_n = 0;
 
+    if(mouse_packet_bytes==4){
+        int wheel=mouse_type==4?(int)(mouse_pkt[3]&15):(int)(int8_t)mouse_pkt[3];
+        if(mouse_type==4&&wheel>=8)wheel-=16;
+        mouse_wheel+=wheel;
+        if(mouse_wheel>64)mouse_wheel=64;
+        if(mouse_wheel<-64)mouse_wheel=-64;
+    }
     uint8_t flags = mouse_pkt[0];
     if (flags & 0xC0)
         return;
@@ -1265,6 +1281,7 @@ static void keyboard_handle_byte(uint8_t sc) {
 static uint8_t kq[1024];
 static int input_ready;
 void platform_poll(void){if(input_ready)drain_8042();audio_poll();net_poll();}
+void fs_background_poll(void){platform_poll();}
 static int kqn;
 
 void drain_8042(void) {
@@ -1394,6 +1411,9 @@ typedef struct {
 } EditorSearch;
 typedef struct {
     int cwd;
+    int cwd_tracked;
+    unsigned cwd_identity;
+    int manual_files_scroll,manual_editor_scroll;
     int selected;
     int first;
     int ids[FS_MAX_NODES];
@@ -1409,6 +1429,8 @@ static int context_slot;
 static void context_set(int slot) { if (slot >= 0 && slot < MAX_WIN) { context_slot = slot; term_select(slot); } }
 _Static_assert(sizeof(WindowState) * MAX_WIN < EDITOR_CAPACITY - 2 * EDIT_BUF_SIZE, "window arena overflow");
 #define fm_cwd (window_state[context_slot].cwd)
+#define fm_manual_scroll (window_state[context_slot].manual_files_scroll)
+#define edit_manual_scroll (window_state[context_slot].manual_editor_scroll)
 #define fm_selected (window_state[context_slot].selected)
 #define fm_first (window_state[context_slot].first)
 #define fm_ids (window_state[context_slot].ids)
@@ -1592,6 +1614,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h);
 
 static void win_minimum(Win *w, int *mw, int *mh) {
     if (w->kind == WK_EDIT || w->kind == WK_FILES || w->kind == WK_TERM) { *mw = 360; *mh = 200; }
+    else if(w->kind==WK_VIEW){*mw=IMAGE_VIEWER_MIN_W+2;*mh=IMAGE_VIEWER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_BROWSER){*mw=BROWSER_MIN_W+2;*mh=BROWSER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_PLAYER){*mw=PLAYER_MIN_W+2;*mh=PLAYER_MIN_H+TITLE_H+2;}
     else { int x, y; layout_window(w->kind, &x, &y, mw, mh); }
@@ -1676,6 +1699,7 @@ static int win_open(int kind) {
 static void win_close(int i) {
     if (i < 0 || i >= MAX_WIN || !wins[i].open)
         return;
+    if(wins[i].kind==WK_VIEW)image_viewer_close();
     if(wins[i].kind==WK_TERM)term_task_close(i);
     if(wins[i].kind==WK_BROWSER)browser_close();
     if(wins[i].kind==WK_PLAYER)audio_stop();
@@ -1814,7 +1838,10 @@ static int fm_row_id(int row) {
 }
 
 static void fm_refresh(void) {
-    if(!fs_is_dir(fm_cwd))fm_cwd=fs_root();
+    WindowState *state=&window_state[context_slot];
+    if(!fs_is_dir(fm_cwd)||(state->cwd_tracked==fm_cwd&&state->cwd_identity&&state->cwd_identity!=fs_identity(fm_cwd)))fm_cwd=fs_root();
+    if(state->cwd_tracked!=fm_cwd)fm_manual_scroll=0;
+    state->cwd_tracked=fm_cwd;state->cwd_identity=fs_identity(fm_cwd);
     int raw[FS_MAX_NODES];
     int n = fs_list(fm_cwd, raw, FS_MAX_NODES);
     fm_count = 0;
@@ -2445,9 +2472,9 @@ _Static_assert(0x8000 + 2 * PAINT_W * PAINT_H <= PAINT_CAPACITY, "paint fill sta
 #define PT_ERASER  6
 
 static History paint_history;
+_Static_assert(8*PAINT_W*PAINT_H<=PAINT_HISTORY_CAPACITY,"paint history arena overflow");
 static void paint_undo(int redo);
 static uint8_t *paint_pix;
-static uint8_t *view_pix;
 static int paint_ready;
 static int paint_tool;
 static int paint_brush = 1;
@@ -2460,9 +2487,6 @@ static int paint_text_on;
 static int paint_text_x, paint_text_y, paint_text_origin_x;
 static int paint_text_last_adv;
 
-static int view_ok;
-static int view_iw, view_ih;
-static int view_file;
 
 static const uint8_t paint_well[PAINT_NWELL] = {
     0, 1, 2, 15, 4, 5, 6, 7, 8, 9, 10, 11
@@ -2481,13 +2505,11 @@ static uint8_t plot_col;
 
 static void paint_init(void) {
     if (!paint_history.capacity) paint_history=(History){0,0,8,PAINT_W*PAINT_H,
-        (unsigned char *)APPS_BASE + sizeof(WindowState)*MAX_WIN};
+        (unsigned char *)PAINT_HISTORY_BASE};
     for (int i = 0; i < PAINT_NWELL2; i++)
         paint_well2[i] = idx24(paint_well2_rgb[i]);
     if (!paint_pix)
         paint_pix = (uint8_t *)PAINT_MEM;
-    if (!view_pix)
-        view_pix = (uint8_t *)(PAINT_MEM + 0x4000);
     if (!paint_ready) {
         kmemset(paint_pix, COLOR_WHITE, PAINT_W * PAINT_H);
         paint_tool = PT_PENCIL;
@@ -2990,90 +3012,21 @@ static void open_paint(void) {
     dirty = 1;
 }
 
-static int is_bos1(int id) {
-    if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id))
-        return 0;
-    if (fs_size(id) < 8)
-        return 0;
-    const char *d = fs_data(id);
-    return d[0] == 'B' && d[1] == 'O' && d[2] == 'S' && d[3] == '1';
-}
-
-static int view_load(int id) {
-    if (id < 0 || !is_bos1(id))
-        return 0;
-    const unsigned char *d = (const unsigned char *)fs_data(id);
-    int w = d[4] | (d[5] << 8);
-    int h = d[6] | (d[7] << 8);
-    if (w < 1 || h < 1 || w > 400 || h > 400)
-        return 0;
-    int need = 8 + w * h;
-    if (need > fs_size(id) || w * h > 16376)
-        return 0;
-    kmemcpy(view_pix, d + 8, w * h);
-    view_file = id;
-    view_iw = w;
-    view_ih = h;
-    view_ok = 1;
-    return 1;
-}
-
-/* Viewer holds a picture or nothing: drop the window if the file went away. */
-static void view_check_file(void) {
-    int i = find_open_kind(WK_VIEW);
-    if (i < 0)
-        return;
-    if (is_bos1(view_file))
-        return;
-    win_close(i);
-    view_ok = 0;
-    view_file = -1;
-}
-
-static void view_apply_geom(int i) {
-    if (i < 0)
-        return;
-    layout_window(WK_VIEW, &wins[i].x, &wins[i].y, &wins[i].w, &wins[i].h);
-    win_clamp(&wins[i]);
+static int is_image_file(int id) {
+    return fs_valid(id)&&!fs_is_dir(id)&&!fs_is_app(id)&&
+           image_probe(fs_data(id),(unsigned)fs_size(id))!=IMAGE_FORMAT_NONE;
 }
 
 static void open_view(int file_id) {
-    if (!view_load(file_id))
-        return;
-    paint_init();
-    open_dlg = 0;
-    int i = find_open_kind(WK_VIEW);
-    if (i < 0)
-        i = win_open(WK_VIEW);
-    else {
-        view_apply_geom(i);
-        win_focus(i);
-    }
-    /* win_open already laid out using current view_* */
-    view_apply_geom(i);
-    dirty = 1;
+    if(!fs_valid(file_id)||fs_is_dir(file_id)||fs_is_app(file_id))return;
+    if(win_open(WK_VIEW)<0)return;
+    image_viewer_open(fs_data(file_id),(unsigned)fs_size(file_id),fs_name(file_id));
+    open_dlg=0;dirty=1;
 }
 
-static void draw_view(int wx, int wy, int ww, int wh, int inactive) {
-    gui_draw_window(wx, wy, ww, wh, fs_name(view_file), 0,
-                    inactive ? WIN_INACTIVE : 0);
-    int body_y = wy + TITLE_H + 1;
-    int body_h = wh - TITLE_H - 2;
-    int body_x = wx + 1;
-    int body_w = ww - 2;
-    int cw = view_iw * PAINT_SCALE;
-    int ch = view_ih * PAINT_SCALE;
-    int cx = body_x + (body_w - cw) / 2;
-    int cy = body_y + (body_h - ch) / 2;
-    draw_rect(body_x, body_y, body_w, body_h, ui_chrome);
-    draw_shadow(cx, cy, cw, ch);
-    for (int ly = 0; ly < view_ih; ly++) {
-        for (int lx = 0; lx < view_iw; lx++) {
-            uint8_t c = view_pix[ly * view_iw + lx];
-            draw_rect(cx + lx * PAINT_SCALE, cy + ly * PAINT_SCALE,
-                      PAINT_SCALE, PAINT_SCALE, c);
-        }
-    }
+static void draw_view(int wx,int wy,int ww,int wh,int inactive) {
+    gui_draw_window(wx,wy,ww,wh,image_viewer_title(),0,inactive?WIN_INACTIVE:0);
+    image_viewer_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
 }
 
 static void handle_paint_click(int wx, int wy, int ww, int wh) {
@@ -3688,7 +3641,7 @@ static void open_fs_file(int id) {
         win_open(WK_SYSMON);
         return;
     }
-    if (is_bos1(id)) {
+    if (is_image_file(id)||file_extension(n,".jpg")||file_extension(n,".jpeg")||file_extension(n,".png")||file_extension(n,".bmp")||file_extension(n,".gif")) {
         open_view(id);
         return;
     }
@@ -3754,18 +3707,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *h = 500;
         break;
     case WK_VIEW:
-        if (view_ok && view_iw > 0 && view_ih > 0) {
-            *w = view_iw * 3 + 8;
-            *h = view_ih * 3 + 8 + TITLE_H;
-        } else {
-            *w = 320;
-            *h = 160;
-        }
-        if (*w < 200) *w = 200;
-        if (*w > 800) *w = 800;
-        if (*h < 120) *h = 120;
-        if (*h > 520) *h = 520;
-        break;
+        *w=IMAGE_VIEWER_W+2;*h=IMAGE_VIEWER_H+TITLE_H+2;break;
     case WK_SNAKE:
         *w = 520;
         *h = 400;
@@ -4065,7 +4007,6 @@ static void do_empty_trash(void) {
     kprint_debug("Empty trash\n");
     if (edit_file >= 0 && !fs_valid(edit_file))
         edit_clear();
-    view_check_file();
     if (find_open_kind(WK_FILES) >= 0) {
         if (!fs_valid(fm_cwd))
             fm_cwd = trash_id;
@@ -4079,7 +4020,7 @@ static void do_empty_trash(void) {
 static int od_row_enabled(int id) {
     if (!pick_pics_only)
         return 1;
-    return fs_is_dir(id) || is_bos1(id);
+    return fs_is_dir(id) || is_image_file(id);
 }
 
 /* Selection never rests on a row the dialog would refuse to open. */
@@ -4317,7 +4258,7 @@ static void draw_file_row(int x, int y, int w, int id, int sel, int dim) {
             is_app = 7;
         else
             is_app = 1;
-    } else if (is_bos1(id)) {
+    } else if (is_image_file(id)) {
         is_app = 4;
     }
     int renaming = fm_renaming && id == fm_rename_id;
@@ -4358,6 +4299,7 @@ static int files_list_y(int wy) {
 
 static void files_scroll(int rows){
     if(rows<1)rows=1;
+    if(fm_manual_scroll){int max=fm_vis_count()-rows;if(max<0)max=0;if(fm_first>max)fm_first=max;if(fm_first<0)fm_first=0;return;}
     if(fm_selected<fm_first)fm_first=fm_selected;
     if(fm_selected>=fm_first+rows)fm_first=fm_selected-rows+1;
     if(fm_first<0)fm_first=0;
@@ -4525,7 +4467,7 @@ static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
         cols = 1;
     if (rows < 1)
         rows = 1;
-    edit_ensure_caret_visible(rows, cols);
+    if(!edit_manual_scroll)edit_ensure_caret_visible(rows, cols);
 
     int r = 0, c = 0;
     int sel_lo = edit_sel_a < edit_sel_b ? edit_sel_a : edit_sel_b;
@@ -5174,7 +5116,7 @@ static int edit_index_at(int wx, int wy, int ww, int wh, int mx, int my) {
 
 static void handle_edit_click(int wx, int wy, int ww, int wh) {
     if(edit_search_click(wx,wy,ww,wh))return;
-    edit_search.focus=0;
+    edit_search.focus=0;edit_manual_scroll=0;
     int ax, ay, aw, ah;
     edit_area(wx, wy, ww, wh, &ax, &ay, &aw, &ah);
     if (hit(mouse_x, mouse_y, ax, ay, aw, ah)) {
@@ -5866,6 +5808,9 @@ static void handle_click(void) {
             if (wordle_click(w->x, w->y + TITLE_H, mouse_x, mouse_y))
                 dirty = 1;
         }
+        else if(w->kind==WK_VIEW){
+            if(image_viewer_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
+        }
         else if(w->kind==WK_BROWSER){
             if(browser_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
         }else if(w->kind==WK_PLAYER){
@@ -5909,6 +5854,26 @@ static void handle_click(void) {
     }
 }
 
+static void handle_wheel(int amount) {
+    if(!amount||name_dlg||open_dlg||launcher_on||open_menu>=0||display_pending)return;
+    int target=-1;
+    for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&!wins[i].min&&
+       hit(mouse_x,mouse_y,wins[i].x,wins[i].y+TITLE_H,wins[i].w,wins[i].h-TITLE_H)&&
+       (target<0||wins[i].z>wins[target].z))target=i;
+    if(target<0)return;
+    int original=win_front();context_set(target);Win *w=&wins[target];
+    if(w->kind==WK_BROWSER)browser_scroll(amount*3);
+    else if(w->kind==WK_VIEW)image_viewer_scroll(amount*3);
+    else if(w->kind==WK_TERM)term_scroll(-amount*3);
+    else if(w->kind==WK_EDIT){
+        int ax,ay,aw,ah,row,col,old=edit_caret;edit_area(w->x,w->y,w->w,w->h,&ax,&ay,&aw,&ah);
+        int cols=aw/EDIT_CHAR_W;if(cols<1)cols=1;edit_caret=edit_len;edit_caret_cell(cols,&row,&col);edit_caret=old;
+        int max=row+1-ah/EDIT_LINE_H;if(max<0)max=0;
+        edit_scroll+=amount*3;if(edit_scroll<0)edit_scroll=0;if(edit_scroll>max)edit_scroll=max;edit_manual_scroll=1;
+    }else if(w->kind==WK_FILES){fm_first+=amount*3;fm_manual_scroll=1;files_scroll((w->h-TITLE_H-INFO_H-40)/ROW_H);}
+    context_set(original);dirty=1;
+}
+
 static void launcher_key(void);
 
 static void handle_key(void) {
@@ -5918,6 +5883,8 @@ static void handle_key(void) {
         return;
     }
     context_set(win_front());
+    if(front_kind()==WK_EDIT)edit_manual_scroll=0;
+    if(front_kind()==WK_FILES)fm_manual_scroll=0;
     if(front_kind()==WK_EDIT&&!name_dlg&&!open_dlg&&!launcher_on&&open_menu<0){
         if(ctrl_down&&(key_sc==0x21||key_sc==0x23)){edit_search_open(key_sc==0x23);return;}
         if(key_sc==0x3d){if(!edit_search.open)edit_search_open(0);edit_find_next(shift_down?-1:1);return;}
@@ -6030,6 +5997,11 @@ static void handle_key(void) {
         dirty=1;return;
     }
 
+    if(fk==WK_VIEW){
+        if(key_sc==KEY_ESC)close_front();
+        else if(image_viewer_key(key_sc,key_char))dirty=1;
+        return;
+    }
     if(fk==WK_BROWSER){
         if(browser_key(key_sc,key_char,(ctrl_down?BROWSER_MOD_CTRL:0)|
            (shift_down?BROWSER_MOD_SHIFT:0)|(alt_down?BROWSER_MOD_ALT:0)))dirty=1;
@@ -6827,11 +6799,11 @@ void kmain(void) {
         drain_8042();
 
         if (saver_on) {
-            int woke = kqn > 0 || mouse_clicked || mouse_moved || mouse_rclicked;
+            int woke = kqn > 0 || mouse_clicked || mouse_moved || mouse_rclicked || mouse_wheel;
             kqn = 0;
             mouse_clicked = 0;
             mouse_rclicked = 0;
-            mouse_moved = 0;
+            mouse_moved = 0;mouse_wheel=0;
             if (woke) {
                 saver_stop();
             } else {
@@ -6839,7 +6811,7 @@ void kmain(void) {
                 continue;
             }
         }
-        if (kqn > 0 || mouse_clicked || mouse_moved || mouse_rclicked)
+        if (kqn > 0 || mouse_clicked || mouse_moved || mouse_rclicked || mouse_wheel)
             last_input_frame = frame_count;
         else if (saver_enabled && !display_pending && frame_count - last_input_frame > SAVER_DELAY && !open_dlg)
             saver_start();
@@ -6856,6 +6828,7 @@ void kmain(void) {
                 handle_key();
         }
         kqn = 0;
+        if(mouse_wheel){int amount=mouse_wheel;mouse_wheel=0;handle_wheel(amount);}
         if (mouse_rclicked) {
             handle_rclick();
             mouse_rclicked = 0;
