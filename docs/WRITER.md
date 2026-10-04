@@ -29,7 +29,7 @@ character styles are turned on consistently by the corresponding button.
 
 Wrapping uses the proportional UI font advances, not a character grid. Body text
 uses the bundled 95-glyph ASCII UI font. Headings use a 1.5x rendering of those
-same glyphs, so arbitrary ASCII headings work without relying on the limited
+same glyphs with fixed-point area-coverage resampling, so arbitrary ASCII headings work without relying on the limited
 Logo font. Bold and italic are bounded synthetic treatments. Word wrapping,
 alignment, scaled advances, selection and caret hit testing share the same line
 geometry. A caret at a soft line ending can stay visually on that line.
