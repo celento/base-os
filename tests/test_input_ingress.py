@@ -35,5 +35,15 @@ class InputIngressTests(unittest.TestCase):
                             str(ROOT / 'src/input_ingress.c'), '-o', str(output)], check=True)
             subprocess.run([str(output)], check=True)
 
+    def test_terminal_draft_survives_input_loss(self):
+        with tempfile.TemporaryDirectory(prefix='baseos-terminal-input-loss-') as temporary:
+            output = Path(temporary) / 'terminal-input-loss'
+            subprocess.run([shutil.which('cc'), '-std=gnu11', '-Wall', '-Wextra',
+                            '-Werror', '-Wno-unused-function', '-O1', '-I', str(ROOT / 'src'),
+                            str(ROOT / 'tests/term_input_loss_host.c'), str(ROOT / 'src/input_ingress.c'),
+                            str(ROOT / 'tests/net_stub.c'), str(ROOT / 'src/download.c'),
+                            '-DDOWNLOAD_HOST_TEST', '-o', str(output)], check=True)
+            subprocess.run([str(output)], check=True)
+
 if __name__ == '__main__':
     unittest.main()

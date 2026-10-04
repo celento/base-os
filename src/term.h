@@ -35,6 +35,8 @@ const char *term_input(void);
 
 void term_char(char c);
 void term_backspace(void);
+/* Refuse an incomplete command after finite device-ingress loss; retain draft. */
+void term_input_lost(int slot);
 void term_enter(void);
 /* Desktop input ownership around synchronous BASIC/exec only. */
 void term_set_program_input(void (*hook)(int active));
