@@ -50,12 +50,19 @@ static FsNode *nodes;
 static int fs_touched = 0;
 static unsigned identities[FS_MAX_NODES], next_identity;
 unsigned fs_identity(int id){return fs_valid(id)?identities[id]:0;}
+static unsigned new_identity(void) {
+    /* Unknown after exhaustion, never wrap an old node incarnation into use. */
+    return next_identity == ~0u ? 0 : ++next_identity;
+}
 static unsigned content_revisions[FS_MAX_NODES], next_content_revision;
 unsigned fs_content_revision(int id){return fs_valid(id)?content_revisions[id]:0;}
 static unsigned new_content_revision(void) {
     /* This diagnostic token must neither alias an old version nor prevent an
      * ordinary write. Once exhausted, new versions remain explicitly unknown. */
     return next_content_revision == ~0u ? 0 : ++next_content_revision;
+}
+int fs_version_available(int creating) {
+    return next_content_revision != ~0u && (!creating || next_identity != ~0u);
 }
 static int writable;
 static int active_slot = -1;
@@ -246,7 +253,7 @@ static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
             nodes[i].is_app = is_app;
             nodes[i].size = 0;
             nodes[i].used = 1;
-            identities[i]=++next_identity;
+            identities[i]=new_identity();
             content_revisions[i]=new_content_revision();
             nodes[i].modified = fs_clock();
             fs_touched = 1;
@@ -272,6 +279,7 @@ int fs_init(void) {
     kmemset(content_revisions, 0, sizeof(content_revisions));
 
     nodes[0].used = 1;
+    identities[0]=new_identity();
     content_revisions[0]=new_content_revision();
     nodes[0].is_dir = 1;
     nodes[0].parent = -1;
@@ -1036,7 +1044,7 @@ static void import_payload(const DiskHeader *h) {
         nd->is_app = d.is_app;
         nd->size = d.size;
         nd->used = 1;
-        identities[d.id]=++next_identity;
+        identities[d.id]=new_identity();
         content_revisions[d.id]=new_content_revision();
         nd->modified = d.modified;
         if (d.size) {

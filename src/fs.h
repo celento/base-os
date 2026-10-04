@@ -17,12 +17,19 @@ unsigned fs_clock(void);
 /* Device-only servicing during long copies/checksums; must not mutate files. */
 void fs_background_poll(void);
 unsigned fs_modified(int id);
+/* Runtime identity also never wraps. A new/imported node gets 0 after the
+ * finite counter is exhausted; legacy mutations remain available. */
 unsigned fs_identity(int id);
 /* Runtime content token, separate from identity and the wall-clock timestamp.
  * Create/import and every successful write (even identical bytes) get a fresh
  * token. Rename/move/sync leave it unchanged. Tokens never wrap or reset across
  * remount/init; 0 means invalid/unknown after exhaustion, never a match. */
 unsigned fs_content_revision(int id);
+/* Preflight for serialized version-bound services. A create consumes both a
+ * node identity and a content token; an ordinary write consumes only a token.
+ * False means fail BEFORE mutation. No file-mutating work may run between this
+ * check and the mutation (device-only background polling is safe). */
+int fs_version_available(int creating);
 /* File-data allowance for the current node count; extra IDE nodes cost 40 bytes. */
 unsigned fs_capacity(void);
 /* Same allowance for a projected total node count, or 0 outside this backend. */
