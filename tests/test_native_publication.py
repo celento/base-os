@@ -13,7 +13,7 @@ class NativePublicationTests(unittest.TestCase):
         def prepare(directory):
             source = (ROOT / 'src/kernel.c').read_text()
             code = ''.join(function(source, name) for name in
-                           ('draw_term_canvas',))
+                           ('draw_app_canvas', 'draw_term_canvas'))
             (directory / 'native_publication_render.inc').write_text(code)
         for rectangle in (False, True):
             with self.subTest(rectangle=rectangle):

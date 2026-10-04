@@ -11,7 +11,7 @@
 #define TIMER_HZ 70
 #define KEY_ESC 1
 #define MENU_NONE -1
-enum { WK_NONE=-1, WK_FILES, WK_EDIT, WK_PAINT, WK_WRITER, WK_SPREADSHEET, WK_TERM };
+enum { WK_NONE=-1, WK_FILES, WK_EDIT, WK_PAINT, WK_WRITER, WK_SPREADSHEET, WK_TERM, WK_NATIVE };
 typedef struct { int kind,x,y,w,h,z,open,seq,min,maximized,old_x,old_y,old_w,old_h; } Win;
 static Win wins[MAX_WIN];
 static struct { struct {int dragging;} doc; int last_click_item; } window_state[MAX_WIN];

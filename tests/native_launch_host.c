@@ -8,8 +8,25 @@
 static const struct {const char *label;} icons[ICON_TRASH]={{"Terminal"},{"Files"}};
 enum { WK_NONE=-1, WK_TERM, WK_EDIT, WK_CLOCK, WK_CAL, WK_MINES, WK_2048,
        WK_BREAKOUT, WK_SYSMON, WK_HELLO, WK_PROPERTIES, WK_WRITER, WK_SPREADSHEET,
-       WK_VIEW, WK_BROWSER, WK_PLAYER };
-static struct {int open,kind,seq;} wins[MAX_WIN];
+       WK_VIEW, WK_BROWSER, WK_PLAYER, WK_NATIVE };
+typedef struct {int open,kind,seq,x,y,w,h;} Win;
+static Win wins[MAX_WIN];
+static unsigned window_state[MAX_WIN];
+static int native_output_scroll[MAX_WIN],wm_seq,wm_z;
+static int input_available=1,probe_result;
+static unsigned probe_mode=PROCESS_LAUNCH_HOSTED;
+/* Execution and executable validation have separate production-process gates.
+ * These admitted results exercise the unchanged real desktop routing helpers. */
+int process_probe_launch(const void *file,unsigned bytes,unsigned *mode){
+    assert(file&&bytes>=16&&mode);
+    if(probe_result)return probe_result;
+    *mode=probe_mode;return 0;
+}
+static int native_ui_available(void){return input_available;}
+static void layout_window(int kind,int *x,int *y,int *w,int *h){
+    assert(kind==WK_NATIVE);*x=40;*y=50;*w=360;*h=240;
+}
+static void win_clamp(Win *w){assert(w->w>0&&w->h>0);}
 static int context_slot,open_dlg,dirty,properties_id,launch_n,launch_len,launch_sel,launcher_on;
 static int fm_cwd,fm_count,fm_total,fm_selected,fm_ids[FS_MAX_NODES];
 static FileViewOptions fm_view;
@@ -23,6 +40,7 @@ static int edits,other_opens,icon_opens,document_requests;
 static int edit_close_owner=-1,name_dlg,dragging_win=-1,drag_active;
 static int win_front(void){for(int i=MAX_WIN-1;i>=0;i--)if(wins[i].open)return i;return -1;}
 static void context_set(int slot){if(slot>=0){context_slot=slot;term_select(slot);}}
+static void win_focus(int slot){context_set(slot);}
 static int win_open(int kind){
     for(int i=0;i<MAX_WIN;i++)if(!wins[i].open){
         wins[i].open=1;wins[i].kind=kind;wins[i].seq++;
@@ -88,7 +106,7 @@ int main(void){
     open_fs_file(first);assert(windows()==3&&term_task_running(2));
     for(int i=3;i<8;i++)open_fs_file(upper);
     assert(windows()==8);assert(term_task_info(0,&before));open_fs_file(first);
-    assert(windows()==8&&strstr(native_launch_status,"Close a window"));
+    assert(windows()==8&&strstr(native_launch_status,"close a window"));
     assert(term_task_info(0,&after)&&before.instance==after.instance);
     win_close(-1);assert(native_launch_status[0]);
     win_close(3);assert(!native_launch_status[0]&&!term_task_running(3));open_fs_file(first);
@@ -117,5 +135,24 @@ int main(void){
     assert(edits==1&&!term_task_running(context_slot));close_all();
     query("Terminal");assert(launch_n==1);launcher_run(0);assert(icon_opens==1);
     open_fs_file(shortcut);assert(!windows());
+    /* Native mode preflight and all refused admissions leave the caller's
+     * Terminal state alone. This hosted fixture intentionally has no owned
+     * process creator; owned success has a separate real-view integration gate. */
+    term_select(4);term_reset();term_char('k');context_slot=4;
+    unsigned generation=views[4].binding.generation;
+    probe_result=PROCESS_CREATE_UNSUPPORTED;open_fs_file(replacement);
+    assert(!windows()&&strstr(native_launch_status,"format or ABI"));
+    probe_result=0;probe_mode=PROCESS_LAUNCH_OWNED_WINDOW;input_available=0;
+    open_fs_file(replacement);
+    assert(!windows()&&strstr(native_launch_status,"input is unavailable"));
+    input_available=1;wm_seq=0x7fffffff;open_fs_file(replacement);
+    assert(!windows()&&strstr(native_launch_status,"identities are exhausted"));
+    wm_seq=0;open_fs_file(replacement);
+    assert(!windows()&&strstr(native_launch_status,"format or ABI"));
+    assert(selected==4&&context_slot==4&&!strcmp(term_input(),"k")&&
+           views[4].binding.generation==generation&&!term_task_running(4));
+    unsigned mode=99;
+    assert(native_file_mode(replacement,fs_identity(replacement)+1,&mode)==APP_VIEW_START_INVALID&&mode==99);
+    assert(native_file_mode(shortcut,fs_identity(shortcut),&mode)==APP_VIEW_START_INVALID&&mode==99);
     puts("native launch: Files/Open/launcher dispatch, fresh owners, spaces/case, copied names, reused nodes, eight-window capacity and shared start lifecycle passed");
 }

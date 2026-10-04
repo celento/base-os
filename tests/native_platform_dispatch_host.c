@@ -75,7 +75,7 @@ static void query(void){
     memset(user_memory,0xa5,sizeof(user_memory));
     assert(invoke(BOS_CALL_ABI_QUERY,64,sizeof info,BOS_ABI_MAJOR,0,0)==BOS_OK);
     memcpy(&info,user_memory+64,sizeof info);
-    assert(info.struct_size==96&&info.abi_major==1&&info.abi_minor==1&&info.features==(15|BOS_FEATURE_MEMORY_INFO));
+    assert(info.struct_size==96&&info.abi_major==1&&info.abi_minor==BOS_ABI_MINOR&&info.features==(15|BOS_FEATURE_MEMORY_INFO));
     assert(info.context==BOS_CONTEXT_DESKTOP_TASK&&info.process==current_task->owner_id);
     assert(info.user_bytes==65536&&info.image_bytes==49152&&info.stack_reserved_bytes==16384);
     assert(info.file_bytes==2097152&&info.replace_bytes==32768&&info.file_chunk_bytes==4096);

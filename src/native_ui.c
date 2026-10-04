@@ -3,7 +3,6 @@
 #define BUTTONS (BOS_UI_BUTTON_LEFT|BOS_UI_BUTTON_RIGHT)
 #define SUBSCRIPTIONS (BOS_UI_SUB_POINTER|BOS_UI_SUB_HOVER|BOS_UI_SUB_WHEEL)
 #define BASE_STATE (BOS_UI_STATE_FOCUSED|BOS_UI_STATE_AVAILABLE|BOS_UI_STATE_MINIMIZED|BOS_UI_STATE_BLOCKED)
-#define CAPABILITIES (BOS_UI_CAP_HOSTED_CANVAS|BOS_UI_CAP_POINTER|BOS_UI_CAP_HOVER|BOS_UI_CAP_WHEEL|BOS_UI_CAP_IMPLICIT_CAPTURE|BOS_UI_CAP_BOUNDED_WAIT|BOS_UI_CAP_LEGACY_KEY_READINESS|BOS_UI_CAP_HOST_FORCED_CLOSE)
 #define CONSUMED (NATIVE_UI_CONSUMED_POINTER|NATIVE_UI_CONSUMED_WHEEL)
 typedef struct {
     ProcessBinding binding;
@@ -28,6 +27,14 @@ _Static_assert(BOS_UI_BUTTON_LEFT==INPUT_LEFT && BOS_UI_BUTTON_RIGHT==INPUT_RIGH
 _Static_assert(BOS_UI_MOD_LSHIFT==INPUT_LSHIFT && BOS_UI_MOD_RALT==INPUT_RALT,
                "pointer modifier adapter must be explicit if device bits change");
 
+static unsigned capabilities(unsigned kind){
+    return kind==BOS_UI_KIND_HOSTED_CANVAS?NATIVE_UI_CAPABILITIES_HOSTED:
+        kind==BOS_UI_KIND_OWNED_WINDOW?NATIVE_UI_CAPABILITIES_OWNED:0;
+}
+static int host_contract(const NativeUiHost *host){
+    unsigned expected=capabilities(host->kind);
+    return expected&&host->capabilities==expected;
+}
 static unsigned add_saturated(unsigned a,unsigned b){return b>~a?~0u:a+b;}
 static int binding_equal(const ProcessBinding *a,const ProcessBinding *b){
     return a&&b&&a->process==b->process&&a->slot==b->slot&&a->generation==b->generation;
@@ -131,8 +138,9 @@ static int geometry_equal(const CanvasView *a,const CanvasView *b){
 }
 static int refresh_target(Target *t,unsigned ticks,unsigned physical){
     if(t->revoked)return 0;
-    NativeUiHost host;
-    if(!hooks.snapshot||!hooks.snapshot(&t->binding,&host)){revoke(t,physical);return 0;}
+    NativeUiHost host={0};
+    if(!hooks.snapshot||!hooks.snapshot(&t->binding,&host)||!host_contract(&host)||
+       host.kind!=t->host.kind||host.capabilities!=t->host.capabilities){revoke(t,physical);return 0;}
     host.state&=BASE_STATE;
     if((host.state&BOS_UI_STATE_MINIMIZED)||host.view.logical_w<=0||host.view.logical_h<=0||host.view.viewport_w<=0||host.view.viewport_h<=0)
         host.state&=~BOS_UI_STATE_AVAILABLE;
@@ -163,7 +171,7 @@ static Target *owned(const ProcessBinding *binding,BosHandle target){
 }
 static void target_info(const Target *t,BosUiTargetInfoV1 *out){
     *out=(BosUiTargetInfoV1){0};out->size=sizeof *out;out->major=BOS_UI_MAJOR;out->minor=BOS_UI_MINOR;
-    out->target=t->target;out->kind=BOS_UI_KIND_HOSTED_CANVAS;out->capabilities=CAPABILITIES;
+    out->target=t->target;out->kind=t->host.kind;out->capabilities=t->host.capabilities;
     out->subscriptions=t->subscriptions;out->state=state(t);
     out->logical_w=t->host.view.logical_w;out->logical_h=t->host.view.logical_h;
     out->viewport_w=t->host.view.viewport_w;out->viewport_h=t->host.view.viewport_h;
@@ -178,19 +186,23 @@ void native_ui_init(const NativeUiHooks *configured){
     /* next_serial deliberately survives reinitialization. */
 }
 int native_ui_available(void){return hooks.snapshot&&hooks.acquired&&hooks.focus;}
-void native_ui_query(BosUiInfoV1 *out,unsigned hz){
+void native_ui_query_kind(BosUiInfoV1 *out,unsigned hz,unsigned kind){
     *out=(BosUiInfoV1){0};out->size=sizeof *out;out->major=BOS_UI_MAJOR;out->minor=BOS_UI_MINOR;
-    out->capabilities=CAPABILITIES;out->subscriptions_supported=SUBSCRIPTIONS;out->buttons_supported=BUTTONS;
+    out->capabilities=capabilities(kind);out->subscriptions_supported=SUBSCRIPTIONS;out->buttons_supported=BUTTONS;
     out->targets_per_process=1;out->targets_total=BOS_UI_TARGETS_TOTAL;out->queue_capacity=BOS_UI_QUEUE_CAPACITY;
     out->event_bytes=sizeof(BosUiEventV1);out->wait_max_ms=BOS_UI_WAIT_MAX_MS;out->ticks_per_second=hz;
     out->context=BOS_CONTEXT_DESKTOP_TASK;
 }
-int native_ui_open(const ProcessBinding *binding,unsigned subscriptions,BosUiTargetInfoV1 *out){
+void native_ui_query(BosUiInfoV1 *out,unsigned hz){
+    native_ui_query_kind(out,hz,BOS_UI_KIND_HOSTED_CANVAS);
+}
+static int open_kind(const ProcessBinding *binding,unsigned subscriptions,unsigned kind,BosUiTargetInfoV1 *out){
     if(!native_ui_available())return BOS_E_UNSUPPORTED;
     if(!binding||!binding->process||!binding->generation||binding->slot>=PROCESS_TASKS||!out||
        !(subscriptions&BOS_UI_SUB_POINTER)||(subscriptions&~SUBSCRIPTIONS))return BOS_E_INVALID;
-    NativeUiHost host;
+    NativeUiHost host={0};
     if(!hooks.snapshot(binding,&host))return BOS_E_STALE;
+    if(host.kind!=kind||!host_contract(&host))return BOS_E_UNSUPPORTED;
     Target *empty=0;
     for(unsigned i=0;i<BOS_UI_TARGETS_TOTAL;i++){
         if(targets[i].target&&!targets[i].revoked&&targets[i].binding.process==binding->process)return BOS_E_BUSY;
@@ -208,6 +220,12 @@ int native_ui_open(const ProcessBinding *binding,unsigned subscriptions,BosUiTar
         empty->host.state&=~BOS_UI_STATE_FOCUSED;
     reset_latch(empty,BOS_UI_REASON_OPEN,a.ticks,a.buttons,0);
     target_info(empty,out);return BOS_OK;
+}
+int native_ui_open(const ProcessBinding *binding,unsigned subscriptions,BosUiTargetInfoV1 *out){
+    return open_kind(binding,subscriptions,BOS_UI_KIND_HOSTED_CANVAS,out);
+}
+int native_ui_adopt(const ProcessBinding *binding,unsigned subscriptions,BosUiTargetInfoV1 *out){
+    return open_kind(binding,subscriptions,BOS_UI_KIND_OWNED_WINDOW,out);
 }
 int native_ui_info(const ProcessBinding *binding,BosHandle target,BosUiTargetInfoV1 *out){
     Target *t=owned(binding,target);if(!t)return BOS_E_STALE;if(!out)return BOS_E_INVALID;

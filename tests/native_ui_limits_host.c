@@ -5,7 +5,8 @@
 #include <string.h>
 #include "../src/native_ui.c"
 static ProcessBinding owner={BOS_HANDLE_TYPE_PROCESS|1,0,1};
-static NativeUiHost host={{100,100,160,100,160,100},BOS_UI_STATE_AVAILABLE|BOS_UI_STATE_FOCUSED};
+static NativeUiHost host={{100,100,160,100,160,100},BOS_UI_STATE_AVAILABLE|BOS_UI_STATE_FOCUSED,
+    BOS_UI_KIND_HOSTED_CANVAS,NATIVE_UI_CAPABILITIES_HOSTED};
 static NativeUiAcquired acquired;
 static int snap(const ProcessBinding *b,NativeUiHost *out){if(!binding_equal(b,&owner))return 0;*out=host;return 1;}
 static void acquire(NativeUiAcquired *out){*out=acquired;}

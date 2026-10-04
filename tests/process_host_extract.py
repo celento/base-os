@@ -11,8 +11,8 @@ FUNCTIONS = (
     'task_private', 'task_private_release', 'task_private_copy', 'task_private_create',
     'allocate_owner', 'current_owner', 'release_owner', 'task_release',
     'task_mark_exit', 'task_finalize', 'task_image_write', 'task_image_read',
-    'task_reset_all', 'valid_image', 'image_magic', 'image_plan', 'task_lookup',
-    'process_create', 'process_bind', 'process_unbind', 'process_start',
+    'task_reset_all', 'valid_image', 'image_magic', 'image_plan', 'process_probe_launch', 'task_lookup',
+    'process_create_mode', 'process_create', 'process_launch_mode', 'process_bind', 'process_unbind', 'process_start',
     'process_status', 'process_binding_live', 'process_get_result', 'process_counts', 'task_wake',
     'process_key', 'process_request_stop', 'process_reap',
     'output_print', 'output_plot', 'output_present', 'output_resize', 'output_rect',
@@ -24,7 +24,7 @@ FUNCTIONS = (
 def extract(source, directory, stem, scheduler=False):
     first = source.index('#define TASK_KEYS ')
     types = source[first:source.index('static NativeTask *tasks=', first)]
-    exported = re.findall(r'^(int|void|ProcessHandle) (process_\w+)\(', source, re.M)
+    exported = re.findall(r'^(int|void|unsigned|ProcessHandle) (process_\w+)\(', source, re.M)
     for result, name in exported:
         source = source.replace(result + ' ' + name + '(', 'static ' + result + ' ' + name + '(')
     names = FUNCTIONS + (('process_run', 'process_step', 'process_schedule_one') if scheduler else ())

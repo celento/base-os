@@ -29,8 +29,8 @@ static void checked_round(int x,int y,int w,int h,int r,uint8_t c){bounds(x,y,w,
 static void checked_line(int x,int y,int w,uint8_t c){bounds(x,y,w,1);draw_hline(x,y,w,c);}
 static void checked_text(const char *s,int x,int y,uint8_t c,int xmax){
     bounds(x,y,xmax-x+UI_FONT_W,UI_FONT_H);
-    if((!strcmp(s,"Show terminal")||!strcmp(s,"Stop task")||!strcmp(s,"Close"))&&ui_string_w(s)>xmax-x)fprintf(stderr,"clipped label %s: %d > %d\n",s,ui_string_w(s),xmax-x);
-    if(!strcmp(s,"Show terminal")){show_labels++;assert(ui_string_w(s)<=xmax-x);}
+    if((!strcmp(s,"Show window")||!strcmp(s,"Stop task")||!strcmp(s,"Close"))&&ui_string_w(s)>xmax-x)fprintf(stderr,"clipped label %s: %d > %d\n",s,ui_string_w(s),xmax-x);
+    if(!strcmp(s,"Show window")){show_labels++;assert(ui_string_w(s)<=xmax-x);}
     if(!strcmp(s,"Stop task")){stop_labels++;assert(ui_string_w(s)<=xmax-x);}
     if(!strcmp(s,"Close")){close_labels++;assert(ui_string_w(s)<=xmax-x);}
     draw_string_clip(s,x,y,c,xmax);
@@ -81,6 +81,8 @@ static void check_actions(SysInfo *si){
         SysmonAction a=click(si,window_button(&l,i));
         assert(a.kind==SYSMON_ACTION_CLOSE_WINDOW&&a.owner==si->win_id[i]);
     }
+    SysInfo reused=*si;reused.win_instance[0]++;
+    assert(!click(&reused,window_button(&l,0)).kind);
     tab(si,SYSMON_TAB_TASKS);assert(drawn_task_n==8&&show_labels==8&&stop_labels==8);
     for(int i=0;i<8;i++)for(int stop=0;stop<2;stop++){
         SysmonAction a=click(si,task_button(&l,i,stop));
@@ -109,7 +111,7 @@ int main(int argc,char **argv){
         .fs_bytes=7340032,.fs_cap=8385024,.fb_w=1280,.fb_h=800,.fb_bpp=32,.mem_mb=64,
         .win_n=8,.task_n=8};
     for(int i=0;i<8;i++){
-        si.win_name[i]=i%2?"Terminal":"System Monitor";si.win_id[i]=7-i;si.win_min[i]=i%2;
+        si.win_instance[i]=(unsigned)i+400;si.win_name[i]=i%2?"Terminal":"System Monitor";si.win_id[i]=7-i;si.win_min[i]=i%2;
         snprintf(si.tasks[i].name,sizeof si.tasks[i].name,"counter-%d.bex",i+1);
         si.tasks[i].owner=i;si.tasks[i].instance=(unsigned)i+101;
         si.tasks[i].state=i%2?PROCESS_TASK_SLEEPING:PROCESS_TASK_READY;

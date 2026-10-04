@@ -16,10 +16,11 @@ enum {
     SYSMON_ACTION_SHOW_TERMINAL,
     SYSMON_ACTION_STOP_TASK
 };
+#define SYSMON_ACTION_SHOW_WINDOW SYSMON_ACTION_SHOW_TERMINAL
 typedef struct {
     int kind;
     int owner;                    /* Window/terminal slot, only for an action. */
-    unsigned task_instance;       /* Recheck before acting on a native task. */
+    unsigned task_instance;       /* Process handle, or window seq for Close. */
 } SysmonAction;
 
 typedef struct {
@@ -27,7 +28,9 @@ typedef struct {
     unsigned frames;              /* Actual compositor redraws, never PIT ticks. */
     int win_n;
     const char *win_name[SYSMON_MAX_WIN];
+    char win_title[SYSMON_MAX_WIN][APP_VIEW_TITLE_LEN];
     int win_id[SYSMON_MAX_WIN];
+    unsigned win_instance[SYSMON_MAX_WIN];
     int win_min[SYSMON_MAX_WIN];
     int task_n;
     TermTaskInfo tasks[SYSMON_MAX_TASKS];
