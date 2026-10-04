@@ -195,7 +195,9 @@ The driver does not hide the problem by replaying stale DMA data.
 
 `ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p 'test_audio*.py'`
 checks the default transport and the large owned-source path under ASan/UBSan.
-The large test generates an original Harbor-derived three-minute 192 kb/s MP3
+The large test also consumes and verifies every PCM sample of exact-capacity
+2 MiB and 16 MiB WAV sources through EOF. It generates an original
+Harbor-derived three-minute 192 kb/s MP3
 with FFmpeg, then compares every simulated DMA sample with a separate decoder
 through EOF. It also checks exact 2 MiB/16 MiB WAV boundaries, a legal ID3-padded
 MP3 at exactly 16 MiB, complete byte ownership after source mutation/deletion,

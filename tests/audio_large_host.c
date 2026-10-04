@@ -54,7 +54,7 @@ static void test_owned_wave_boundaries(int large) {
     for(unsigned trim=0;trim<=2;trim+=2) {
         unsigned bytes=capacity-trim;
         uint8_t *data=make_large_wave(bytes);
-        copy_polls=0;background_check=check_copy_stopped;
+        position=0;copy_polls=0;background_check=check_copy_stopped;
         assert(!audio_play_wav(data,bytes));background_check=0;
         assert(copy_polls==(bytes+SOURCE_COPY_BYTES_PER_POLL-1)/SOURCE_COPY_BYTES_PER_POLL);
         assert(!memcmp(source_buffer,data,bytes));
@@ -75,6 +75,26 @@ static void test_owned_wave_boundaries(int large) {
         now+=1000;audio_poll();assert(status.state==AUDIO_PAUSED);
         audio_pause(0);assert(status.state==AUDIO_PLAYING&&status.volume==37);
         assert(!audio_configure_source_workspace(!large,1));
+        if (!trim) {
+            unsigned consumed=0,frames=(bytes-44)/2;
+            while(status.state==AUDIO_PLAYING) {
+                for(unsigned i=0;i<512;i++) {
+                    unsigned frame=consumed+i,offset=44+frame*2;
+                    uint16_t value=(uint8_t)(offset*37+11) |
+                        (uint16_t)(uint8_t)((offset+1)*37+11)<<8;
+                    int16_t want=frame<frames?(int16_t)value:0;
+                    assert(((int16_t *)audio_test_dma)[(position/2+i)%(RING_BYTES/2)]==want);
+                }
+                consumed+=512;assert(consumed<frames+2000);
+                position=(position+1024)%RING_BYTES;++now;
+                unsigned read=wave.frame_cursor;audio_poll();
+                assert(wave.frame_cursor-read<=PCM_SAMPLES_PER_POLL);
+                assert(status.played_frames<=frames);
+            }
+            assert(status.state==AUDIO_FINISHED&&!status.error&&!status.underruns);
+            assert(status.played_frames==frames&&status.total_frames==frames);
+            assert(audio_position_ms()==audio_duration_ms());
+        }
         audio_stop();
     }
 }
@@ -86,7 +106,7 @@ static void test_large_mp3(const char *path, const char *different_path) {
     rewind(input);assert(fread(data,1,bytes,input)==bytes);fclose(input);
     assert(audio_configure_source_workspace(0,1));
     assert(audio_play(data,bytes)==MEDIA_TOO_LARGE&&status.state==AUDIO_STOPPED);
-    assert(audio_configure_source_workspace(1,1));
+    assert(audio_configure_source_workspace(1,1));position=0;
     assert(!audio_play(data,bytes));
     assert(!memcmp(source_buffer,data,bytes)&&mp3.data==source_buffer);
     for(unsigned i=0;status.state==AUDIO_LOADING;i++){assert(i<100);audio_poll();}
