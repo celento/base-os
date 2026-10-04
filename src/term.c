@@ -129,7 +129,7 @@ static void print_download(void){
     if(d->state==DOWNLOAD_IDLE)return;
     push(d->url);push(d->path);print_number("Received bytes: ",d->received);print_number("File byte limit: ",d->limit);
     if(d->http_status)print_number("HTTP status: ",(unsigned)d->http_status);
-    if(d->state==DOWNLOAD_ACTIVE)push(d->http_state==NET_HTTP_RESOLVING?"Looking up host...":d->http_state==NET_HTTP_CONNECTING?"Connecting...":"Receiving body...");
+    if(d->state==DOWNLOAD_ACTIVE)push(d->http_state==NET_HTTP_DONE?d->message:d->http_state==NET_HTTP_RESOLVING?"Looking up host...":d->http_state==NET_HTTP_CONNECTING?"Connecting...":"Receiving body...");
     else if(d->state==DOWNLOAD_DONE){
         const char *storage=fs_storage_status();
         push(storage?storage:fs_needs_sync()?"File complete in RAM; disk autosave pending.":"File saved; disk is synchronized.");
@@ -283,7 +283,7 @@ static int script(int id,int depth,int *budget){
     if(depth>=4||!fs_valid(id)||fs_is_dir(id))return -1;
     /* Copy each script so deleting its source cannot change the running program. */
     char *source=(char *)(TERM_MEMORY+0xC0000+depth*FS_MAX_SIZE);int size=fs_size(id);if(size>=FS_MAX_SIZE)return -1;kmemcpy(source,fs_data(id),size);int pos=0;
-    while(pos<size){char line[81];int n=0;while(pos<size&&source[pos]!='\n'){char c=source[pos++];if(c=='\r')continue;if(n==80)return -1;line[n++]=c;}pos++;line[n]=0;if(execute(line,depth+1,budget))return -1;}return 0;
+    while(pos<size){char line[81];int n=0;while(pos<size&&source[pos]!='\n'){char c=source[pos++];if(c=='\r')continue;if(n==80)return -1;line[n++]=c;}pos++;line[n]=0;int result=execute(line,depth+1,budget);if(result)return result;}return 0;
 }
 static int execute(const char *s,int depth,int *budget){
     if(--*budget<0)return -1;
@@ -320,8 +320,16 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"cd")){if(!fs_is_dir(id))return -1;term_set_cwd(id);}
     else if(!kstrcmp(cmd,"ls")){if(!fs_is_dir(id))return -1;int ids[FS_MAX_NODES],count=fs_list(id,ids,FS_MAX_NODES);for(int i=0;i<count;i++){char row[26];kstrcpy(row,fs_name(ids[i]));if(fs_is_dir(ids[i]))kstrcpy(row+kstrlen(row),"/");push(row);}}
     else if(!kstrcmp(cmd,"cat")){if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;cat(id);}
-    else if(!kstrcmp(cmd,"mkdir")||!kstrcmp(cmd,"touch")){char name[FS_NAME_LEN];int parent=fs_destination(cwd,arg,name);if(parent<0)return -1;if((!kstrcmp(cmd,"mkdir")?fs_mkdir(parent,name):fs_create(parent,name))<0)return -1;}
-    else if(!kstrcmp(cmd,"rm")){if(!arg[0]||fs_delete(id)<0)return -1;}
+    else if(!kstrcmp(cmd,"mkdir")||!kstrcmp(cmd,"touch")){
+        if(fs_sync_busy())return FS_ERR_BUSY;
+        char name[FS_NAME_LEN];int parent=fs_destination(cwd,arg,name);if(parent<0)return -1;
+        int result=!kstrcmp(cmd,"mkdir")?fs_mkdir(parent,name):fs_create(parent,name);if(result<0)return result;
+    }
+    else if(!kstrcmp(cmd,"rm")){
+        if(fs_sync_busy())return FS_ERR_BUSY;
+        if(!arg[0])return -1;
+        int result=fs_delete(id);if(result<0)return result;
+    }
     else if(!kstrcmp(cmd,"stat")){if(!fs_valid(id))return -1;push(fs_name(id));push(fs_is_dir(id)?"Directory":"File");print_number("Bytes: ",fs_size(id));print_number("Modified (UTC seconds since 2000; 0=unknown): ",fs_modified(id));}
     else if(!kstrcmp(cmd,"df")){print_number("Bytes used: ",fs_used_bytes());print_number("Payload capacity: ",fs_capacity());print_number("Free node slots: ",fs_node_limit()-fs_node_count());print_number("Maximum file bytes: ",fs_file_limit());push(fs_storage_name());push("Folders also consume file slots.");push(fs_storage_status()?fs_storage_status():"Disk is synchronized.");}
     else if(!kstrcmp(cmd,"run"))return script(id,depth,budget);
@@ -351,5 +359,7 @@ void term_enter(void){
     char line[81];kstrcpy(line,T.input);push(line);
     if(T.len){if(T.hcount==16){for(int i=1;i<16;i++)kstrcpy(T.history[i-1],T.history[i]);T.hcount--;}kstrcpy(T.history[T.hcount++],line);}
     T.hpos=T.hcount;T.len=0;T.input[0]=0;T.draft[0]=0;int budget=256;
-    if(execute(line,0,&budget))push("Error: check command, path, syntax, or available space.");
+    int result=execute(line,0,&budget);
+    if(result==FS_ERR_BUSY)push("Disk is saving; retry shortly.");
+    else if(result)push("Error: check command, path, syntax, or available space.");
 }

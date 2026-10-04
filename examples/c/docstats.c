@@ -120,7 +120,9 @@ static void save_report(void){
     used=append(report,used,"\nLines: ");number(n,lines);used=append(report,used,n);
     used=append(report,used,"\nByte sum: ");number(n,checksum);used=append(report,used,n);
     used=append(report,used,"\n");
-    if(bos_replace_file(destination,report,used)!=(int)used){bos_print("Report write failed; check disk capacity.\n");return;}
+    int written=bos_replace_file(destination,report,used);
+    if(written==BOS_ERR_BUSY){bos_print("Disk is saving; retry shortly. S retries the report.\n");return;}
+    if(written!=(int)used){bos_print("Report write failed; check disk capacity.\n");return;}
     if(bos_sync()){bos_print("Report is in RAM, but disk sync failed. Press S to retry.\n");return;}
     bos_print("Saved and synchronized: ");bos_print(destination);bos_print("\n");
 }

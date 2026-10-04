@@ -13,7 +13,7 @@ enum {
     FILE_CLIPBOARD_ERROR = -1, /* No new file or move retained. */
     FILE_CLIPBOARD_NOOP = 0,   /* Same-folder Cut; clipboard consumed. */
     FILE_CLIPBOARD_SYNCED = 1, /* Completed operation, disk sync confirmed. */
-    FILE_CLIPBOARD_RAM_ONLY = 2 /* Completed in RAM; disk sync failed. */
+    FILE_CLIPBOARD_RAM_ONLY = 2 /* Completed in RAM; disk sync not yet confirmed. */
 };
 
 #define FILE_CLIPBOARD_STATUS_LEN 128
@@ -21,8 +21,9 @@ enum {
 /* Copy an ordinary file/folder in RAM with a collision-safe, extension-aware
  * name. Keeps an unused original name; otherwise makes "report copy.bwr",
  * "report copy 2.bwr", etc. Folders retain fs_unique_copy naming.
- * Returns the new node or -1 with no copy retained. Never syncs and leaves ALL
- * clipboard selection, status and retry state unchanged. Callers own sync.
+ * Returns the new node, -1 on failure or FS_ERR_BUSY with no copy retained.
+ * Never syncs; clipboard selection, status and retry state stay unchanged.
+ * Callers own sync.
  * Same-folder use implements Duplicate while preserving file associations. */
 int file_copy_named(int source, int directory);
 
@@ -48,6 +49,8 @@ int file_clipboard_can_paste(int directory);
  * After Copy returns RAM_ONLY, the next Paste only retries that completed
  * operation's sync, even if autosync succeeded meanwhile. No duplicate copy is
  * made. A fresh Copy/Cut or clear explicitly ends this retry guard.
+ * During a storage lease, Paste preserves both the selection and retry guard.
+ * Busy retries return RAM_ONLY for a prior completed paste, ERROR otherwise.
  * RAM_ONLY must be reported as "changed in RAM", never "nothing changed". */
 int file_clipboard_paste(int directory, int *result_node);
 /* A completed paste awaits a confirmed sync through this module. This can

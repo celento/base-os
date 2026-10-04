@@ -40,7 +40,9 @@ int main(void){
             if(key==' ')paused=!paused;
             if(key=='s'||key=='S'){
                 unsigned n=number(saved,value);saved[n++]='\n';
-                if(bos_write_file(path,saved,n)==(int)n){
+                int written=bos_write_file(path,saved,n);
+                if(written==BOS_ERR_BUSY)bos_print("Disk is saving; retry shortly. S retries saving.\n");
+                else if(written==(int)n){
                     if(!bos_sync()){char message[]="Saved /Documents/counter-1.txt\n";message[25]=(char)('0'+id);bos_print(message);}
                     else bos_print("Counter is in RAM only; disk sync failed. S retries saving.\n");
                 }

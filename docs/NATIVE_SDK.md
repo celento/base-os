@@ -114,7 +114,7 @@ holds the result. User pointers are offsets in the isolated 64 KiB region.
 | --- | --- | --- | --- |
 | 13 | `bos_read_file_at(path, out, capacity, offset)` | EBX=path, ECX=path length, EDX=output, ESI=capacity≤4096, EDI=unsigned byte offset | Bytes copied, zero at/beyond EOF, or -1 |
 | 14 | `bos_canvas_size(width, height)` | EBX=width, ECX=height | 0 for a supported mode, otherwise -1 |
-| 15 | `bos_replace_file(path, data, bytes)` | EBX=path, ECX=path length, EDX=data, ESI=bytes≤32768 | Bytes replaced in RAM, or -1 |
+| 15 | `bos_replace_file(path, data, bytes)` | EBX=path, ECX=path length, EDX=data, ESI=bytes≤32768 | Bytes replaced in RAM, -1 on failure, or `BOS_ERR_BUSY` (-2) |
 | 16 | `bos_sync()` | None | 0 after a durable filesystem snapshot, or -1 |
 | 17 | `bos_argument(out, capacity)` | EBX=output, ECX=capacity | Startup-path byte length, zero if absent, or -1 |
 
@@ -190,8 +190,12 @@ The old syscall 7 and `bos_write_file` remain capped at 4096 bytes.
 policy: `/Documents` and its existing subfolders. It does not create directories.
 The path and complete data range are checked before use.
 
-A replacement either writes the whole file in RAM or returns -1 while preserving
-an existing file. If a new file cannot be written, its newly created node is
+A replacement either writes the whole file in RAM or returns a negative result
+while preserving an existing file. `BOS_ERR_BUSY` (-2), also returned by the old
+write syscall, means an incremental disk snapshot temporarily owns filesystem
+RAM. No file is created or changed; retry the same path after a short delay.
+Native reads, computation and launch remain available during that lease. Other
+failures remain -1. If a new file cannot be written, its newly created node is
 removed. Empty replacement writes are supported. The current filesystem's
 per-file and total-capacity limits still apply; over-16,383-byte writes need IDE.
 The 32 KiB buffer must coexist with the app's code, data, BSS and stack, so it is

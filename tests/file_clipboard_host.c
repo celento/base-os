@@ -629,8 +629,61 @@ static void pending_result_identity(void) {
     puts("file clipboard: retry cannot select a reused result or recopy a deleted source");
 }
 
+static void finish_snapshot(FsSyncTicket ticket) {
+    unsigned steps = 0;
+    while (fs_sync_busy()) { assert(fs_sync_step() != FS_SYNC_IDLE); assert(++steps < 100000); }
+    assert(fs_sync_result(ticket) == 0 && fs_sync_release(ticket) == 0);
+}
+static void temporary_storage_lease(void) {
+    reset_volume(1);
+    int destination = fs_mkdir(0, "destination");
+    int original = make_file(0, "original.txt", "source", 6), result;
+    unsigned identity = fs_identity(original);
+    assert(file_clipboard_set(original, FILE_CLIPBOARD_CUT) == 0);
+    FsSyncTicket ticket; assert(!fs_sync_request(&ticket) && fs_sync_busy());
+    Snapshot before; snapshot(&before);
+    assert(file_clipboard_paste(destination, &result) == FILE_CLIPBOARD_ERROR && result == -1);
+    assert(strstr(file_clipboard_status(), "Disk is saving; retry shortly"));
+    assert(file_clipboard_mode() == FILE_CLIPBOARD_CUT && file_clipboard_source() == original);
+    assert(file_clipboard_identity() == identity && !file_clipboard_pending_sync());
+    expect_unchanged(&before);
+    /* Even a same-folder Cut remains selected until an unleased retry. */
+    assert(file_clipboard_paste(0, &result) == FILE_CLIPBOARD_ERROR && result == -1);
+    assert(file_clipboard_mode() == FILE_CLIPBOARD_CUT && file_clipboard_can_paste(0));
+    assert(file_copy_named(original, destination) == FS_ERR_BUSY);
+    expect_unchanged(&before);
+    finish_snapshot(ticket);
+    assert(file_clipboard_paste(destination, &result) == FILE_CLIPBOARD_SYNCED && result == original);
+    assert(fs_parent(original) == destination && fs_identity(original) == identity);
+    assert(file_clipboard_mode() == FILE_CLIPBOARD_NONE);
+
+    /* Failed Copy owns a complete RAM result. Busy retry neither consumes its
+     * guard nor duplicates the file, including when its source later changes. */
+    assert(file_clipboard_set(original, FILE_CLIPBOARD_COPY) == 0);
+    device_unavailable = 1;
+    assert(file_clipboard_paste(0, &result) == FILE_CLIPBOARD_RAM_ONLY);
+    int copy = result, count = fs_node_count(); unsigned copy_identity = fs_identity(copy);
+    device_unavailable = 0;
+    assert(!fs_sync_request(&ticket) && fs_sync_busy()); snapshot(&before);
+    assert(file_clipboard_paste(0, &result) == FILE_CLIPBOARD_RAM_ONLY && result == copy);
+    assert(strstr(file_clipboard_status(), "Disk is saving; retry shortly"));
+    assert(file_clipboard_pending_sync() && fs_node_count() == count && fs_identity(copy) == copy_identity);
+    expect_unchanged(&before); finish_snapshot(ticket);
+    assert(!fs_delete(original));
+    int replacement = make_file(destination, "replacement.txt", "replacement", 11);
+    assert(replacement == original && fs_identity(replacement) != identity);
+    assert(file_clipboard_paste(0, &result) == FILE_CLIPBOARD_SYNCED && result == copy);
+    assert(!file_clipboard_pending_sync() && fs_node_count() == count);
+    expect_bytes(copy, "source", 6); expect_bytes(replacement, "replacement", 11);
+    assert(file_clipboard_paste(0, &result) == FILE_CLIPBOARD_ERROR && result == -1);
+    assert(strstr(file_clipboard_status(), "Source no longer exists"));
+    remount_volume(); expect_bytes(fs_resolve(0, "/original.txt"), "source", 6);
+    puts("file clipboard: temporary lease retains Cut, copy identity and pending retry without duplicate mutations");
+}
+
 int main(void) {
     for (unsigned i = 0; i < sizeof(content); ++i) content[i] = (char)(i * 37 + i / 65536);
+    temporary_storage_lease();
     copy_files();
     copy_names_and_folders();
     extension_names_and_helper();

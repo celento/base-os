@@ -4,6 +4,7 @@
 #include <string.h>
 #define BASEOS_SDK_H
 #define BOS_TICKS_PER_SECOND 70u
+#define BOS_ERR_BUSY (-2)
 static char output[2048],written[128];
 static const char *keys;
 static int write_result,sync_result,writes,syncs;
@@ -12,7 +13,7 @@ static int bos_print(const char *s){strcat(output,s);return (int)strlen(s);}
 static unsigned bos_task_id(void){return 1;}
 static int bos_read_file(const char *p,void *out,unsigned n){(void)p;(void)out;(void)n;return -1;}
 static int bos_write_file(const char *p,const void *data,unsigned n){
-    (void)p;writes++;if(write_result<0)return -1;
+    (void)p;writes++;if(write_result<0)return write_result;
     memcpy(written,data,n);written[n]=0;return (int)n;
 }
 static int bos_sync(void){syncs++;return sync_result;}
@@ -37,11 +38,19 @@ int main(void){
     assert(strstr(output,"RAM only")&&!strstr(output,"Saved /"));
     prepare(-1,0);assert(!counter_main());assert(writes==1&&!syncs&&!written[0]);
     assert(strstr(output,"Save failed")&&!strstr(output,"Saved /"));
+    prepare(BOS_ERR_BUSY,0);assert(!counter_main());assert(writes==1&&!syncs&&!written[0]);
+    assert(strstr(output,"Disk is saving; retry shortly")&&!strstr(output,"Save failed")&&!strstr(output,"Saved /"));
+    /* A normal later S retries the same document name. */
+    prepare(0,0);assert(!counter_main());assert(writes==1&&syncs==1&&!strcmp(written,"42\n"));
     prepare(0,0);assert(!notebook_main());assert(writes==1&&syncs==1);
     assert(strstr(output,"Saved /Documents/sdk-note.txt"));
     prepare(0,-1);assert(notebook_main()==1);assert(writes==1&&syncs==1&&written[0]);
     assert(strstr(output,"RAM only")&&!strstr(output,"Saved /"));
     prepare(-1,0);assert(notebook_main()==1);assert(writes==1&&!syncs&&!written[0]);
     assert(strstr(output,"Could not save")&&!strstr(output,"Saved /"));
+    prepare(BOS_ERR_BUSY,0);assert(notebook_main()==1);assert(writes==1&&!syncs&&!written[0]);
+    assert(strstr(output,"Disk is saving; retry shortly")&&!strstr(output,"free space")&&!strstr(output,"Saved /"));
+    prepare(0,0);assert(!notebook_main());assert(writes==1&&syncs==1);
+    assert(strstr(output,"Saved /Documents/sdk-note.txt"));
     puts("native saves: Counter and Notebook require explicit successful sync for Saved; RAM-only and write failures stay honest");
 }

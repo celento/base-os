@@ -19,7 +19,9 @@ static inline void bos_present(void) { bos_call(5,0,0,0,0,0); }
 static inline int bos_read_file(const char *path,void *out,unsigned capacity) {
     return bos_call(6,(unsigned)path,bos_strlen(path),(unsigned)out,capacity,0);
 }
+#define BOS_ERR_BUSY (-2) /* Temporary snapshot lease; retry the write shortly. */
 /* Atomic RAM writes, confined to /Documents and its existing subfolders.
+ * BOS_ERR_BUSY leaves the target and source bytes unchanged. Reads still work.
  * A successful return is not durable until bos_sync() succeeds. */
 static inline int bos_write_file(const char *path,const void *data,unsigned bytes) {
     return bos_call(7,(unsigned)path,bos_strlen(path),(unsigned)data,bytes,0);
@@ -47,7 +49,8 @@ static inline int bos_canvas_size(unsigned width,unsigned height) {
     return bos_call(14,width,height,0,0,0);
 }
 /* Replace one /Documents file in RAM, atomically, with up to 32 KiB.
- * IDE storage is required above 16383 bytes. Call bos_sync for durable storage. */
+ * IDE storage is required above 16383 bytes. Call bos_sync for durable storage.
+ * BOS_ERR_BUSY leaves the target and source bytes unchanged; retry shortly. */
 static inline int bos_replace_file(const char *path,const void *data,unsigned bytes) {
     return bos_call(15,(unsigned)path,bos_strlen(path),(unsigned)data,bytes,0);
 }

@@ -6,10 +6,11 @@
 #define BASEOS_SDK_H
 #define BOS_FILE_CHUNK_MAX 4096u
 #define BOS_ARGUMENT_MAX 128u
+#define BOS_ERR_BUSY (-2)
 static const char *argument,*configuration,*input_name,*keys;
 static unsigned char *input;
 static unsigned input_size,reads,yields,presents,config_reads,syncs;
-static int changed_length;
+static int changed_length, write_result, writes;
 static char output[8192],saved[512];
 static unsigned bos_strlen(const char *s){return (unsigned)strlen(s);}
 static int bos_print(const char *s){assert(strlen(output)+strlen(s)<sizeof output);strcat(output,s);return (int)strlen(s);}
@@ -32,7 +33,9 @@ static int bos_read_file_at(const char *path,void *out,unsigned capacity,unsigne
     unsigned n=input_size-offset;if(n>capacity)n=capacity;memcpy(out,input+offset,n);return (int)n;
 }
 static int bos_replace_file(const char *path,const void *data,unsigned n){
-    assert(!strcmp(path,"/Documents/stats-1.txt")&&n<sizeof saved);memcpy(saved,data,n);saved[n]=0;return (int)n;
+    assert(!strcmp(path,"/Documents/stats-1.txt")&&n<sizeof saved);writes++;
+    if(write_result<0)return write_result;
+    memcpy(saved,data,n);saved[n]=0;return (int)n;
 }
 static int bos_sync(void){syncs++;return 0;}
 static int bos_key(void){assert(*keys);return *keys++;}
@@ -71,6 +74,15 @@ int main(void){
     check(100,"",NULL,"/Documents/stats-sample.txt");
     check(2*1024*1024,"/Documents/large.txt",NULL,"/Documents/large.txt");
     check(16*1024*1024,"/Documents/large.txt",NULL,"/Documents/large.txt");
+    /* A temporary lease blocks only the report write, with an ordinary retry. */
+    output[0]=saved[0]=0;syncs=0;writes=0;write_result=BOS_ERR_BUSY;
+    save_report();assert(writes==1&&!syncs&&!saved[0]);
+    assert(strstr(output,"Disk is saving; retry shortly")&&!strstr(output,"capacity")&&!strstr(output,"Saved and synchronized"));
+    write_result=0;save_report();assert(writes==2&&syncs==1&&saved[0]);
+    assert(strstr(output,"Saved and synchronized"));
+    output[0]=0;write_result=-1;save_report();
+    assert(strstr(output,"Report write failed; check disk capacity")&&!strstr(output,"Disk is saving"));
+    write_result=0;
     /* A length change remains a visible retryable error, never a saved result. */
     reads=0;changed_length=1;keys="sq";saved[0]=output[0]=0;syncs=0;
     assert(!docstats_main());assert(!ready&&!saved[0]&&!syncs&&strstr(output,"Input length changed"));

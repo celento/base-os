@@ -399,7 +399,9 @@ const unsigned char *spreadsheet_snapshot(unsigned *length) {
 static int save_to(int id) {
     unsigned length;
     if (!spreadsheet_snapshot(&length)) return SPREADSHEET_SAVE_ERROR;
-    if (fs_write(id, (const char *)ARENA->output, (int)length) < 0) {
+    int written = fs_write(id, (const char *)ARENA->output, (int)length);
+    if (written == FS_ERR_BUSY) { status("Disk is saving; retry shortly."); return SPREADSHEET_SAVE_ERROR; }
+    if (written < 0) {
         state.failed_save = 1; status("Save failed. The complete sheet remains open."); return SPREADSHEET_SAVE_ERROR;
     }
     state.file = id; state.identity = fs_identity(id); state.has_binding = 1; state.binding_conflict = 0;
@@ -411,6 +413,7 @@ static int save_to(int id) {
     status("Saved native .bsh and synchronized to disk."); return SPREADSHEET_SAVE_OK;
 }
 int spreadsheet_save(void) {
+    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return SPREADSHEET_SAVE_ERROR; }
     if (!state.initialized) spreadsheet_init();
     if (!commit_edit()) return SPREADSHEET_SAVE_ERROR;
     if (!binding_valid()) { status("Choose Save As for a new native .bsh file."); return SPREADSHEET_SAVE_NEEDS_NAME; }
@@ -422,6 +425,7 @@ int spreadsheet_save(void) {
     return save_to(state.file);
 }
 int spreadsheet_save_as(int parent, const char *name) {
+    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return SPREADSHEET_SAVE_ERROR; }
     if (!state.initialized) spreadsheet_init();
     if (!name || !extension(name, "bsh")) { status("Native sheets use the .bsh filename extension."); return SPREADSHEET_SAVE_ERROR; }
     int existing = fs_find_child(parent, name);
@@ -440,6 +444,7 @@ int spreadsheet_save_as(int parent, const char *name) {
     return result;
 }
 int spreadsheet_export_csv(int parent, const char *name) {
+    if (fs_sync_busy()) { status("Disk is saving; retry shortly."); return -1; }
     if (!state.initialized) spreadsheet_init();
     if (!name || !extension(name, "csv")) { status("CSV exports use the .csv filename extension."); return -1; }
     if (fs_find_child(parent, name) >= 0) { status("Choose a new CSV name; existing files are never replaced."); return -1; }

@@ -30,6 +30,8 @@ void spreadsheet_release(void);
 int spreadsheet_scroll(int lines);
 int spreadsheet_tick(void);
 void spreadsheet_close(void);
+/* Save/export reject a temporary storage lease with their normal error result
+ * and a retry message, before committing a cell edit or changing save state. */
 int spreadsheet_save(void);
 int spreadsheet_save_as(int parent, const char *name);
 /* New .csv name only, calculated values, no native rebind/dirty reset.

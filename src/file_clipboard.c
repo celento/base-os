@@ -115,13 +115,14 @@ static int choose_copy_name(int node, int directory, char *out) {
 }
 
 int file_copy_named(int node, int directory) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(node) || node == fs_root() || fs_is_app(node) ||
         !fs_is_dir(directory) || within(directory, node) ||
         (fs_is_dir(node) && contains_apps(node))) return -1;
     char final_name[FS_NAME_LEN];
     if (choose_copy_name(node, directory, final_name) < 0) return -1;
     int result = fs_copy(node, directory);
-    if (result < 0) return -1;
+    if (result < 0) return result;
     /* fs_copy is also the legacy Duplicate, so it always chooses a " copy"
      * name after the whole filename. Finalize our already-chosen free name
      * in RAM before the caller's sync. Rename cannot fail under the current
@@ -202,6 +203,13 @@ static int selected_result(int directory) {
 
 int file_clipboard_paste(int directory, int *result_node) {
     if (result_node) *result_node = -1;
+    /* Preserve Cut selection and any completed-copy retry guard before the
+     * compound operation can consume private state or report a false failure. */
+    if (fs_sync_busy()) {
+        if (pending && result_node) *result_node = selected_result(directory);
+        status("Disk is saving; retry shortly.");
+        return pending ? FILE_CLIPBOARD_RAM_ONLY : FILE_CLIPBOARD_ERROR;
+    }
     const char *error = paste_error(directory);
     if (error) {
         status(error);
@@ -232,6 +240,10 @@ int file_clipboard_paste(int directory, int *result_node) {
     int result = operation == FILE_CLIPBOARD_COPY ? file_copy_named(node, directory)
                                                   : fs_move(node, directory);
     if (result < 0) {
+        if (result == FS_ERR_BUSY) {
+            status("Disk is saving; retry shortly.");
+            return FILE_CLIPBOARD_ERROR;
+        }
         status(operation == FILE_CLIPBOARD_COPY
             ? "Copy did not fit; check names, free slots, free bytes and folder depth."
             : "Move did not fit; destination path is too deep.");
