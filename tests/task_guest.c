@@ -102,7 +102,8 @@ void feature_test(void){
     term_task_stop(1);task_check(!term_task_running(1),"terminal stop failed");
     command("start /Programs/task-test.bex");task_check(term_task_running(1),"terminal restart failed");
     term_reset();task_check(!term_task_running(1),"reset did not cancel task");
-    /* Legacy C ABI still succeeds while asynchronous support is enabled. */
+    /* Notebook also synchronizes the floppy through syscall 16: motor delays
+     * must receive PIT ticks even though the syscall enters an interrupt gate. */
     command("exec /Programs/notebook.bex");
     task_check(!kstrcmp(term_get(term_count()-1),"Program finished."),"legacy synchronous exec regression");
     task_check(fs_sync()==0,"task document persistence");
