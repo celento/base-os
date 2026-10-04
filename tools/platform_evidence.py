@@ -194,8 +194,18 @@ class PlatformSession(DesktopSession):
         for _ in range(9):
             observed, _, _ = self.observe()
             if observed and observed['process'] == process:
-                return observed
-            self.key('ctrl-tab')
+                # Published pixels can lag queued desktop shortcuts. A harmless
+                # echo consumed by this exact owner proves actual input focus;
+                # never queue another Ctrl+Tab based on a stale framebuffer.
+                before = observed['keys']
+                self.key('a', delay=.15)
+                end = time.monotonic() + 2
+                while time.monotonic() < end:
+                    after, _, _ = self.observe()
+                    if after and after['process'] == process and after['keys'] > before:
+                        return after
+                    time.sleep(.05)
+            self.key('ctrl-tab', delay=.5)
         raise AssertionError('Could not focus native owner ' + str(process))
 
     def start_client(self):
