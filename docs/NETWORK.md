@@ -17,6 +17,11 @@ version does not implement DHCP, Wi-Fi, real-hardware provisioning, IPv6, TLS,
 certificate verification, or modern browser JavaScript. Do not send credentials
 or private information over its unencrypted HTTP client.
 
+Terminal commands are `net`, `ping HOST`, `nslookup HOST`, and
+`fetch http://host[:port]/path`. Fetch prints at most 4,095 body bytes and does
+not save a file. `man COMMAND` describes each operation. The Terminal remains
+inside the cooperative command handler while a bounded request is in progress.
+
 ## Implemented path
 
 PCI configuration mechanism 1 discovers vendor/device `10ec:8139`, enables I/O
@@ -78,6 +83,14 @@ echo, HTTP, chunked and close framing, a 20 KB multi-packet response, explicit
 truncation, incomplete-response rejection, cancellation, and recovery. It saves
 serial output and a packet capture in its printed temporary directory. It does
 not boot or change the normal persistent image.
+
+`python3 tools/network_dns_test.py build` separately uses the real RTL8139
+with a loopback-only Ethernet/DNS fixture to verify ARP, UDP, compressed A and
+CNAME replies, and repeat lookups. It requires no external resolver. Host
+ASan/UBSan fixtures exercise ordinary DNS/HTTP framing, split responses,
+truncation, request ownership, cancellation, offline behavior, and timeouts.
+If the execution host runs under ptrace, use `ASAN_OPTIONS=detect_leaks=0 make
+test`; this disables only unsupported LeakSanitizer, retaining ASan and UBSan.
 
 `--public-dns` additionally requests `example.com` through QEMU's DNS proxy.
 That optional check depends on the host's upstream DNS/network policy; a timeout

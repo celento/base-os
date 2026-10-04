@@ -2,6 +2,7 @@
 #include "term.h"
 #include "program.h"
 #include "layout.h"
+#include "net.h"
 typedef struct {
     char lines[TERM_LINES][TERM_COLS+1], input[TERM_COLS+1];
     char history[16][TERM_COLS+1], draft[TERM_COLS+1];
@@ -46,6 +47,10 @@ static const Manual commands[]={
     {"df","df","Show used bytes, payload capacity, free slots, and disk status.","df","Folders and session files also consume the 64 volume slots."},
     {"run","run SCRIPT","Run one terminal command per script line.","run /Programs/demo.sh","Stops on errors; four nested scripts, 256 command dispatches."},
     {"basic","basic FILE","Run numbered, uppercase Tiny BASIC statements.","basic /Programs/demo.bas","PRINT, LET, IF/THEN, GOTO, INKEY, WAIT, PLOT, RECT, REM, END."},
+    {"net","net","Show RTL8139 link, QEMU IPv4 settings, and packet counters.","net","QEMU: -nic user,model=rtl8139; fixed guest IP 10.0.2.15."},
+    {"ping","ping HOST","Send an ICMP echo and report round-trip time.","ping 10.0.2.2","One bounded request. Some hosts do not answer ICMP."},
+    {"nslookup","nslookup HOST","Resolve an IPv4 A record through QEMU DNS.","nslookup example.com","Uses 10.0.2.3; upstream DNS must be reachable on the host."},
+    {"fetch","fetch HTTP_URL","Fetch and print up to 4095 bytes of an HTTP response.","fetch http://10.0.2.2:8000/","HTTP only, no TLS. No files are saved. Network waits are bounded."},
     {"exec","exec FILE","Run a BEX1 native x86 program in protected memory.","exec /Programs/hello.bex","64 KB memory; two-second limit. Faults return to the terminal."}
 };
 static int manual(const char *name){
@@ -79,6 +84,24 @@ void term_complete(void){
     if(count==1&&start+kstrlen(match)+1<=TERM_COLS){kstrcpy(T.input+start,match);T.len=kstrlen(T.input);term_char(dir?'/':' ');}else if(count>1)push("Multiple matches; type more of the name.");
 }
 static void print_number(const char *label,unsigned n){char out[81],rev[12];int p=0,r=0;while(*label&&p<65)out[p++]=*label++;do{rev[r++]='0'+n%10;n/=10;}while(n);while(r)out[p++]=rev[--r];out[p]=0;push(out);}
+static void print_network(void){
+    const NetStatus *status=net_status();char ip[16],row[40];
+    push(!status->available?"RTL8139: unavailable":status->link_up?"RTL8139: link up":"RTL8139: link down");
+    net_format_ipv4(status->address,ip);kstrcpy(row,"IPv4: ");kstrcpy(row+6,ip);push(row);
+    net_format_ipv4(status->gateway,ip);kstrcpy(row,"Gateway: ");kstrcpy(row+9,ip);push(row);
+    net_format_ipv4(status->dns,ip);kstrcpy(row,"DNS: ");kstrcpy(row+5,ip);push(row);
+    kstrcpy(row,"MAC: ");for(int i=0;i<6;i++){row[5+i*3]="0123456789abcdef"[status->mac[i]>>4];row[6+i*3]="0123456789abcdef"[status->mac[i]&15];row[7+i*3]=i==5?0:':';}push(row);
+    print_number("Packets received: ",status->rx_packets);print_number("Packets sent: ",status->tx_packets);
+    print_number("Packets dropped: ",status->dropped_packets);print_number("Receive errors: ",status->rx_errors);
+    push(!status->available||!status->link_up?"Network offline":net_busy()?"Network request in progress":"Network ready; HTTP only (unencrypted)");
+}
+static void print_http_body(const char *text,unsigned size){
+    char row[81];unsigned n=0;for(unsigned i=0;i<size;i++){
+        unsigned char c=(unsigned char)text[i];if(c=='\r')continue;
+        if(c=='\n'){row[n]=0;push(row);n=0;continue;}
+        row[n++]=c>=32&&c<=126?(char)c:'.';if(n==80){row[n]=0;push(row);n=0;}
+    }if(n){row[n]=0;push(row);}
+}
 static void cat(int id){char row[81];int n=0;for(int i=0;i<fs_size(id);i++){char c=fs_data(id)[i];if(c=='\r')continue;if(c=='\n'){row[n]=0;push(row);n=0;continue;}row[n++]=c>=32&&c<=126?c:'.';if(n==80){row[n]=0;push(row);n=0;}}if(n){row[n]=0;push(row);}}
 static void plot(int x,int y,int color){if(x>=0&&x<160&&y>=0&&y<100){T.canvas_on=1;T.canvas[y*160+x]=(unsigned char)color;}}
 static int execute(const char *,int,int *);
@@ -101,6 +124,14 @@ static int execute(const char *s,int depth,int *budget){
     if(!kstrcmp(cmd,"help")||!kstrcmp(cmd,"man"))return manual(arg);
     else if(!kstrcmp(cmd,"echo"))push(s);
     else if(!kstrcmp(cmd,"clear")){T.head=T.count=T.canvas_on=0;}
+    else if(!kstrcmp(cmd,"net"))print_network();
+    else if(!kstrcmp(cmd,"ping")||!kstrcmp(cmd,"nslookup")||!kstrcmp(cmd,"fetch")){
+        if(!arg[0])return -1;
+        if(net_busy()){push("Network is busy; wait for the current request or stop it.");return -1;}
+        if(!kstrcmp(cmd,"ping")){unsigned ms;if(net_ping(arg,&ms)){push(net_last_error());return -1;}print_number("ICMP reply, round-trip milliseconds: ",ms);}
+        else if(!kstrcmp(cmd,"nslookup")){uint32_t address;char ip[16];if(net_resolve(arg,&address)){push(net_last_error());return -1;}net_format_ipv4(address,ip);push(ip);}
+        else {char body[4096];if(net_http_get(arg,body,sizeof body)){push(net_last_error());return -1;}const NetHttpResult *result=net_http_result();print_number("HTTP status: ",(unsigned)result->status);if(result->content_type[0])push(result->content_type);print_http_body(body,result->length);if(result->truncated)push("[Response truncated to 4095 bytes]");if(result->location[0]){push("Redirect Location:");push(result->location);}}
+    }
     else if(!kstrcmp(cmd,"pwd")){char path[64];fs_path(cwd,path,sizeof path);push(path);}
     else if(!kstrcmp(cmd,"cd")){if(!fs_is_dir(id))return -1;term_set_cwd(id);}
     else if(!kstrcmp(cmd,"ls")){if(!fs_is_dir(id))return -1;int ids[64],count=fs_list(id,ids,64);for(int i=0;i<count;i++){char row[26];kstrcpy(row,fs_name(ids[i]));if(fs_is_dir(ids[i]))kstrcpy(row+kstrlen(row),"/");push(row);}}

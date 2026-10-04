@@ -1,5 +1,7 @@
 #include "net.h"
 #include "platform.h"
+#include "fs.h"
+#include "term.h"
 #ifndef HTTP_PORT
 #define HTTP_PORT "18080"
 #endif
@@ -7,6 +9,8 @@ static char body[32768];
 static int equals(const char *a,const char *b){while(*a&&*a==*b){a++;b++;}return !*a&&!*b;}
 static void check(int condition,const char *message){if(!condition){platform_log("NETWORK-FAIL ");platform_log(message);platform_log(" ");platform_log(net_last_error());platform_log("\n");panic(message);}}
 static void fetch(const char *path){char url[128];const char *prefix="http://10.0.2.2:" HTTP_PORT;unsigned p=0;while(*prefix)url[p++]=*prefix++;while(*path)url[p++]=*path++;url[p]=0;check(net_http_get(url,body,sizeof body)==0,"HTTP fetch");check(net_http_result()->status==200,"HTTP status");}
+static void terminal_command(const char *s){while(*s)term_char(*s++);term_enter();}
+static int terminal_has(const char *s){for(int i=0;i<term_count();i++)if(equals(term_get(i),s))return 1;return 0;}
 void network_guest(void){
     platform_validate_memory();net_init();check(net_status()->available,"NIC discovery");check(net_status()->link_up,"NIC link");
     unsigned latency;check(net_ping("10.0.2.2",&latency)==0,"gateway ping");platform_log("NETWORK-PING-PASS\n");
@@ -21,5 +25,8 @@ void network_guest(void){
 #ifdef TEST_PUBLIC_DNS
     uint32_t address;check(net_resolve("example.com",&address)==0&&address,"DNS lookup");char ip[16];net_format_ipv4(address,ip);platform_log("NETWORK-DNS-PASS ");platform_log(ip);platform_log("\n");
 #endif
+    fs_init();term_select(0);term_reset();terminal_command("net");check(terminal_has("RTL8139: link up"),"Terminal net");
+    terminal_command("nslookup 10.0.2.2");check(terminal_has("10.0.2.2"),"Terminal nslookup");
+    terminal_command("fetch http://10.0.2.2:" HTTP_PORT "/hello");check(terminal_has("BaseOS real HTTP works."),"Terminal fetch");platform_log("NETWORK-TERMINAL-PASS\n");
     platform_log("NETWORK-QEMU-PASS\n");for(;;)__asm__ volatile("hlt");
 }
