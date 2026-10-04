@@ -991,6 +991,7 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl);
 static void handle_settings_click(int wx, int wy, int ww, int wh);
 static void theme_set(int id);
 static void saver_save(void);
+static void preferences_retry(void);
 static void boot_splash(void);
 static void start_open_dialog(int pics_only);
 
@@ -1094,7 +1095,7 @@ static void draw_menubar(int open_menu, int menu_sel) {
     if(!storage && native_launch_status[0])storage=native_launch_status;
     if (storage)
         draw_string_clip(storage, bar_x[MENU_N - 1] + bar_w[MENU_N - 1] + 12,
-                         label_y, COLOR_RED, clock_x - 10);
+                         label_y, fs_sync_busy() ? ui_text_dim : COLOR_RED, clock_x - 10);
 }
 
 static void draw_pulldown(int open_menu, int menu_sel) {
@@ -1526,6 +1527,7 @@ typedef struct {
     int last_click_item;
     Document doc, undo[8];
     EditorSource editor_source;
+    int editor_save_busy;
     EditorSearch search;
     History history;
 } WindowState;
@@ -1555,6 +1557,7 @@ _Static_assert(sizeof(WindowState) * MAX_WIN < EDITOR_CAPACITY - 2 * EDIT_BUF_SI
 #define edit_file (window_state[context_slot].doc.file)
 #define edit_identity (window_state[context_slot].doc.identity)
 #define edit_saved_ok (window_state[context_slot].doc.saved_ok)
+#define edit_save_busy (window_state[context_slot].editor_save_busy)
 #define edit_scroll (window_state[context_slot].doc.scroll)
 #define edit_sel_a (window_state[context_slot].doc.sel_a)
 #define edit_sel_b (window_state[context_slot].doc.sel_b)
@@ -1631,6 +1634,15 @@ static char *const edit_scratch=(char *)(EDITOR_BASE+EDITOR_CAPACITY-2*EDIT_BUF_
 static int clip_len = 0;
 static unsigned clip_generation;
 static uint32_t files_message_until;
+static int files_action_busy;
+static int files_storage_busy(void) {
+    files_action_busy = fs_sync_busy();
+    if (files_action_busy) {
+        files_message_until = frame_count + 8 * TIMER_HZ;
+        dirty = 1;
+    }
+    return files_action_busy;
+}
 static void clipboard_changed(void) {
     file_clipboard_clear();
     files_message_until = 0;
@@ -1749,7 +1761,21 @@ static unsigned fm_rename_identity;
 static char fm_rename_buf[FS_NAME_LEN];
 static int fm_rename_len = 0;
 
+static int preferences_prepare_shutdown(void);
+static int win_open(int kind);
 static void do_shutdown(void) {
+    if (preferences_prepare_shutdown() < 0) {
+        if (win_open(WK_SETTINGS) < 0)
+            session_status="Shutdown paused. Open Settings after closing a window.";
+        dirty = 1;
+        return;
+    }
+    if (todo_prepare_shutdown() < 0) {
+        if (win_open(WK_TODO) < 0)
+            session_status="Shutdown paused. Open Todo after closing a window.";
+        dirty=1;
+        return;
+    }
     session_save();
     if(session_status[0]){dirty=1;return;}
     if (fs_sync() < 0) {
@@ -2066,7 +2092,7 @@ static int menu_item_enabled(int m, int item) {
         }
         if (item == 4) { /* Save */
             int fk = front_kind();
-            return !open_dlg && (fk == WK_EDIT || fk == WK_PAINT || fk == WK_WRITER || fk == WK_SPREADSHEET);
+            return !open_dlg && (fk == WK_EDIT || fk == WK_PAINT || fk == WK_WRITER || fk == WK_SPREADSHEET || fk == WK_TODO);
         }
         if (item == 5) { /* Duplicate: Files + selected file/folder, not an app. */
             int id;
@@ -2263,6 +2289,7 @@ static void edit_paste(void) {
 }
 
 static void edit_clear(void) {
+    edit_save_busy = 0;
     edit_len = 0;
     edit_caret = 0;
     edit_buf[0] = 0;
@@ -2278,6 +2305,7 @@ static void edit_clear(void) {
 static void edit_load(int id) {
     if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id) || fs_size(id) >= EDIT_BUF_SIZE)
         return;
+    edit_save_busy = 0;
     edit_len = fs_read(id, edit_buf, EDIT_BUF_SIZE);
     if (edit_len < 0)
         edit_len = 0;
@@ -2432,6 +2460,12 @@ static int edit_search_click(int wx,int wy,int ww,int wh){
 static void namedlg_open(int target, const char *initial);
 static const char *edit_conflict_message="Source changed. Save with a new name.";
 
+static int edit_storage_busy(void) {
+    edit_save_busy = fs_sync_busy();
+    if (edit_save_busy) dirty = 1;
+    return edit_save_busy;
+}
+
 static int edit_source_unchanged(void) {
     if(edit_source.valid&&edit_binding_matches(edit_file,&edit_source.source))return 1;
     edit_saved_ok=0;
@@ -2439,6 +2473,7 @@ static int edit_source_unchanged(void) {
 }
 
 static int edit_write_to(int id) {
+    if (edit_storage_busy()) return 0;
     edit_saved_ok=0;
     if(fs_write(id,edit_buf,edit_len)!=edit_len)return 0;
     edit_file=id;edit_identity=fs_identity(id);
@@ -2452,6 +2487,10 @@ static int edit_write_to(int id) {
 
 static int edit_write_named(const char *name) {
     name_failure_message=0;
+    if (edit_storage_busy()) {
+        name_failure_message="Disk saving. Retry Save shortly.";
+        return 0;
+    }
     int parent = fm_checked_cwd();
     int id = fs_find_child(parent, name);
     int created = id < 0;
@@ -2479,6 +2518,7 @@ static int edit_write_named(const char *name) {
 }
 
 static int edit_save(void) {
+    if (edit_storage_busy()) return 0;
     if (edit_file >= 0 && !edit_binding_valid()) {
         edit_file = -1;
         edit_identity = 0;
@@ -3401,6 +3441,11 @@ static int unique_untitled_pbm(int parent, char *out) {
 }
 
 static int paint_write_named(const char *name) {
+    name_failure_message=0;
+    if (fs_sync_busy()) {
+        name_failure_message="Disk saving. Retry Save shortly.";
+        return 0;
+    }
     paint_init();
     int pics = fs_find_child(fs_root(), "Pictures");
     if (pics < 0)
@@ -3432,6 +3477,11 @@ static int paint_write_named(const char *name) {
 
 static void paint_save(void) {
     paint_init();
+    if (fs_sync_busy()) {
+        namedlg_open(1, "untitled.pbm");
+        name_failed=1;name_failure_message="Disk saving. Retry Save shortly.";
+        return;
+    }
     int pics = fs_find_child(fs_root(), "Pictures");
     if (pics < 0)
         pics = fs_mkdir(fs_root(), "Pictures");
@@ -3930,7 +3980,7 @@ static void todo_field_box(int wx, int wy, int ww, int wh,
                            int *fx, int *fy, int *fw, int *fh) {
     *fx = wx + 12;
     *fy = wy + wh - TODO_FOOT_H + 8;
-    *fw = ww - 24;
+    *fw = ww - 100;
     *fh = 24;
 }
 
@@ -3968,6 +4018,8 @@ static void draw_todo(int wx, int wy, int ww, int wh, int inactive) {
 
     int fx, fy, fw, fh;
     todo_field_box(wx, wy, ww, wh, &fx, &fy, &fw, &fh);
+    draw_button(wx+ww-76, fy, 64, fh, "Save");
+    draw_string_clip(todo_status(), wx+12, ruley+37, ui_text_dim, wx+ww-12);
     int active = todo_field_active();
     draw_round_rect(fx, fy, fw, fh, 5, active ? ui_accent : gfx_gray(0xA8));
     draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 4, COLOR_WHITE);
@@ -3988,6 +4040,9 @@ static void draw_todo(int wx, int wy, int ww, int wh, int inactive) {
 static void handle_todo_click(int wx, int wy, int ww, int wh) {
     int fx, fy, fw, fh;
     todo_field_box(wx, wy, ww, wh, &fx, &fy, &fw, &fh);
+    if(hit(mouse_x,mouse_y,wx+ww-76,fy,64,fh)){
+        todo_retry_save();dirty=1;return;
+    }
     if (hit(mouse_x, mouse_y, fx, fy, fw, fh)) {
         todo_focus_field();
         dirty = 1;
@@ -4394,6 +4449,7 @@ static void fm_go_up(void) {
 static void fm_select_id(int id);
 
 static void fm_new_file(void) {
+    if (files_storage_busy()) return;
     if(!fm_cwd_valid()){fm_refresh();dirty=1;return;}
     char name[FS_NAME_LEN];
     if (fs_unique_file(fm_cwd, name) < 0)
@@ -4454,6 +4510,7 @@ static void fm_rename_begin(int id) {
 static void fm_rename_commit(void) {
     if (!fm_renaming)
         return;
+    if (files_storage_busy()) return;
     if(!fm_cwd_valid()||!file_view_valid(fm_cwd,fm_rename_id,fm_rename_identity)){
         fm_rename_cancel();fm_refresh();dirty=1;return;
     }
@@ -4478,6 +4535,7 @@ static void fm_rename_commit(void) {
 static void do_duplicate(void) {
     if (front_kind() != WK_FILES || open_dlg)
         return;
+    if (files_storage_busy()) return;
     int id = fm_row_id(fm_selected);
     if (id < 0)
         return;
@@ -4497,6 +4555,7 @@ static void do_duplicate(void) {
 
 static void files_clipboard_action(int item) {
     if(front_kind()!=WK_FILES||open_dlg||name_dlg)return;
+    files_action_busy=0;
     if(!fm_cwd_valid()){fm_refresh();dirty=1;return;}
     fm_filter_focus=fm_filter_select_all=0;
     fm_rename_cancel();
@@ -4523,6 +4582,7 @@ static void do_new_folder(void) {
     /* Disk window only. untitled folder, then untitled folder 2. */
     if (front_kind() != WK_FILES || open_dlg)
         return;
+    if (files_storage_busy()) return;
     if(!fm_cwd_valid()){fm_refresh();dirty=1;return;}
     fm_rename_cancel();
     char name[FS_NAME_LEN];
@@ -4539,7 +4599,8 @@ static void do_new_folder(void) {
 static void do_empty_trash(void) {
     if (trash_id < 0)
         return;
-    fs_empty_dir(trash_id);
+    if (files_storage_busy()) return;
+    if (fs_empty_dir(trash_id) < 0) { dirty = 1; return; }
     kprint_debug("Empty trash\n");
     if (edit_file >= 0 && !fs_valid(edit_file))
         edit_clear();
@@ -4652,8 +4713,10 @@ static void files_title(char *title, int max) {
 }
 
 static void files_info(char *info, int max) {
-    if(file_clipboard_status()[0]&&((int32_t)(files_message_until-frame_count)>0||file_clipboard_pending_sync())){
-        const char *message=file_clipboard_status();int i=0;
+    if((files_action_busy&&(int32_t)(files_message_until-frame_count)>0)||
+       (file_clipboard_status()[0]&&((int32_t)(files_message_until-frame_count)>0||file_clipboard_pending_sync()))){
+        const char *message=files_action_busy&&(int32_t)(files_message_until-frame_count)>0?
+            "Disk saving. Retry the file action.":file_clipboard_status();int i=0;
         while(i+1<max&&message[i]){info[i]=message[i];i++;}
         if(max>0)info[i]=0;
     }else {
@@ -5102,7 +5165,8 @@ static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
         info[i++] = '*';
     }
     info[i] = 0;
-    if(edit_search.open&&edit_search.message[0]){kstrcpy(info+i," | ");kstrcpy(info+i+3,edit_search.message);}
+    if(edit_save_busy)kstrcpy(info+i," | Save not started; retry");
+    else if(edit_search.open&&edit_search.message[0]){kstrcpy(info+i," | ");kstrcpy(info+i+3,edit_search.message);}
 
     gui_draw_window(wx, wy, ww, wh, title, info,
                     WIN_INFO | WIN_SCROLL | (inactive ? WIN_INACTIVE : 0));
@@ -5409,7 +5473,7 @@ static void draw_window_contents(Win *w, int inactive) {
         PROP(fs_storage_name());
         fmt_uint(number,fs_file_limit());kstrcpy(row,"Maximum file bytes: ");kstrcpy(row+kstrlen(row),number);PROP(row);
         PROP("Editor maximum: 65535 bytes");
-        PROP(fs_storage_status()?fs_storage_status():"Disk is synchronized");
+        PROP(fs_storage_status()?fs_storage_status():fs_needs_sync()?"RAM changes await disk save":"Disk is synchronized");
         #undef PROP
     } else if (w->kind == WK_HELLO) {
         gui_draw_window(wx, wy, ww, wh, "Hello", 0, fl);
@@ -5755,6 +5819,7 @@ static void files_drop(void) {
     /* Already in the trash can: drop is a no-op. */
     if (fs_parent(id) == trash_id)
         return;
+    if (files_storage_busy()) return;
     if (fs_move(id, trash_id) < 0)
         return;
     kprint_debug("Trash drop\n");
@@ -5928,7 +5993,9 @@ static void menu_activate(int m, int item) {
         } else if (item == 3) {
             close_front();
         } else if (item == 4) {
-            if (front_kind() == WK_SPREADSHEET && !open_dlg) {
+            if (front_kind() == WK_TODO && !open_dlg) {
+                todo_retry_save();dirty=1;
+            } else if (front_kind() == WK_SPREADSHEET && !open_dlg) {
                 spreadsheet_save_document();
             } else if (front_kind() == WK_WRITER && !open_dlg) {
                 writer_save_document();
@@ -6361,7 +6428,8 @@ static void draw_edit_close(void) {
         doc->file >= 0 && fs_identity(doc->file) == doc->identity
                      ? fs_name(doc->file) : "untitled";
     draw_string_clip(name, x + 22, y + 50, ui_text, x + 438);
-    draw_string(edit_close_failed ? "Save failed. Your document is still open."
+    draw_string(edit_close_failed && fs_sync_busy() ? "Disk saving. Retry Save shortly."
+                : edit_close_failed ? "Save failed. Your document is still open."
                                  : "Your unsaved changes will be lost if discarded.",
                 x + 22, y + 82, ui_text_dim);
     const char *labels[] = {"Save", "Discard", "Cancel"};
@@ -6829,7 +6897,7 @@ static void handle_key(void) {
             menu_activate(MENU_FILE, 0);
             return;
         }
-        if (key_sc == KEY_S && (front_kind() == WK_PAINT || front_kind() == WK_EDIT || front_kind() == WK_WRITER || front_kind() == WK_SPREADSHEET)) {
+        if (key_sc == KEY_S && (front_kind() == WK_PAINT || front_kind() == WK_EDIT || front_kind() == WK_WRITER || front_kind() == WK_SPREADSHEET || front_kind() == WK_TODO)) {
             menu_activate(MENU_FILE, 4);
             return;
         }
@@ -7021,6 +7089,7 @@ static void handle_key(void) {
         if(key_sc==KEY_TAB||key_sc==KEY_RIGHT||key_sc==KEY_DOWN)theme_set((theme_id+(shift_down?THEME_N-1:1))%THEME_N);
         else if(key_sc==KEY_LEFT||key_sc==KEY_UP)theme_set((theme_id+THEME_N-1)%THEME_N);
         else if(key_sc==KEY_SPACE){saver_enabled=!saver_enabled;saver_save();dirty=1;}
+        else if(key_char=='r'||key_char=='R')preferences_retry();
         else if(key_sc==KEY_ESC)close_front();
         return;
     }
@@ -7129,73 +7198,165 @@ static void handle_key(void) {
 
 /* ---------- Themes, Kilroy, Settings, splash ---------- */
 
+/* Fixed system paths are resolved afresh: cached node IDs can be moved/reused.
+ * Only recognized one-byte preferences are replaceable. No pending choice
+ * borrows filesystem bytes or changes a leased snapshot. */
+enum { PREF_THEME, PREF_SAVER, PREF_DISPLAY, PREF_COUNT };
+enum { PREF_IDLE, PREF_QUEUED, PREF_RAM, PREF_SAVED, PREF_WRITE_FAILED, PREF_SYNC_FAILED, PREF_PATH_FAILED, PREF_FULL_FAILED };
+enum { PREF_ERR_PATH = -4, PREF_ERR_FULL = -5 };
+typedef struct { char choice; int state, file; unsigned identity; } PendingPreference;
+static PendingPreference preferences[PREF_COUNT];
+static const char *const preference_names[PREF_COUNT] = { "theme", "saver", "display" };
+static FsSyncTicket preference_sync_ticket;
+static int preference_sync_active, preference_retry_requested;
+static unsigned preference_retry_after;
+
+static int preference_valid(int which, char value) {
+    int count = which == PREF_THEME ? THEME_N : which == PREF_SAVER ? 2 : DISPLAY_MODE_COUNT;
+    return value >= '0' && value < '0' + count;
+}
+static int preference_file(int which) {
+    int dir = fs_find_child(fs_root(), "prefs");
+    if (!fs_is_dir(dir)) return -1;
+    return fs_find_child(dir, preference_names[which]);
+}
+static int preference_read(int which) {
+    int id = preference_file(which);
+    if (id < 0 || fs_is_dir(id) || fs_is_app(id) || fs_size(id) != 1) return -1;
+    char value = fs_data(id)[0];
+    return preference_valid(which, value) ? value - '0' : -1;
+}
+static void preference_state(int which, int state) {
+    if (preferences[which].state != state) { preferences[which].state = state; dirty = 1; }
+}
+static int preference_write(int which) {
+    PendingPreference *p = &preferences[which];
+    int dir = fs_find_child(fs_root(), "prefs");
+    if (dir >= 0 && !fs_is_dir(dir)) return PREF_ERR_PATH;
+    int id = dir < 0 ? -1 : fs_find_child(dir, preference_names[which]);
+    if (id >= 0 && (fs_is_dir(id) || fs_is_app(id) || fs_size(id) != 1 ||
+                   !preference_valid(which, fs_data(id)[0]))) return PREF_ERR_PATH;
+    if (id < 0) {
+        /* Preflight before creating even an empty directory/file. */
+        unsigned count = (unsigned)fs_node_count() + 1 + (dir < 0);
+        if (count > (unsigned)fs_node_limit() ||
+            fs_used_bytes() + 1 > fs_capacity_for_nodes(count)) return PREF_ERR_FULL;
+        if (dir < 0) dir = fs_mkdir(fs_root(), "prefs");
+        if (dir < 0) return dir;
+        id = fs_create(dir, preference_names[which]);
+        if (id < 0) return id;
+        int result = fs_write(id, &p->choice, 1);
+        if (result != 1) { (void)fs_delete(id); return result < 0 ? result : -1; }
+    } else if (fs_data(id)[0] != p->choice) {
+        int result = fs_write(id, &p->choice, 1);
+        if (result != 1) return result < 0 ? result : -1;
+    }
+    prefs_id = dir;
+    p->file = id; p->identity = fs_identity(id);
+    return 0;
+}
+static int preference_matches(int which) {
+    PendingPreference *p = &preferences[which];
+    int id = preference_file(which);
+    return id == p->file && fs_identity(id) == p->identity &&
+           !fs_is_dir(id) && !fs_is_app(id) && fs_size(id) == 1 && fs_data(id)[0] == p->choice;
+}
+/* Call after top-level storage progress and before other filesystem mutations.
+ * Normal saves share autosync's backoff. Only an explicit Retry requests its
+ * own ticket; a retained foreign result is retried at most once per second. */
+static void preferences_tick(void) {
+    if (preference_sync_active) {
+        int result = fs_sync_result(preference_sync_ticket);
+        if (result == FS_SYNC_PENDING) return;
+        (void)fs_sync_release(preference_sync_ticket);
+        preference_sync_active = 0;
+    }
+    if (fs_sync_busy()) return;
+    /* Observe a just-finished clean snapshot before queued writes dirty it. */
+    for (int i = 0; i < PREF_COUNT; ++i) {
+        int state = preferences[i].state;
+        if (state != PREF_RAM && state != PREF_SYNC_FAILED) continue;
+        if (!preference_matches(i)) preference_state(i, PREF_WRITE_FAILED);
+        else if (fs_storage_status()) preference_state(i, PREF_SYNC_FAILED);
+        else if (!fs_needs_sync()) preference_state(i, PREF_SAVED);
+    }
+    for (int i = 0; i < PREF_COUNT; ++i) if (preferences[i].state == PREF_QUEUED) {
+        int result = preference_write(i);
+        if (result == FS_ERR_BUSY) return;
+        preference_state(i, result == PREF_ERR_PATH ? PREF_PATH_FAILED :
+            result == PREF_ERR_FULL ? PREF_FULL_FAILED : result < 0 ? PREF_WRITE_FAILED :
+            fs_storage_status() ? PREF_SYNC_FAILED : !fs_needs_sync() ? PREF_SAVED : PREF_RAM);
+    }
+    if (!preference_retry_requested) return;
+    int needs_save = 0;
+    for (int i = 0; i < PREF_COUNT; ++i)
+        if (preferences[i].state == PREF_RAM || preferences[i].state == PREF_SYNC_FAILED) needs_save = 1;
+    if (!needs_save) { preference_retry_requested = 0; return; }
+    if ((int32_t)(timer_ticks() - preference_retry_after) < 0) return;
+    int result = fs_sync_request(&preference_sync_ticket);
+    if (result == FS_ERR_BUSY) { preference_retry_after = timer_ticks() + TIMER_HZ; return; }
+    preference_retry_requested = 0;
+    if (!result) preference_sync_active = 1;
+    else for (int i = 0; i < PREF_COUNT; ++i)
+        if (preferences[i].state == PREF_RAM) preference_state(i, PREF_SYNC_FAILED);
+}
+static void preference_queue(int which, char choice) {
+    preferences[which].choice = choice;
+    preference_state(which, PREF_QUEUED);
+    preferences_tick();
+}
+static void preferences_retry(void) {
+    for (int i = 0; i < PREF_COUNT; ++i)
+        if (preferences[i].state == PREF_WRITE_FAILED || preferences[i].state == PREF_SYNC_FAILED ||
+            preferences[i].state == PREF_PATH_FAILED || preferences[i].state == PREF_FULL_FAILED)
+            preference_state(i, PREF_QUEUED);
+    preference_retry_requested = 1;
+    preference_retry_after = timer_ticks();
+    preferences_tick();
+    dirty = 1;
+}
+/* Shutdown calls this instead of its initial busy join, before session_save
+ * and its final fs_sync. Success means ready in RAM, never durable by itself. */
+static int preferences_prepare_shutdown(void) {
+    preference_retry_requested = 0;
+    if (fs_sync_busy() && fs_sync() < 0) { preferences_tick(); return -1; }
+    for (int i = 0; i < PREF_COUNT; ++i)
+        if (preferences[i].state == PREF_WRITE_FAILED || preferences[i].state == PREF_SYNC_FAILED ||
+            preferences[i].state == PREF_PATH_FAILED || preferences[i].state == PREF_FULL_FAILED)
+            preference_state(i, PREF_QUEUED);
+    preferences_tick();
+    for (int i = 0; i < PREF_COUNT; ++i) {
+        int state = preferences[i].state;
+        if (state == PREF_QUEUED || state == PREF_WRITE_FAILED ||
+            state == PREF_PATH_FAILED || state == PREF_FULL_FAILED) return -1;
+    }
+    return 0;
+}
+static const char *preference_message(int which) {
+    switch (preferences[which].state) {
+    case PREF_QUEUED: return "Applied; preference queued until disk is free.";
+    case PREF_RAM: return "Applied in RAM; waiting for disk save.";
+    case PREF_SAVED: return which == PREF_DISPLAY ? "Resolution saved." : "Preference saved.";
+    case PREF_WRITE_FAILED: return "Preference changed or write failed. Retry saving.";
+    case PREF_PATH_FAILED: return "Preference path occupied; fix it and retry.";
+    case PREF_FULL_FAILED: return "No room for preference; free space and retry.";
+    case PREF_SYNC_FAILED: return "RAM only; disk save failed. Use Retry saving.";
+    default: return "";
+    }
+}
 static void theme_save(void) {
-    int prefs = prefs_id;
-    if (prefs < 0)
-        prefs = fs_find_child(fs_root(), "prefs");
-    if (prefs < 0)
-        prefs = fs_mkdir(fs_root(), "prefs");
-    if (prefs < 0)
-        return;
-    prefs_id = prefs;
-    int f = fs_find_child(prefs, "theme");
-    if (f < 0)
-        f = fs_create(prefs, "theme");
-    if (f < 0)
-        return;
-    char b[2];
-    b[0] = (char)('0' + theme_id);
-    b[1] = 0;
-    fs_write(f, b, 1);
+    preference_queue(PREF_THEME, (char)('0' + theme_id));
 }
-
 static void saver_save(void) {
-    int prefs = prefs_id;
-    if (prefs < 0)
-        prefs = fs_find_child(fs_root(), "prefs");
-    if (prefs < 0)
-        prefs = fs_mkdir(fs_root(), "prefs");
-    if (prefs < 0)
-        return;
-    prefs_id = prefs;
-    int f = fs_find_child(prefs, "saver");
-    if (f < 0)
-        f = fs_create(prefs, "saver");
-    if (f < 0)
-        return;
-    char b[2];
-    b[0] = saver_enabled ? '1' : '0';
-    b[1] = 0;
-    fs_write(f, b, 1);
+    preference_queue(PREF_SAVER, saver_enabled ? '1' : '0');
 }
-
 static void saver_load(void) {
-    int prefs = fs_find_child(fs_root(), "prefs");
-    if (prefs < 0)
-        return;
-    int f = fs_find_child(prefs, "saver");
-    if (f < 0)
-        return;
-    char b[2];
-    if (fs_read(f, b, 2) >= 1)
-        saver_enabled = (b[0] == '1');
+    int choice = preference_read(PREF_SAVER);
+    if (choice >= 0) saver_enabled = choice;
 }
-
 static void theme_load(void) {
-    theme_id = 0;
-    int prefs = prefs_id;
-    if (prefs < 0)
-        prefs = fs_find_child(fs_root(), "prefs");
-    if (prefs < 0)
-        return;
-    prefs_id = prefs;
-    int f = fs_find_child(prefs, "theme");
-    if (f < 0)
-        return;
-    char b[2];
-    int n = fs_read(f, b, 2);
-    if (n >= 1 && b[0] >= '0' && b[0] <= '7')
-        theme_id = b[0] - '0';
+    int choice = preference_read(PREF_THEME);
+    theme_id = choice >= 0 ? choice : 0;
 }
 
 static void theme_set(int id) {
@@ -7261,6 +7422,7 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
             draw_round_rect(bx + 1, by + 1, 16, 16, 3, COLOR_WHITE);
         }
         draw_string("Start the screen saver after 90 seconds idle", bx + 28, by, ui_text);
+        draw_string_clip(preference_message(PREF_SAVER), bx + 28, by + 21, ui_text_dim, wx + ww - 20);
     }
     int ry = wy + TITLE_H + 270;
     draw_string_bold("Display resolution", wx + 24, ry, ui_text);
@@ -7268,9 +7430,12 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
         draw_button_styled(wx + 24 + i * 127, ry + 26, 119, 30,
                            display_mode(i)->name, display_current_mode() == i);
     draw_string_clip(display_message[0] ? display_message :
+                     preferences[PREF_DISPLAY].state ? preference_message(PREF_DISPLAY) :
                      "Keys 1-4 select a mode. Enter keeps it; Escape reverts.",
                      wx + 24, ry + 66, ui_text_dim, wx + ww - 20);
     draw_string_bold("Appearance", wx + 24, wy + TITLE_H + 16, ui_text);
+    draw_button(wx + ww - 156, wy + TITLE_H + 8, 132, 26, "Retry saving (R)");
+    draw_string_clip(preference_message(PREF_THEME), wx + 24, wy + TITLE_H + 244, ui_text_dim, wx + ww - 20);
     draw_hline(wx + 24, wy + TITLE_H + 38, ww - 48, ui_chrome_dk);
     for (int i = 0; i < THEME_N; i++) {
         int sx, sy;
@@ -7312,7 +7477,9 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
     }
 }
 static void handle_settings_click(int wx, int wy, int ww, int wh) {
-    (void)ww;
+    if (hit(mouse_x, mouse_y, wx + ww - 156, wy + TITLE_H + 8, 132, 26)) {
+        preferences_retry(); return;
+    }
     for (int i = 0; i < DISPLAY_MODE_COUNT; ++i) {
         if (hit(mouse_x, mouse_y, wx + 24 + i * 127, wy + TITLE_H + 296, 119, 30)) {
             display_request(i); return;
@@ -7458,6 +7625,7 @@ static int session_put(int dir,const char *name,const void *data,int size){
     return 0;
 }
 static void session_save(void){
+    if(fs_sync_busy())return;
     if(!session_ready)return;
     int dir=fs_find_child(fs_root(),"prefs");
     unsigned writer_size=0;
@@ -7795,22 +7963,14 @@ static void display_revert(void) {
 static void display_keep(void) {
     if (!display_pending) return;
     display_pending = 0;
-    int dir = fs_find_child(fs_root(), "prefs");
-    if (dir < 0) dir = fs_mkdir(fs_root(), "prefs");
-    int id = fs_find_child(dir, "display");
-    if (id < 0 && dir >= 0) id = fs_create(dir, "display");
-    char choice = (char)('0' + display_current_mode());
-    display_message = id >= 0 && fs_write(id, &choice, 1) == 1 ?
-                      "Resolution saved." : "Resolution applied, but could not save preference.";
+    preference_queue(PREF_DISPLAY, (char)('0' + display_current_mode()));
+    display_message = "";
     dirty = 1;
 }
+
 static void display_load(void) {
-    int dir = fs_find_child(fs_root(), "prefs");
-    int id = fs_find_child(dir, "display");
-    if (id >= 0 && fs_size(id) == 1) {
-        int mode = fs_data(id)[0] - '0';
-        if (mode >= 0 && mode < DISPLAY_MODE_COUNT) display_set_mode(mode);
-    }
+    int mode = preference_read(PREF_DISPLAY);
+    if (mode >= 0) display_set_mode(mode);
 }
 
 static void render_desktop_frame(void) {
@@ -7825,6 +7985,21 @@ static void render_desktop_frame(void) {
 }
 
 /* ---------- kmain ---------- */
+
+/* Device polling never dispatches app work or filesystem mutations. */
+static enum FsSyncProgress storage_poll(void) {
+    const char *before = fs_storage_status();
+    unsigned started = timer_ticks();
+    enum FsSyncProgress progress = FS_SYNC_IDLE;
+    for (unsigned unit = 0; unit < 256; unit++) {
+        progress = fs_sync_step();
+        if (progress == FS_SYNC_IDLE || progress == FS_SYNC_FINISHED || timer_ticks() != started) break;
+        platform_poll();
+        if (timer_ticks() != started) break;
+    }
+    if (before != fs_storage_status()) dirty = 1;
+    return progress;
+}
 
 void kmain(void) {
     kprint_debug("Kernel started\nBuild " BASEOS_BUILD_LABEL "\n");
@@ -7883,6 +8058,9 @@ void kmain(void) {
     uint32_t last_session = frame_count;
 
     while (1) {
+        storage_poll();
+        preferences_tick();
+        if(todo_tick()&&find_open_kind(WK_TODO)>=0)dirty=1;
         poll_time();
         audio_poll();
         net_poll();
@@ -8075,7 +8253,7 @@ void kmain(void) {
             dirty = 1;
         }
 
-        if(!display_pending&&frame_count-last_session>=5*TIMER_HZ&&frame_count-last_input_frame>=TIMER_HZ&&!mouse_left&&!name_dlg&&!edit_close_dlg&&!open_dlg){session_save();last_session=frame_count;}
+        if(!fs_sync_busy()&&!display_pending&&frame_count-last_session>=5*TIMER_HZ&&frame_count-last_input_frame>=TIMER_HZ&&!mouse_left&&!name_dlg&&!edit_close_dlg&&!open_dlg){session_save();last_session=frame_count;}
         if(drag_cached>=0 && dragging_win<0)dirty=1;
         if(mouse_moved&&dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
         int moved = mouse_moved;
@@ -8111,7 +8289,7 @@ void kmain(void) {
                 flip_rect(cursor_sx, cursor_sy, CURSOR_W, CURSOR_H);
             }
         }
-        /* PIT wakes us at 70Hz; do not burn a CPU polling an idle desktop. */
-        if(!dirty&&!mouse_left&&!mouse_moved&&kqn==0)__asm__ volatile("hlt");
+        /* ATA uses polling, not IRQ14: do not sleep once per sector wait. */
+        if(!fs_sync_busy()&&!dirty&&!mouse_left&&!mouse_moved&&kqn==0)__asm__ volatile("hlt");
     }
 }

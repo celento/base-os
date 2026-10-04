@@ -23,6 +23,7 @@ static unsigned fm_drag_identity;
 static int key_sc,ctrl_down,alt_down;
 static char key_char;
 static uint32_t frame_count,files_message_until;
+static int files_action_busy;
 static int open_dlg,name_dlg,clip_len,mouse_x,mouse_y;
 static unsigned clip_generation;
 static char clip_buf[1024];
