@@ -22,7 +22,10 @@ int main(void){
         command("start /canvas.bex"); /* A busy start must preserve this canvas. */
         assert(term_canvas_width()==320&&term_canvas()[63999]==owner+1);
     }
-    term_select(3);assert(callbacks[3].resize(160,100)==0);
+    term_select(3);assert(callbacks[3].resize(320,200)==0);
+    for(int i=0;i<64000;i++)assert(term_canvas()[i]==0);
+    plot(319,199,9);
+    assert(callbacks[3].resize(160,100)==0);
     assert(term_canvas_width()==160&&term_canvas_height()==100);
     for(int i=0;i<64000;i++)assert(terms[3].canvas[i]==0);
     plot(159,99,45);assert(term_canvas()[15999]==45);

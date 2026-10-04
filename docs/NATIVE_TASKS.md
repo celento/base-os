@@ -24,7 +24,7 @@ Tasks have no cumulative runtime limit. A CPU-bound loop is repeatedly preempted
 
 ## Added ABI
 
-Existing BEX1 headers and syscalls 0–9 retain their argument and return contracts. Executable file size remains at most 16,383 bytes, independent of filesystem capacity. Code, BSS, and stack share 64 KiB. The SDK linker reserves at least 16 KiB for the stack.
+Existing BEX1 headers and syscalls 0–9 retain their argument and return contracts. Executable file size is at most 49,152 bytes, with IDE storage required above the legacy floppy limit of 16,383 bytes. Code, BSS, and stack still share 64 KiB. The SDK linker reserves at least 16 KiB for the stack.
 
 | Syscall | SDK wrapper | Meaning |
 | --- | --- | --- |
@@ -32,6 +32,15 @@ Existing BEX1 headers and syscalls 0–9 retain their argument and return contra
 | 10 | `bos_yield()` | Resume on a later desktop turn; returns 0. `exec` returns -1. |
 | 11 | `bos_sleep(ms)` | Wait at least the requested 0–60,000 ms, rounded up to PIT ticks. Zero yields. Invalid values and `exec` return -1. |
 | 12 | `bos_task_id()` | Owning terminal slot 1–8; `exec` returns 0. |
+| 13 | `bos_read_file_at(path,out,capacity,offset)` | Up to 4096 bytes from any file offset; returns 0 at/beyond EOF. |
+| 14 | `bos_canvas_size(width,height)` | Select and clear exactly 160×100 or 320×200; new apps default to 160×100. |
+| 15 | `bos_replace_file(path,data,bytes)` | Atomic RAM replacement up to 32,768 bytes, confined to `/Documents`. |
+| 16 | `bos_sync()` | Durable filesystem snapshot result: 0 success, -1 failure. |
+
+The extended calls do not enlarge application memory or bypass filesystem
+capacity. Sync can delay scheduling while the bounded disk write completes.
+The [native SDK guide](NATIVE_SDK.md) details streaming consistency, replacement
+failure behavior, canvas callback integration and the DocStats C example.
 
 Key polling is nonblocking and returns one queued byte or zero. A full queue drops the newest key. Keys remain queued through sleep; input does not shorten the sleep deadline. No key is shared with another owner, and stop/restart clears pending input. General registers other than syscall EAX and x87 state survive a returning syscall or timer slice. The standard SDK targets software floating point with SSE/MMX disabled; x87 task state is explicitly isolated.
 
@@ -42,6 +51,11 @@ Key polling is nonblocking and returns one queued byte or zero. A full queue dro
 - `process_task_status/result`, `process_task_key`, `process_task_stop`, and `process_task_clear` expose bounded lifecycle operations.
 - `term_task_poll()` selects one fair runnable terminal, preserves the caller's selected terminal, and returns whether its output changed. The desktop marks itself dirty when this returns true.
 - `term_task_running/key/stop/close` route focus, Ctrl+C and close by explicit window slot. Reset also clears the owned task.
+- `ProgramIO.resize` is optional. Terminal supplies it; accepted mode changes clear
+  pixels. A task retains its active dimensions across slices. The renderer must
+  use `term_canvas_width/height`; pixels are packed with the current width.
+- Eight Terminals with 320 scrollback rows and maximum 320×200 canvases use
+  731,744 bytes, below the fixed 786,432-byte subarena before script scratch.
 
 The legacy synchronous `process_run` still has its two-second watchdog, checked syscalls, and audio pause/resume behavior. Running it does not destroy saved task images; asynchronous tasks resume afterward.
 
@@ -66,3 +80,8 @@ cancels a slow request, loads its replacement, and the desktop redraws. It check
 independent counter saves, complete MP3 playback with no underruns, and captures
 both a screenshot and non-silent PCM output. This is a focused subsystem smoke;
 the main desktop must still wire its real focus/close/poll events as described above.
+
+`python3 tools/native_sdk_test.py build` verifies exact 48 KiB images, two
+concurrent 2 MiB streams, EOF and partial reads, independent larger canvases,
+32 KiB durable replacement, DocStats sample/empty counts, legacy mode resets and
+full-volume rollback across reboot. Its host companion is `test_native_sdk.py`.
