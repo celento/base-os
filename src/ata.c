@@ -55,6 +55,22 @@ static void outw(unsigned short port, unsigned short value) {
 
 static unsigned capacity;
 static int ready;
+enum RequestPhase { REQUEST_IDLE, REQUEST_WAIT_IDLE, REQUEST_DATA,
+                    REQUEST_FINISH, REQUEST_DONE, REQUEST_ERROR };
+static struct {
+    enum RequestPhase phase;
+    unsigned char *buffer;
+    unsigned lba, left, chunk_left, started;
+    int writing, flushing;
+} request;
+_Static_assert(sizeof(request) <= 40, "ATA request must remain small and fixed-size");
+
+int ata_request_active(void) {
+    return request.phase == REQUEST_WAIT_IDLE || request.phase == REQUEST_DATA ||
+           request.phase == REQUEST_FINISH;
+}
+int ata_ready(void) { return ready; }
+
 static void settle(void) {
     /* Four alternate-status reads supply the ATA 400 ns selection delay. */
     for (int i = 0; i < 4; ++i) (void)inb(ATA_CONTROL);
@@ -74,6 +90,9 @@ static int wait_status(int data_phase) {
 }
 int ata_probe(void) {
     unsigned short identify[256];
+    if (ata_request_active()) return -1;
+    request.phase = REQUEST_IDLE;
+    request.buffer = 0;
     ready = 0; capacity = 0;
     outb(ATA_CONTROL, 2); /* nIEN: the controller is always polled. */
     outb(ATA_DEVICE, 0xA0); settle();
@@ -99,48 +118,118 @@ int ata_probe(void) {
 }
 unsigned ata_sector_count(void) { return capacity; }
 
-static int transfer(unsigned lba, unsigned char *buffer, int sectors, int writing) {
-    if (!ready || sectors < 0 || lba > capacity || (unsigned)sectors > capacity - lba)
+static int request_transfer(unsigned lba, unsigned char *buffer, int sectors, int writing) {
+    if (ata_request_active() || !ready || sectors < 0 || lba > capacity ||
+        (unsigned)sectors > capacity - lba || (sectors && !buffer))
         return -1;
-    if (!sectors) return 0;
-    if (!buffer) return -1;
-    while (sectors) {
-        int count = sectors > 128 ? 128 : sectors;
-        if (wait_status(0) < 0) goto failed;
-        outb(ATA_DEVICE, 0xE0 | ((lba >> 24) & 15)); settle();
-        outb(ATA_COUNT, count);
-        outb(ATA_LBA0, lba); outb(ATA_LBA1, lba >> 8); outb(ATA_LBA2, lba >> 16);
-        outb(ATA_STATUS, writing ? ATA_WRITE : ATA_READ); settle();
-        for (int sector = 0; sector < count; ++sector) {
-            if (wait_status(1) < 0) goto failed;
+    request.buffer = sectors ? buffer : 0;
+    request.lba = lba;
+    request.left = (unsigned)sectors;
+    request.chunk_left = 0;
+    request.writing = writing;
+    request.flushing = 0;
+    request.started = timer_ticks();
+    request.phase = sectors ? REQUEST_WAIT_IDLE : REQUEST_DONE;
+    return 0;
+}
+int ata_request_read(unsigned lba, void *buffer, int sectors) {
+    return request_transfer(lba, buffer, sectors, 0);
+}
+int ata_request_write(unsigned lba, const void *buffer, int sectors) {
+    return request_transfer(lba, (unsigned char *)buffer, sectors, 1);
+}
+int ata_request_flush(void) {
+    if (ata_request_active() || !ready) return -1;
+    request.buffer = 0;
+    request.flushing = 1;
+    request.started = timer_ticks();
+    request.phase = REQUEST_WAIT_IDLE;
+    return 0;
+}
+static enum AtaProgress request_failed(void) {
+    ready = 0; /* Uncertain controller state requires an explicit remount. */
+    request.buffer = 0;
+    request.phase = REQUEST_ERROR;
+    return ATA_PROGRESS_ERROR;
+}
+enum AtaProgress ata_poll(unsigned sector_budget) {
+    if (!ata_request_active()) {
+        return request.phase == REQUEST_DONE ? ATA_PROGRESS_DONE :
+               request.phase == REQUEST_ERROR ? ATA_PROGRESS_ERROR : ATA_PROGRESS_IDLE;
+    }
+    unsigned transferred = 0;
+    for (;;) {
+        /* A loop iteration must advance a protocol phase, transfer one sector,
+         * or return. Never repeat an observation to wait for hardware. */
+        unsigned char status = inb(ATA_CONTROL);
+        if (!status || status == 0xFF ||
+            (unsigned)(timer_ticks() - request.started) >= 2 * TIMER_HZ)
+            return request_failed();
+        if (status & ATA_BUSY) return ATA_PROGRESS_WAIT;
+        if (status & (ATA_ERROR | ATA_FAULT)) return request_failed();
+
+        if (request.phase == REQUEST_WAIT_IDLE) {
+            if (status & ATA_DRQ) return ATA_PROGRESS_WAIT;
+            if (request.flushing) {
+                outb(ATA_STATUS, ATA_FLUSH); settle();
+                request.phase = REQUEST_FINISH;
+            } else {
+                request.chunk_left = request.left > 128 ? 128 : request.left;
+                outb(ATA_DEVICE, 0xE0 | ((request.lba >> 24) & 15)); settle();
+                outb(ATA_COUNT, request.chunk_left);
+                outb(ATA_LBA0, request.lba);
+                outb(ATA_LBA1, request.lba >> 8);
+                outb(ATA_LBA2, request.lba >> 16);
+                outb(ATA_STATUS, request.writing ? ATA_WRITE : ATA_READ); settle();
+                request.phase = REQUEST_DATA;
+            }
+            request.started = timer_ticks();
+        } else if (request.phase == REQUEST_DATA) {
+            if (!(status & ATA_DRQ)) return ATA_PROGRESS_WAIT;
+            if (transferred == sector_budget) return ATA_PROGRESS_MORE;
             for (int word = 0; word < 256; ++word) {
-                if (writing) outw(ATA_DATA, buffer[0] | (unsigned)buffer[1] << 8);
+                if (request.writing)
+                    outw(ATA_DATA, request.buffer[0] | (unsigned)request.buffer[1] << 8);
                 else {
                     unsigned short value = inw(ATA_DATA);
-                    buffer[0] = value; buffer[1] = value >> 8;
+                    request.buffer[0] = value; request.buffer[1] = value >> 8;
                 }
-                buffer += 2;
+                request.buffer += 2;
             }
+            ++transferred; ++request.lba; --request.left;
+            if (!--request.chunk_left) request.phase = REQUEST_FINISH;
             settle();
-            platform_poll();
+            request.started = timer_ticks();
+        } else { /* REQUEST_FINISH: command/flush completion, not just data. */
+            if (status & ATA_DRQ) return ATA_PROGRESS_WAIT;
+            if (request.flushing || !request.left) {
+                request.buffer = 0;
+                request.phase = REQUEST_DONE;
+                return ATA_PROGRESS_DONE;
+            }
+            request.phase = REQUEST_WAIT_IDLE;
+            request.started = timer_ticks();
         }
-        if (wait_status(0) < 0) goto failed;
-        lba += count; sectors -= count;
     }
-    return 0;
-failed:
-    ready = 0; /* Uncertain controller state requires an explicit remount. */
-    return -1;
+}
+static int complete_request(void) {
+    for (;;) {
+        /* A one-sector budget keeps the legacy device-service opportunity
+         * after every sector, including the final one. */
+        unsigned left = request.left;
+        enum AtaProgress progress = ata_poll(1);
+        if (progress == ATA_PROGRESS_MORE || progress == ATA_PROGRESS_WAIT ||
+            (!request.flushing && request.left != left)) platform_poll();
+        if (progress == ATA_PROGRESS_DONE) return 0;
+        if (progress == ATA_PROGRESS_ERROR || progress == ATA_PROGRESS_IDLE) return -1;
+    }
 }
 int ata_read(unsigned lba, void *buffer, int sectors) {
-    return transfer(lba, buffer, sectors, 0);
+    return ata_request_read(lba, buffer, sectors) < 0 ? -1 : complete_request();
 }
 int ata_write(unsigned lba, const void *buffer, int sectors) {
-    return transfer(lba, (unsigned char *)buffer, sectors, 1);
+    return ata_request_write(lba, buffer, sectors) < 0 ? -1 : complete_request();
 }
 int ata_flush(void) {
-    if (!ready || wait_status(0) < 0) return -1;
-    outb(ATA_STATUS, ATA_FLUSH); settle();
-    if (wait_status(0) < 0) { ready = 0; return -1; }
-    return 0;
+    return ata_request_flush() < 0 ? -1 : complete_request();
 }
