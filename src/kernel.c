@@ -38,6 +38,7 @@
 #include "breakout.h"
 #include "sysmon.h"
 #include "fs.h"
+#include "native_sync.h"
 #include "wordle.h"
 #include "term.h"
 #include "todo.h"
@@ -8059,6 +8060,7 @@ static void render_desktop_frame(void) {
 
 /* Device polling never dispatches app work or filesystem mutations. */
 static enum FsSyncProgress storage_poll(void) {
+    native_sync_tick();
     const char *before = fs_storage_status();
     unsigned started = timer_ticks();
     enum FsSyncProgress progress = FS_SYNC_IDLE;
@@ -8068,6 +8070,7 @@ static enum FsSyncProgress storage_poll(void) {
         platform_poll();
         if (timer_ticks() != started) break;
     }
+    native_sync_tick();
     if (before != fs_storage_status()) dirty = 1;
     return progress;
 }

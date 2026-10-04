@@ -75,10 +75,12 @@ There is no cancellation or force replacement. Successful initialization or
 remount changes the incarnation and invalidates previous tickets. Serials and
 incarnations refuse allocation before wrapping; they never reuse an identity.
 
-The two fixed completion records have separate roles:
+The three fixed completion records have separate roles:
 
 1. The one async client, including internally owned autosaves.
 2. The synchronous `fs_sync` wrapper or joiner.
+3. The kernel-owned native completion coordinator. Its bounded per-process
+   handles never expose the raw FS ticket; see [owned native durability](NATIVE_ASYNC_SYNC.md).
 
 An active job records its subscribers. `fs_sync()` joining an async job gets
 its own result before any autosave result is reaped. It does not consume an
@@ -118,14 +120,16 @@ polls. The blocking wrapper calls device-only `fs_background_poll()` between
 quanta, preserving audio/network/input service without dispatching applications.
 
 The production i386 `-Os` build measured 1,220 bytes for the job and 32 bytes for
-both completion records, plus 12 bytes of counters/ownership flags: 1,264 bytes
+the original two completion records, plus 12 bytes of counters/ownership flags: 1,264 bytes
 of named control state. A compile-time assertion caps this at 1,536 bytes on
 both 32-bit and host builds (the 64-bit host uses 1,276 bytes). Object BSS grows
 1,280 bytes including compiler alignment. No profile arena constants change.
 The `fs_sync_step` own stack frame is 144 bytes; its bounded validator helper is
 160 bytes, and `fs_sync` is 48 bytes. These are compiler frame measurements,
 not a claim that the whole caller/callee chain or interrupt stack is that size.
-The synchronous mounted-image validator's own frame changes from 1,248 to 1,136
+The native coordinator adds a third 16-byte result record, making the current
+named i386 FS control state 1,280 bytes (1,292 on the 64-bit host), still below
+the same 1,536-byte assertion. The synchronous mounted-image validator's own frame changes from 1,248 to 1,136
 bytes; its new helper adds a separate bounded frame. Production `fs.o` text grows
 3,604 bytes relative to 064d79b with the measured GCC flags.
 

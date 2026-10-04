@@ -23,7 +23,10 @@ native computation continue. Busy errors preserve app state for a retry.
 Completion tickets retain terminal results until released, with a separate
 reserved blocking-sync subscriber. Incarnation/serial wrap is rejected. Explicit
 GUI saves, native bos_sync(), large RAM copies/compaction and legacy execution
-remain synchronous; this is not a fully preemptive kernel.
+remain synchronous; this is not a fully preemptive kernel. The additive
+[native async service](NATIVE_ASYNC_SYNC.md) provides per-process completion
+handles on IDE through an independent internal subscriber, reaped separately
+from application result retention.
 
 Complete downloads retain owned bodies during leases; their durability messages
 track node identity, original path and non-wrapping runtime content revision.

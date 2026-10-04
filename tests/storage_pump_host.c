@@ -7,7 +7,7 @@
 #include "fs.h"
 #include "platform.h"
 
-static unsigned now, steps, polls, clock_calls, status_calls;
+static unsigned now, steps, polls, clock_calls, status_calls, sync_ticks;
 static unsigned step_tick_at, poll_tick_at, status_change_at, plan_length;
 static enum FsSyncProgress fallback, plan[260];
 static int dirty;
@@ -16,6 +16,7 @@ static const char *storage_status;
 static char trace[1024];
 static unsigned trace_length;
 
+void native_sync_tick(void){sync_ticks++;}
 uint32_t timer_ticks(void){clock_calls++;return now;}
 const char *fs_storage_status(void){status_calls++;return storage_status;}
 enum FsSyncProgress fs_sync_step(void){
@@ -34,14 +35,14 @@ void platform_poll(void){
 #include "storage_pump.inc"
 
 static void reset(enum FsSyncProgress progress){
-    now=42;steps=polls=clock_calls=status_calls=0;
+    now=42;steps=polls=clock_calls=status_calls=sync_ticks=0;
     step_tick_at=poll_tick_at=status_change_at=plan_length=0;
     fallback=progress;dirty=0;storage_status=unchanged;trace_length=0;
     memset(plan,0,sizeof plan);memset(trace,0,sizeof trace);
 }
 static void counts(unsigned expected_steps,unsigned expected_polls){
     assert(steps==expected_steps);assert(polls==expected_polls);
-    assert(status_calls==2);assert(clock_calls>=1);
+    assert(status_calls==2);assert(clock_calls>=1);assert(sync_ticks==2);
     assert(trace_length==steps+polls);
     for(unsigned i=0;i<polls;i++){assert(trace[2*i]=='S');assert(trace[2*i+1]=='P');}
     if(steps>polls)assert(trace[trace_length-1]=='S');
