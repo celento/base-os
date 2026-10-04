@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 from layout import constants
+from update_image import install_kernel
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build").resolve()
@@ -41,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix="baseos-gallery-") as temp:
     assert len(kernel) <= layout["KERNEL_SECTORS"] * 512
     disk = bytearray(layout["DISK_SECTORS"] * 512)
     disk[:512] = (BUILD / "boot.bin").read_bytes()
-    disk[512:512 + len(kernel)] = kernel
+    install_kernel(disk, kernel, layout)
     (work / "disk.img").write_bytes(disk)
     log = work / "serial.log"
     OUTPUT.mkdir(parents=True, exist_ok=True)

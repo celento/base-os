@@ -3,7 +3,9 @@
 /* Shared by C, the preprocessed linker script, assembler and image tools.
  * Keep these values integer literals so tools/layout.py can read them. */
 #define KERNEL_LOAD_ADDR 0x10000
-#define KERNEL_SECTORS 383
+#define KERNEL_SECTORS 895
+#define KERNEL_PRIMARY_SECTORS 383
+#define KERNEL_EXT_LBA 5184
 #define STACK_BOTTOM 0x80000
 #define STACK_TOP 0x90000
 #define BOOTINFO_ADDR 0x7E00

@@ -1,8 +1,9 @@
 """Exercise real PS/2 input through QEMU, including BASIC's INKEY callback."""
 import json,pathlib,subprocess,sys,tempfile,time
 from layout import constants
+from update_image import install_kernel
 build=pathlib.Path(sys.argv[1]).resolve();d=pathlib.Path(tempfile.mkdtemp(prefix='baseos-input-'));print(d,flush=True)
-c=constants();image=bytearray(c['DISK_SECTORS']*512);kernel=(build/'kernel.bin').read_bytes();image[:512]=(build/'boot.bin').read_bytes();image[512:512+len(kernel)]=kernel
+c=constants();image=bytearray(c['DISK_SECTORS']*512);kernel=(build/'kernel.bin').read_bytes();image[:512]=(build/'boot.bin').read_bytes();install_kernel(image,kernel,c)
 path=d/'disk.img';path.write_bytes(image);log=d/'serial.log'
 p=subprocess.Popen(['qemu-system-i386','-m','32M','-vga','std','-drive',f'file={path},format=raw,index=0,if=floppy','-display','none','-serial',f'file:{log}','-qmp','stdio','-no-reboot'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 try:

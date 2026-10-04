@@ -1,7 +1,7 @@
-; CHS loader for drive A, 80 cylinders, two heads, 18 or 36 sectors/track.
+; CHS loader for drive A, 80 cylinders, two heads, 36 sectors/track.
 [org 0x7c00]
 bits 16
-%if KERNEL_SECTORS + 1 > FS_DISK_LBA
+%if KERNEL_PRIMARY_SECTORS + 1 > FS_DISK_LBA
 %error "kernel overlaps filesystem"
 %endif
 start:
@@ -24,8 +24,6 @@ start:
     jne disk_error
     cmp ch, 79
     jne disk_error
-    cmp cl, 18
-    je .geometry
     cmp cl, 36
     jne disk_error
 .geometry:
@@ -59,10 +57,27 @@ start:
     dec di
     jz kernel_loaded
     add bx, 512
-    jnc .advchs
+    jnc .check_extent
     mov ax, es
     add ax, 0x1000
     mov es, ax
+.check_extent:
+    cmp di, KERNEL_SECTORS - KERNEL_PRIMARY_SECTORS
+    jne .advchs
+    ; Continue in the unused disk tail, leaving both filesystem slots intact.
+    mov ax, KERNEL_EXT_LBA
+    xor dx, dx
+    xor cx, cx
+    mov cl, [spt]
+    div cx
+    mov cl, dl
+    inc cl
+    xor dx, dx
+    mov bp, 2
+    div bp
+    mov dh, dl
+    mov ch, al
+    jmp .read
 .advchs:
     inc cl
     cmp cl, [spt]

@@ -7,7 +7,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-from update_image import update
+from update_image import update, install_kernel, kernel_offset
 from layout import constants
 
 
@@ -34,6 +34,25 @@ class ImageTests(unittest.TestCase):
             kernel.write_bytes(b'changed kernel')
             update(image, boot, kernel)
             self.assertEqual(image.read_bytes()[c['FS_DISK_LBA'] * 512:], marker[c['FS_DISK_LBA'] * 512:])
+
+    def test_split_kernel_preserves_both_snapshots(self):
+        c = constants()
+        data = bytearray(c['DISK_SECTORS'] * 512)
+        start, end = c['FS_DISK_LBA'] * 512, c['KERNEL_EXT_LBA'] * 512
+        data[start:end] = b'V' * (end - start)
+        kernel = bytes((i * 37) & 255 for i in range(300000))
+        install_kernel(data, kernel, c)
+        self.assertEqual(data[start:end], b'V' * (end - start))
+        first = c['KERNEL_PRIMARY_SECTORS'] * 512
+        self.assertEqual(data[512:512 + first], kernel[:first])
+        self.assertEqual(data[end:end + len(kernel) - first], kernel[first:])
+        for offset in (0, first - 1, first, len(kernel) - 1):
+            self.assertEqual(data[kernel_offset(offset, c)], kernel[offset])
+        # A smaller rebuild clears stale extension bytes, leaving files intact.
+        install_kernel(data, b'small', c)
+        self.assertEqual(data[start:end], b'V' * (end - start))
+        extra = (c['KERNEL_SECTORS'] - c['KERNEL_PRIMARY_SECTORS']) * 512
+        self.assertEqual(data[end:end + extra], bytes(extra))
 
     def test_locked_image_is_not_replaced(self):
         with tempfile.TemporaryDirectory() as temp:

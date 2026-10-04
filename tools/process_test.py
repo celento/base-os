@@ -1,6 +1,7 @@
 """Boot disposable native isolation tests; never edits the user image."""
 import pathlib,subprocess,tempfile,sys,shutil
 from layout import constants
+from update_image import install_kernel
 from smoke_test import run
 build=pathlib.Path(sys.argv[1]).resolve();root=pathlib.Path(__file__).resolve().parents[1]
 d=pathlib.Path(tempfile.mkdtemp(prefix='baseos-process-'));print(d,flush=True)
@@ -11,6 +12,6 @@ objects=[str(p) for p in build.glob('*.o') if p.name!='kernel_entry.o']
 subprocess.run([tool('ld'),'-T',str(build/'linker.ld'),'-nostdlib','-m','elf_i386','-z','noexecstack','-o',str(d/'kernel.elf'),str(d/'entry.o'),str(d/'guest.o'),*objects],check=True)
 subprocess.run([tool('objcopy'),'-O','binary',str(d/'kernel.elf'),str(d/'kernel.bin')],check=True)
 c=constants();kernel=(d/'kernel.bin').read_bytes();assert len(kernel)<=c['KERNEL_SECTORS']*512
-image=bytearray(c['DISK_SECTORS']*512);image[:512]=(build/'boot.bin').read_bytes();image[512:512+len(kernel)]=kernel
+image=bytearray(c['DISK_SECTORS']*512);image[:512]=(build/'boot.bin').read_bytes();install_kernel(image,kernel,c)
 (d/'disk.img').write_bytes(image)
 run(d/'disk.img',d,'isolation','PROCESS-ISOLATION-PASS',seconds=20)
