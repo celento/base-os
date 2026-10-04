@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "input_ingress.h"
+#include "native_ui.h"
 #define MAX_WIN 8
 #define MENUBAR_H 36
 #define TITLE_H 32
@@ -62,6 +63,13 @@ static void term_input_lost(int slot){(void)slot;++terminal_losses;}
 static void drain_8042(void){}
 static unsigned acquire_tail;
 static unsigned input_acquire(unsigned budget){unsigned n=acquire_tail<budget?acquire_tail:budget;acquire_tail-=n;return n;}
+#ifndef NATIVE_UI_DESKTOP_REAL
+static uint32_t timer_ticks(void){return frame_count;}
+static unsigned desktop_native_pointer(const InputSample *sample){(void)sample;return 0;}
+void native_ui_cancel_all(unsigned reason,unsigned ticks,unsigned buttons){(void)reason;(void)ticks;(void)buttons;}
+void native_ui_refresh(unsigned ticks,unsigned buttons){(void)ticks;(void)buttons;}
+void native_ui_input_loss(unsigned ticks,unsigned buttons,unsigned dropped){(void)ticks;(void)buttons;(void)dropped;}
+#endif
 static uint32_t input_gesture_ticks(void);
 static int double_click(int item,int *last_item,uint32_t *last_frame);
 struct Record{char kind;int x,y,buttons,mod,value;unsigned ticks;};

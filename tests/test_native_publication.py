@@ -13,12 +13,12 @@ class NativePublicationTests(unittest.TestCase):
         def prepare(directory):
             source = (ROOT / 'src/kernel.c').read_text()
             code = ''.join(function(source, name) for name in
-                           ('term_canvas_geometry', 'draw_term_canvas'))
+                           ('draw_term_canvas',))
             (directory / 'native_publication_render.inc').write_text(code)
         for rectangle in (False, True):
             with self.subTest(rectangle=rectangle):
                 extra = (str(ROOT / 'tests/net_stub.c'), str(ROOT / 'src/download.c'),
-                         '-DDOWNLOAD_HOST_TEST')
+                         '-DDOWNLOAD_HOST_TEST', str(ROOT / 'src/canvas_view.c'))
                 if rectangle:
                     extra += ('-DNATIVE_RECTANGLE_CALLBACK',)
                 self.run_host('native_publication_host', prepare, extra)

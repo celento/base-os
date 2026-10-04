@@ -1,5 +1,6 @@
 #ifndef TERM_H
 #define TERM_H
+#include "program.h"
 
 #define TERM_COLS  80
 #define TERM_LINES 320 /* Holds one complete 256-node directory listing. */
@@ -77,6 +78,8 @@ TermTaskUpdate term_task_poll_update(void);
 /* Compatibility for callers which always redraw the entire desktop. */
 int term_task_poll(void);
 int term_task_running(int slot);
+/* Identity-only attachment check; does not select a Terminal or poll tasks. */
+int term_binding_matches(const ProcessBinding *binding);
 int term_task_key(int slot, int key);
 void term_task_stop(int slot);
 /* Returns 0 while an active process is stopping; callers must not reuse/reset. */

@@ -42,6 +42,7 @@
 #include "sysmon.h"
 #include "fs.h"
 #include "native_sync.h"
+#include "native_ui.h"
 #include "wordle.h"
 #include "term.h"
 #include "todo.h"
@@ -1149,6 +1150,7 @@ static unsigned input_suppressed, input_saver_buttons, input_unknown_buttons, in
 static uint64_t input_wake_serial;
 static void desktop_input_cancel(unsigned buttons);
 static void desktop_input_fence(void);
+static int desktop_input_blocked(void);
 static unsigned desktop_input_turn(void);
 static int desktop_program_key(void);
 static uint32_t input_gesture_ticks(void) { return input_routing ? input_sample_ticks : frame_count; }
@@ -7835,6 +7837,7 @@ static void install_examples(void){
     if(fs_find_child(dir,"notebook.bex")<0){int id=fs_create(dir,"notebook.bex");if(id>=0)fs_write(id,(const char *)sdk_notebook,sizeof sdk_notebook);}
     if(fs_find_child(dir,"counter.bex")<0){int id=fs_create(dir,"counter.bex");if(id>=0)fs_write(id,(const char *)sdk_counter,sizeof sdk_counter);}
     if(fs_find_child(dir,"docstats.bex")<0){int id=fs_create(dir,"docstats.bex");if(id>=0)fs_write(id,(const char *)sdk_docstats,sizeof sdk_docstats);}
+    if(fs_find_child(dir,"pointer.bex")<0){int id=fs_create(dir,"pointer.bex");if(id>=0)fs_write(id,(const char *)sdk_pointer,sizeof sdk_pointer);}
     if(docs>=0&&fs_find_child(docs,"stats-sample.txt")<0){
         unsigned length=example_stats_document(edit_scratch,EDIT_BUF_SIZE);
         if(length&&length<=fs_file_limit()){
@@ -8034,6 +8037,54 @@ static int term_task_render_action(TermTaskUpdate update) {
     return TERM_RENDER_FULL;
 }
 
+/* Trusted native-host adapter. Every snapshot independently checks process,
+ * Terminal incarnation and published geometry; it never changes selection. */
+static int native_host_snapshot(const ProcessBinding *binding,NativeUiHost *out) {
+    if(!binding||binding->slot>=MAX_WIN||!process_binding_live(binding)||!term_binding_matches(binding))return 0;
+    const Win *w=&wins[binding->slot];
+    if(!w->open||w->kind!=WK_TERM)return 0;
+    int width=0,height=0;term_canvas_size((int)binding->slot,&width,&height);
+    *out=(NativeUiHost){0};
+    canvas_view_layout(&out->view,w->x,w->y,w->w,w->h,width,height,TITLE_H,TERM_PAD,EDIT_LINE_H);
+    if(w->min)out->state|=BOS_UI_STATE_MINIMIZED;
+    if(desktop_input_blocked())out->state|=BOS_UI_STATE_BLOCKED;
+    if(!w->min&&out->view.viewport_w>0&&out->view.viewport_h>0)out->state|=BOS_UI_STATE_AVAILABLE;
+    if(!w->min&&!desktop_input_blocked()&&(int)binding->slot==win_front())out->state|=BOS_UI_STATE_FOCUSED;
+    return 1;
+}
+static void native_host_acquired(NativeUiAcquired *out) {
+    unsigned partial=device_input.packet_n?device_input.packet[0]&(INPUT_LEFT|INPUT_RIGHT):0;
+    unsigned unknown=input_unknown_buttons;
+    if(device_input.loss&INPUT_LOSS_DEVICE)unknown=INPUT_LEFT|INPUT_RIGHT;
+    *out=(NativeUiAcquired){device_input.serial,device_input.buttons|partial|unknown,timer_ticks()};
+}
+static void native_host_focus(const ProcessBinding *binding) {
+    NativeUiHost host;
+    if(native_host_snapshot(binding,&host)&&(host.state&BOS_UI_STATE_AVAILABLE)&&
+       !(host.state&BOS_UI_STATE_BLOCKED))win_focus((int)binding->slot);
+}
+static unsigned desktop_native_pointer(const InputSample *sample) {
+    native_ui_refresh(sample->ticks,sample->buttons);
+    BosHandle target=0;
+    /* Existing shell drags retain their own gesture. A later chord over a
+     * native canvas cannot steal an in-progress title/built-in interaction. */
+    if(!mouse_left&&!mouse_right&&!desktop_input_blocked()&&sample->x>=0&&sample->x<fb_w&&
+       sample->y>=MENUBAR_H&&sample->y<TASKBAR_Y){
+        int slot=-1;
+        for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&!wins[i].min&&
+           hit(sample->x,sample->y,wins[i].x,wins[i].y,wins[i].w,wins[i].h)&&
+           (slot<0||wins[i].z>wins[slot].z))slot=i;
+        if(slot>=0&&wins[slot].kind==WK_TERM){
+            int width=0,height=0;CanvasView view;
+            term_canvas_size(slot,&width,&height);
+            canvas_view_layout(&view,wins[slot].x,wins[slot].y,wins[slot].w,wins[slot].h,
+                               width,height,TITLE_H,TERM_PAD,EDIT_LINE_H);
+            if(canvas_view_contains(&view,sample->x,sample->y))target=native_ui_target_at((unsigned)slot);
+        }
+    }
+    return native_ui_route(sample,target);
+}
+
 /* Desktop-only compatibility adapter for the one ordered device stream. */
 typedef struct {
     Win win[MAX_WIN];
@@ -8067,6 +8118,7 @@ static void desktop_input_modifiers(unsigned modifiers) {
     shift_down=!!(modifiers&INPUT_SHIFT); ctrl_down=!!(modifiers&INPUT_CTRL); alt_down=!!(modifiers&INPUT_ALT);
 }
 static void desktop_input_cancel(unsigned buttons) {
+    native_ui_cancel_all(BOS_UI_REASON_SCENE,input_routing?input_sample_ticks:timer_ticks(),buttons);
     /* Cancellation never commits a file drop, snapped window or Paint shape. */
     dragging_win=resizing_win=-1; drag_active=fm_dragging=fm_drag_active=0;
     for(int i=0;i<MAX_WIN;++i) window_state[i].doc.dragging=0;
@@ -8174,6 +8226,13 @@ static void desktop_pointer_sample(const InputSample *sample) {
     mouse_moved=sample->x!=mouse_x || sample->y!=mouse_y;
     input_cursor_moved |= mouse_moved;
     mouse_x=sample->x; mouse_y=sample->y;
+    unsigned native=desktop_native_pointer(sample);
+    if(native&NATIVE_UI_CONSUMED_POINTER){
+        mouse_left=mouse_right=0;
+        if(sample->wheel&&!(native&NATIVE_UI_CONSUMED_WHEEL))handle_wheel(sample->wheel);
+        if(mouse_moved&&dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
+        return;
+    }
     /* Final release coordinates belong to the gesture being released. */
     if(mouse_moved && (prior&INPUT_LEFT)) desktop_pointer_motion();
     mouse_left=!!(buttons&INPUT_LEFT); mouse_right=!!(buttons&INPUT_RIGHT);
@@ -8188,11 +8247,12 @@ static void desktop_pointer_sample(const InputSample *sample) {
      * motion; the old per-turn drag tick supplied this initial application. */
     if((buttons&INPUT_LEFT) && !(prior&INPUT_LEFT) && mouse_left)desktop_pointer_motion();
     if((prior&INPUT_LEFT) && !(buttons&INPUT_LEFT))desktop_pointer_release();
-    if(sample->wheel)handle_wheel(sample->wheel);
+    if(sample->wheel&&!(native&NATIVE_UI_CONSUMED_WHEEL))handle_wheel(sample->wheel);
     /* A dismissal click is already consumed; held gestures cannot click through
      * a newly opened menu/modal or continue behind it. Focus by DOWN is ordered
      * normally, so the same queued DOWN/UP survives without an epoch change. */
     if(desktop_input_blocked())desktop_input_cancel(sample->buttons);
+    native_ui_refresh(sample->ticks,sample->buttons);
     if(mouse_moved && dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
 }
 static void desktop_keyboard_loss(void) {
@@ -8205,6 +8265,7 @@ static void desktop_input_reset(const InputSample *sample) {
     if(sample->kind==INPUT_RESET)desktop_keyboard_loss();
     if(sample->reason&INPUT_LOSS_DEVICE)input_unknown_buttons=INPUT_LEFT|INPUT_RIGHT;
     desktop_input_cancel(sample->buttons);
+    native_ui_input_loss(sample->ticks,sample->buttons|input_unknown_buttons,sample->dropped);
     desktop_input_clear_clicks();
     input_cursor_moved |= mouse_x!=sample->x || mouse_y!=sample->y;
     mouse_x=sample->x;mouse_y=sample->y;
@@ -8217,6 +8278,7 @@ static unsigned desktop_input_turn(void) {
         input_tail_pending=input_acquire(32)==32;
         if(device_input.loss)desktop_keyboard_loss();
         if(device_input.loss&INPUT_LOSS_DEVICE)input_unknown_buttons=INPUT_LEFT|INPUT_RIGHT;
+        if(device_input.loss)native_ui_input_loss(device_input.ticks,device_input.buttons|input_unknown_buttons,device_input.dropped);
         input_discard(&device_input);desktop_input_fence();
         desktop_input_modifiers(device_input.modifiers);
         mouse_moved |= mouse_x!=device_input.x || mouse_y!=device_input.y;
@@ -8227,6 +8289,7 @@ static unsigned desktop_input_turn(void) {
     /* Changes made by a routed record are remembered immediately. Only an
      * autonomous scene change fences backlog, including same-slot reuse. */
     if(desktop_input_scene_changed())desktop_input_fence();
+    native_ui_refresh(timer_ticks(),device_input.buttons);
     desktop_input_remember_scene();
     input_cursor_moved=mouse_moved;
     unsigned count=0;
@@ -8268,6 +8331,7 @@ static unsigned desktop_input_turn(void) {
                 if(desktop_input_scene_changed())desktop_input_cancel(sample.buttons);
             }
         }
+        native_ui_refresh(sample.ticks,sample.buttons);
         input_routing=0;
         desktop_input_remember_scene();
     }
@@ -8372,6 +8436,10 @@ void kmain(void) {
     drain_8042();
 
     input_ready=1;
+    if(mouse_ok){
+        const NativeUiHooks native_hooks={native_host_snapshot,native_host_acquired,native_host_focus};
+        native_ui_init(&native_hooks);
+    }
     boot_splash();
     session_restore();
 #ifdef FEATURE_TEST
@@ -8403,6 +8471,9 @@ void kmain(void) {
         int player_slot=find_open_kind(WK_PLAYER);
         if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
         TermTaskUpdate term_update=term_task_poll_update();
+        /* Publication/clear changes become visible to input before the next
+         * routed sample, including when rendering is occluded or deferred. */
+        native_ui_refresh(timer_ticks(),device_input.buttons);
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();
