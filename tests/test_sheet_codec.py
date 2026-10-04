@@ -60,7 +60,7 @@ class SheetCodecTests(unittest.TestCase):
 
     def test_host_codec_bounds_and_atomicity(self):
         self.assertIn('Spreadsheet codec tests passed', self.host_result.stdout)
-        self.assertIn('Maximum spreadsheet native: 329488 bytes; CSV: 642432 bytes',
+        self.assertIn('Maximum spreadsheet native v1: 329488 bytes; CSV: 642432 bytes',
                       self.host_result.stdout)
 
     def test_native_exact_cell_types_and_sources(self):
