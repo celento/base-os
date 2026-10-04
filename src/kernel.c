@@ -6,6 +6,8 @@
 #include "gfx.h"
 #include "decimal.h"
 #include "display.h"
+#include "audio.h"
+#include "net.h"
 #include "platform.h"
 #include "history.h"
 #include "program.h"
@@ -1245,7 +1247,7 @@ static void keyboard_handle_byte(uint8_t sc) {
 
 static uint8_t kq[1024];
 static int input_ready;
-void platform_poll(void){if(input_ready)drain_8042();}
+void platform_poll(void){if(input_ready)drain_8042();audio_poll();net_poll();}
 static int kqn;
 
 void drain_8042(void) {
@@ -1276,7 +1278,7 @@ static void video_init(void) {
     fb_pitch = bi->pitch;
     lfb = (uint8_t *)bi->lfb;
     gfx_init((uint8_t *)FB_BASE, lfb, fb_w, fb_h, fb_bpp, fb_pitch);
-    gfx_set_flip_hook(drain_8042);
+    gfx_set_flip_hook(platform_poll);
 
     kprint_debug("Video ");
     kprint_uint((unsigned)fb_w);
@@ -6290,6 +6292,8 @@ static void boot_splash(void) {
     int shown = 0;
     while (1) {
         poll_time();
+        audio_poll();
+        net_poll();
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();
@@ -6506,6 +6510,8 @@ void kmain(void) {
     poll_time();
 
     video_init();
+    audio_init();
+    net_init();
 
     fs_init();
     int mounted = fs_load_disk();
@@ -6553,6 +6559,8 @@ void kmain(void) {
 
     while (1) {
         poll_time();
+        audio_poll();
+        net_poll();
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();

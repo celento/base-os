@@ -1,4 +1,5 @@
 #include "program.h"
+#include "audio.h"
 #include "platform.h"
 #include "fs.h"
 extern unsigned char gdt_user_code[],gdt_user_data[],gdt_tss[];
@@ -53,7 +54,10 @@ int process_run(const void *file,unsigned bytes,const ProgramIO *io){
     kmemset((void *)USER_BASE,0,USER_CAPACITY);
     kmemcpy((void *)USER_BASE,file,bytes);
     output=io;process_result=0;began=timer_ticks();active=1;
+    int resume_audio=audio_status()->state==AUDIO_PLAYING;
+    if(resume_audio)audio_pause(1);
     int result=process_enter(h[1]);active=0;
+    if(resume_audio)audio_pause(0);
     return result;
 }
 /* Offsets match InterruptFrame: 8 registers, four segment slots, vector/error,
