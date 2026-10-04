@@ -1,5 +1,9 @@
 # Native address-space foundation: C3a
 
+The sections below preserve staged implementation boundaries. Current combined
+BEX2 and ordered-input acceptance is recorded in [C3_COMBINED_VERIFICATION.md](C3_COMBINED_VERIFICATION.md);
+this checkpoint includes that qualified later loader.
+
 BEX2 loading is not enabled by this landing. BEX1 files, ABI0–27, 64 KiB
 contiguous offsets, 48 KiB executable cap, initial ESP65520 and synchronous exec
 remain unchanged. Every syscall buffer now goes through one direction-aware
