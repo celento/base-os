@@ -42,11 +42,18 @@ static void unchanged_error(int result, int expected, const BosFileInfo *info,
 static void coherence(void) {
     setup_files();
     memset(replacement, 'a', sizeof(replacement));
+    int prefix = add_file("prefix.txt", "unrelated earlier allocation", 28);
     int id = add_file("shared.txt", (const char *)replacement, 8192);
     BosFileInfo a = open_file(OWNER_A, "/Documents/shared.txt", RW);
     BosFileInfo b = open_file(OWNER_B, "/Documents/shared.txt", RW);
     BosFileInfo second = open_file(OWNER_A, "/Documents/shared.txt", BOS_FILE_OPEN_READ);
     char bytes[4096];
+    /* Unrelated compaction relocates data without invalidating the version. */
+    unsigned old_offset = nodes[id].offset;
+    assert(fs_delete(prefix) == 0 && nodes[id].offset != old_offset);
+    assert(native_file_read_at(OWNER_B, a.handle, 0, bytes, sizeof(bytes)) == BOS_E_STALE);
+    BosFileInfo wrong_owner = a, wrong_before = a;
+    unchanged_error(native_file_replace(OWNER_B, a.handle, "wrong owner", 11, &wrong_owner), BOS_E_STALE, &wrong_owner, &wrong_before);
     assert(native_file_read_at(OWNER_A, a.handle, 0, bytes, sizeof(bytes)) == 4096);
     assert(!memcmp(bytes, replacement, sizeof(bytes)));
     assert(native_file_read_at(OWNER_B, b.handle, 4096, bytes, sizeof(bytes)) == 4096);
@@ -180,6 +187,12 @@ static void capacity_and_owners(void) {
     setup_files(); int id = add_file("capacity.txt", "old", 3);
     BosFileInfo handles[NATIVE_FILE_CAPACITY], out, before;
     memset(&out, 0x55, sizeof(out)); before = out;
+    for (unsigned i = 0; i < NATIVE_FILE_PER_OWNER; ++i)
+        handles[i] = open_file(OWNER_A, "/Documents/capacity.txt", RW);
+    unchanged_error(native_file_open(OWNER_A, "/Documents/new.txt", CREATE, &out), BOS_E_CAPACITY, &out, &before);
+    /* Another process can still open while only the first owner's table is full. */
+    (void)open_file(OWNER_B, "/Documents/capacity.txt", RW);
+    native_files_init();
     for (unsigned i = 0; i < NATIVE_FILE_CAPACITY; ++i)
         handles[i] = open_file(BOS_HANDLE_TYPE_PROCESS | (i / NATIVE_FILE_PER_OWNER + 1),
                                "/Documents/capacity.txt", RW);
