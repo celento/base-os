@@ -9,6 +9,8 @@ int main(void){
     table[2]=0x510007;table[3]=0xf03007; /* Adjacent offsets, scattered frames. */
     table[768]=0x681007; /* High workspace. */
     table[1023]=0x511007; /* Top stack; its preceding page remains absent. */
+    assert(!address_space_span(0,4194304,4096,1,USER_READ));
+    assert(!address_space_span(0,65536,0,0,(enum UserAccess)7));
     assert(address_space_span(0,65536,0,65536,USER_WRITE));
     assert(address_space_span(0,65536,65536,0,USER_READ));
     assert(!address_space_span(0,65536,65536,1,USER_READ));

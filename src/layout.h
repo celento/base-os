@@ -55,7 +55,7 @@
 #define PAGING_BASE 0xF00000
 #define PAGING_CAPACITY 0x3000
 /* Separate inactive kernel root. Both compatibility pages retain their layout. */
-#define KERNEL_DIRECTORY_BASE (PAGING_BASE+0x2000)
+#define KERNEL_DIRECTORY_BASE 0xF02000
 #define USER_BASE 0x1000000
 #define USER_CAPACITY 0x10000
 /* The compatibility page directory replaces this entire 4 MiB PDE. Unused
