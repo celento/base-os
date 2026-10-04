@@ -38,17 +38,17 @@ input/output/selection. It returns 1 only for `PROCESS_TASK_READY` or
 
 - `name[TERM_TASK_NAME_LEN]`: copied executable basename, including a NUL
 - `owner`: zero-based terminal/window slot
-- `state`: the live process state from `process_task_status`
+- `state`: the live process state from `process_status`
 - `started_ticks`: PIT tick counter at the accepted start
 - `elapsed_sec`: unsigned PIT tick difference divided by `TIMER_HZ`
-- `instance`: nonzero per-start identity, distinct even for immediate same-slot,
-  same-tick restarts; zero is reserved for tasks not started through Terminal
+- `instance`: the full nonzero opaque process handle, distinct even for immediate
+  same-slot, same-tick restarts
 
 The unsigned tick subtraction handles a PIT rollover for lifetimes shorter than
-one complete 32-bit tick cycle. A low-level caller using `process_task_start`
-directly, without Terminal's command lifecycle, has no filename/start metadata;
-its query falls back to “Native task” and reports zero elapsed seconds. Ordinary
-user-started tasks always use the tracked Terminal lifecycle.
+one complete 32-bit tick cycle. Low-level process creation is independent of
+Terminal and does not appear in this display snapshot without a Terminal
+attachment. Ordinary user-started tasks always use the tracked Terminal
+lifecycle and copied filename/start metadata.
 
 ## Desktop integration contract
 

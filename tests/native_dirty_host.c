@@ -6,11 +6,11 @@ static void task_test_step(int owner);
 enum { QUIET, PIXELS, TEXT, BOTH, RESIZE, OUTSIDE };
 static int operation;
 static void task_test_step(int owner) {
-    if(operation==PIXELS||operation==BOTH)callbacks[owner].plot(3,4,17);
-    if(operation==TEXT||operation==BOTH)callbacks[owner].print("ordinary output");
-    if(operation==RESIZE)assert(!callbacks[owner].resize(320,200));
-    if(operation==OUTSIDE)callbacks[owner].plot(-1,4,17);
-    if(operation!=QUIET)callbacks[owner].present();
+    if(operation==PIXELS||operation==BOTH)callbacks[owner].plot(&callbacks[owner].binding,3,4,17);
+    if(operation==TEXT||operation==BOTH)callbacks[owner].print(&callbacks[owner].binding,"ordinary output");
+    if(operation==RESIZE)assert(!callbacks[owner].resize(&callbacks[owner].binding,320,200));
+    if(operation==OUTSIDE)callbacks[owner].plot(&callbacks[owner].binding,-1,4,17);
+    if(operation!=QUIET)callbacks[owner].present(&callbacks[owner].binding);
 }
 static TermTaskUpdate update(int op,int owner,unsigned flags) {
     operation=op;
@@ -43,7 +43,7 @@ int main(void) {
     update(PIXELS,6,TERM_TASK_CANVAS);
     exit_next[2]=1;
     update(QUIET,2,TERM_TASK_TEXT|TERM_TASK_LIFECYCLE);
-    assert(!term_task_running(2)&&!terms[2].task_instance);
+    assert(!term_task_running(2)&&!terms[2].process);
     operation=TEXT;assert(term_task_poll());
     operation=QUIET;assert(!term_task_poll());
     term_task_stop(6);

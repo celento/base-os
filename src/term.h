@@ -47,7 +47,7 @@ typedef struct {
     int state;                   /* PROCESS_TASK_READY or PROCESS_TASK_SLEEPING. */
     unsigned started_ticks;      /* PIT time at the accepted start. */
     unsigned elapsed_sec;        /* Wall-clock lifetime, including sleep. */
-    unsigned instance;           /* Changes on each accepted terminal task start. */
+    unsigned instance;           /* Full opaque process handle; recheck before UI actions. */
 } TermTaskInfo;
 /* Returns 1 for a live task, otherwise 0 and a cleared output. No selection change. */
 int term_task_info(int slot, TermTaskInfo *out);
@@ -75,6 +75,7 @@ int term_task_poll(void);
 int term_task_running(int slot);
 int term_task_key(int slot, int key);
 void term_task_stop(int slot);
-void term_task_close(int slot);
+/* Returns 0 while an active process is stopping; callers must not reuse/reset. */
+int term_task_close(int slot);
 
 #endif

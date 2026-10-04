@@ -7,43 +7,136 @@ static unsigned char published_arena[NATIVE_CANVAS_CAPACITY];
 #define NATIVE_CANVAS_MEMORY ((uintptr_t)published_arena)
 #define TERM_MEMORY ((uintptr_t)terminal_arena)
 #include "../src/term.c"
+#include "../sdk/baseos_abi.h"
+/* Exact handles resolve records first. Slot-indexed views keep the Terminal
+ * assertions readable without making a display slot the process identity. */
 static int states[PROCESS_TASKS],exit_next[PROCESS_TASKS],steps[PROCESS_TASKS];
-static ProgramIO callbacks[PROCESS_TASKS];
+static int stop_deferred[PROCESS_TASKS];
+static ProcessIO callbacks[PROCESS_TASKS];
 static char arguments[PROCESS_TASKS][PROCESS_ARGUMENT_MAX+1];
+typedef struct {
+    ProcessHandle handle;
+    int slot,state;
+    ProcessResult result;
+    char argument[PROCESS_ARGUMENT_MAX+1];
+} FixtureProcess;
+static FixtureProcess fixture_processes[PROCESS_TASKS];
+static ProcessHandle next_handle=0x100;
+static unsigned schedule_cursor;
+static FixtureProcess *fixture_process(ProcessHandle handle){
+    for(unsigned i=0;i<PROCESS_TASKS;i++)
+        if(handle&&fixture_processes[i].handle==handle)return &fixture_processes[i];
+    return 0;
+}
+static int fixture_state(const FixtureProcess *p){return p->slot>=0?states[p->slot]:p->state;}
+static void fixture_set_state(FixtureProcess *p,int state){
+    p->state=state;if(p->slot>=0)states[p->slot]=state;
+}
 int basic_run(const char *s,int n,const ProgramIO *io){(void)s;(void)n;(void)io;return 0;}
 int program_key(void){return 0;}
 void program_present(void){}
 int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;return 0;}
-int process_task_start(int owner,const void *p,unsigned n,const ProgramIO *io){
-    return process_task_start_with_arg(owner,p,n,io,0,0);
-}
-int process_task_start_with_arg(int owner,const void *p,unsigned n,const ProgramIO *io,
-                                const char *argument,unsigned length){
-    assert(owner>=0&&owner<8&&p&&n>=16&&io);
+int process_create(const void *file,unsigned bytes,const char *argument,unsigned length,ProcessHandle *out){
+    assert(file&&bytes>=16&&out);
     assert(length<=PROCESS_ARGUMENT_MAX&&(!length||(argument&&argument[0]=='/')));
-    if(states[owner]==PROCESS_TASK_READY||states[owner]==PROCESS_TASK_SLEEPING)return -1;
-    states[owner]=PROCESS_TASK_READY;callbacks[owner]=*io;
-    if(length)memcpy(arguments[owner],argument,length);
-    arguments[owner][length]=0;return 0;
+    for(unsigned i=0;i<PROCESS_TASKS;i++)if(!fixture_processes[i].handle){
+        FixtureProcess *p=&fixture_processes[i];memset(p,0,sizeof *p);
+        p->handle=BOS_HANDLE_TYPE_PROCESS|++next_handle;p->slot=-1;p->state=PROCESS_TASK_CREATED;
+        if(length)memcpy(p->argument,argument,length);
+        p->argument[length]=0;*out=p->handle;return 0;
+    }
+    return -1;
 }
-int process_task_step(int owner){
-    if(states[owner]!=PROCESS_TASK_READY)return 0;
+int process_bind(ProcessHandle handle,const ProcessIO *io){
+    FixtureProcess *p=fixture_process(handle);
+    if(!p||fixture_state(p)!=PROCESS_TASK_CREATED||p->slot>=0||!io||!io->print||!io->plot||
+       io->binding.process!=handle||io->binding.slot>=PROCESS_TASKS||!io->binding.generation)return 0;
+    int slot=(int)io->binding.slot;
+    for(unsigned i=0;i<PROCESS_TASKS;i++)
+        if(fixture_processes[i].handle&&fixture_processes[i].slot==slot)return 0;
+    p->slot=slot;callbacks[slot]=*io;strcpy(arguments[slot],p->argument);
+    states[slot]=p->state;return 1;
+}
+int process_unbind(ProcessHandle handle){
+    FixtureProcess *p=fixture_process(handle);
+    if(!p||fixture_state(p)!=PROCESS_TASK_CREATED)return 0;
+    if(p->slot>=0)states[p->slot]=PROCESS_TASK_EMPTY;
+    p->slot=-1;return 1;
+}
+int process_start(ProcessHandle handle){
+    FixtureProcess *p=fixture_process(handle);
+    if(!p||fixture_state(p)!=PROCESS_TASK_CREATED||p->slot<0)return 0;
+    fixture_set_state(p,PROCESS_TASK_READY);return 1;
+}
+int process_step(ProcessHandle handle){
+    FixtureProcess *p=fixture_process(handle);
+    if(!p||fixture_state(p)!=PROCESS_TASK_READY)return 0;
+    int owner=p->slot;
+    if(owner<0)return 1;
     steps[owner]++;
-    if(exit_next[owner]){exit_next[owner]=0;states[owner]=PROCESS_TASK_DONE;}
-    else {
+    if(exit_next[owner]){
+        exit_next[owner]=0;p->result=(ProcessResult){0,PROCESS_EXIT_APP};
+        fixture_set_state(p,PROCESS_TASK_DONE);
+    }else {
 #ifdef TERM_TASK_STEP_HOOK
         TERM_TASK_STEP_HOOK(owner);
 #else
-        callbacks[owner].print("Task progress.");
+        callbacks[owner].print(&callbacks[owner].binding,"Task progress.");
 #endif
     }
     return 1;
 }
-int process_task_status(int owner){return owner>=0&&owner<8?states[owner]:PROCESS_TASK_EMPTY;}
-int process_task_result(int owner){(void)owner;return 0;}
-int process_task_key(int owner,int key){(void)key;return term_task_running(owner);}
-void process_task_stop(int owner){states[owner]=PROCESS_TASK_DONE;}
-void process_task_clear(int owner){if(owner>=0&&owner<8)states[owner]=PROCESS_TASK_EMPTY;}
+ProcessHandle process_schedule_one(void){
+    for(unsigned n=0;n<PROCESS_TASKS;n++){
+        unsigned i=(schedule_cursor+n)%PROCESS_TASKS;
+        FixtureProcess *p=&fixture_processes[i];
+        if(p->handle&&process_step(p->handle)){
+            schedule_cursor=(i+1)%PROCESS_TASKS;return p->handle;
+        }
+    }
+    return 0;
+}
+int process_status(ProcessHandle handle){
+    FixtureProcess *p=fixture_process(handle);return p?fixture_state(p):PROCESS_TASK_EMPTY;
+}
+int process_get_result(ProcessHandle handle,ProcessResult *out){
+    FixtureProcess *p=fixture_process(handle);
+    if(!p||fixture_state(p)!=PROCESS_TASK_DONE||!out)return 0;
+    *out=p->result;return 1;
+}
+int process_key(ProcessHandle handle,int key){
+    (void)key;int state=process_status(handle);
+    return state==PROCESS_TASK_READY||state==PROCESS_TASK_SLEEPING;
+}
+int process_request_stop(ProcessHandle handle){
+    FixtureProcess *p=fixture_process(handle);
+    if(!p)return 1;
+    if(p->slot>=0&&stop_deferred[p->slot])return 0;
+    if(fixture_state(p)!=PROCESS_TASK_DONE){
+        p->result=(ProcessResult){PROCESS_TASK_STOPPED,PROCESS_EXIT_STOP};
+        fixture_set_state(p,PROCESS_TASK_DONE);
+    }
+    return 1;
+}
+int process_reap(ProcessHandle handle){
+    FixtureProcess *p=fixture_process(handle);
+    if(!p)return 1;
+    if(fixture_state(p)!=PROCESS_TASK_DONE)return 0;
+    if(p->slot>=0)states[p->slot]=PROCESS_TASK_EMPTY;
+    memset(p,0,sizeof *p);return 1;
+}
+void process_counts(ProcessCounts *out){
+    if(!out)return;
+    memset(out,0,sizeof *out);
+    for(unsigned i=0;i<PROCESS_TASKS;i++)if(fixture_processes[i].handle){
+        int state=fixture_state(&fixture_processes[i]);out->records++;
+        if(state==PROCESS_TASK_CREATED)out->created++;
+        if(state==PROCESS_TASK_READY||state==PROCESS_TASK_SLEEPING)out->live++;
+        if(state==PROCESS_TASK_EXITING)out->exiting++;
+        if(state==PROCESS_TASK_DONE)out->done++;
+        if(state!=PROCESS_TASK_DONE)out->owned++;
+    }
+}
 static void command(const char *s){while(*s)term_char(*s++);term_enter();}
 static int executable(const char *name){
     /* A complete BEX1 file is used. Process execution itself has separate tests. */
@@ -74,7 +167,7 @@ int main(void){
     assert(selected==1&&!strcmp(term_input(),"x")&&term_task_running(1)&&!term_task_running(0));
     memset(&info,0xa5,sizeof info);assert(!term_task_info(0,&info));
     TermTaskInfo zero={0};assert(!memcmp(&info,&zero,sizeof info));
-    assert(!terms[0].task_name[0]&&!terms[0].task_started&&!terms[0].task_instance);
+    assert(!terms[0].task_name[0]&&!terms[0].task_started&&!terms[0].process);
     term_select(0);assert(!strcmp(term_get(term_count()-1),"Native task stopped."));
     command("echo Terminal is still alive");assert(!strcmp(term_get(term_count()-1),"Terminal is still alive"));
     command("start /another.bex");assert(term_task_info(0,&info));
@@ -86,7 +179,7 @@ int main(void){
     for(int i=0;i<3&&term_task_running(0);i++)term_task_poll();
     assert(!term_task_running(0)&&!terms[0].task_name[0]&&selected==1&&!strcmp(term_input(),"x"));
     assert(term_task_running(1)&&steps[1]>=before_steps);
-    term_task_close(1);assert(!term_task_info(1,&info)&&!terms[1].task_instance);
+    term_task_close(1);assert(!term_task_info(1,&info)&&!terms[1].process);
     term_backspace();command("start /another.bex");assert(term_task_info(1,&info));
     term_reset();assert(!term_task_info(1,&info)&&!terms[1].task_name[0]);
     /* Lifetime remains correct across the unsigned PIT counter rollover. */

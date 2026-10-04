@@ -10,9 +10,9 @@
 #endif
 #if MPEG_NATIVE_TASKS
 #include "mpeg_native_examples.h"
+#include "process_guest_fixture.h"
+static ProcessHandle mpeg_handles[2];
 static int native_first,native_second,native_saved;
-static void native_quiet(const char *text){(void)text;}
-static void native_pixel(int x,int y,int c){(void)x;(void)y;(void)c;}
 #endif
 #ifndef MPEG_AV_CONTROLS
 #define MPEG_AV_CONTROLS 0
@@ -34,14 +34,13 @@ static void native_begin(int first){
     wins[native_second].x=28;wins[native_second].y=374;wins[native_second].w=450;wins[native_second].h=278;
     require_av(term_task_running(native_first)&&term_task_running(native_second),"MPEG native counters did not start");
     term_task_key(native_first,'+');term_task_key(native_first,'+');term_task_key(native_second,'+');
-    ProgramIO io={native_quiet,native_pixel,0,0,0,0};
-    require_av(!process_task_start(6,mpeg_fpu_a,sizeof mpeg_fpu_a,&io),"MPEG x87 task A");
-    require_av(!process_task_start(7,mpeg_fpu_b,sizeof mpeg_fpu_b,&io),"MPEG x87 task B");
+    require_av(!guest_process_launch(&mpeg_handles[0],6,mpeg_fpu_a,sizeof mpeg_fpu_a,0,0),"MPEG x87 task A");
+    require_av(!guest_process_launch(&mpeg_handles[1],7,mpeg_fpu_b,sizeof mpeg_fpu_b,0,0),"MPEG x87 task B");
 }
 static int native_poll(void){
     int changed=term_task_poll();
     require_av(term_task_running(native_first)&&term_task_running(native_second),"MPEG native counter ended");
-    require_av(process_task_status(6)==PROCESS_TASK_READY&&process_task_status(7)==PROCESS_TASK_READY,"MPEG changed native x87 state");
+    require_av(process_status(mpeg_handles[0])==PROCESS_TASK_READY&&process_status(mpeg_handles[1])==PROCESS_TASK_READY,"MPEG changed native x87 state");
     if(!native_saved&&audio_position_ms()>=1500){
         term_task_key(native_first,' ');term_task_key(native_second,' ');
         term_task_key(native_first,'s');term_task_key(native_second,'s');native_saved=1;
@@ -53,10 +52,10 @@ static void native_finish(void){
     require_av(native_saved&&one>=23&&two>=13&&one>two&&one-two>=8&&one-two<=12,"MPEG native counters did not progress independently");
     term_task_close(native_first);require_av(!term_task_running(native_first)&&term_task_running(native_second),"MPEG native close isolation");
     term_task_stop(native_second);require_av(!term_task_running(native_second),"MPEG native stop");
-    process_task_key(6,'q');process_task_key(7,'q');
-    for(int i=0;i<5;++i){process_task_step(6);process_task_step(7);}
-    require_av(process_task_status(6)==PROCESS_TASK_DONE&&!process_task_result(6)&&process_task_status(7)==PROCESS_TASK_DONE&&!process_task_result(7),"MPEG x87 tasks did not exit cleanly");
-    process_task_clear(6);process_task_clear(7);
+    process_key(mpeg_handles[0],'q');process_key(mpeg_handles[1],'q');
+    for(int i=0;i<5;++i){process_step(mpeg_handles[0]);process_step(mpeg_handles[1]);}
+    require_av(process_status(mpeg_handles[0])==PROCESS_TASK_DONE&&guest_process_result(mpeg_handles[0],PROCESS_EXIT_APP,0)&&process_status(mpeg_handles[1])==PROCESS_TASK_DONE&&guest_process_result(mpeg_handles[1],PROCESS_EXIT_APP,0),"MPEG x87 tasks did not exit cleanly");
+    require_av(guest_process_release(&mpeg_handles[0]),"MPEG record release");require_av(guest_process_release(&mpeg_handles[1]),"MPEG record release");
     platform_log("MPEG-NATIVE-COUNTERS ");kprint_uint(one);serial_write(' ');kprint_uint(two);serial_write('\n');
     platform_log("MPEG-NATIVE-X87-PASS\n");
 }

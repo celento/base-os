@@ -24,8 +24,18 @@ int native_sync_poll(unsigned owner,unsigned handle){
 int native_sync_release(unsigned owner,unsigned handle){
     stub_sync_calls++;stub_owner=owner;stub_handle=handle;return stub_result;
 }
-void native_sync_owner_release(unsigned owner){stub_release_sync++;stub_last_released=owner;}
-void native_files_release_owner(unsigned owner){stub_release_files++;stub_last_released=owner;}
+void native_sync_owner_release(unsigned owner){
+#ifdef NATIVE_OWNER_RELEASE_HOOK
+    NATIVE_OWNER_RELEASE_HOOK(owner);
+#endif
+    stub_release_sync++;stub_last_released=owner;
+}
+void native_files_release_owner(unsigned owner){
+#ifdef NATIVE_OWNER_RELEASE_HOOK
+    NATIVE_OWNER_RELEASE_HOOK(owner);
+#endif
+    stub_release_files++;stub_last_released=owner;
+}
 static void stub_info(BosFileInfo *info){
     memset(info,0,sizeof(*info));info->struct_size=sizeof(*info);
     info->handle=BOS_HANDLE_TYPE_FILE|1;info->size=7;info->flags=3;info->revision=19;

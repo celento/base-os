@@ -36,14 +36,18 @@ int basic_run(const char *text,int n,const ProgramIO *io){(void)text;(void)n;(vo
 int program_key(void){return 0;}
 void program_present(void){}
 int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;return -1;}
-int process_task_start(int owner,const void *p,unsigned n,const ProgramIO *io){(void)owner;(void)p;(void)n;(void)io;return -1;}
-int process_task_start_with_arg(int owner,const void *p,unsigned n,const ProgramIO *io,const char *argument,unsigned length){(void)argument;(void)length;return process_task_start(owner,p,n,io);}
-int process_task_step(int owner){(void)owner;return 0;}
-int process_task_status(int owner){(void)owner;return PROCESS_TASK_EMPTY;}
-int process_task_result(int owner){(void)owner;return 0;}
-int process_task_key(int owner,int key){(void)owner;(void)key;return 0;}
-void process_task_stop(int owner){(void)owner;}
-void process_task_clear(int owner){(void)owner;}
+int process_create(const void *p,unsigned n,const char *argument,unsigned length,ProcessHandle *out){(void)p;(void)n;(void)argument;(void)length;(void)out;return -1;}
+int process_bind(ProcessHandle p,const ProcessIO *io){(void)p;(void)io;return 0;}
+int process_unbind(ProcessHandle p){(void)p;return 0;}
+int process_start(ProcessHandle p){(void)p;return 0;}
+int process_step(ProcessHandle p){(void)p;return 0;}
+ProcessHandle process_schedule_one(void){return 0;}
+int process_status(ProcessHandle p){(void)p;return PROCESS_TASK_EMPTY;}
+int process_get_result(ProcessHandle p,ProcessResult *out){(void)p;(void)out;return 0;}
+int process_key(ProcessHandle p,int key){(void)p;(void)key;return 0;}
+int process_request_stop(ProcessHandle p){(void)p;return 1;}
+int process_reap(ProcessHandle p){(void)p;return 1;}
+void process_counts(ProcessCounts *out){if(out)memset(out,0,sizeof *out);}
 
 static void reset_download(void){
     reset();memset(data_disk,0,sizeof data_disk);unsigned *m=(unsigned *)data_disk;

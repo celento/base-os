@@ -31,13 +31,14 @@ static int file_call(unsigned call,unsigned a,unsigned b,unsigned c,unsigned d,u
 static void process_leave(void) __attribute__((noreturn));
 static void process_leave(void){longjmp(leave_target,1);}
 #include "native_platform_ops.inc"
-static void print_line(const char *text){(void)text;}
-static void pixel(int x,int y,int color){(void)x;(void)y;(void)color;}
-static void publish(void){publications++;}
-static ProgramIO io={print_line,pixel,0,publish,0,0};
+static void print_line(const ProcessBinding *binding,const char *text){(void)binding;(void)text;}
+static void pixel(const ProcessBinding *binding,int x,int y,int color){(void)binding;(void)x;(void)y;(void)color;}
+static void publish(const ProcessBinding *binding){(void)binding;publications++;}
+static ProcessIO io={{0,0,0},print_line,pixel,publish,0,0};
+static ProcessHandle handles[PROCESS_TASKS];
 static const unsigned char program[]={0x42,0x45,0x58,0x31,16,0,0,0,18,0,0,0,0,0,0,0,0xeb,0xfe};
 static void select_task(unsigned slot){
-    current_task=tasks+slot;active=1;output=&current_task->io;
+    current_task=task_lookup(handles[slot]);assert(current_task);active=1;output=0;
     canvas_width=160;canvas_height=100;
 }
 static int invoke(unsigned call,unsigned a,unsigned b,unsigned c,unsigned d,unsigned e){
@@ -49,7 +50,10 @@ static int invoke(unsigned call,unsigned a,unsigned b,unsigned c,unsigned d,unsi
 }
 static void start(unsigned slot){
     active=0;
-    assert(process_task_start_with_arg(slot,program,sizeof program,&io,0,0)==0);
+    if(handles[slot]){assert(process_request_stop(handles[slot]));assert(process_reap(handles[slot]));}
+    assert(process_create(program,sizeof program,0,0,&handles[slot])==0);
+    io.binding=(ProcessBinding){handles[slot],slot,1};
+    assert(process_bind(handles[slot],&io)&&process_start(handles[slot]));
     select_task(slot);
 }
 static void query(void){
@@ -141,28 +145,35 @@ static void waits(void){
 }
 static void lifetimes(void){
     volatile BosHandle old=current_task->owner_id;
-    unsigned f=stub_release_files,s=stub_release_sync;
+    volatile unsigned f=stub_release_files,s=stub_release_sync;
     assert(invoke(BOS_CALL_EXIT,27,0,0,0,0)==12345);
-    assert(current_task->state==PROCESS_TASK_DONE&&current_task->result==27);
-    assert(!current_task->owner_id&&stub_release_files==f+1&&stub_release_sync==s+1&&stub_last_released==old);
+    assert(current_task->state==PROCESS_TASK_EXITING&&current_task->result==27);
+    assert(current_task->owner_id==old&&stub_release_files==f&&stub_release_sync==s);
+    NativeTask *finished=current_task;active=0;current_task=0;task_finalize(finished);
+    assert(finished->state==PROCESS_TASK_DONE&&finished->owner_id==old);
+    assert(stub_release_files==f+1&&stub_release_sync==s+1&&stub_last_released==old);
+    ProcessResult result;assert(process_get_result(old,&result)&&result.value==27&&result.reason==PROCESS_EXIT_APP);
     start(2);assert(current_task->owner_id!=old);old=current_task->owner_id;
     stub_poll=BOS_PENDING;assert(invoke(BOS_CALL_SYNC_WAIT,BOS_HANDLE_TYPE_OPERATION|2,1000,0,0,0)==12345);
-    assert(process_task_key(2,'x'));active=0;process_task_stop(2);
-    assert(!current_task->owner_id&&!current_task->wait_operation&&stub_last_released==old);
+    assert(process_key(old,'x'));active=0;assert(process_request_stop(old));
+    assert(current_task->owner_id==old&&!current_task->wait_operation&&stub_last_released==old);
     assert(!current_task->key_count&&current_task->state==PROCESS_TASK_DONE);
-    start(2);old=current_task->owner_id;active=0;process_task_clear(2);
+    start(2);old=current_task->owner_id;active=0;
+    assert(process_request_stop(old)&&process_reap(old));
     assert(current_task->state==PROCESS_TASK_EMPTY&&!current_task->owner_id&&stub_last_released==old);
-    /* Generic error completion invokes the same cleanup. No fault is injected. */
-    start(2);old=current_task->owner_id;
-    if(!setjmp(leave_target))finish(-3);
-    assert(current_task->state==PROCESS_TASK_DONE&&!current_task->owner_id&&stub_last_released==old);
+    /* Generic completion uses the same deferred cleanup; no fault is injected. */
+    start(2);old=current_task->owner_id;f=stub_release_files;
+    if(!setjmp(leave_target))finish(-3,PROCESS_EXIT_ERROR);
+    assert(current_task->state==PROCESS_TASK_EXITING&&current_task->owner_id==old&&stub_release_files==f);
+    active=0;task_finalize(current_task);
+    assert(current_task->state==PROCESS_TASK_DONE&&stub_last_released==old);
     /* Direct allocator boundary, no runtime fault or malformed app involved. */
     owner_serial=BOS_HANDLE_SERIAL_MAX-1;
     assert(allocate_owner()==(BOS_HANDLE_TYPE_PROCESS|BOS_HANDLE_SERIAL_MAX));
     assert(allocate_owner()==BOS_HANDLE_INVALID&&allocate_owner()==BOS_HANDLE_INVALID);
-    active=0;
-    assert(process_task_start_with_arg(2,program,sizeof program,&io,0,0)==-2);
-    assert(current_task->state==PROCESS_TASK_DONE&&!current_task->owner_id);
-    puts("Native platform dispatcher: negotiation, bounded copy, wait/timeout, context support and owner cleanup passed.");
+    ProcessHandle untouched=77;
+    assert(process_create(program,sizeof program,0,0,&untouched)==-2&&untouched==77);
+    assert(current_task->state==PROCESS_TASK_DONE&&current_task->owner_id==old);
+    puts("Native platform dispatcher: negotiation, bounded copy, wait/timeout, context support and deferred owner cleanup passed.");
 }
 int main(void){query();file_dispatch();waits();lifetimes();return 0;}

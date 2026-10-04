@@ -1965,7 +1965,7 @@ static void win_close(int i) {
         edit_close_cancel();
     }
     if(wins[i].kind==WK_VIEW)image_viewer_close();
-    if(wins[i].kind==WK_TERM)term_task_close(i);
+    if(wins[i].kind==WK_TERM&&!term_task_close(i))return;
     if(wins[i].kind==WK_BROWSER)browser_close();
     if(wins[i].kind==WK_PLAYER)player_close();
     if(wins[i].kind==WK_WRITER)writer_close();

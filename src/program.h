@@ -25,27 +25,55 @@ int basic_run(const char *source, int length, const ProgramIO *io);
 void process_init(void);
 int process_run(const void *file, unsigned bytes, const ProgramIO *io);
 int process_interrupt(uint32_t *registers);
-/* Bounded desktop-driven native tasks, one per terminal/window slot. */
+/* Internal process identity is the existing opaque owner handle, never a
+ * record index or display slot. BEX1 call 12 retains an explicit display ID. */
+typedef uint32_t ProcessHandle;
 #define PROCESS_TASKS 8
 #define PROCESS_TASK_EMPTY 0
 #define PROCESS_TASK_READY 1
 #define PROCESS_TASK_SLEEPING 2
 #define PROCESS_TASK_DONE 3
+#define PROCESS_TASK_CREATED 4
+#define PROCESS_TASK_EXITING 5
+#define PROCESS_TASK_CREATING 6
 #define PROCESS_TASK_STOPPED (-4)
-int process_task_start(int owner, const void *file, unsigned bytes, const ProgramIO *io);
-/* One optional absolute printable-ASCII path, copied before returning. A zero
- * length means no argument. BEX1 images, entry points and stack ABI are unchanged. */
-int process_task_start_with_arg(int owner, const void *file, unsigned bytes,
-                                const ProgramIO *io, const char *argument,
-                                unsigned argument_length);
-/* Run at most one PIT tick of user code. Returns 1 if a slice ran. */
-int process_task_step(int owner);
-int process_task_status(int owner);
-int process_task_result(int owner);
-int process_task_key(int owner, int key);
-void process_task_stop(int owner);
-/* Forget a stopped/completed task, including queued input and saved state. */
-void process_task_clear(int owner);
+enum { PROCESS_EXIT_NONE, PROCESS_EXIT_APP, PROCESS_EXIT_ERROR, PROCESS_EXIT_STOP };
+typedef struct { int value; unsigned reason; } ProcessResult;
+typedef struct {
+    ProcessHandle process;
+    unsigned slot, generation;
+} ProcessBinding;
+/* This table and its bounded context are copied; no borrowed Terminal/user
+ * pointer survives launch. Callbacks validate the complete attachment tuple. */
+typedef struct {
+    ProcessBinding binding;
+    void (*print)(const ProcessBinding *,const char *);
+    void (*plot)(const ProcessBinding *,int,int,int);
+    void (*present)(const ProcessBinding *);
+    int (*resize)(const ProcessBinding *,int,int);
+    void (*rect)(const ProcessBinding *,int,int,int,int,int);
+} ProcessIO;
+typedef struct {
+    unsigned records, created, live, exiting, done, owned;
+} ProcessCounts;
+/* Creation is not runnable. Failure leaves out_process untouched. */
+int process_create(const void *file,unsigned bytes,const char *argument,
+                   unsigned argument_length,ProcessHandle *out_process);
+int process_bind(ProcessHandle process,const ProcessIO *io);
+/* Only an unscheduled CREATED record can bind/unbind. Unbind owns no cleanup. */
+int process_unbind(ProcessHandle process);
+int process_start(ProcessHandle process);
+int process_status(ProcessHandle process);
+int process_get_result(ProcessHandle process,ProcessResult *out);
+int process_key(ProcessHandle process,int key);
+/* Returns 1 once stopped/inactive, 0 if its active slice must first return. */
+int process_request_stop(ProcessHandle process);
+/* Consume DONE, then reap. Repeated/stale handles cannot affect another record. */
+int process_reap(ProcessHandle process);
+/* Run at most one PIT tick; scheduling rotates process records, not displays. */
+int process_step(ProcessHandle process);
+ProcessHandle process_schedule_one(void);
+void process_counts(ProcessCounts *out);
 int program_key(void);
 void program_present(void);
 #endif

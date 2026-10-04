@@ -25,7 +25,7 @@ int main(void){
     assert(term_task_info(0,&after)&&!memcmp(&before,&after,sizeof before));
     assert(!strcmp(arguments[0],"/Documents/a sample.txt"));
     assert(!strcmp(title,"native stats.bex - a sample.txt"));
-    term_select(0);canvas_resize(320,200);plot(0,0,9);callbacks[0].present();
+    term_select(0);canvas_resize(320,200);plot(0,0,9);callbacks[0].present(&callbacks[0].binding);
     command("start /renamed.bex /Documents/replacement.txt");
     assert(term_task_info(0,&after)&&after.instance==before.instance&&term_canvas()[0]==9);
     assert(!strcmp(arguments[0],"/Documents/a sample.txt"));idle();

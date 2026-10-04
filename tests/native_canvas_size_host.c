@@ -13,7 +13,7 @@ int main(void){
         size(owner,0,0,0);
         int w=owner%2?320:160,h=owner%2?200:100;
         assert(!canvas_resize(w,h));plot(w-1,h-1,owner+1);
-        size(owner,0,0,0);callbacks[owner].present();
+        size(owner,0,0,0);callbacks[owner].present(&callbacks[owner].binding);
     }
     term_select(7);term_char('q');
     for(int owner=0;owner<PROCESS_TASKS;owner++)size(owner,1,owner%2?320:160,owner%2?200:100);
@@ -24,10 +24,10 @@ int main(void){
     assert(!term_canvas_size(0,0,0)&&selected==7);
     term_select(0);assert(!canvas_resize(320,200));plot(319,199,9);
     term_select(7);size(0,1,160,100); /* Incomplete working resize stays hidden. */
-    term_select(0);callbacks[0].present();term_select(7);size(0,1,320,200);
+    term_select(0);callbacks[0].present(&callbacks[0].binding);term_select(7);size(0,1,320,200);
     term_task_stop(0);size(0,1,320,200);
     term_select(0);command("start /canvas.bex");term_select(7);size(0,0,0,0);
-    term_select(0);plot(0,0,9);callbacks[0].present();term_select(7);size(0,1,160,100);
+    term_select(0);plot(0,0,9);callbacks[0].present(&callbacks[0].binding);term_select(7);size(0,1,160,100);
     term_task_close(0);size(0,1,160,100); /* Close retains its last complete view. */
     term_select(0);term_reset();command("exec /canvas.bex");plot(2,3,9);
     term_select(7);size(0,1,160,100); /* Direct synchronous canvas compatibility. */

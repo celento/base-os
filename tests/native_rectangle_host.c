@@ -63,11 +63,11 @@ static void owner_lifecycle(void){
     executable("rect.bex");
     for(int owner=0;owner<PROCESS_TASKS;owner++){
         term_select(owner);term_reset();command("start /rect.bex");
-        const ProgramIO *io=&callbacks[owner];assert(io->rect);
-        assert(!io->resize(320,200));io->rect(0,0,320,200,owner+1);
-        assert(!term_canvas());io->present();
+        const ProcessIO *io=&callbacks[owner];assert(io->rect);
+        assert(!io->resize(&io->binding,320,200));io->rect(&io->binding,0,0,320,200,owner+1);
+        assert(!term_canvas());io->present(&io->binding);
         for(int i=0;i<64000;i++)assert(term_canvas()[i]==owner+1);
-        io->rect(1,1,318,198,99); /* Keep an incomplete next frame private. */
+        io->rect(&io->binding,1,1,318,198,99); /* Keep an incomplete next frame private. */
     }
     for(int owner=0;owner<PROCESS_TASKS;owner++){
         term_select(owner);
@@ -78,28 +78,28 @@ static void owner_lifecycle(void){
         assert(!T.canvas_pending);
     }
     term_select(3);command("start /rect.bex");
-    const ProgramIO *io=&callbacks[3];T.task_dirty=0;
-    io->rect(-5,0,5,100,2);io->rect(160,0,160,100,2);
-    io->rect(0,0,0,100,2);io->present();
+    const ProcessIO *io=&callbacks[3];T.task_dirty=0;
+    io->rect(&io->binding,-5,0,5,100,2);io->rect(&io->binding,160,0,160,100,2);
+    io->rect(&io->binding,0,0,0,100,2);io->present(&io->binding);
     assert(!term_canvas()&&!T.canvas_on&&!T.canvas_pending&&!T.task_dirty);
-    io->rect(-2,-3,5,7,301);
+    io->rect(&io->binding,-2,-3,5,7,301);
     assert(!term_canvas()&&T.canvas_pending&&!T.task_dirty);
-    io->present();assert(T.task_dirty==TERM_TASK_LAYOUT);
+    io->present(&io->binding);assert(T.task_dirty==TERM_TASK_LAYOUT);
     assert(term_canvas_width()==160&&term_canvas_height()==100);
     for(int y=0;y<100;y++)for(int x=0;x<160;x++)
         assert(term_canvas()[y*160+x]==(x<3&&y<4?45:0));
-    T.task_dirty=0;io->rect(1,1,1,1,45);io->present();
+    T.task_dirty=0;io->rect(&io->binding,1,1,1,1,45);io->present(&io->binding);
     assert(T.task_dirty==TERM_TASK_CANVAS); /* Same color still counts as a draw. */
-    T.task_dirty=0;io->present();assert(!T.task_dirty);
-    assert(!io->resize(320,200));io->rect(319,199,1,1,6);
-    assert(term_canvas_width()==160);io->present();
+    T.task_dirty=0;io->present(&io->binding);assert(!T.task_dirty);
+    assert(!io->resize(&io->binding,320,200));io->rect(&io->binding,319,199,1,1,6);
+    assert(term_canvas_width()==160);io->present(&io->binding);
     assert(term_canvas_width()==320&&term_canvas()[63999]==6);
-    assert(!io->resize(320,200));io->present();
+    assert(!io->resize(&io->binding,320,200));io->present(&io->binding);
     for(int i=0;i<64000;i++)assert(!term_canvas()[i]);
-    command("clear");T.task_dirty=0;io->rect(159,99,1,1,7);
-    assert(!term_canvas());io->present();
+    command("clear");T.task_dirty=0;io->rect(&io->binding,159,99,1,1,7);
+    assert(!term_canvas());io->present(&io->binding);
     assert(term_canvas_width()==160&&term_canvas()[15999]==7);
-    io->rect(159,99,1,1,99);term_task_close(3);
+    io->rect(&io->binding,159,99,1,1,99);term_task_close(3);
     assert(term_canvas()[15999]==7&&!T.canvas_pending);
     command("exec /rect.bex");canvas_rect(1,2,3,4,9);
     assert(term_canvas()==T.canvas&&term_canvas()[321]==9);

@@ -50,8 +50,9 @@ start /Programs/docstats.bex /Documents/stats-sample.txt
 ```
 
 `exec` remains synchronous with its two-second watchdog. `start` gives the app
-bounded slices alongside the desktop and other native tasks. Its canvas, memory,
-keys, registers and x87 state belong to its Terminal slot. See
+bounded slices alongside the desktop and other native tasks. Its memory, keys,
+registers and x87 state belong to its independent process record; its Terminal
+owns the working/published canvases and retains an exact process attachment. See
 [NATIVE_TASKS.md](NATIVE_TASKS.md) for lifecycle and scheduling guarantees.
 
 Eight desktop windows and eight task owners remain the limits. A full desktop

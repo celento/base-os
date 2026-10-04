@@ -15,6 +15,7 @@ import tempfile
 import unittest
 
 from test_editor_binding import function
+from process_host_extract import extract
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,35 +23,12 @@ ROOT = Path(__file__).resolve().parents[1]
 class NativePlatformTests(unittest.TestCase):
     def test_dispatch_and_lifetimes(self):
         source = (ROOT / 'src/process.c').read_text()
-        first = source.index('#define TASK_KEYS ')
-        types = source[first:source.index('static NativeTask *tasks=', first)]
-        exported = {'process_interrupt': 'int', 'process_task_start_with_arg': 'int',
-                    'process_task_stop': 'void', 'process_task_clear': 'void',
-                    'process_task_key': 'int'}
-        for name, result in exported.items():
-            source = source.replace(result + ' ' + name + '(', 'static ' + result + ' ' + name + '(')
-        names = ('allocate_owner', 'current_owner', 'release_owner', 'task_release',
-                 'task_at', 'valid_image', 'process_task_start_with_arg', 'task_wake',
-                 'process_task_key', 'process_task_stop', 'process_task_clear',
-                 'task_suspend', 'finish', 'user_range', 'user_path',
-                 'abi_query', 'native_file_call', 'process_interrupt')
-        code = ''.join(function(source, name) for name in names)
-        for name, result in exported.items():
-            code = code.replace('static ' + result + ' ' + name + '(', result + ' ' + name + '(')
-        for old, new in (
-            ('__asm__ volatile("pushfl; popl %0; sti":"=r"(flags)::"memory");', 'flags=0;'),
-            ('__asm__ volatile("pushl %0; popfl"::"r"(flags):"memory","cc");', '(void)flags;'),
-        ):
-            self.assertEqual(code.count(old), 1)
-            code = code.replace(old, new)
-        self.assertNotIn('__asm__', code)
         with tempfile.TemporaryDirectory(prefix='baseos-platform-dispatch-') as temporary:
             directory = Path(temporary)
-            (directory / 'native_platform_types.inc').write_text(types)
-            (directory / 'native_platform_ops.inc').write_text(code)
+            extract(source, directory, 'native_platform')
             executable = directory / 'dispatch'
             subprocess.run([shutil.which('clang') or 'cc', '-std=gnu11', '-O1', '-g',
-                            '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
+                            '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-fsanitize=address,undefined',
                             '-I', str(ROOT / 'src'), '-I', str(directory),
                             str(ROOT / 'tests/native_platform_dispatch_host.c'),
                             '-o', str(executable)], check=True)

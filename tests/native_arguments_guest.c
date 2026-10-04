@@ -1,5 +1,7 @@
 #define FEATURE_TEST
 #include "../src/kernel.c"
+#include "process_guest_fixture.h"
+static ProcessHandle argument_handles[3];
 static void check(int ok,const char *why){if(!ok)panic(why);}
 static void quiet(const char *text){(void)text;}
 static void pixel(int x,int y,int color){(void)x;(void)y;(void)color;}
@@ -21,28 +23,30 @@ void feature_test(void){
     char first[]="/Documents/a sample.txt",second[PROCESS_ARGUMENT_MAX+1],saved_second[PROCESS_ARGUMENT_MAX+1];
     second[0]='/';for(unsigned i=1;i<PROCESS_ARGUMENT_MAX;i++)second[i]=(char)('a'+i%26);
     second[PROCESS_ARGUMENT_MAX]=0;kstrcpy(saved_second,second);
-    check(!process_task_start_with_arg(0,fs_data(app),fs_size(app),&io,first,kstrlen(first)),"argument first start");
-    check(!process_task_start_with_arg(1,fs_data(app),fs_size(app),&io,second,PROCESS_ARGUMENT_MAX),"128-byte argument start");
-    check(!process_task_start(2,fs_data(app),fs_size(app),&io),"legacy argument-free start");
-    check(process_task_start_with_arg(0,fs_data(app),fs_size(app),&io,"/other",6)==-1,"busy task argument replaced");
+    check(!guest_process_launch(&argument_handles[0],0,fs_data(app),fs_size(app),first,kstrlen(first)),"argument first start");
+    check(!guest_process_launch(&argument_handles[1],1,fs_data(app),fs_size(app),second,PROCESS_ARGUMENT_MAX),"128-byte argument start");
+    check(!guest_process_launch(&argument_handles[2],2,fs_data(app),fs_size(app),0,0),"legacy argument-free start");
+    check(!process_start(argument_handles[0]),"busy task argument replaced");
     kmemset(first,'x',sizeof first-1);kmemset(second,'y',PROCESS_ARGUMENT_MAX);
     unsigned began=timer_ticks();
     while(timer_ticks()-began<5*TIMER_HZ){
         int done=0;
         for(int owner=0;owner<3;owner++){
-            process_task_step(owner);if(process_task_status(owner)==PROCESS_TASK_DONE)done++;
+            process_step(argument_handles[owner]);if(process_status(argument_handles[owner])==PROCESS_TASK_DONE)done++;
         }
         if(done==3)break;tick();
     }
-    for(int owner=0;owner<3;owner++)check(process_task_status(owner)==PROCESS_TASK_DONE&&!process_task_result(owner),"argument runtime copy or bounded output failed");
+    for(int owner=0;owner<3;owner++)check(process_status(argument_handles[owner])==PROCESS_TASK_DONE&&guest_process_result(argument_handles[owner],PROCESS_EXIT_APP,0),"argument runtime copy or bounded output failed");
     record(1,"/Documents/a sample.txt");record(2,saved_second);record(3,"none");
     check(!process_run(fs_data(app),fs_size(app),&io),"legacy exec argument absence");
-    /* Reusing a completed owner through the old wrapper must drop its old path. */
-    check(!process_task_start(1,fs_data(app),fs_size(app),&io),"argument-free owner restart");
+    /* A new exact process bound to the same display must drop its old path. */
+    check(guest_process_release(&argument_handles[1]),"argument owner release");
+    check(!guest_process_launch(&argument_handles[1],1,fs_data(app),fs_size(app),0,0),"argument-free owner restart");
     began=timer_ticks();
-    while(process_task_status(1)!=PROCESS_TASK_DONE&&timer_ticks()-began<5*TIMER_HZ){process_task_step(1);tick();}
-    check(process_task_status(1)==PROCESS_TASK_DONE&&!process_task_result(1),"argument-free restarted app");record(2,"none");
-    for(int owner=0;owner<3;owner++)process_task_clear(owner);
+    while(process_status(argument_handles[1])!=PROCESS_TASK_DONE&&timer_ticks()-began<5*TIMER_HZ){process_step(argument_handles[1]);tick();}
+    check(process_status(argument_handles[1])==PROCESS_TASK_DONE&&guest_process_result(argument_handles[1],PROCESS_EXIT_APP,0),"argument-free restarted app");record(2,"none");
+    for(int owner=0;owner<3;owner++)
+        check(guest_process_release(&argument_handles[owner]),"argument record release");
     platform_log("NATIVE-ARGUMENT-COPY-ISOLATION-PASS\n");
     /* Two real Terminal paths, one quoted and one relative. Their source image
      * and argument bytes remain owned after ordinary source edits/deletion. */
