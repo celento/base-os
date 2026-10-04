@@ -73,7 +73,13 @@ $(OUT)/sdk_examples.h: $(OUT)/hello-c.bex $(OUT)/notebook.bex tools/bin2c.py
 	$(PYTHON) tools/bin2c.py $(OUT)/hello-c.bex sdk_hello > $@
 	$(PYTHON) tools/bin2c.py $(OUT)/notebook.bex sdk_notebook >> $@
 
-$(OUT)/kernel.o: $(OUT)/native_example.h $(OUT)/sdk_examples.h
+$(OUT)/chime.wav: tools/make_audio_example.py | $(OUT)
+	$(PYTHON) tools/make_audio_example.py $@
+
+$(OUT)/audio_example.h: $(OUT)/chime.wav tools/bin2c.py
+	$(PYTHON) tools/bin2c.py $< audio_example > $@
+
+$(OUT)/kernel.o: $(OUT)/native_example.h $(OUT)/sdk_examples.h $(OUT)/audio_example.h
 
 # Rendering is the hot path; retain size optimization for the rest of the kernel.
 $(OUT)/gfx.o: CFLAGS := $(filter-out -Os,$(CFLAGS)) -O2
