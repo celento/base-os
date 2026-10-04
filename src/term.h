@@ -2,7 +2,7 @@
 #define TERM_H
 
 #define TERM_COLS  80
-#define TERM_LINES 64
+#define TERM_LINES 320 /* Holds one complete 256-node directory listing. */
 
 void term_select(int slot);
 void term_reset(void);

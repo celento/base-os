@@ -51,7 +51,7 @@ static const Manual commands[]={
     {"echo","echo TEXT","Print the remaining text on a new line.","echo Hello world","There are no variables, pipes, or output redirection."},
     {"clear","clear","Clear this terminal's output and graphics canvas.","clear","Command history and the current folder are kept."},
     {"stat","stat PATH","Show type, byte size, and modification timestamp.","stat /readme.txt","Time is UTC seconds since 2000; zero means unknown."},
-    {"df","df","Show used bytes, payload capacity, free slots, and disk status.","df","Folders and session files also consume the 64 volume slots."},
+    {"df","df","Show used bytes, payload capacity, free slots, and disk status.","df","Folders and session files consume slots: 256 on IDE, 64 on floppy."},
     {"run","run SCRIPT","Run one terminal command per script line.","run /Programs/demo.sh","Stops on errors; four nested scripts, 256 command dispatches."},
     {"basic","basic FILE","Run numbered, uppercase Tiny BASIC statements.","basic /Programs/demo.bas","PRINT, LET, IF/THEN, GOTO, INKEY, WAIT, PLOT, RECT, REM, END."},
     {"net","net","Show RTL8139 link, QEMU IPv4 settings, and packet counters.","net","QEMU: -nic user,model=rtl8139; fixed guest IP 10.0.2.15."},
@@ -231,12 +231,12 @@ static int execute(const char *s,int depth,int *budget){
     }
     else if(!kstrcmp(cmd,"pwd")){char path[64];fs_path(cwd,path,sizeof path);push(path);}
     else if(!kstrcmp(cmd,"cd")){if(!fs_is_dir(id))return -1;term_set_cwd(id);}
-    else if(!kstrcmp(cmd,"ls")){if(!fs_is_dir(id))return -1;int ids[64],count=fs_list(id,ids,64);for(int i=0;i<count;i++){char row[26];kstrcpy(row,fs_name(ids[i]));if(fs_is_dir(ids[i]))kstrcpy(row+kstrlen(row),"/");push(row);}}
+    else if(!kstrcmp(cmd,"ls")){if(!fs_is_dir(id))return -1;int ids[FS_MAX_NODES],count=fs_list(id,ids,FS_MAX_NODES);for(int i=0;i<count;i++){char row[26];kstrcpy(row,fs_name(ids[i]));if(fs_is_dir(ids[i]))kstrcpy(row+kstrlen(row),"/");push(row);}}
     else if(!kstrcmp(cmd,"cat")){if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;cat(id);}
     else if(!kstrcmp(cmd,"mkdir")||!kstrcmp(cmd,"touch")){char name[FS_NAME_LEN];int parent=fs_destination(cwd,arg,name);if(parent<0)return -1;if((!kstrcmp(cmd,"mkdir")?fs_mkdir(parent,name):fs_create(parent,name))<0)return -1;}
     else if(!kstrcmp(cmd,"rm")){if(!arg[0]||fs_delete(id)<0)return -1;}
     else if(!kstrcmp(cmd,"stat")){if(!fs_valid(id))return -1;push(fs_name(id));push(fs_is_dir(id)?"Directory":"File");print_number("Bytes: ",fs_size(id));print_number("Modified (UTC seconds since 2000; 0=unknown): ",fs_modified(id));}
-    else if(!kstrcmp(cmd,"df")){print_number("Bytes used: ",fs_used_bytes());print_number("Payload capacity: ",fs_capacity());print_number("Free node slots: ",FS_MAX_NODES-fs_node_count());print_number("Maximum file bytes: ",fs_file_limit());push(fs_storage_name());push("Folders also consume file slots.");push(fs_storage_status()?fs_storage_status():"Disk is synchronized.");}
+    else if(!kstrcmp(cmd,"df")){print_number("Bytes used: ",fs_used_bytes());print_number("Payload capacity: ",fs_capacity());print_number("Free node slots: ",fs_node_limit()-fs_node_count());print_number("Maximum file bytes: ",fs_file_limit());push(fs_storage_name());push("Folders also consume file slots.");push(fs_storage_status()?fs_storage_status():"Disk is synchronized.");}
     else if(!kstrcmp(cmd,"run"))return script(id,depth,budget);
     else if(!kstrcmp(cmd,"tasks")){
         int found=0;

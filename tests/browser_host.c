@@ -147,7 +147,7 @@ static void test_save_original_pages(void){
     int plain=fs_resolve(0,"/Downloads/page.txt");assert(plain>0&&!strcmp(fs_data(plain),"a < b & original text"));
     /* A complete response may be saved even if only rendering was bounded. */
     browser_open("http://example.com/short");complete("Complete body","text/plain");B.truncated=1;assert(browser_can_save());
-    before=fs_node_count();while(fs_node_count()<FS_MAX_NODES){char name[24];snprintf(name,sizeof name,"file%d",fs_node_count());assert(fs_create(0,name)>0);}
+    before=fs_node_count();while(fs_node_count()<fs_node_limit()){char name[24];snprintf(name,sizeof name,"file%d",fs_node_count());assert(fs_create(0,name)>0);}
     assert(browser_save_page(0,"/no-slots.txt")==-1&&fs_node_count()==FS_MAX_NODES);assert(before<FS_MAX_NODES);
 }
 static void edit_download_address(const char *url){browser_key(0x26,0,BROWSER_MOD_CTRL);while(*url)browser_key(0,*url++,0);}

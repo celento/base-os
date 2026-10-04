@@ -4849,7 +4849,7 @@ static void draw_window_contents(Win *w, int inactive) {
             }
         }else PROP("File is no longer available.");
         fmt_uint(number,fs_used_bytes());kstrcpy(row,"Volume bytes used: ");kstrcpy(row+19,number);PROP(row);
-        fmt_uint(number,FS_MAX_NODES-fs_node_count());kstrcpy(row,"Free file/folder slots: ");kstrcpy(row+kstrlen(row),number);PROP(row);
+        fmt_uint(number,fs_node_limit()-fs_node_count());kstrcpy(row,"Free file/folder slots: ");kstrcpy(row+kstrlen(row),number);PROP(row);
         if(properties_reason[0])PROP(properties_reason);
         PROP(fs_storage_name());
         fmt_uint(number,fs_file_limit());kstrcpy(row,"Maximum file bytes: ");kstrcpy(row+kstrlen(row),number);PROP(row);
@@ -5657,7 +5657,7 @@ static void sysinfo_fill(SysInfo *si) {
     for (int i = 0; i < total; i++)
         bytes += fs_size(ids[i]);
     si->fs_nodes = fs_node_count();
-    si->fs_max = FS_MAX_NODES;
+    si->fs_max = fs_node_limit();
     si->fs_bytes = bytes;
     si->fs_cap = fs_capacity();
     si->fb_w = fb_w;
@@ -6756,7 +6756,7 @@ static void session_save(void){
         projected+=size;
     }
     /* No draft is changed until every new node and replacement byte fits. */
-    if(needed>FS_MAX_NODES-fs_node_count()||projected>(int)fs_capacity())goto failure;
+    if(needed>fs_node_limit()-fs_node_count()||projected>(int)fs_capacity_for_nodes((unsigned)(fs_node_count()+needed)))goto failure;
     SavedSession snap;kmemset(&snap,0,sizeof snap);snap.magic=0x53534542;snap.version=1;
     for(int i=0;i<MAX_WIN;i++){
         Win *w=&wins[i];SavedWindow *v=&snap.win[i];
