@@ -587,7 +587,7 @@ int writer_open_file(int id) {
 }
 static int binding_valid(void) {
     return state.file >= 0 && fs_valid(state.file) && !fs_is_dir(state.file) && !fs_is_app(state.file) &&
-           fs_identity(state.file) == state.identity;
+           native_name(fs_name(state.file)) && fs_identity(state.file) == state.identity;
 }
 const unsigned char *writer_snapshot(unsigned *length) {
     if (!state.initialized) writer_init();
