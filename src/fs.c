@@ -1183,8 +1183,9 @@ static int save_snapshot(void) {
 }
 
 /* An active snapshot owns the live FS and its existing image arena until the
- * final verified readback (or failure). Two tiny result records outlive jobs:
- * record 0 belongs to the sole async/autosave client, record 1 to fs_sync.
+ * final verified readback (or failure). Three tiny result records outlive jobs:
+ * record 0 belongs to the sole async/autosave client, record 1 to fs_sync,
+ * and record 2 to the kernel native completion coordinator.
  * A joining fs_sync subscribes independently, so autosave can reap its own
  * record without losing the joiner's result. Explicit owners release theirs. */
 typedef struct {
@@ -1206,7 +1207,7 @@ enum {
     SYNC_CRC_COMMITTED, SYNC_VALIDATE_COMMITTED, SYNC_IO, SYNC_FLOPPY
 };
 static SyncJob sync_job;
-static SyncResult sync_results[2];
+static SyncResult sync_results[3];
 static unsigned sync_incarnation, sync_serial;
 static int sync_autosave;
 _Static_assert(sizeof(SyncJob) + sizeof(sync_results) + 3 * sizeof(unsigned) <= 1536,
@@ -1230,7 +1231,7 @@ static int sync_record(unsigned slot, FsSyncTicket *ticket) {
     return 0;
 }
 static int sync_find(FsSyncTicket ticket) {
-    for (unsigned i = 0; i < 2; ++i)
+    for (unsigned i = 0; i < 3; ++i)
         if (sync_results[i].occupied && ticket.incarnation == sync_results[i].ticket.incarnation &&
             ticket.serial == sync_results[i].ticket.serial) return (int)i;
     return -1;
@@ -1275,7 +1276,7 @@ static enum FsSyncProgress sync_finish(int result) {
         generation = sync_job.header.generation;
         fs_touched = 0;
     }
-    for (unsigned i = 0; i < 2; ++i)
+    for (unsigned i = 0; i < 3; ++i)
         if (sync_job.subscribers & (1u << i)) sync_results[i].result = result;
     sync_job.phase = SYNC_IDLE;
     sync_account(result);
@@ -1307,6 +1308,26 @@ int fs_sync_request(FsSyncTicket *ticket) {
     sync_start(0);
     /* The floppy BIOS/PIO path remains deliberately synchronous. */
     if (!data_backend) (void)fs_sync_step();
+    return 0;
+}
+/* This entry is reserved for the native completion coordinator. Keeping a
+ * separate subscriber lets it join autosave or a built-in explicit save without
+ * borrowing that caller's result or changing its release policy. */
+unsigned fs_incarnation(void) { return sync_incarnation; }
+int fs_sync_async_supported(void) { return data_backend != 0; }
+int fs_writes_allowed(void) { return writable; }
+int fs_sync_request_owned(FsSyncTicket *ticket) {
+    if (!ticket) return -1;
+    /* Reject before sync_record/start: the floppy request path can block. */
+    if (!fs_sync_async_supported()) return FS_SYNC_UNSUPPORTED;
+    if (sync_results[2].occupied) return FS_ERR_BUSY;
+    if (!sync_incarnation || sync_serial == ~0u) return FS_SYNC_EXHAUSTED;
+    if (!fs_sync_busy() && fs_touched && !writable) return FS_SYNC_PROTECTED;
+    int result = sync_record(2, ticket);
+    if (result < 0) return result;
+    if (fs_sync_busy()) sync_job.subscribers |= 4u;
+    else if (!fs_touched) sync_results[2].result = 0;
+    else sync_start(2);
     return 0;
 }
 static unsigned sync_crc_bytes(unsigned crc, const unsigned char *data, unsigned length) {

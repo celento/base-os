@@ -98,6 +98,21 @@ int fs_sync_request(FsSyncTicket *ticket);
 int fs_sync_result(FsSyncTicket ticket);
 int fs_sync_release(FsSyncTicket ticket);
 int fs_sync_busy(void);
+/* Kernel-native coordinator only. A third independent subscriber can join the
+ * current immutable snapshot without taking the explicit/autosave ticket.
+ * This entry NEVER performs payload work or blocking floppy I/O. Accepted work
+ * covers all RAM mutations completed before this call; the live snapshot lease
+ * excludes intervening mutation when joining. A clean volume completes now.
+ * Only this coordinator may hold the returned ticket; apps get owned handles.
+ * Dirty protected storage is rejected; an already-clean protected IDE snapshot
+ * can still be acknowledged. Rejection leaves *ticket unchanged. */
+#define FS_SYNC_UNSUPPORTED (-4)
+#define FS_SYNC_PROTECTED (-5)
+#define FS_SYNC_EXHAUSTED (-6)
+unsigned fs_incarnation(void);
+int fs_sync_async_supported(void);
+int fs_writes_allowed(void);
+int fs_sync_request_owned(FsSyncTicket *ticket);
 /* One bounded CPU quantum or ATA poll (at most 8 sectors). MORE means that
  * callers should schedule another quantum, WAIT means hardware is pending.
  * Neither step nor device polling dispatches applications or retains a stack. */
