@@ -5,7 +5,17 @@
     "height": 54,
     "format": 5,
     "sha256": "c6d57dac55e89c9fc4d806e3d708826a9b562341bcc9eb7436f355959b471a25",
-    "reference": "animated.gif.rgba.zlib"
+    "reference": "animated.gif.rgba.zlib",
+    "error": 0
+  },
+  {
+    "name": "dimension_limit.png",
+    "width": 1025,
+    "height": 512,
+    "format": 3,
+    "sha256": "b61ad7b611620e6365f9ab24d9f684750ce300237ea049aefc25565cefb54d4f",
+    "reference": null,
+    "error": -3
   },
   {
     "name": "gray16.png",
@@ -13,7 +23,8 @@
     "height": 29,
     "format": 3,
     "sha256": "30f40867b104e19b2a91fa56ee09c0bdb225e720c6fc52f2a1133d949f80f20b",
-    "reference": "gray16.png.rgba.zlib"
+    "reference": "gray16.png.rgba.zlib",
+    "error": 0
   },
   {
     "name": "gray_alpha.png",
@@ -21,7 +32,8 @@
     "height": 112,
     "format": 3,
     "sha256": "0c398a4b35c9b5f22e5802ebe6b012028fb6f72617baea658ece7932d3bfcd30",
-    "reference": "gray_alpha.png.rgba.zlib"
+    "reference": "gray_alpha.png.rgba.zlib",
+    "error": 0
   },
   {
     "name": "grayscale.jpg",
@@ -29,7 +41,8 @@
     "height": 72,
     "format": 2,
     "sha256": "87275245b90661c9625a149adda79af017d7fe5696c5fe991b98c698ee2d9214",
-    "reference": "grayscale.jpg.rgba.zlib"
+    "reference": "grayscale.jpg.rgba.zlib",
+    "error": 0
   },
   {
     "name": "interlaced.png",
@@ -37,7 +50,8 @@
     "height": 43,
     "format": 3,
     "sha256": "610534057bc00cda8412e7c9ab6b1323e8ee04c591791ce2bec8bffefe8ac72c",
-    "reference": "interlaced.png.rgba.zlib"
+    "reference": "interlaced.png.rgba.zlib",
+    "error": 0
   },
   {
     "name": "landscape.jpg",
@@ -45,7 +59,8 @@
     "height": 360,
     "format": 2,
     "sha256": "5890793bd2e757fe28a05f584e725ad2d78e80b6eea87f452a5e4b854aca7d08",
-    "reference": "landscape.jpg.rgba.zlib"
+    "reference": "landscape.jpg.rgba.zlib",
+    "error": 0
   },
   {
     "name": "landscape.png",
@@ -53,7 +68,53 @@
     "height": 360,
     "format": 3,
     "sha256": "5b341773d03a6937d83e5bef849de76b30b645a0f48b4f0c8b99d59ad4f1278a",
-    "reference": "landscape.png.rgba.zlib"
+    "reference": "landscape.png.rgba.zlib",
+    "error": 0
+  },
+  {
+    "name": "large.gif",
+    "width": 1024,
+    "height": 512,
+    "format": 5,
+    "sha256": "b6ee3a439af072803488884f14c502ecc56e9a0296a4f18cbbac8f761847c93f",
+    "reference": "large.gif.rgba.zlib",
+    "error": 0
+  },
+  {
+    "name": "maximum.jpg",
+    "width": 1024,
+    "height": 768,
+    "format": 2,
+    "sha256": "e63c654eca76c27daa480ed490b5b0809553078036c1fa25703f3253648f5932",
+    "reference": "maximum.jpg.rgba.zlib",
+    "error": 0
+  },
+  {
+    "name": "maximum.png",
+    "width": 1024,
+    "height": 768,
+    "format": 3,
+    "sha256": "b8be1e0dbd1d000b84010626673f53f5527d5d18abd04cbb4b83846ff5a596a0",
+    "reference": "maximum.png.rgba.zlib",
+    "error": 0
+  },
+  {
+    "name": "maximum_alpha.png",
+    "width": 1024,
+    "height": 768,
+    "format": 3,
+    "sha256": "92b6d1972ab18841a0e0a2be88bb96cfdbe5c816c788883cf12dfda1c6cb3311",
+    "reference": "maximum_alpha.png.rgba.zlib",
+    "error": 0
+  },
+  {
+    "name": "maximum_progressive.jpg",
+    "width": 1024,
+    "height": 768,
+    "format": 2,
+    "sha256": "bd0ddb23d0d16a778b55f80d9c3b698a691937effd994f2a0fd45e5899871092",
+    "reference": "maximum_progressive.jpg.rgba.zlib",
+    "error": 0
   },
   {
     "name": "monochrome.png",
@@ -61,7 +122,8 @@
     "height": 23,
     "format": 3,
     "sha256": "1ef13597ecb0c0110a6a3b2050b4a16e9aaf42d9d8c3fd49dd87a99ff70e822d",
-    "reference": "monochrome.png.rgba.zlib"
+    "reference": "monochrome.png.rgba.zlib",
+    "error": 0
   },
   {
     "name": "paint.pbm",
@@ -69,7 +131,8 @@
     "height": 32,
     "format": 1,
     "sha256": "5b41e7276890b92e5689704e4602cecbe6ccc02729bcd424628b6bdf3bebf3d7",
-    "reference": "paint.pbm.rgba.zlib"
+    "reference": "paint.pbm.rgba.zlib",
+    "error": 0
   },
   {
     "name": "palette.bmp",
@@ -77,7 +140,8 @@
     "height": 54,
     "format": 4,
     "sha256": "6e537df536ae9c8bbcedf059afffe52d00cce1c8077ad002f8e8200f41dff36b",
-    "reference": "palette.bmp.rgba.zlib"
+    "reference": "palette.bmp.rgba.zlib",
+    "error": 0
   },
   {
     "name": "palette.png",
@@ -85,7 +149,17 @@
     "height": 54,
     "format": 3,
     "sha256": "746388bfd3a43835fc28a2c4b47b0e9fc79571f791b8e5e4c9a372415b0499ca",
-    "reference": "palette.png.rgba.zlib"
+    "reference": "palette.png.rgba.zlib",
+    "error": 0
+  },
+  {
+    "name": "portrait.png",
+    "width": 768,
+    "height": 1024,
+    "format": 3,
+    "sha256": "928ed3b65bcb3214fe78067cfd966aa60a52e0cc28062129159a681bea0e90cb",
+    "reference": "portrait.png.rgba.zlib",
+    "error": 0
   },
   {
     "name": "progressive.jpg",
@@ -93,7 +167,8 @@
     "height": 108,
     "format": 2,
     "sha256": "9955131521a914ddbf511d64ba93619bfb59d17deb5bdb33fc854a135e162e7e",
-    "reference": "progressive.jpg.rgba.zlib"
+    "reference": "progressive.jpg.rgba.zlib",
+    "error": 0
   },
   {
     "name": "rgb.bmp",
@@ -101,7 +176,8 @@
     "height": 54,
     "format": 4,
     "sha256": "bd4a06d820a4e61f30ccebb9276a5f3bbabc6724f9ad058621749d974870ee9c",
-    "reference": "rgb.bmp.rgba.zlib"
+    "reference": "rgb.bmp.rgba.zlib",
+    "error": 0
   },
   {
     "name": "transparent.gif",
@@ -109,7 +185,8 @@
     "height": 112,
     "format": 5,
     "sha256": "d322496ea3d5d9c64100df6245414a30f5d9faf422f996010313c20cb5378bb4",
-    "reference": "transparent.gif.rgba.zlib"
+    "reference": "transparent.gif.rgba.zlib",
+    "error": 0
   },
   {
     "name": "transparent.png",
@@ -117,6 +194,16 @@
     "height": 112,
     "format": 3,
     "sha256": "32e41e9b98ded95de40a64521ec09fc8247099d7a405b2eab137556e411154c1",
-    "reference": "transparent.png.rgba.zlib"
+    "reference": "transparent.png.rgba.zlib",
+    "error": 0
+  },
+  {
+    "name": "workspace_limit.jpg",
+    "width": 1024,
+    "height": 768,
+    "format": 2,
+    "sha256": "a037c265b9ce308616e84e8e870a554295e021d295f23263a2727c4e4fb7dd41",
+    "reference": null,
+    "error": -4
   }
 ]

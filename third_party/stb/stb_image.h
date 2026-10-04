@@ -598,6 +598,11 @@ STBIDEF int   stbi_zlib_decode_noheader_buffer(char *obuffer, int olen, const ch
 #include <stdio.h>
 #endif
 
+// BaseOS cooperative progress hook; a no-op for other integrations.
+#ifndef STBI_BASEOS_PROGRESS
+#define STBI_BASEOS_PROGRESS(work) ((void) 0)
+#endif
+
 #ifndef STBI_ASSERT
 #include <assert.h>
 #define STBI_ASSERT(x) assert(x)
@@ -1196,8 +1201,10 @@ static stbi_uc *stbi__convert_16_to_8(stbi__uint16 *orig, int w, int h, int chan
    reduced = (stbi_uc *) stbi__malloc(img_len);
    if (reduced == NULL) return stbi__errpuc("outofmem", "Out of memory");
 
-   for (i = 0; i < img_len; ++i)
+   for (i = 0; i < img_len; ++i) {
+      if ((i & 4095) == 0) STBI_BASEOS_PROGRESS(4096);
       reduced[i] = (stbi_uc)((orig[i] >> 8) & 0xFF); // top half of each byte is sufficient approx of 16->8 bit scaling
+   }
 
    STBI_FREE(orig);
    return reduced;
@@ -1613,6 +1620,7 @@ static void stbi__refill_buffer(stbi__context *s)
 
 stbi_inline static stbi_uc stbi__get8(stbi__context *s)
 {
+   STBI_BASEOS_PROGRESS(1);
    if (s->img_buffer < s->img_buffer_end)
       return *s->img_buffer++;
    if (s->read_from_callbacks) {
@@ -1767,6 +1775,7 @@ static unsigned char *stbi__convert_format(unsigned char *data, int img_n, int r
    }
 
    for (j=0; j < (int) y; ++j) {
+      STBI_BASEOS_PROGRESS(x);
       unsigned char *src  = data + j * x * img_n   ;
       unsigned char *dest = good + j * x * req_comp;
 
@@ -2961,6 +2970,7 @@ static int stbi__parse_entropy_coded_data(stbi__jpeg *z)
          int w = (z->img_comp[n].x+7) >> 3;
          int h = (z->img_comp[n].y+7) >> 3;
          for (j=0; j < h; ++j) {
+            STBI_BASEOS_PROGRESS(4096);
             for (i=0; i < w; ++i) {
                int ha = z->img_comp[n].ha;
                if (!stbi__jpeg_decode_block(z, data, z->huff_dc+z->img_comp[n].hd, z->huff_ac+ha, z->fast_ac[ha], n, z->dequant[z->img_comp[n].tq])) return 0;
@@ -2980,6 +2990,7 @@ static int stbi__parse_entropy_coded_data(stbi__jpeg *z)
          int i,j,k,x,y;
          STBI_SIMD_ALIGN(short, data[64]);
          for (j=0; j < z->img_mcu_y; ++j) {
+            STBI_BASEOS_PROGRESS(4096);
             for (i=0; i < z->img_mcu_x; ++i) {
                // scan an interleaved mcu... process scan_n components in order
                for (k=0; k < z->scan_n; ++k) {
@@ -3018,6 +3029,7 @@ static int stbi__parse_entropy_coded_data(stbi__jpeg *z)
          int w = (z->img_comp[n].x+7) >> 3;
          int h = (z->img_comp[n].y+7) >> 3;
          for (j=0; j < h; ++j) {
+            STBI_BASEOS_PROGRESS(4096);
             for (i=0; i < w; ++i) {
                short *data = z->img_comp[n].coeff + 64 * (i + j * z->img_comp[n].coeff_w);
                if (z->spec_start == 0) {
@@ -3040,6 +3052,7 @@ static int stbi__parse_entropy_coded_data(stbi__jpeg *z)
       } else { // interleaved
          int i,j,k,x,y;
          for (j=0; j < z->img_mcu_y; ++j) {
+            STBI_BASEOS_PROGRESS(4096);
             for (i=0; i < z->img_mcu_x; ++i) {
                // scan an interleaved mcu... process scan_n components in order
                for (k=0; k < z->scan_n; ++k) {
@@ -3086,6 +3099,7 @@ static void stbi__jpeg_finish(stbi__jpeg *z)
          int w = (z->img_comp[n].x+7) >> 3;
          int h = (z->img_comp[n].y+7) >> 3;
          for (j=0; j < h; ++j) {
+            STBI_BASEOS_PROGRESS(4096);
             for (i=0; i < w; ++i) {
                short *data = z->img_comp[n].coeff + 64 * (i + j * z->img_comp[n].coeff_w);
                stbi__jpeg_dequantize(data, z->dequant[z->img_comp[n].tq]);
@@ -3924,6 +3938,7 @@ static stbi_uc *load_jpeg_image(stbi__jpeg *z, int *out_x, int *out_y, int *comp
 
       // now go ahead and resample
       for (j=0; j < z->s->img_y; ++j) {
+         STBI_BASEOS_PROGRESS(z->s->img_x);
          stbi_uc *out = output + n * z->s->img_x * j;
          for (k=0; k < decode_n; ++k) {
             stbi__resample *r = &res_comp[k];
@@ -4310,6 +4325,7 @@ static int stbi__parse_huffman_block(stbi__zbuf *a)
 {
    char *zout = a->zout;
    for(;;) {
+      STBI_BASEOS_PROGRESS(64);
       int z = stbi__zhuffman_decode(a, &a->z_length);
       if (z < 256) {
          if (z < 0) return stbi__err("bad huffman code","Corrupt PNG"); // error in huffman codes
@@ -4735,6 +4751,7 @@ static int stbi__create_png_image_raw(stbi__png *a, stbi_uc *raw, stbi__uint32 r
    }
 
    for (j=0; j < y; ++j) {
+      STBI_BASEOS_PROGRESS(x);
       // cur/prior filter buffers alternate
       stbi_uc *cur = filter_buf + (j & 1)*img_width_bytes;
       stbi_uc *prior = filter_buf + (~j & 1)*img_width_bytes;
@@ -4966,6 +4983,7 @@ static int stbi__expand_png_palette(stbi__png *a, stbi_uc *palette, int len, int
 
    if (pal_img_n == 3) {
       for (i=0; i < pixel_count; ++i) {
+         if ((i & 4095) == 0) STBI_BASEOS_PROGRESS(4096);
          int n = orig[i]*4;
          p[0] = palette[n  ];
          p[1] = palette[n+1];
@@ -4974,6 +4992,7 @@ static int stbi__expand_png_palette(stbi__png *a, stbi_uc *palette, int len, int
       }
    } else {
       for (i=0; i < pixel_count; ++i) {
+         if ((i & 4095) == 0) STBI_BASEOS_PROGRESS(4096);
          int n = orig[i]*4;
          p[0] = palette[n  ];
          p[1] = palette[n+1];
@@ -6651,41 +6670,46 @@ static int stbi__gif_info_raw(stbi__context *s, int *x, int *y, int *comp)
    return 1;
 }
 
-static void stbi__out_gif_code(stbi__gif *g, stbi__uint16 code)
+// BaseOS adaptation: bounded iterative prefix expansion instead of recursion.
+// A long, valid repeated-color GIF must fit the fixed 64 KiB kernel stack.
+static int stbi__out_gif_code(stbi__gif *g, stbi__uint16 code)
 {
-   stbi_uc *p, *c;
-   int idx;
-
-   // recurse to decode the prefixes, since the linked-list is backwards,
-   // and working backwards through an interleaved image would be nasty
-   if (g->codes[code].prefix >= 0)
-      stbi__out_gif_code(g, g->codes[code].prefix);
-
-   if (g->cur_y >= g->max_y) return;
-
-   idx = g->cur_x + g->cur_y;
-   p = &g->out[idx];
-   g->history[idx / 4] = 1;
-
-   c = &g->color_table[g->codes[code].suffix * 4];
-   if (c[3] > 128) { // don't render transparent pixels;
-      p[0] = c[2];
-      p[1] = c[1];
-      p[2] = c[0];
-      p[3] = c[3];
+   stbi_uc suffixes[4096];
+   unsigned count = 0;
+   for (;;) {
+      if (code >= 4096 || count == 4096) return 0;
+      suffixes[count++] = g->codes[code].suffix;
+      if (g->codes[code].prefix < 0) break;
+      code = (stbi__uint16) g->codes[code].prefix;
    }
-   g->cur_x += 4;
 
-   if (g->cur_x >= g->max_x) {
-      g->cur_x = g->start_x;
-      g->cur_y += g->step;
-
-      while (g->cur_y >= g->max_y && g->parse > 0) {
-         g->step = (1 << g->parse) * g->line_size;
-         g->cur_y = g->start_y + (g->step >> 1);
-         --g->parse;
+   while (count) {
+      STBI_BASEOS_PROGRESS(1);
+      stbi_uc *p, *c;
+      int idx;
+      if (g->cur_y >= g->max_y) return 1;
+      idx = g->cur_x + g->cur_y;
+      p = &g->out[idx];
+      g->history[idx / 4] = 1;
+      c = &g->color_table[suffixes[--count] * 4];
+      if (c[3] > 128) { // don't render transparent pixels;
+         p[0] = c[2];
+         p[1] = c[1];
+         p[2] = c[0];
+         p[3] = c[3];
+      }
+      g->cur_x += 4;
+      if (g->cur_x >= g->max_x) {
+         g->cur_x = g->start_x;
+         g->cur_y += g->step;
+         while (g->cur_y >= g->max_y && g->parse > 0) {
+            g->step = (1 << g->parse) * g->line_size;
+            g->cur_y = g->start_y + (g->step >> 1);
+            --g->parse;
+         }
       }
    }
+   return 1;
 }
 
 static stbi_uc *stbi__process_gif_raster(stbi__context *s, stbi__gif *g)
@@ -6758,7 +6782,8 @@ static stbi_uc *stbi__process_gif_raster(stbi__context *s, stbi__gif *g)
             } else if (code == avail)
                return stbi__errpuc("illegal code in raster", "Corrupt GIF");
 
-            stbi__out_gif_code(g, (stbi__uint16) code);
+            if (!stbi__out_gif_code(g, (stbi__uint16) code))
+               return stbi__errpuc("bad code", "Corrupt GIF");
 
             if ((avail & codemask) == 0 && avail <= 0x0FFF) {
                codesize++;
@@ -7048,29 +7073,33 @@ static void *stbi__load_gif_main(stbi__context *s, int **delays, int *x, int *y,
 static void *stbi__gif_load(stbi__context *s, int *x, int *y, int *comp, int req_comp, stbi__result_info *ri)
 {
    stbi_uc *u = 0;
-   stbi__gif g;
-   memset(&g, 0, sizeof(g));
+   // BaseOS: keep GIF state in the bounded arena, leaving stack room for
+   // cooperative audio polling (including MP3 decoding) during an image open.
+   stbi__gif *g = (stbi__gif *) stbi__malloc(sizeof(*g));
+   if (g == NULL) return stbi__errpuc("outofmem", "Out of memory");
+   memset(g, 0, sizeof(*g));
    STBI_NOTUSED(ri);
 
-   u = stbi__gif_load_next(s, &g, comp, req_comp, 0);
+   u = stbi__gif_load_next(s, g, comp, req_comp, 0);
    if (u == (stbi_uc *) s) u = 0;  // end of animated gif marker
    if (u) {
-      *x = g.w;
-      *y = g.h;
+      *x = g->w;
+      *y = g->h;
 
       // moved conversion to after successful load so that the same
       // can be done for multiple frames.
       if (req_comp && req_comp != 4)
-         u = stbi__convert_format(u, 4, req_comp, g.w, g.h);
-   } else if (g.out) {
+         u = stbi__convert_format(u, 4, req_comp, g->w, g->h);
+   } else if (g->out) {
       // if there was an error and we allocated an image buffer, free it!
-      STBI_FREE(g.out);
+      STBI_FREE(g->out);
    }
 
    // free buffers needed for multiple frame loading;
-   STBI_FREE(g.history);
-   STBI_FREE(g.background);
+   STBI_FREE(g->history);
+   STBI_FREE(g->background);
 
+   STBI_FREE(g);
    return u;
 }
 
