@@ -22,6 +22,7 @@ int platform_memory_range_available(uint32_t base, uint32_t end) {
 #define FS_LARGE_POOL_BASE ((uintptr_t)high_pool)
 #define FS_LARGE_IMG_BASE ((uintptr_t)high_image)
 #include "../src/fs.c"
+#include "ata_async_stub.h"
 
 static unsigned char floppy[DISK_SECTORS * SECTOR_SIZE], old_floppy[sizeof(floppy)];
 static unsigned char disk[DATA_LARGE_DISK_SECTORS * SECTOR_SIZE], old_disk[sizeof(disk)];
@@ -194,4 +195,5 @@ int main(int argc, char **argv) {
     assert(pool_base == FS_POOL_BASE && image_base == FS_IMG_BASE && fs_file_limit() == FS_FILE_MAX);
     verify(legacy, 12345, 0); assert(fs_sync() == 0);
     puts("large profile: 128 MiB plus default disk retains low arenas and old limits");
+    return 0;
 }

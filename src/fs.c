@@ -63,6 +63,7 @@ static int data_backend; /* 0 floppy, 1 default IDE, 2 large IDE */
 static uintptr_t pool_base, image_base;
 static unsigned pool_capacity, image_capacity;
 static int data_problem;
+static int sync_new_incarnation(void);
 
 _Static_assert(sizeof(FsNode) * FS_MAX_NODES <= FS_CAPACITY, "FS arena overflow");
 _Static_assert(FS_MAX_NODES <= 32768, "node IDs exceed signed disk parents");
@@ -216,6 +217,7 @@ static int tree_fits(int id, int parent, const char *name) {
 }
 
 static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!valid_name(name)) return -1;
     if (parent < 0 || parent >= fs_node_limit() || !nodes[parent].used)
         return -1;
@@ -246,7 +248,9 @@ static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
     return -1;
 }
 
-void fs_init(void) {
+int fs_init(void) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
+    if (sync_new_incarnation() < 0) return -1;
     writable = 0;
     active_slot = -1;
     generation = sync_failures = last_sync_attempt = 0;
@@ -304,6 +308,7 @@ void fs_init(void) {
     fs_create_app(0, "2048");
     fs_create_app(0, "Breakout");
     fs_create_app(0, "System Monitor");
+    return 0;
 }
 
 int fs_root(void) { return 0; }
@@ -367,6 +372,7 @@ static void release_data(int id) {
     nodes[id].offset = 0;
 }
 int fs_write(int id, const char *data, int len) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(id) || nodes[id].is_dir || nodes[id].is_app || len < 0 ||
         (unsigned)len > fs_file_limit() || (len && !data)) return -1;
     if ((unsigned)len > fs_capacity() - (fs_used_bytes() - nodes[id].size)) return -1;
@@ -568,6 +574,7 @@ int fs_child_count(int parent) {
 }
 
 int fs_delete(int id) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(id) || id == 0)
         return -1;
     if (nodes[id].is_dir) {
@@ -583,6 +590,7 @@ int fs_delete(int id) {
 }
 
 int fs_move(int id, int new_parent) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(id) || id == 0)
         return -1;
     if (!fs_is_dir(new_parent))
@@ -619,13 +627,15 @@ int fs_move(int id, int new_parent) {
     return 0;
 }
 
-void fs_empty_dir(int parent) {
+int fs_empty_dir(int parent) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_is_dir(parent))
-        return;
+        return -1;
     for (int i = 0; i < FS_MAX_NODES; i++) {
         if (nodes[i].used && nodes[i].parent == parent)
             fs_delete(i);
     }
+    return 0;
 }
 
 static void make_copy_name(char *out, const char *base, int n) {
@@ -666,6 +676,7 @@ static void make_copy_name(char *out, const char *base, int n) {
 }
 
 static int copy_into(int id, int parent, const char *name) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(id) || !fs_is_dir(parent))
         return -1;
     int dst;
@@ -706,6 +717,7 @@ int fs_unique_copy(int parent, const char *src, char *out) {
 }
 
 int fs_copy(int id, int parent) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(id) || id == 0)
         return -1;
     if (!fs_is_dir(parent))
@@ -727,6 +739,7 @@ int fs_copy(int id, int parent) {
 }
 
 int fs_rename(int id, const char *name) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(id) || id == 0 || !valid_name(name))
         return -1;
     int len = kstrlen(name);
@@ -859,62 +872,99 @@ static void decode_node(DiskNode *d, const unsigned char *p, const DiskHeader *h
     kmemcpy(d, p, disk_node_size(h));
 }
 
-/* Validate the complete graph before changing the live node table. */
-static int validate_payload(const DiskHeader *h, const unsigned char *img) {
-    unsigned ds = disk_node_size(h), limit = fs_node_limit();
-    unsigned allowance = fs_capacity_for_nodes(h->count);
-    unsigned offsets[FS_MAX_NODES] = {0};
-    unsigned pos = FS_SECTOR_SIZE, end = pos + h->bytes, total = 0;
-    for (unsigned n = 0; n < h->count; ++n) {
-        DiskNode d;
-        if (end - pos < ds) return -1;
-        decode_node(&d, img + pos, h);
-        if (d.id >= limit || offsets[d.id] || d.parent < -1 ||
-            d.parent >= (int)limit || d.is_dir > 1 || d.is_app > 1 ||
-            (d.is_dir && d.is_app) ||
-            d.size > fs_file_limit() ||
-            d.size > end - pos - ds ||
-            ((d.is_dir || d.is_app) && d.size)) return -1;
-        int length = 0;
-        while (length < FS_NAME_LEN && d.name[length]) {
-            if (d.name[length] == '/') return -1;
-            length++;
-        }
-        if (length == FS_NAME_LEN || (d.id && !length)) return -1;
-        if (d.id && (kstrcmp(d.name, ".") == 0 || kstrcmp(d.name, "..") == 0))
-            return -1;
-        if (!d.id && (d.parent != -1 || !d.is_dir || length)) return -1;
-        if (d.size > allowance - total) return -1;
-        total += d.size;
-        offsets[d.id] = pos;
-        pos += ds + d.size;
-    }
-    if (pos != end || !offsets[0]) return -1;
-    for (int id = 1; id < FS_MAX_NODES; ++id) {
-        if (!offsets[id]) continue;
-        DiskNode node;
-        decode_node(&node, img + offsets[id], h);
-        int walk = id;
-        unsigned path_bytes = 0;
-        for (unsigned steps = 0; walk != 0; ++steps) {
-            if (steps >= FS_MAX_DEPTH) return -1;
-            DiskNode d, parent;
-            decode_node(&d, img + offsets[walk], h);
-            path_bytes += 1 + kstrlen(d.name);
-            if (path_bytes >= FS_PATH_LEN) return -1;
-            walk = d.parent;
-            if (walk < 0 || !offsets[walk]) return -1;
-            decode_node(&parent, img + offsets[walk], h);
-            if (!parent.is_dir) return -1;
-        }
-        for (int other = 1; other < id; ++other) {
-            if (!offsets[other]) continue;
-            DiskNode d;
-            decode_node(&d, img + offsets[other], h);
-            if (d.parent == node.parent && !kstrcmp(d.name, node.name)) return -1;
-        }
-    }
+/* The same bounded graph validator serves mount and incremental commit. No
+ * live node or file bytes are changed; offsets describe the staged image. */
+typedef struct {
+    unsigned offsets[FS_MAX_NODES];
+    const DiskHeader *header;
+    const unsigned char *image;
+    unsigned phase, record, pos, total, allowance;
+    unsigned id, walk, steps, path_bytes, other;
+    DiskNode node;
+} PayloadValidator;
+enum { VALIDATE_RECORDS = 1, VALIDATE_NEXT, VALIDATE_PATH, VALIDATE_NAMES,
+       VALIDATE_DONE };
+#define FS_SYNC_GRAPH_BUDGET 64u
+#define FS_SYNC_BYTE_BUDGET 4096u
+
+static int validator_begin(PayloadValidator *v, const DiskHeader *h,
+                           const unsigned char *image) {
+    kmemset(v, 0, sizeof(*v));
+    if (!h->count || h->count > (unsigned)fs_node_limit() ||
+        h->bytes > (slot_sectors() - 1) * FS_SECTOR_SIZE ||
+        h->bytes < h->count * disk_node_size(h)) return -1;
+    v->header = h; v->image = image;
+    v->allowance = fs_capacity_for_nodes(h->count);
+    v->phase = VALIDATE_RECORDS; v->pos = FS_SECTOR_SIZE; v->id = 1;
     return 0;
+}
+/* 1 more work, 0 valid, -1 invalid. At most budget fixed-size graph checks. */
+static int validator_step(PayloadValidator *v, unsigned budget) {
+    const DiskHeader *h = v->header;
+    const unsigned char *img = v->image;
+    unsigned ds = disk_node_size(h), end = FS_SECTOR_SIZE + h->bytes;
+    while (budget--) {
+        if (v->phase == VALIDATE_RECORDS) {
+            if (v->record == h->count) {
+                if (v->pos != end || !v->offsets[0]) return -1;
+                v->phase = VALIDATE_NEXT;
+                continue;
+            }
+            DiskNode d;
+            if (v->pos > end || end - v->pos < ds) return -1;
+            decode_node(&d, img + v->pos, h);
+            if (d.id >= (unsigned)fs_node_limit() || v->offsets[d.id] ||
+                d.parent < -1 || d.parent >= fs_node_limit() ||
+                d.is_dir > 1 || d.is_app > 1 || (d.is_dir && d.is_app) ||
+                d.size > fs_file_limit() || d.size > end - v->pos - ds ||
+                ((d.is_dir || d.is_app) && d.size)) return -1;
+            int length = 0;
+            while (length < FS_NAME_LEN && d.name[length]) {
+                if (d.name[length] == '/') return -1;
+                ++length;
+            }
+            if (length == FS_NAME_LEN || (d.id && !length) ||
+                (d.id && (!kstrcmp(d.name, ".") || !kstrcmp(d.name, ".."))) ||
+                (!d.id && (d.parent != -1 || !d.is_dir || length)) ||
+                d.size > v->allowance - v->total) return -1;
+            v->total += d.size; v->offsets[d.id] = v->pos;
+            v->pos += ds + d.size; ++v->record;
+        } else if (v->phase == VALIDATE_NEXT) {
+            if (v->id >= FS_MAX_NODES) { v->phase = VALIDATE_DONE; return 0; }
+            if (!v->offsets[v->id]) { ++v->id; continue; }
+            decode_node(&v->node, img + v->offsets[v->id], h);
+            v->walk = v->id; v->steps = v->path_bytes = 0;
+            v->other = 1; v->phase = VALIDATE_PATH;
+        } else if (v->phase == VALIDATE_PATH) {
+            if (!v->walk) { v->phase = VALIDATE_NAMES; continue; }
+            if (v->steps++ >= FS_MAX_DEPTH) return -1;
+            DiskNode d, parent;
+            decode_node(&d, img + v->offsets[v->walk], h);
+            v->path_bytes += 1 + kstrlen(d.name);
+            if (v->path_bytes >= FS_PATH_LEN || d.parent < 0 ||
+                !v->offsets[d.parent]) return -1;
+            v->walk = (unsigned)d.parent;
+            decode_node(&parent, img + v->offsets[v->walk], h);
+            if (!parent.is_dir) return -1;
+        } else if (v->phase == VALIDATE_NAMES) {
+            if (v->other >= v->id) { ++v->id; v->phase = VALIDATE_NEXT; continue; }
+            unsigned offset = v->offsets[v->other++];
+            if (!offset) continue;
+            DiskNode d;
+            decode_node(&d, img + offset, h);
+            if (d.parent == v->node.parent && !kstrcmp(d.name, v->node.name)) return -1;
+        } else return v->phase == VALIDATE_DONE ? 0 : -1;
+    }
+    return 1;
+}
+
+static int validate_payload(const DiskHeader *h, const unsigned char *img) {
+    PayloadValidator v;
+    if (validator_begin(&v, h, img) < 0) return -1;
+    int result;
+    do { result = validator_step(&v, FS_SYNC_GRAPH_BUDGET); }
+    while (result > 0);
+    return result;
 }
 
 static int all_zero(const unsigned char *p, unsigned n) {
@@ -1018,6 +1068,8 @@ static int load_volume(void) {
 }
 
 int fs_load_disk(void) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
+    if (sync_new_incarnation() < 0) return -1;
     data_backend = data_problem = 0;
     int probe = ata_probe();
     if (probe == 0) return load_volume();
@@ -1115,30 +1167,272 @@ static int save_snapshot(void) {
     return 0;
 }
 
-int fs_save_disk(void) {
-    last_sync_attempt = timer_ticks();
-    int result = save_snapshot();
+/* An active snapshot owns the live FS and its existing image arena until the
+ * final verified readback (or failure). Two tiny result records outlive jobs:
+ * record 0 belongs to the sole async/autosave client, record 1 to fs_sync.
+ * A joining fs_sync subscribes independently, so autosave can reap its own
+ * record without losing the joiner's result. Explicit owners release theirs. */
+typedef struct {
+    FsSyncTicket ticket;
+    int occupied, result;
+} SyncResult;
+typedef struct {
+    unsigned phase, next_phase, subscribers;
+    unsigned node, pos, copied, length, cursor, crc, sectors, lba;
+    int target, header_attempted;
+    DiskHeader header, verified;
+    PayloadValidator validator;
+} SyncJob;
+enum {
+    SYNC_IDLE, SYNC_SERIALIZE_NODE, SYNC_SERIALIZE_DATA, SYNC_VALIDATE_STAGE,
+    SYNC_CRC_STAGE, SYNC_WRITE_PAYLOAD, SYNC_FLUSH_PAYLOAD,
+    SYNC_READ_PAYLOAD, SYNC_CRC_READBACK, SYNC_WRITE_HEADER, SYNC_FLUSH_HEADER,
+    SYNC_READ_HEADER, SYNC_CHECK_HEADER, SYNC_READ_COMMITTED,
+    SYNC_CRC_COMMITTED, SYNC_VALIDATE_COMMITTED, SYNC_IO, SYNC_FLOPPY
+};
+static SyncJob sync_job;
+static SyncResult sync_results[2];
+static unsigned sync_incarnation, sync_serial;
+static int sync_autosave;
+_Static_assert(sizeof(SyncJob) + sizeof(sync_results) + 3 * sizeof(unsigned) <= 1536,
+               "incremental FS control state exceeds bounded budget");
+
+int fs_sync_busy(void) { return sync_job.phase != SYNC_IDLE; }
+static int sync_new_incarnation(void) {
+    if (sync_incarnation == ~0u) return -1; /* Never make an old ticket current. */
+    ++sync_incarnation; sync_serial = 0; sync_autosave = 0;
+    kmemset(sync_results, 0, sizeof(sync_results));
+    kmemset(&sync_job, 0, sizeof(sync_job));
+    return 0;
+}
+static int sync_record(unsigned slot, FsSyncTicket *ticket) {
+    if (sync_results[slot].occupied) return FS_ERR_BUSY;
+    if (!sync_incarnation || sync_serial == ~0u) return -1;
+    SyncResult *r = &sync_results[slot];
+    r->ticket.incarnation = sync_incarnation; r->ticket.serial = ++sync_serial;
+    r->occupied = 1; r->result = FS_SYNC_PENDING;
+    if (ticket) *ticket = r->ticket;
+    return 0;
+}
+static int sync_find(FsSyncTicket ticket) {
+    for (unsigned i = 0; i < 2; ++i)
+        if (sync_results[i].occupied && ticket.incarnation == sync_results[i].ticket.incarnation &&
+            ticket.serial == sync_results[i].ticket.serial) return (int)i;
+    return -1;
+}
+int fs_sync_result(FsSyncTicket ticket) {
+    int slot = sync_find(ticket);
+    return slot < 0 ? FS_SYNC_STALE : sync_results[slot].result;
+}
+int fs_sync_release(FsSyncTicket ticket) {
+    int slot = sync_find(ticket);
+    if (slot < 0) return FS_SYNC_STALE;
+    if (sync_results[slot].result == FS_SYNC_PENDING) return FS_ERR_BUSY;
+    sync_results[slot].occupied = 0;
+    return 0;
+}
+static void sync_account(int result) {
     save_failed = result < 0;
     if (save_failed) {
-        if (sync_failures < 3) sync_failures++;
+        if (sync_failures < 3) ++sync_failures;
         platform_log("FS save failed; keeping unsaved RAM data\n");
-    } else {
-        sync_failures = 0;
+    } else sync_failures = 0;
+}
+static enum FsSyncProgress sync_finish(int result) {
+    if (result < 0 && sync_job.header_attempted) writable = 0;
+    if (!result) {
+        active_slot = sync_job.target;
+        generation = sync_job.header.generation;
+        fs_touched = 0;
     }
+    for (unsigned i = 0; i < 2; ++i)
+        if (sync_job.subscribers & (1u << i)) sync_results[i].result = result;
+    sync_job.phase = SYNC_IDLE;
+    sync_account(result);
+    if (sync_autosave) { sync_results[0].occupied = 0; sync_autosave = 0; }
+    return FS_SYNC_FINISHED;
+}
+/* Start only after reserving a completion record. No IDE payload work here. */
+static void sync_start(unsigned slot) {
+    kmemset(&sync_job, 0, sizeof(sync_job));
+    sync_job.subscribers = 1u << slot;
+    sync_job.target = active_slot == 0 ? 1 : 0;
+    sync_job.lba = slot_lba(sync_job.target);
+    sync_job.pos = FS_SECTOR_SIZE;
+    sync_job.header.magic = FS_DISK_MAGIC;
+    sync_job.header.version = snapshot_version();
+    sync_job.header.generation = generation + 1;
+    sync_job.phase = data_backend ? SYNC_SERIALIZE_NODE : SYNC_FLOPPY;
+    last_sync_attempt = timer_ticks();
+}
+int fs_sync_request(FsSyncTicket *ticket) {
+    if (!ticket) return -1;
+    if (fs_sync_busy() || sync_results[0].occupied) return FS_ERR_BUSY;
+    if (fs_touched && !writable) return -1;
+    int result = sync_record(0, ticket);
+    if (result < 0) return result;
+    if (!fs_touched) { sync_results[0].result = 0; return 0; }
+    sync_start(0);
+    /* The floppy BIOS/PIO path remains deliberately synchronous. */
+    if (!data_backend) (void)fs_sync_step();
+    return 0;
+}
+static unsigned sync_crc_bytes(unsigned crc, const unsigned char *data, unsigned length) {
+    for (unsigned i = 0; i < length; ++i)
+        crc = (crc >> 8) ^ crc32_table[(crc ^ data[i]) & 255u];
+    return crc;
+}
+static void sync_crc_begin(void) { sync_job.cursor = 0; sync_job.crc = ~0u; }
+static int sync_crc_step(void) {
+    unsigned n = sync_job.header.bytes - sync_job.cursor;
+    if (n > FS_SYNC_BYTE_BUDGET) n = FS_SYNC_BYTE_BUDGET;
+    sync_job.crc = sync_crc_bytes(sync_job.crc,
+        (const unsigned char *)image_base + FS_SECTOR_SIZE + sync_job.cursor, n);
+    sync_job.cursor += n;
+    return sync_job.cursor == sync_job.header.bytes;
+}
+/* The transport retains this stable image buffer until a later poll completes. */
+static enum FsSyncProgress sync_io(int operation, unsigned lba, void *buffer,
+                                   int sectors, unsigned next) {
+    int result = operation == 0 ? ata_request_read(lba, buffer, sectors) :
+                 operation == 1 ? ata_request_write(lba, buffer, sectors) :
+                                  ata_request_flush();
+    if (result < 0) return sync_finish(-1);
+    if (sync_job.phase == SYNC_WRITE_HEADER) sync_job.header_attempted = 1;
+    sync_job.phase = SYNC_IO; sync_job.next_phase = next;
+    return FS_SYNC_MORE;
+}
+enum FsSyncProgress fs_sync_step(void) {
+    unsigned char *img = (unsigned char *)image_base;
+    SyncJob *j = &sync_job;
+    switch (j->phase) {
+    case SYNC_IDLE: return FS_SYNC_IDLE;
+    case SYNC_SERIALIZE_NODE: {
+        while (j->node < FS_MAX_NODES && !nodes[j->node].used) ++j->node;
+        if (j->node == FS_MAX_NODES) {
+            j->header.bytes = j->pos - FS_SECTOR_SIZE;
+            if (validator_begin(&j->validator, &j->header, img) < 0) return sync_finish(-1);
+            j->phase = SYNC_VALIDATE_STAGE; return FS_SYNC_MORE;
+        }
+        FsNode *n = &nodes[j->node];
+        DiskNode d = { .id = j->node, .parent = n->parent,
+            .is_dir = n->is_dir, .is_app = n->is_app, .size = n->size, .modified = n->modified };
+        if (d.size > fs_file_limit() || j->pos > slot_sectors() * FS_SECTOR_SIZE ||
+            sizeof(d) + d.size > slot_sectors() * FS_SECTOR_SIZE - j->pos) return sync_finish(-1);
+        kmemcpy(d.name, n->name, FS_NAME_LEN);
+        kmemcpy(img + j->pos, &d, sizeof(d)); j->pos += sizeof(d);
+        j->length = d.size; j->copied = 0; ++j->header.count;
+        j->phase = SYNC_SERIALIZE_DATA; return FS_SYNC_MORE;
+    }
+    case SYNC_SERIALIZE_DATA: {
+        unsigned n = j->length - j->copied;
+        if (n > FS_SYNC_BYTE_BUDGET) n = FS_SYNC_BYTE_BUDGET;
+        kmemcpy(img + j->pos, fs_data(j->node) + j->copied, n);
+        j->pos += n; j->copied += n;
+        if (j->copied == j->length) { ++j->node; j->phase = SYNC_SERIALIZE_NODE; }
+        return FS_SYNC_MORE;
+    }
+    case SYNC_VALIDATE_STAGE:
+    case SYNC_VALIDATE_COMMITTED: {
+        int result = validator_step(&j->validator, FS_SYNC_GRAPH_BUDGET);
+        if (result < 0) return sync_finish(-1);
+        if (result) return FS_SYNC_MORE;
+        if (j->phase == SYNC_VALIDATE_COMMITTED) return sync_finish(0);
+        sync_crc_begin(); j->phase = SYNC_CRC_STAGE; return FS_SYNC_MORE;
+    }
+    case SYNC_CRC_STAGE:
+        if (!sync_crc_step()) return FS_SYNC_MORE;
+        j->header.sum = ~j->crc; j->header.header_sum = crc32(&j->header, 24);
+        j->sectors = (j->header.bytes + FS_SECTOR_SIZE - 1) / FS_SECTOR_SIZE;
+        kmemset(img + j->pos, 0, (1 + j->sectors) * FS_SECTOR_SIZE - j->pos);
+        j->phase = SYNC_WRITE_PAYLOAD; return FS_SYNC_MORE;
+    case SYNC_WRITE_PAYLOAD:
+        return sync_io(1, j->lba + 1, img + FS_SECTOR_SIZE, j->sectors, SYNC_FLUSH_PAYLOAD);
+    case SYNC_FLUSH_PAYLOAD:
+        return sync_io(2, 0, 0, 0, SYNC_READ_PAYLOAD);
+    case SYNC_READ_PAYLOAD:
+        sync_crc_begin();
+        return sync_io(0, j->lba + 1, img + FS_SECTOR_SIZE, j->sectors, SYNC_CRC_READBACK);
+    case SYNC_CRC_READBACK:
+        if (!sync_crc_step()) return FS_SYNC_MORE;
+        if (~j->crc != j->header.sum) return sync_finish(-1);
+        kmemset(img, 0, FS_SECTOR_SIZE); kmemcpy(img, &j->header, sizeof(j->header));
+        j->phase = SYNC_WRITE_HEADER; return FS_SYNC_MORE;
+    case SYNC_WRITE_HEADER:
+        return sync_io(1, j->lba, img, 1, SYNC_FLUSH_HEADER);
+    case SYNC_FLUSH_HEADER:
+        return sync_io(2, 0, 0, 0, SYNC_READ_HEADER);
+    case SYNC_READ_HEADER:
+        return sync_io(0, j->lba, img, 1, SYNC_CHECK_HEADER);
+    case SYNC_CHECK_HEADER:
+        kmemcpy(&j->verified, img, sizeof(j->verified));
+        /* Compare every semantic header field, not just the generation/CRC.
+         * This also validates magic, version, count, length and header CRC. */
+        if (j->verified.magic != j->header.magic || j->verified.version != j->header.version ||
+            j->verified.count != j->header.count || j->verified.bytes != j->header.bytes ||
+            j->verified.sum != j->header.sum || j->verified.generation != j->header.generation ||
+            j->verified.header_sum != j->header.header_sum ||
+            j->verified.header_sum != crc32(&j->verified, 24)) return sync_finish(-1);
+        j->phase = SYNC_READ_COMMITTED; return FS_SYNC_MORE;
+    case SYNC_READ_COMMITTED:
+        sync_crc_begin();
+        return sync_io(0, j->lba + 1, img + FS_SECTOR_SIZE, j->sectors, SYNC_CRC_COMMITTED);
+    case SYNC_CRC_COMMITTED:
+        if (!sync_crc_step()) return FS_SYNC_MORE;
+        if (~j->crc != j->header.sum || validator_begin(&j->validator, &j->verified, img) < 0)
+            return sync_finish(-1);
+        j->phase = SYNC_VALIDATE_COMMITTED; return FS_SYNC_MORE;
+    case SYNC_IO: {
+        enum AtaProgress progress = ata_poll(FS_SYNC_BYTE_BUDGET / FS_SECTOR_SIZE);
+        if (progress == ATA_PROGRESS_WAIT) return FS_SYNC_WAIT;
+        if (progress == ATA_PROGRESS_MORE) return FS_SYNC_MORE;
+        if (progress != ATA_PROGRESS_DONE) return sync_finish(-1);
+        j->phase = j->next_phase; return FS_SYNC_MORE;
+    }
+    case SYNC_FLOPPY: {
+        int result = save_snapshot();
+        /* Legacy save has already selected its target and generation. */
+        j->target = active_slot; j->header.generation = generation;
+        return sync_finish(result);
+    }
+    default: return sync_finish(-1);
+    }
+}
+
+int fs_save_disk(void) { return fs_sync(); }
+int fs_needs_sync(void) { return fs_touched; }
+int fs_sync(void) {
+    /* A clean FS needs no new job, but never report success over a pending one. */
+    if (!fs_sync_busy() && !fs_touched) return 0;
+    if (!fs_sync_busy() && !writable) {
+        last_sync_attempt = timer_ticks(); sync_account(-1); return -1;
+    }
+    FsSyncTicket ticket;
+    int result = sync_record(1, &ticket);
+    if (result < 0) return result;
+    if (fs_sync_busy()) sync_job.subscribers |= 2u;
+    else sync_start(1);
+    do {
+        (void)fs_sync_step();
+        result = fs_sync_result(ticket);
+        if (result == FS_SYNC_PENDING) fs_background_poll();
+    } while (result == FS_SYNC_PENDING);
+    (void)fs_sync_release(ticket);
     return result;
 }
-int fs_needs_sync(void) { return fs_touched; }
-int fs_sync(void) { return fs_save_disk(); }
 void fs_autosync(void) {
-    if (!writable || !fs_touched || sync_failures >= 3) return;
-    if (sync_failures && (unsigned)(timer_ticks() - last_sync_attempt) < 5 * TIMER_HZ)
-        return;
-    fs_save_disk();
+    if (!writable || !fs_touched || fs_sync_busy() || sync_results[0].occupied || sync_failures >= 3) return;
+    if (sync_failures && (unsigned)(timer_ticks() - last_sync_attempt) < 5 * TIMER_HZ) return;
+    if (!data_backend) { (void)fs_sync(); return; }
+    FsSyncTicket ticket;
+    if (!fs_sync_request(&ticket)) sync_autosave = 1;
 }
+
 const char *fs_storage_status(void) {
     if (data_problem == 2) return "Large disk needs 128 MiB RAM; boot files read-only";
     if (data_problem) return "Data disk unavailable; boot files read-only";
     if (!writable) return "Disk protected; changes in RAM only";
+    if (fs_sync_busy()) return "Saving disk snapshot; file changes paused";
     if (save_failed) return "Save failed; changes in RAM only";
     return 0;
 }
