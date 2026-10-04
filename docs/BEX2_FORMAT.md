@@ -1,10 +1,13 @@
-# BEX2 v1 format and producer (staged, loader disabled)
+# BEX2 v1 format and producer
 
-This landing supplies an opt-in producer, a pure parser/planner, and host-tested
-example algorithms. It does not enable BEX2 execution, change the running ABI,
-seed BEX2 files into the desktop, or advertise a BEX2 feature bit. Mapping,
-execution, syscall-span checks, memory-info discovery, mixed-format behavior and
-ordinary guest gates are separate prerequisites. BEX1 stays the default.
+The original producer landing supplied a pure parser/planner and host-tested
+example algorithms without enabling a loader. The later private-space loader
+now passed independent and combined default/large guest gates; see
+[C3b verification](C3B_VERIFICATION.md) and [combined acceptance](C3_COMBINED_VERIFICATION.md).
+BEX1 remains the default producer and unchanged binary contract. Fresh release
+images may explicitly include the two workspace examples; existing saved disks
+and kernel startup seeding are unchanged. This document defines the format, not
+a claim of heap allocation or general dynamic virtual-memory services.
 
 ## Wire header
 
