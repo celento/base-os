@@ -234,6 +234,8 @@ static void capacity_and_exhaustion(void) {
     assert(native_sync_begin(owner(1), &rejected) == BOS_E_CAPACITY && rejected == 999);
     assert(!live_records() && !ticket_owned);
 }
+
+#ifndef NATIVE_SYNC_FIXTURE
 int main(void) {
     two_clients_and_boundary(); close_exit_and_reuse(); join_autosave_and_explicit();
     retained_results_do_not_starve(); old_completion_and_new_autosave();
@@ -242,3 +244,5 @@ int main(void) {
     puts("native sync ownership, joins, boundaries, cleanup and bounded progress passed");
     return 0;
 }
+
+#endif
