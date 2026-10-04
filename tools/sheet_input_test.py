@@ -30,19 +30,34 @@ def native(records):
     return bytes(out)
 
 
-def decode(data):
+def decode_document(data):
+    """Independent v1/v2 file reader, including display-only metadata."""
     magic, version, flags, rows, cols, count = struct.unpack_from('<4sHHHHI', data)
-    assert (magic, version, flags, rows, cols) == (b'BSH1', 1, 0, 128, 26)
-    cursor, previous, records = 16, -1, {}
+    assert (magic, flags, rows, cols) == (b'BSH1', 0, 128, 26)
+    assert version in (1, 2) and count <= 3328
+    cursor, previous, records, formats = 16, -1, {}, {}
+    widths = [104] * 26
+    if version == 2:
+        widths = list(struct.unpack_from('<26H', data, cursor)); cursor += 52
+        assert all(48 <= width <= 320 for width in widths)
     for _ in range(count):
         index, kind, size = struct.unpack_from('<HBB', data, cursor)
-        assert previous < index < 3328 and kind in (1, 2, 3) and size <= 95
+        assert previous < index < 3328 and kind in (0, 1, 2, 3) and size <= 95
         cursor += 4
+        display = data[cursor] if version == 2 else 0
+        cursor += version == 2
+        assert display in (0, 1, 2, 3)
+        assert kind != 0 or (version == 2 and not size and display)
         records[index] = (kind, data[cursor:cursor + size])
+        formats[index] = display
         cursor += size
         previous = index
     assert cursor == len(data)
-    return records
+    return dict(version=version, records=records, formats=formats, widths=widths)
+
+
+def decode(data):
+    return decode_document(data)['records']
 
 
 def contents(disk, path):
@@ -79,7 +94,8 @@ class SheetCheck(WriterCheck):
         self.cell_size, self.cell_fields = debug.structure('SheetCell', 'src/sheet.c')
         arena_size, self.arena_fields = debug.structure('SpreadsheetArena', 'src/sheet.c')
         assert self.state_size < 4096 and self.cell_size == 104
-        assert arena_size == 2824636 <= session.layout['SHEET_CAPACITY']
+        assert arena_size <= session.layout['SHEET_CAPACITY']
+        assert 6 * self.doc_size < arena_size
 
     def state(self):
         raw = self.s.memory(self.state_address, self.state_size)
@@ -104,6 +120,15 @@ class SheetCheck(WriterCheck):
         return dict(text=raw[self.cell_fields['text']:self.cell_fields['text'] + length],
                     kind=raw[self.cell_fields['kind']], error=raw[self.cell_fields['error']],
                     value=struct.unpack_from('<i', raw, self.cell_fields['value'])[0])
+
+    def format(self, index):
+        assert 0 <= index < 3328
+        address = self.selected()['address'] + self.snapshot_fields['doc'] + self.doc_fields['formats'] + index
+        return self.s.memory(address, 1)[0]
+
+    def widths(self):
+        address = self.selected()['address'] + self.snapshot_fields['doc'] + self.doc_fields['column_widths']
+        return list(struct.unpack('<26H', self.s.memory(address, 52)))
 
     def expect(self, index, text, kind=None, value=None):
         text = text.encode('ascii') if isinstance(text, str) else text
@@ -215,9 +240,9 @@ def run(build, profile="default"):
         win = check.owner(); check.move(win['x'] + win['w'] - 2, win['y'] + win['h'] - 2)
         session.command('input-send-event', {'events': [{'type': 'btn', 'data': {'down': True, 'button': 'left'}}]})
         session.wait(lambda: check.o.integer('resizing_win') >= 0, 'resize began')
-        check.move(win['x'] + 420, win['y'] + 292)
+        check.move(win['x'] + 360, win['y'] + 292)
         session.command('input-send-event', {'events': [{'type': 'btn', 'data': {'down': False, 'button': 'left'}}]})
-        session.wait(lambda: check.owner()['w'] == 422 and check.owner()['h'] == 294, 'minimum window clamps correctly')
+        session.wait(lambda: check.owner()['w'] == 362 and check.owner()['h'] == 294, 'minimum window clamps correctly')
         pictures.append(str(session.screenshot('spreadsheet-minimum-window.png')))
         check.open_file(disk, '/Documents/source.bsh'); check.expect(0, '100', 2)
         check.jump('C2'); session.text('Pending recovery')
