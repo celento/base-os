@@ -168,7 +168,28 @@ static void widened_coordinates(void) {
     assert(!ly);
 }
 
+
+static void native_layouts(void){
+    CanvasView view;
+    canvas_view_native_layout(&view,17,29,622,398,160,100);
+    assert(view.x==17&&view.y==34&&view.viewport_w==622&&view.viewport_h==388);
+    at(&view,16,33,-1,-1);at(&view,639,422,160,100);
+    canvas_view_native_layout(&view,17,29,222,98,320,200);
+    assert(view.x==50&&view.y==29&&view.viewport_w==156&&view.viewport_h==98);
+    assert(!canvas_view_contains(&view,49,50));assert(canvas_view_contains(&view,50,29));
+    at(&view,49,28,-3,-3);
+    canvas_view_native_layout(&view,-100,-80,622,398,320,200);
+    assert(view.x==-100&&view.y==-75);assert(canvas_view_contains(&view,0,0));
+    canvas_view_native_layout(&view,0,0,0,100,320,200);
+    assert(view.logical_w==320&&!view.viewport_w&&!view.viewport_h);
+    canvas_view_native_layout(&view,0,0,300,200,0,0);
+    assert(!view.logical_w&&!view.viewport_w);
+    canvas_view_native_layout(&view,INT32_MAX,INT32_MIN,INT32_MAX,INT32_MAX,1,INT32_MAX);
+    assert(view.x==INT32_MAX&&view.y==INT32_MIN&&view.viewport_w==1&&view.viewport_h==INT32_MAX);
+}
+
 int main(void) {
+    native_layouts();
     legacy_layouts();
     bounds_and_scaling();
     empty_views();

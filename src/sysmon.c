@@ -60,6 +60,7 @@ static int drawn_tab=-1, drawn_task_n, drawn_win_n;
 static MonitorRect drawn_client;
 static TermTaskInfo drawn_tasks[SYSMON_MAX_TASKS];
 static int drawn_windows[SYSMON_MAX_WIN];
+static unsigned drawn_window_instances[SYSMON_MAX_WIN];
 
 static int smaller(int a,int b){return a<b?a:b;}
 static MonitorLayout layout(int bx,int by,int bw,int bh){
@@ -159,7 +160,7 @@ static void system_draw(const MonitorLayout *l,const SysInfo *si){
     text(l,"CPU utilization is not measured.",l->x,l->footer_y,l->w,0,app_text_dim);
 }
 static MonitorRect task_button(const MonitorLayout *l,int i,int stop){
-    int sw=ui_string_w("Stop task")+32,showw=ui_string_w("Show terminal")+32,gap=6;
+    int sw=ui_string_w("Stop task")+32,showw=ui_string_w("Show window")+32,gap=6;
     int right=l->x+l->w;
     return (MonitorRect){stop?right-sw:right-sw-gap-showw,l->rows_y+i*TASK_ROW_H,
         stop?sw:showw,22};
@@ -184,11 +185,12 @@ static void windows_draw(const MonitorLayout *l,const SysInfo *si){
         text(l,si->win_min[i]?"Minimized":"Open",statusx,y+7,104,0,app_text_dim);
         button(l,close,"Close",0);
         draw_hline(l->x,y+WINDOW_ROW_H-1,l->w,gfx_gray(0xEC));
+        drawn_window_instances[drawn_win_n]=si->win_instance[i];
         drawn_windows[drawn_win_n++]=si->win_id[i];
     }
     if(count==0)text(l,"No windows are open.",l->x,l->rows_y,l->w,0,app_text_dim);
     const char *footer=drawn_win_n<count?"Enlarge the window to see all windows.":
-        "Closing a Terminal also ends its native task.";
+        "Closing a native window forcibly ends its task.";
     text(l,footer,l->x,l->footer_y,l->w,0,app_text_dim);
 }
 static void tasks_draw(const MonitorLayout *l,const SysInfo *si){
@@ -203,8 +205,8 @@ static void tasks_draw(const MonitorLayout *l,const SysInfo *si){
         append(title,task->name);
         if(task->document[0]){append(title," - ");append(title,task->document);}
         text(l,title,l->x+6,y+2,show.x-l->x-12,1,app_text);
-        button(l,show,"Show terminal",0);button(l,stop,"Stop task",0);
-        char detail[96]="Terminal ",t[24];
+        button(l,show,"Show window",0);button(l,stop,"Stop task",0);
+        char detail[96]="Window ",t[24];
         fmt_uint(t,(unsigned)task->owner+1);append(detail,t);
         append(detail,task->state==PROCESS_TASK_SLEEPING?"   Sleeping":"   Running");
         append(detail,"   Elapsed ");fmt_time(t,task->elapsed_sec);append(detail,t);
@@ -249,8 +251,9 @@ SysmonAction sysmon_click(int bx,int by,int bw,int bh,int mx,int my,const SysInf
        drawn_client.w!=bw||drawn_client.h!=bh)return none;
     if(current_tab==SYSMON_TAB_WINDOWS){
         for(int i=0;i<drawn_win_n;i++)if(contains(window_button(&l,i),mx,my)){
-            for(int j=0;j<si->win_n&&j<SYSMON_MAX_WIN;j++)if(si->win_id[j]==drawn_windows[i])
-                return (SysmonAction){SYSMON_ACTION_CLOSE_WINDOW,drawn_windows[i],0};
+            for(int j=0;j<si->win_n&&j<SYSMON_MAX_WIN;j++)
+                if(si->win_id[j]==drawn_windows[i]&&si->win_instance[j]==drawn_window_instances[i])
+                    return (SysmonAction){SYSMON_ACTION_CLOSE_WINDOW,drawn_windows[i],drawn_window_instances[i]};
         }
     }else if(current_tab==SYSMON_TAB_TASKS){
         for(int i=0;i<drawn_task_n;i++){
