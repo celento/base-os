@@ -176,12 +176,17 @@ def main(build, quick=False):
     results = {'fresh': boot(build, image, directory, 'fresh', names, kernel)}
     results['reboot'] = boot(build, image, directory, 'reboot', names, kernel, loaded=True)
     if not quick:
-        raw_path = directory / 'raw-codec.img'
-        raw_disk = bytearray(C['DISK_SECTORS'] * 512)
-        raw_disk[:512] = (build / 'boot.bin').read_bytes()
-        install_packed_kernel(raw_disk, pack_kernel(kernel, C, codec=RAW), C)
-        raw_path.write_bytes(raw_disk)
-        results['raw-codec'] = boot(build, raw_path, directory, 'raw-codec', names, kernel, codec=RAW)
+        raw_bytes = len(kernel) + C['KERNEL_BOOTSTRAP_BYTES'] + C['KERNEL_PACK_HEADER_BYTES']
+        if raw_bytes <= C['KERNEL_SECTORS'] * C['SECTOR_SIZE']:
+            raw_path = directory / 'raw-codec.img'
+            raw_disk = bytearray(C['DISK_SECTORS'] * 512)
+            raw_disk[:512] = (build / 'boot.bin').read_bytes()
+            install_packed_kernel(raw_disk, pack_kernel(kernel, C, codec=RAW), C)
+            raw_path.write_bytes(raw_disk)
+            results['raw-codec'] = boot(build, raw_path, directory, 'raw-codec', names, kernel, codec=RAW)
+        else:
+            results['raw-codec'] = {'skipped': 'Production image exceeds the optional uncompressed disk envelope'}
+            print('raw-codec: skipped; production image requires compression', flush=True)
         old_path = directory / 'legacy.img'
         old, content = legacy_image(old_path)
         update(old_path, build / 'boot.bin', build / 'kernel.bin')
