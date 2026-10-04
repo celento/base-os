@@ -33,9 +33,9 @@ class VideoTests(unittest.TestCase):
         if compiler is None:
             raise unittest.SkipTest('MPEG-1 host tests require a C compiler')
         subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra',
-                        '-Werror', '-fsanitize=address,undefined', '-DVIDEO_HOST_TEST',
+                        '-Werror', '-fsanitize=address,undefined', '-DVIDEO_HOST_TEST','-DMEDIA_MP3_HOST_TEST',
                         '-I', str(ROOT / 'src'), str(ROOT / 'tests/video_host.c'),
-                        str(ROOT / 'src/video.c'), '-lm', '-o', str(cls.executable)],
+                        str(ROOT / 'src/video.c'), str(ROOT / 'src/media_mp3.c'), '-lm', '-o', str(cls.executable)],
                        check=True)
         cls.environment = dict(os.environ)
         cls.environment['ASAN_OPTIONS'] = 'detect_leaks=0'
@@ -148,6 +148,17 @@ class VideoTests(unittest.TestCase):
                 self.assertEqual(metadata['frames'], 12)
                 subprocess.run([str(self.executable), '--reject', str(source)],
                                check=True, env=self.environment)
+
+    def test_non_square_pixel_aspect(self):
+        source=make_fixture(self.directory,352,240,'25',12,'aspect',sar='10/11')
+        metadata=probe_fixture(source)
+        # MPEG-1 stores inverse pixel aspect. FFmpeg rounds the requested SAR
+        # to sequence code12, which denotes actual displayed SAR200/219.
+        self.assertEqual(metadata['sample_aspect_ratio'],'200:219')
+        reference=decode_reference(source);actual=source.with_suffix('.baseos.yuv')
+        subprocess.run([str(self.executable),str(source),str(actual),'352','240','25','1','12','0','200','219'],
+                       check=True,env=self.environment)
+        self.check_reference(actual,reference,352,240,12)
 
     def test_without_b_frames(self):
         self.fixture_case('ip-only', 96, 64, '25', 50, bframes=0)

@@ -6,11 +6,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include "video.h"
+#include "audio.h"
 #include "platform.h"
 
 uint8_t video_test_arena[VIDEO_CAPACITY];
 static uint32_t now;
 uint32_t timer_ticks(void) { return now; }
+static AudioStatus no_audio;
+const AudioStatus *audio_status(void) { return &no_audio; }
+void audio_stop(void) {}
+void audio_pause(int paused) { (void)paused; }
+uint32_t audio_position_ms(void) { return 0; }
+uint32_t audio_duration_ms(void) { return 0; }
+int audio_play_pcm_stream(unsigned rate,unsigned channels,uint32_t total,
+                          AudioPcmReader reader,void *context) {
+    (void)rate;(void)channels;(void)total;(void)reader;(void)context;
+    return MEDIA_NO_DEVICE;
+}
+
 
 static unsigned number(const char *s) {
     char *end;
@@ -163,7 +176,7 @@ static int reject_valid_unsupported(const char *path) {
 int main(int argc, char **argv) {
     if (argc == 3 && !strcmp(argv[1], "--reject"))
         return reject_valid_unsupported(argv[2]);
-    assert(argc == 9);
+    assert(argc == 9 || argc == 11);
     unsigned width = number(argv[3]), height = number(argv[4]);
     unsigned fps_num = number(argv[5]), fps_den = number(argv[6]);
     unsigned expected = number(argv[7]), mode = number(argv[8]);
@@ -202,6 +215,7 @@ int main(int argc, char **argv) {
         assert(s->displayed_frames >= count && s->displayed_frames <= count + 1);
         if (s->state != VIDEO_LOADING) {
             assert(s->width == width && s->height == height);
+            if (argc==11) assert(s->aspect_num*number(argv[10])==s->aspect_den*number(argv[9]));
             assert(s->fps_num == fps_num && s->fps_den == fps_den);
             assert(s->total_frames == expected);
             assert(s->audio_present == audio);

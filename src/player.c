@@ -168,6 +168,26 @@ static void video_geometry(int h, int *viewport_height, int *buttons_y, int *lib
     *buttons_y = 76 + *viewport_height + 46;
     *library_y = *buttons_y + 62;
 }
+static void draw_video_progress(int x,int y,int w,int viewport_h) {
+    char text[32];
+    unsigned position=video_position_ms(),duration=video_duration_ms();
+    int bar_y=76+viewport_h+10,bar_width=w-32;
+    draw_round_rect(x+16,y+bar_y,bar_width,6,3,app_chrome_dk);
+    unsigned scale=duration/65535u+1;
+    unsigned progress=duration?(position/scale)*(unsigned)bar_width/(duration/scale):0;
+    if (progress>(unsigned)bar_width) progress=(unsigned)bar_width;
+    if (progress) draw_rect(x+16,y+bar_y,(int)progress,6,app_accent);
+    draw_rect(x+16,y+bar_y+12,w-32,18,COLOR_WHITE);
+    time_string(text,position);draw_string(text,x+16,y+bar_y+12,app_text_dim);
+    time_string(text,duration);draw_string(text,x+w-16-ui_string_w(text),y+bar_y+12,app_text_dim);
+}
+void player_draw_playback(int x,int y,int w,int h) {
+    if (!video_mode || w<420 || h<362) return;
+    int viewport_h,buttons_y,library_y;
+    video_geometry(h,&viewport_h,&buttons_y,&library_y);
+    video_draw(x+16,y+86,w-32,viewport_h-10);
+    draw_video_progress(x,y,w,viewport_h);
+}
 static void draw_video(int x, int y, int w, int h) {
     const VideoStatus *status = video_status();
     int viewport_h, buttons_y, library_y;
@@ -177,28 +197,35 @@ static void draw_video(int x, int y, int w, int h) {
     draw_string(state, x+w-16-ui_string_w(state), y+12, app_text_dim);
     draw_string_bold_clip(title[0] ? title : "Choose a video", x+16, y+40, app_text, x+w-16);
     char text[96], number[20];
-    copy_text(text, "MPEG-1 / Video only (no audio)", sizeof text);
+    if (status->audio_enabled) {
+        copy_text(text,"MPEG-1 + MP2 / ",sizeof text);
+        append(text,status->audio_channels==1?"Mono / ":"Stereo / ",sizeof text);
+        fmt_uint(number,status->audio_sample_rate);append(text,number,sizeof text);append(text," Hz",sizeof text);
+    } else copy_text(text,status->audio_error==MEDIA_NO_DEVICE?
+        "MPEG-1 / Video only (no audio device)":"MPEG-1 / Video only (no audio)",sizeof text);
     if (status->width) {
         append(text, " / ", sizeof text); fmt_uint(number,status->width); append(text,number,sizeof text);
         append(text," x ",sizeof text); fmt_uint(number,status->height); append(text,number,sizeof text);
     }
     draw_string_clip(text,x+16,y+62,app_text_dim,x+w-16);
     video_draw(x+16,y+86,w-32,viewport_h-10);
-    unsigned position=video_position_ms(),duration=video_duration_ms();
-    int bar_y=76+viewport_h+10,bar_width=w-32;
-    draw_round_rect(x+16,y+bar_y,bar_width,6,3,app_chrome_dk);
-    unsigned scale=duration/65535u+1;
-    unsigned progress=duration?(position/scale)*(unsigned)bar_width/(duration/scale):0;
-    if (progress>(unsigned)bar_width) progress=(unsigned)bar_width;
-    if (progress) draw_rect(x+16,y+bar_y,(int)progress,6,app_accent);
-    time_string(text,position);draw_string(text,x+16,y+bar_y+12,app_text_dim);
-    time_string(text,duration);draw_string(text,x+w-16-ui_string_w(text),y+bar_y+12,app_text_dim);
+    draw_video_progress(x,y,w,viewport_h);
     const char *play=status->state==VIDEO_PLAYING || status->state==VIDEO_LOADING?"Pause":"Play";
     button(x+16,y+buttons_y,96,play,1);
     button(x+120,y+buttons_y,76,"Stop",0);
     button(x+204,y+buttons_y,96,"Clear error",0);
     button(x+w-96,y+buttons_y,80,"Refresh",0);
-    const char *hint=message[0]?message:"Space: play/pause   Enter: open   S: stop";
+    if (status->audio_enabled && w>=600) {
+        button(x+w-316,y+buttons_y,28,"-",0);
+        copy_text(text,"Vol ",sizeof text);fmt_uint(number,audio_status()->volume);
+        append(text,number,sizeof text);append(text,"%",sizeof text);
+        draw_string(text,x+w-280,y+buttons_y+7,app_text_dim);
+        button(x+w-212,y+buttons_y,28,"+",0);
+    }
+    const char *hint=message[0]?message:status->audio_enabled?
+        "Space: play/pause   Enter: open   +/-: volume   S: stop":
+        status->audio_error==MEDIA_UNSUPPORTED?"Unsupported MPEG audio; playing video only.":
+        "Space: play/pause   Enter: open   S: stop";
     draw_string_clip(hint,x+16,y+buttons_y+38,message[0]?gfx_rgb(176,47,42):app_text_dim,x+w-16);
     copy_text(text,"Media files (",sizeof text);fmt_uint(number,(unsigned)file_count);
     append(text,number,sizeof text);append(text,")",sizeof text);
@@ -216,7 +243,8 @@ static void draw_video(int x, int y, int w, int h) {
         draw_string_clip(fs_name(id),x+26,row_y+5,app_text,x+w-86);
         draw_string(is_video(id)?"MPEG":extension(fs_name(id),".mp3")?"MP3":"WAV",x+w-72,row_y+5,app_text_dim);
     }
-    draw_string_clip("MPEG-1 video / 2 MiB / up to 640 x 480 / no audio",x+16,y+h-24,app_text_dim,x+w-16);
+    draw_string_clip(status->audio_enabled?"MPEG-1 video + MP2 audio / Sound Blaster 16 / 2 MiB":
+        "MPEG-1 video / 2 MiB / up to 640 x 480 / no audio",x+16,y+h-24,app_text_dim,x+w-16);
 }
 void player_draw(int x, int y, int w, int h) {
     player_init();
@@ -304,6 +332,10 @@ int player_click(int x, int y, int w, int h, int mx, int my) {
         if (hit(mx,my,x+120,y+buttons_y,76,32)) { video_stop(); return 1; }
         if (hit(mx,my,x+204,y+buttons_y,96,32)) { message[0]=0;video_clear_error();return 1; }
         if (hit(mx,my,x+w-96,y+buttons_y,80,32)) { player_refresh();return 1; }
+        if (video_status()->audio_enabled && w>=600) {
+            if (hit(mx,my,x+w-316,y+buttons_y,28,32)) return player_key(0,'-');
+            if (hit(mx,my,x+w-212,y+buttons_y,28,32)) return player_key(0,'+');
+        }
         if (hit(mx,my,x+w-76,y+library_y-4,28,24)) return player_key(KEY_UP,0);
         if (hit(mx,my,x+w-46,y+library_y-4,28,24)) return player_key(KEY_DOWN,0);
         int list_y=library_y+24;
@@ -345,12 +377,13 @@ int player_key(int scancode, char character) {
 }
 int player_tick(void) {
     if (!initialized) return 0;
-    int changed=video_poll();
+    int frame_changed=video_poll();
     const AudioStatus *status=audio_status();
     int state=video_mode?video_status()->state:status->state;
     int error=video_mode?video_status()->error:status->error;
     unsigned position=(video_mode?video_position_ms():audio_position_ms())/100;
-    changed|=state!=last_state || error!=last_error || position!=last_position || status->volume!=last_volume;
+    int changed=state!=last_state || error!=last_error || (!video_mode && position!=last_position) || status->volume!=last_volume;
+    if (frame_changed && (!video_mode || state!=VIDEO_PLAYING)) changed=1;
     if (error && error!=last_error)
         copy_text(message,video_mode?video_error_string(error):media_error_string(error),sizeof message);
     last_state=state;last_error=error;last_position=position;last_volume=status->volume;
@@ -359,7 +392,7 @@ int player_tick(void) {
         /* Renames and size changes can keep the same file identity. */
         changed=1;
     }
-    return changed;
+    return changed?PLAYER_CHANGED:frame_changed?PLAYER_VIDEO_FRAME:0;
 }
 const char *player_title(void) { return title; }
 

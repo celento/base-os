@@ -22,7 +22,6 @@ static void *mp3_zero(void *to, int value, size_t n) {
 #define memmove mp3_move
 #define memset mp3_zero
 #define MINIMP3_NO_SIMD
-#define MINIMP3_ONLY_MP3
 #define MINIMP3_IMPLEMENTATION
 #include "../third_party/minimp3/minimp3.h"
 #undef memcpy

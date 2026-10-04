@@ -44,9 +44,28 @@ extern uint8_t audio_test_dma[RING_BYTES], audio_test_source[AUDIO_WORK_CAPACITY
 static AudioStatus status;
 static MediaWave wave;
 static MediaMp3 mp3;
-static unsigned initialized, hardware_running, ready_mask, fill_half, fill_bytes;
-static uint32_t dma_position, last_poll, last_progress, submitted_frames, dma_frames;
-static int eof;
+static AudioPcmReader pcm_reader;
+static void *pcm_context;
+static unsigned initialized, hardware_running, ready_mask, fill_half, fill_bytes, loading_paused;
+static uint32_t dma_position, last_poll, last_progress, submitted_frames, output_frames;
+/* A callback stream can use the entire uint32_t frame range. Its final silent
+ * drain must not wrap the hardware-consumed count back to zero. */
+static uint64_t dma_frames;
+static int eof, source_eof;
+static int16_t pcm_stage[PCM_SAMPLES_PER_POLL];
+static unsigned stage_frames, resample_fraction;
+static uint32_t stage_base;
+static uint64_t resample_frame;
+
+static void clear_pcm_stream(void) { pcm_reader = 0; pcm_context = 0; }
+static void reset_playback(void) {
+    /* QEMU's SB16 SAMPLE_RATE_MAX is 45000, so programming 48000 directly
+     * silently changes pitch and duration. All source formats share this path. */
+    status.output_rate = status.sample_rate > 45000 ? 44100 : status.sample_rate;
+    ready_mask = fill_half = fill_bytes = submitted_frames = output_frames = loading_paused = 0;
+    dma_frames = resample_frame = 0; eof = source_eof = 0;
+    stage_frames = stage_base = resample_fraction = 0;
+}
 
 static int dsp_write(uint8_t value) {
     for (unsigned i = 0; i < IO_LIMIT; ++i) {
@@ -72,7 +91,7 @@ static void hardware_stop(void) {
     hardware_running = 0;
 }
 static void fail(int error) {
-    hardware_stop(); status.state = AUDIO_ERROR; status.error = error;
+    hardware_stop(); clear_pcm_stream(); status.state = AUDIO_ERROR; status.error = error;
 }
 static void hardware_volume(void) {
     /* Both legacy mixer registers are supported by QEMU SB16. */
@@ -120,8 +139,8 @@ static int hardware_start(void) {
     audio_out(0xc6, (RING_BYTES / 2 - 1) & 255);
     audio_out(0xc6, (RING_BYTES / 2 - 1) >> 8);
     acknowledge();
-    if (!dsp_write(0x41) || !dsp_write(status.sample_rate >> 8) ||
-        !dsp_write(status.sample_rate & 255) || !dsp_write(0xd1)) return 0;
+    if (!dsp_write(0x41) || !dsp_write(status.output_rate >> 8) ||
+        !dsp_write(status.output_rate & 255) || !dsp_write(0xd1)) return 0;
     audio_out(0xd4, 1); /* Unmask only DMA5. */
     hardware_running = 1;
     /* Auto-init length is a word count, including both stereo channels. */
@@ -132,8 +151,8 @@ static int hardware_start(void) {
     return 1;
 }
 void audio_stop(void) {
-    hardware_stop(); status.state = AUDIO_STOPPED; status.error = MEDIA_OK;
-    status.played_frames = 0; ready_mask = 0;
+    hardware_stop(); clear_pcm_stream(); status.state = AUDIO_STOPPED; status.error = MEDIA_OK;
+    status.played_frames = 0; ready_mask = loading_paused = 0;
 }
 int audio_play_wav(const void *data, uint32_t bytes) {
     MediaWave parsed;
@@ -141,7 +160,7 @@ int audio_play_wav(const void *data, uint32_t bytes) {
     if (bytes > AUDIO_WORK_CAPACITY) { status.error = MEDIA_TOO_LARGE; return MEDIA_TOO_LARGE; }
     int error = media_wave_open(&parsed, data, bytes);
     if (error) { status.error = error; return error; }
-    hardware_stop();
+    hardware_stop(); clear_pcm_stream();
     const uint8_t *source = data;
     for (uint32_t i = 0; i < bytes; ++i) SOURCE_BUFFER[i] = source[i];
     error = media_wave_open(&wave, SOURCE_BUFFER, bytes);
@@ -151,7 +170,7 @@ int audio_play_wav(const void *data, uint32_t bytes) {
     status.channels = wave.channels; status.bits_per_sample = wave.bits_per_sample;
     status.total_frames = wave.frames; status.played_frames = 0;
     status.underruns = 0;
-    ready_mask = fill_half = fill_bytes = submitted_frames = dma_frames = 0; eof = 0;
+    reset_playback();
     return MEDIA_OK;
 }
 int audio_play(const void *data, uint32_t bytes) {
@@ -162,15 +181,89 @@ int audio_play(const void *data, uint32_t bytes) {
     if (bytes > AUDIO_WORK_CAPACITY) { status.error = MEDIA_TOO_LARGE; return MEDIA_TOO_LARGE; }
     int error = media_mp3_open(&mp3, data, bytes);
     if (error) { status.error = error; return error; }
-    hardware_stop();
+    hardware_stop(); clear_pcm_stream();
     for (uint32_t i = 0; i < bytes; ++i) SOURCE_BUFFER[i] = p[i];
     mp3.data = SOURCE_BUFFER;
     status.state = AUDIO_LOADING; status.error = MEDIA_OK;
     status.format = AUDIO_FORMAT_MP3; status.sample_rate = mp3.sample_rate;
     status.channels = mp3.channels; status.bits_per_sample = 16;
     status.total_frames = mp3.frames; status.played_frames = 0; status.underruns = 0;
-    ready_mask = fill_half = fill_bytes = submitted_frames = dma_frames = 0; eof = 0;
+    reset_playback();
     return MEDIA_OK;
+}
+int audio_play_pcm_stream(unsigned rate, unsigned channels, uint32_t total_frames,
+                          AudioPcmReader reader, void *context) {
+    if (!status.available) { status.error = MEDIA_NO_DEVICE; return MEDIA_NO_DEVICE; }
+    if ((channels != 1 && channels != 2) || rate < 5000 || rate > 48000) {
+        status.error = MEDIA_UNSUPPORTED; return MEDIA_UNSUPPORTED;
+    }
+    if (!reader || !total_frames) { status.error = MEDIA_BAD_FILE; return MEDIA_BAD_FILE; }
+    hardware_stop();
+    pcm_reader = reader; pcm_context = context;
+    status.state = AUDIO_LOADING; status.error = MEDIA_OK;
+    status.format = AUDIO_FORMAT_STREAM; status.sample_rate = rate;
+    status.channels = channels; status.bits_per_sample = 16;
+    status.total_frames = total_frames; status.played_frames = 0; status.underruns = 0;
+    reset_playback();
+    return MEDIA_OK;
+}
+/* Exactly one source read/decode, including the callback's explicit EOF read.
+ * MP3 can legally produce no PCM while still having compressed input left. */
+static int read_source(int16_t *output, unsigned max_frames) {
+    if (source_eof) return 0;
+    int frames;
+    if (status.format == AUDIO_FORMAT_STREAM) {
+        frames = pcm_reader(pcm_context, output, max_frames);
+        if (frames < 0) return frames;
+        if ((unsigned)frames > max_frames ||
+            (unsigned)frames > status.total_frames - submitted_frames ||
+            (!frames && submitted_frames != status.total_frames)) return MEDIA_BAD_FILE;
+        source_eof = !frames;
+    } else if (status.format == AUDIO_FORMAT_MP3) {
+        frames = media_mp3_read(&mp3, output, max_frames);
+        if (frames < 0) return frames;
+        source_eof = media_mp3_finished(&mp3);
+    } else {
+        frames = (int)media_wave_read(&wave, output, max_frames);
+        source_eof = wave.frame_cursor == wave.frames;
+    }
+    submitted_frames += (unsigned)frames;
+    if (source_eof && status.format != AUDIO_FORMAT_STREAM) status.total_frames = submitted_frames;
+    return frames;
+}
+static int resample_step(int16_t *output, unsigned max_frames) {
+    /* Keep a one-frame interpolation lookahead across polls and DMA halves.
+     * Compact first, then make at most one bounded source read into free space. */
+    unsigned discard = resample_frame - stage_base < stage_frames ?
+        (unsigned)(resample_frame - stage_base) : stage_frames;
+    stage_frames -= discard; stage_base += discard;
+    for (unsigned i = 0; i < stage_frames * status.channels; ++i)
+        pcm_stage[i] = pcm_stage[i + discard * status.channels];
+    unsigned room = PCM_SAMPLES_PER_POLL / status.channels - stage_frames;
+    if (!source_eof && room) {
+        int frames = read_source(pcm_stage + stage_frames * status.channels, room);
+        if (frames < 0) return frames;
+        stage_frames += (unsigned)frames;
+    }
+    unsigned frames = 0;
+    while (frames < max_frames && resample_frame < submitted_frames) {
+        unsigned index = (unsigned)(resample_frame - stage_base);
+        if (index >= stage_frames || (index + 1 == stage_frames && !source_eof)) break;
+        unsigned next = index + 1 < stage_frames ? index + 1 : index;
+        for (unsigned c = 0; c < status.channels; ++c) {
+            int first = pcm_stage[index * status.channels + c];
+            int second = pcm_stage[next * status.channels + c];
+            output[frames * status.channels + c] = (int16_t)(
+                (first * (int)(status.output_rate - resample_fraction) +
+                 second * (int)resample_fraction) / (int)status.output_rate);
+        }
+        ++frames;
+        resample_fraction += status.sample_rate;
+        resample_frame += resample_fraction / status.output_rate;
+        resample_fraction %= status.output_rate;
+    }
+    eof = source_eof && resample_frame >= submitted_frames;
+    return (int)frames;
 }
 static void fill_step(void) {
     if (ready_mask == 3) return;
@@ -178,16 +271,13 @@ static void fill_step(void) {
     unsigned budget = remaining_samples < PCM_SAMPLES_PER_POLL ? remaining_samples : PCM_SAMPLES_PER_POLL;
     int16_t *output = (int16_t *)(DMA_BUFFER + fill_half * HALF_BYTES + fill_bytes);
     int frames;
-    if (status.format == AUDIO_FORMAT_MP3) {
-        frames = media_mp3_read(&mp3, output, budget / status.channels);
-        if (frames < 0) { fail(frames); return; }
-        eof = media_mp3_finished(&mp3);
-    } else {
-        frames = (int)media_wave_read(&wave, output, budget / status.channels);
-        eof = wave.frame_cursor == wave.frames;
+    if (status.output_rate != status.sample_rate) frames = resample_step(output, budget / status.channels);
+    else {
+        frames = read_source(output, budget / status.channels);
+        eof = source_eof;
     }
-    submitted_frames += (unsigned)frames;
-    if (eof) status.total_frames = submitted_frames;
+    if (frames < 0) { fail(frames); return; }
+    output_frames += (unsigned)frames;
     unsigned samples = (unsigned)frames * status.channels;
     if (eof) for (; samples < budget; ++samples) output[samples] = 0;
     fill_bytes += samples * 2;
@@ -210,7 +300,7 @@ void audio_poll(void) {
     uint32_t now = timer_ticks();
     /* A full ring may wrap to its old position after a long blocking call.
      * Detect that ambiguity using elapsed time, and never replay stale music. */
-    unsigned ring_ticks = RING_BYTES * TIMER_HZ / (status.sample_rate * status.channels * 2);
+    unsigned ring_ticks = RING_BYTES * TIMER_HZ / (status.output_rate * status.channels * 2);
     if (now - last_poll >= ring_ticks) {
         ++status.underruns; fail(MEDIA_UNDERRUN); return;
     }
@@ -220,12 +310,19 @@ void audio_poll(void) {
     if (delta) last_progress = now;
     else if (now - last_progress > TIMER_HZ) { fail(MEDIA_DEVICE_ERROR); return; }
     dma_frames += delta / (status.channels * 2);
-    status.played_frames = eof && dma_frames > submitted_frames ? submitted_frames : dma_frames;
+    if (eof && dma_frames >= output_frames) status.played_frames = submitted_frames;
+    else {
+        uint32_t consumed = (uint32_t)dma_frames;
+        /* Split the ratio to retain full source-frame range without 64-bit
+         * division helpers in the freestanding i386 kernel. */
+        status.played_frames = (consumed / status.output_rate) * status.sample_rate +
+            (consumed % status.output_rate) * status.sample_rate / status.output_rate;
+    }
     /* Let the device/backend drain its final PCM before disabling the voice.
      * The remainder of the ring is zero-filled, so this adds only silence. */
-    if (eof && dma_frames >= submitted_frames + status.sample_rate / 20) {
+    if (eof && dma_frames >= (uint64_t)output_frames + status.output_rate / 20) {
         status.played_frames = submitted_frames;
-        hardware_stop(); status.state = AUDIO_FINISHED; return;
+        hardware_stop(); clear_pcm_stream(); status.state = AUDIO_FINISHED; return;
     }
     unsigned previous_half = dma_position / HALF_BYTES, current_half = position / HALF_BYTES;
     if (previous_half != current_half) {
@@ -240,12 +337,17 @@ void audio_poll(void) {
     fill_step();
 }
 void audio_pause(int paused) {
-    if (paused && status.state == AUDIO_PLAYING) {
+    if (paused && status.state == AUDIO_LOADING) {
+        loading_paused = 1; status.state = AUDIO_PAUSED;
+    } else if (paused && status.state == AUDIO_PLAYING) {
         audio_poll();
         if (status.state != AUDIO_PLAYING) return;
         if (!dsp_write(0xd5)) { fail(MEDIA_DEVICE_ERROR); return; }
         status.state = AUDIO_PAUSED;
     } else if (!paused && status.state == AUDIO_PAUSED) {
+        if (loading_paused) {
+            loading_paused = 0; status.state = AUDIO_LOADING; return;
+        }
         if (!dsp_write(0xd6)) { fail(MEDIA_DEVICE_ERROR); return; }
         last_poll = last_progress = timer_ticks(); status.state = AUDIO_PLAYING;
     }
