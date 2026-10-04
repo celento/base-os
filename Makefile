@@ -29,7 +29,7 @@ CFLAGS = -std=gnu11 -ffreestanding -Os -g -Wall -Wextra -m32 \
 ASFLAGS = -f elf
 LDFLAGS = -T $(OUT)/linker.ld -nostdlib -m elf_i386 -z noexecstack
 
-CSRC = text_search.c ata.c player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c mines.c game2048.c breakout.c sysmon.c
+CSRC = image_decode.c image_viewer.c text_search.c ata.c player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c mines.c game2048.c breakout.c sysmon.c
 OBJS = $(OUT)/kernel_entry.o $(OUT)/interrupts.o $(OUT)/process_entry.o $(addprefix $(OUT)/,$(CSRC:.c=.o))
 HDRS = $(wildcard $(SRC)/*.h) $(wildcard assets/*.h)
 IMG = $(OUT)/baseos.img
@@ -94,6 +94,10 @@ $(OUT)/gfx.o: CFLAGS := $(filter-out -Os,$(CFLAGS)) -O2
 # Only the scalar MP3 decoder uses x87; all other kernel code stays soft-float.
 $(OUT)/media_mp3.o: CFLAGS := $(filter-out -msoft-float,$(CFLAGS)) -mhard-float -mfpmath=387 -Ithird_party/minimp3/compat
 $(OUT)/media_mp3.o: third_party/minimp3/minimp3.h
+
+# stb image decoding stays integer-only and uses a private bounded arena.
+$(OUT)/image_decode.o: CFLAGS += -Ithird_party/stb/compat
+$(OUT)/image_decode.o: third_party/stb/stb_image.h $(wildcard third_party/stb/compat/*.h)
 
 $(OUT)/kernel.elf: $(OBJS) $(OUT)/linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(OBJS)
