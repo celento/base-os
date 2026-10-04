@@ -6,7 +6,8 @@
 #define ICON_TRASH 2
 static const struct {const char *label;} icons[ICON_TRASH]={{"Terminal"},{"Files"}};
 enum { WK_NONE=-1, WK_TERM, WK_EDIT, WK_CLOCK, WK_CAL, WK_MINES, WK_2048,
-       WK_BREAKOUT, WK_SYSMON, WK_HELLO, WK_PROPERTIES, WK_WRITER, WK_SPREADSHEET };
+       WK_BREAKOUT, WK_SYSMON, WK_HELLO, WK_PROPERTIES, WK_WRITER, WK_SPREADSHEET,
+       WK_VIEW, WK_BROWSER, WK_PLAYER };
 static struct {int open,kind,seq;} wins[MAX_WIN];
 static int context_slot,open_dlg,dirty,properties_id,launch_n,launch_len,launch_sel,launcher_on;
 static int fm_cwd,fm_count,fm_selected,fm_ids[FS_MAX_NODES];
@@ -17,6 +18,9 @@ static unsigned pick_identity[FS_MAX_NODES];
 static char launch_buf[24];
 static const char *native_launch_status="",*properties_reason;
 static int edits,other_opens,icon_opens,document_requests;
+static int edit_close_owner=-1,name_dlg,dragging_win=-1,drag_active;
+static int win_front(void){for(int i=MAX_WIN-1;i>=0;i--)if(wins[i].open)return i;return -1;}
+static void context_set(int slot){if(slot>=0){context_slot=slot;term_select(slot);}}
 static int win_open(int kind){
     for(int i=0;i<MAX_WIN;i++)if(!wins[i].open){
         wins[i].open=1;wins[i].kind=kind;wins[i].seq++;
@@ -37,6 +41,8 @@ STUB_FILE(open_browser) STUB_FILE(open_player) STUB_FILE(open_writer)
 STUB_FILE(open_spreadsheet) STUB_FILE(open_view) STUB_FILE(start_open_dialog)
 STUB_OPEN(open_calc) STUB_OPEN(open_paint) STUB_OPEN(open_snake)
 STUB_OPEN(open_wordle) STUB_OPEN(open_term) STUB_OPEN(open_todo) STUB_OPEN(cal_reset)
+STUB_OPEN(edit_close_cancel) STUB_OPEN(image_viewer_close) STUB_OPEN(browser_close)
+STUB_OPEN(player_close) STUB_OPEN(writer_close) STUB_OPEN(spreadsheet_close)
 static void icon_open(int icon){(void)icon;icon_opens++;}
 #include "native_launch_types.inc"
 static LaunchItem launch_items[24];
@@ -81,7 +87,8 @@ int main(void){
     assert(windows()==8);assert(term_task_info(0,&before));open_fs_file(first);
     assert(windows()==8&&strstr(native_launch_status,"Close a window"));
     assert(term_task_info(0,&after)&&before.instance==after.instance);
-    term_task_close(3);wins[3].open=0;open_fs_file(first);
+    win_close(-1);assert(native_launch_status[0]);
+    win_close(3);assert(!native_launch_status[0]&&!term_task_running(3));open_fs_file(first);
     assert(windows()==8&&term_task_running(3)&&!native_launch_status[0]);
     close_all();
     /* Cached results own their labels and reject a deleted/reused node. */

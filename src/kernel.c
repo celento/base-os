@@ -1913,6 +1913,7 @@ static void win_close(int i) {
     if(wins[i].kind==WK_WRITER)writer_close();
     if(wins[i].kind==WK_SPREADSHEET)spreadsheet_close();
     wins[i].open = 0;
+    native_launch_status=""; /* Closing any window frees native launch capacity. */
     context_set(win_front());
     if (dragging_win == i) {
         dragging_win = -1;
