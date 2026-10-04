@@ -133,3 +133,21 @@ undo/redo branching, file identity/reuse, failed save/sync, recovery, and drawin
 outside-client preservation at normal/minimum/offscreen sizes. Codec tests verify
 all 64 inline-style transition pairs in the independent Pandoc reader when it is
 available. Guest integration tests are separate from these host-module checks.
+
+
+## Verified desktop integration
+
+`python3 tools/writer_input_test.py build` uses actual PS/2 input against the normal
+production kernel at 800x600, never a modified test kernel or a saved user disk.
+It verifies centered headings, bold/italic and rich clipboard attributes, native
+Save As, independent RTF export, undo/redo, New/Close cancellation, Save before
+close, discarded drafts staying discarded, and CRLF imports leaving their source
+untouched. A complete 32,768-byte document rejects an extra character, saves exact
+styles, and recovers its changed styled draft and caret after an actual reboot.
+The exported production RTF was also read successfully by Pandoc.
+
+The desktop saves native recovery bytes in `prefs/writer-draft.bwr`, with the
+existing version-1 session window/path/caret record. Restored drafts are marked
+unsaved conservatively. Storage preflight includes the complete rich snapshot
+before changing any draft; shrinking rich/plain drafts are written first. A
+failed save or failed Save As leaves the owning document and pending action open.
