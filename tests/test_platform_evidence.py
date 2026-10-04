@@ -8,6 +8,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -102,6 +103,28 @@ class PlatformEvidenceTests(unittest.TestCase):
         observed=operation_key(session,'x',lambda o:o['file_result']==-1006,'conflict')
         self.assertEqual(observed['keys'],10)
         self.assertEqual(session.key_sent,'x')
+
+    def test_focus_requires_target_owner_to_consume_harmless_ack(self):
+        class Session:
+            focus=PlatformSession.focus
+            def __init__(self):self.phase=0;self.sent=[]
+            def observe(self):
+                # The first displayed target frame is stale; the first echo
+                # actually reaches another owner. Never accept it as focus.
+                value=dict(process=8 if self.phase==1 else 7,keys=5 if self.phase==3 else 4)
+                return value,None,0
+            def key(self,key,delay=0):
+                self.sent.append(key)
+                if key=='ctrl-tab':self.phase=2
+                elif self.phase==0:self.phase=1
+                elif self.phase==2:self.phase=3
+        session=Session()
+        clock=iter(i*.5 for i in range(100))
+        with patch('platform_evidence.time.monotonic',side_effect=lambda:next(clock)),\
+             patch('platform_evidence.time.sleep'):
+            observed=session.focus(7)
+        self.assertEqual(observed,dict(process=7,keys=5))
+        self.assertEqual(session.sent,['a','ctrl-tab','a'])
 
     def test_fixture_profiles_use_exact_frozen_apps_and_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
