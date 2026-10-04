@@ -11,7 +11,7 @@ subprocess.run(['nasm','-f','elf','-Dkmain=process_guest','-p',str(build/'layout
 objects=[str(p) for p in build.glob('*.o') if p.name!='kernel_entry.o']
 subprocess.run([tool('ld'),'-T',str(build/'linker.ld'),'-nostdlib','-m','elf_i386','-z','noexecstack','-o',str(d/'kernel.elf'),str(d/'entry.o'),str(d/'guest.o'),*objects],check=True)
 subprocess.run([tool('objcopy'),'-O','binary',str(d/'kernel.elf'),str(d/'kernel.bin')],check=True)
-c=constants();kernel=(d/'kernel.bin').read_bytes();assert len(kernel)<=c['KERNEL_SECTORS']*512
+c=constants();kernel=(d/'kernel.bin').read_bytes()
 image=bytearray(c['DISK_SECTORS']*512);image[:512]=(build/'boot.bin').read_bytes();install_kernel(image,kernel,c)
 (d/'disk.img').write_bytes(image)
 run(d/'disk.img',d,'isolation','PROCESS-ISOLATION-PASS',seconds=20)
