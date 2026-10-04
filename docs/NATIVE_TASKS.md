@@ -25,9 +25,9 @@ node incarnation before activation; the loader copies the current program.
 
 ## Execution model
 
-There are eight fixed owner slots. Each stores a 64 KiB image, a complete ring-3 interrupt frame, x87 state, copied output callbacks, a 32-byte key queue, and a sleep deadline. These live in supervisor-only memory at `TASK_BASE` (48 MiB); all eight fit within the 1 MiB reserved arena. Boot memory validation must cover the arena; the QEMU task tests use 64 MiB.
+There are eight independently allocated process records. Each stores a 64 KiB image, a complete ring-3 interrupt frame, x87 state, copied contextual output callbacks, a 32-byte key queue, and a sleep deadline. Record indices are private bookkeeping: they are neither process handles nor Terminal slots. Each Terminal retains its exact opaque process handle and a nonwrapping binding generation. These live in supervisor-only memory at `TASK_BASE` (48 MiB); all eight fit within the 1 MiB reserved arena. Boot memory validation must cover the arena; the QEMU task tests use 64 MiB.
 
-Only one image is mapped into `USER_BASE` at a time. A desktop poll selects the next runnable owner fairly, copies its image into the protected region, restores its registers and x87 state, and resumes with IRET. A PIT interrupt returns to the desktop after at most one tick of uninterrupted user execution (about 14.3 ms at 70 Hz). `present`, `yield`, and `sleep` can return earlier. The saved EIP is the instruction after a completed syscall; filesystem operations are not replayed on resume. Before another app runs, the outgoing image and FPU state are saved and the kernel FPU state restored.
+Only one image is mapped into `USER_BASE` at a time. A process-table round-robin poll selects the next runnable record fairly, copies its image into the protected region, restores its registers and x87 state, and resumes with IRET. A PIT interrupt returns to the desktop after at most one tick of uninterrupted user execution (about 14.3 ms at 70 Hz). `present`, `yield`, and `sleep` can return earlier. The saved EIP is the instruction after a completed syscall; filesystem operations are not replayed on resume. Before another app runs, its FPU state is saved and the kernel FPU state restored. A continuing process saves the outgoing image once. An exiting process skips that final image copy and releases its owned resources only after returning to kernel context; its identity and result remain until Terminal consumes the completion and reaps the record.
 
 Only ring-3 execution is preempted. A syscall completes atomically on the kernel's bounded exception stack. Syscall buffer checks, transfer limits, canvas clipping, and `/Documents` write restrictions are shared with legacy `exec`. No kernel task, filesystem operation, or GUI handler is interrupted by another native task. A task can be delayed by rendering, disk access, BASIC, synchronous `exec`, or other cooperative work. This provides responsive bounded native slices, not real-time guarantees or a general-purpose kernel scheduler.
 
@@ -67,18 +67,27 @@ Key polling is nonblocking and returns one queued byte or zero. A full queue dro
   route; `term_task_start_file_with_arg` adds copied document launch metadata.
   Both reject changed/non-file identities and busy owners, preserve the caller's
   selection, and only clear the canvas after an accepted start.
-- `process_task_start(owner, file, size, io)` remains an argument-free wrapper.
-  `process_task_start_with_arg` also validates and copies one optional startup
-  path into supervisor-owned task storage. Neither retains a filesystem or caller
-  buffer pointer. Images remain 48 KiB maximum inside the existing 64 KiB region.
-- `process_task_step(owner)` runs at most one user slice, skipping a sleeper until its deadline. It is called only from the desktop's normal context, never an interrupt or reentrant polling hook.
-- `process_task_status/result`, `process_task_key`, `process_task_stop`, and `process_task_clear` expose bounded lifecycle operations.
-- `term_task_poll()` selects one fair runnable terminal, preserves the caller's selected terminal, and returns whether its output changed. The desktop marks itself dirty when this returns true.
+- `process_create(file, bytes, argument, length, out_process)` validates/copies
+  the unchanged BEX1 image and optional path into an independent CREATED record.
+  The output handle remains untouched on failure. It is not yet runnable.
+- `process_bind` copies a `ProcessIO` table with `(process, slot, generation)`;
+  `process_start` commits READY. Unbinding a CREATED record does not stop it or
+  release resources. No public detach/reassignment/background launch is added.
+- `process_schedule_one()` selects at most one process-table slice. It never runs
+  in IRQ/device polling. `process_step(handle)` also resolves an exact handle.
+- `process_status`, `process_get_result`, `process_key`, `process_request_stop`
+  and `process_reap` use full nonreused owner handles. Reaping is idempotent; a
+  stale handle cannot stop or target the current occupant of a reused record.
+  Application exit (including -4) remains distinct from a requested Stop.
+- `term_task_poll_update()` translates that process's explicit attachment into a
+  display update, consumes DONE, and reaps. It never selects a Terminal to make
+  output callbacks work. A callback validates all attachment fields and updates
+  only its explicit Terminal; stale callbacks are discarded.
 - `term_task_running/key/stop/close` route focus, Ctrl+C and close by explicit window slot. Reset also clears the owned task.
-- `ProgramIO.resize` is optional. Terminal supplies it; accepted mode changes clear
+- `ProcessIO.resize` is optional. Terminal supplies it; accepted mode changes clear
   working pixels. A task retains its active dimensions across slices. The renderer
   uses `term_canvas_width/height`; pixels are packed with the published width.
-- `ProgramIO.present` publishes complete working pixels plus geometry before
+- `ProcessIO.present` publishes complete working pixels plus geometry before
   explicit present/yield/sleep and explicit application exit (any exit status).
   Timer preemption, Stop and generic failure completion never publish. Terminal
   retains the last published frame until reset/new launch, so a full redraw cannot
@@ -86,7 +95,7 @@ Key polling is nonblocking and returns one queued byte or zero. A full queue dro
 - Published canvases occupy 512,000 bytes of the 512 KiB reservation at
   `0x600000`–`0x680000`, inside the existing E820-validated RAM span.
 - Eight Terminals with 320 scrollback rows and maximum 320×200 canvases use
-  732,128 bytes, including the complete-input overflow flag in each Terminal,
+  732,160 bytes, including complete-input tracking and binding generation,
   below the fixed 786,432-byte subarena before script scratch.
 
 The legacy synchronous `process_run` still has its two-second watchdog, checked syscalls, and audio pause/resume behavior. Running it does not destroy saved task images; asynchronous tasks resume afterward.
@@ -124,3 +133,8 @@ existing task instance guard. `term_task_title` combines those names without
 changing selection; it returns no live title after exit, stop, close or reset.
 `tasks` prints the copied names alongside each live owner. See the SDK's startup
 argument section for exact query/copy and legacy behavior.
+
+The synchronous BASIC/`exec` path retains its existing `ProgramIO` adapter.
+`ProcessCounts` is an internal bounded diagnostic (records, created, live,
+exiting, done, and resource-owning records), not a new syscall or memory promise.
+See [process lifetime notes](PROCESS_LIFETIME.md) for ordering and release gates.

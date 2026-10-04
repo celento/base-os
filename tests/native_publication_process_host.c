@@ -20,6 +20,7 @@ static const ProgramIO *output;
 static int tasks_ready,active,process_result;
 static uint32_t began,now;
 static BosHandle synchronous_owner;
+static unsigned owner_serial;
 static unsigned canvas_width,canvas_height;
 static jmp_buf leave_target;
 static unsigned publications,leaves,plots;
@@ -66,13 +67,22 @@ static void publish(void){
         for(unsigned i=0;i<FRAME_WORDS;i++)assert(current_task->frame[i]==0xa5a5a5a5u);
     }
 }
+static void native_line(const ProcessBinding *binding,const char *line){(void)binding;print_line(line);}
+static void native_pixel(const ProcessBinding *binding,int x,int y,int color){(void)binding;pixel(x,y,color);}
+static void native_publish(const ProcessBinding *binding){(void)binding;publish();}
+static void native_rectangle(const ProcessBinding *binding,int x,int y,int w,int h,int color){
+    (void)binding;rectangle(x,y,w,h,color);
+}
+static ProgramIO legacy_io={print_line,pixel,0,publish,0,0};
 static void prepare(uint32_t frame[FRAME_WORDS],unsigned call,unsigned argument){
     memset(task_memory,0,sizeof task_memory);
     memset(events,0,sizeof events);event_count=publications=leaves=plots=rectangles=0;
     checking_rectangle=0;
     current_task=tasks+3;tasks_ready=active=1;process_result=17;
-    current_task->state=PROCESS_TASK_READY;
-    current_task->io=(ProgramIO){print_line,pixel,0,publish,0,0};output=&current_task->io;
+    current_task->state=PROCESS_TASK_READY;current_task->owner_id=BOS_HANDLE_TYPE_PROCESS|4;
+    current_task->resources_live=1;current_task->bound=1;current_task->legacy_task_id=4;
+    current_task->io=(ProcessIO){{current_task->owner_id,3,1},native_line,native_pixel,native_publish,0,0};
+    output=&legacy_io;legacy_io.rect=0;
     for(unsigned i=0;i<FRAME_WORDS;i++){
         frame[i]=0x100u+i;current_task->frame[i]=0xa5a5a5a5u;
     }
@@ -88,7 +98,7 @@ static int interrupt(uint32_t *frame){
 }
 static void finish_directly(int result){
     if(setjmp(leave_target))return;
-    finish(result);
+    finish(result,PROCESS_EXIT_ERROR);
 }
 static void suspension(unsigned call,unsigned milliseconds,uint32_t tick){
     uint32_t frame[FRAME_WORDS];prepare(frame,call,milliseconds);now=tick;
@@ -119,7 +129,7 @@ static void nonpublishing_paths(void){
     for(int error=-3;error>=-4;error--){
         prepare(frame,0,0);finish_directly(error);
         assert(!publications&&leaves==1&&!strcmp(events,"L"));
-        assert(current_task->state==PROCESS_TASK_DONE);
+        assert(current_task->state==PROCESS_TASK_EXITING);
         assert(current_task->result==error&&process_result==error);
     }
     for(unsigned invalid=60001;invalid;invalid=invalid==60001?UINT32_MAX:0){
@@ -135,28 +145,28 @@ static void nonpublishing_paths(void){
     for(int state=PROCESS_TASK_READY;state<=PROCESS_TASK_SLEEPING;state++){
         prepare(frame,5,0);active=0;current_task->state=state;
         current_task->key_head=7;current_task->key_count=9;
-        process_task_stop(3);
+        process_request_stop(current_task->owner_id);
         assert(!publications&&!leaves&&current_task->state==PROCESS_TASK_DONE);
         assert(current_task->result==PROCESS_TASK_STOPPED);
         assert(!current_task->key_head&&!current_task->key_count);
         assert(tasks[2].state==PROCESS_TASK_EMPTY&&tasks[4].state==PROCESS_TASK_EMPTY);
     }
-    prepare(frame,5,0);process_task_stop(3); /* Cannot stop while a slice is active. */
-    assert(current_task->state==PROCESS_TASK_READY&&!publications&&!leaves);
+    prepare(frame,5,0);process_request_stop(current_task->owner_id); /* Active stop is deferred without releasing the owner. */
+    assert(current_task->state==PROCESS_TASK_READY&&current_task->stop_requested&&!publications&&!leaves);
 }
 static void completion_and_compatibility(void){
     uint32_t frame[FRAME_WORDS];
     for(unsigned exit_code=0;exit_code<=42;exit_code=exit_code?43:42){
         prepare(frame,0,exit_code);assert(interrupt(frame)==-1);
         assert(publications==1&&leaves==1&&!strcmp(events,"PL"));
-        assert(current_task->state==PROCESS_TASK_DONE);
+        assert(current_task->state==PROCESS_TASK_EXITING);
         assert(current_task->result==(int)exit_code&&process_result==(int)exit_code);
     }
     /* Optional callback: the same native ABI still suspends/completes normally. */
     for(unsigned call=0;call<=11;call=call==0?5:call==5?10:call+1){
         prepare(frame,call,0);current_task->io.present=0;
         assert(interrupt(frame)==-1&&leaves==1&&!publications);
-        assert(current_task->state==(call?PROCESS_TASK_READY:PROCESS_TASK_DONE));
+        assert(current_task->state==(call?PROCESS_TASK_READY:PROCESS_TASK_EXITING));
     }
     /* Legacy exec present remains synchronous; yield/sleep remain unsupported. */
     prepare(frame,5,0);current_task=0;assert(interrupt(frame)==1);
@@ -190,7 +200,7 @@ static void rectangle_dispatch(void){
                 checking_rectangle=1;
                 frame[6]=cases[i][1];frame[5]=cases[i][2];
                 frame[1]=cases[i][3];frame[0]=cases[i][4];
-                current_task->io.rect=bulk?rectangle:0;
+                current_task->io.rect=bulk?native_rectangle:0;legacy_io.rect=bulk?rectangle:0;
                 if(legacy)current_task=0;
                 assert(interrupt(frame)==1&&!publications&&!leaves);
                 int valid=cases[i][2]<=width&&cases[i][3]<=height;

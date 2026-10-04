@@ -6,24 +6,24 @@ static void task_test_step(int owner);
 enum { IDLE, CLEAR, FOOTER, PUBLISH, SMALL, LARGE, CLEAR_TEXT };
 static int operation;
 static void task_test_step(int owner) {
-    const ProgramIO *io=&callbacks[owner];
+    const ProcessIO *io=&callbacks[owner];
 #ifdef NATIVE_RECTANGLE_CALLBACK
     assert(io->rect);
     if(operation==CLEAR||operation==CLEAR_TEXT)
-        io->rect(0,0,terms[owner].canvas_width,terms[owner].canvas_height,0);
+        io->rect(&io->binding,0,0,terms[owner].canvas_width,terms[owner].canvas_height,0);
     if(operation==FOOTER)
-        io->rect(0,terms[owner].canvas_height-1,terms[owner].canvas_width,1,42);
+        io->rect(&io->binding,0,terms[owner].canvas_height-1,terms[owner].canvas_width,1,42);
 #else
     if(operation==CLEAR||operation==CLEAR_TEXT)
         for(int y=0;y<terms[owner].canvas_height;y++)
-            for(int x=0;x<terms[owner].canvas_width;x++)io->plot(x,y,0);
+            for(int x=0;x<terms[owner].canvas_width;x++)io->plot(&io->binding,x,y,0);
     if(operation==FOOTER)
-        for(int x=0;x<terms[owner].canvas_width;x++)io->plot(x,terms[owner].canvas_height-1,42);
+        for(int x=0;x<terms[owner].canvas_width;x++)io->plot(&io->binding,x,terms[owner].canvas_height-1,42);
 #endif
-    if(operation==SMALL)assert(!io->resize(160,100));
-    if(operation==LARGE)assert(!io->resize(320,200));
-    if(operation==CLEAR_TEXT)io->print("Ordinary text can force a full redraw.");
-    if(operation==PUBLISH)io->present();
+    if(operation==SMALL)assert(!io->resize(&io->binding,160,100));
+    if(operation==LARGE)assert(!io->resize(&io->binding,320,200));
+    if(operation==CLEAR_TEXT)io->print(&io->binding,"Ordinary text can force a full redraw.");
+    if(operation==PUBLISH)io->present(&io->binding);
 }
 #define TITLE_H 32
 #define TERM_PAD 12
@@ -44,9 +44,9 @@ static void unchanged(int width,int height){
     render();assert(!memcmp(rendered,reference,sizeof rendered));
 }
 static void begin_frame(int width,int height){
-    assert(!callbacks[0].resize(width,height));
+    assert(!callbacks[0].resize(&callbacks[0].binding,width,height));
     for(int y=0;y<height;y++)for(int x=0;x<width;x++)plot(x,y,(x+y*13)%251+1);
-    int before=polls;callbacks[0].present();assert(polls==before);
+    int before=polls;callbacks[0].present(&callbacks[0].binding);assert(polls==before);
     memcpy(frame,term_canvas(),(size_t)width*height);render();memcpy(reference,rendered,sizeof reference);
     terms[0].task_dirty=0;
 }
@@ -93,14 +93,14 @@ int main(void){
     /* Every slot owns its pixels; resetting one cannot reinterpret another. */
     for(int owner=0;owner<8;owner++){
         term_select(owner);term_reset();command("start /canvas.bex");
-        assert(!canvas_resize(320,200));plot(319,199,owner+1);callbacks[owner].present();
+        assert(!canvas_resize(320,200));plot(319,199,owner+1);callbacks[owner].present(&callbacks[owner].binding);
     }
     for(int owner=0;owner<8;owner++){
         term_select(owner);assert(term_canvas()[63999]==owner+1);
         plot(319,199,99);term_task_stop(owner);assert(term_canvas()[63999]==owner+1);
     }
     term_select(3);term_reset();assert(!term_canvas());
-    command("start /canvas.bex");plot(0,0,7);callbacks[3].present();
+    command("start /canvas.bex");plot(0,0,7);callbacks[3].present(&callbacks[3].binding);
     assert(term_canvas_width()==160&&term_canvas()[0]==7&&term_canvas()[15999]==0);
     for(int owner=0;owner<8;owner++)if(owner!=3){
         term_select(owner);assert(term_canvas_width()==320&&term_canvas()[63999]==owner+1);

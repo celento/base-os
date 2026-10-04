@@ -25,11 +25,13 @@ typedef struct {
     unsigned char image[USER_CAPACITY];
     uint32_t frame[FRAME_WORDS];
     FpuState fpu;
-    ProgramIO io;
+    ProcessIO io;
     uint32_t wake;
     BosHandle owner_id, wait_operation;
     unsigned canvas_width,canvas_height;
     int state, result, fpu_ready;
+    unsigned exit_reason, legacy_task_id;
+    int resources_live, bound, stop_requested;
     unsigned key_head, key_count;
     unsigned char keys[TASK_KEYS];
     unsigned argument_length;
@@ -38,6 +40,7 @@ typedef struct {
 static NativeTask *tasks=(NativeTask *)TASK_BASE;
 static NativeTask *current_task;
 static int tasks_ready, have_fpu;
+static unsigned schedule_next;
 static unsigned owner_serial;
 static BosHandle synchronous_owner;
 /* Allocation domains never wrap or reset, even when a display slot is reused. */
@@ -53,13 +56,28 @@ static void release_owner(BosHandle owner) {
     native_files_release_owner(owner);
     native_sync_owner_release(owner);
 }
+/* A completion retains its identity/result until the display consumes it.
+ * Resource release is legal only after the active process has returned. */
 static void task_release(NativeTask *task) {
-    release_owner(task->owner_id);
-    task->owner_id=task->wait_operation=0;
+    if(task->resources_live){release_owner(task->owner_id);task->resources_live=0;}
+    task->wait_operation=0;
+    task->key_head=task->key_count=0;
+}
+static void task_mark_exit(NativeTask *task,int result,unsigned reason) {
+    if(task->state==PROCESS_TASK_DONE||task->state==PROCESS_TASK_EXITING)return;
+    task->result=result;task->exit_reason=reason;task->state=PROCESS_TASK_EXITING;
+}
+static void task_finalize(NativeTask *task) {
+    if(active||task->state!=PROCESS_TASK_EXITING)return;
+    task_release(task);
+    task->state=PROCESS_TASK_DONE;
 }
 static FpuState kernel_fpu, sync_fpu;
 static unsigned kernel_cr0;
 _Static_assert(TASK_BASE+sizeof(NativeTask)*PROCESS_TASKS<=TASK_INTERRUPT_STACK_BASE,"native tasks overlap syscall stack");
+#ifdef TASK_PAGE_METADATA_BASE
+_Static_assert(TASK_BASE+sizeof(NativeTask)*PROCESS_TASKS<=TASK_PAGE_METADATA_BASE,"native tasks overlap owned-page metadata");
+#endif
 _Static_assert(TASK_INTERRUPT_STACK_BASE+TASK_INTERRUPT_STACK_CAPACITY<=TASK_BASE+TASK_CAPACITY,"syscall stack exceeds task arena");
 _Static_assert(TASK_BASE+TASK_CAPACITY<=RAM_REQUIRED_END,"native task arena must be boot-validated");
 static void fpu_enter(NativeTask *task) {
@@ -112,11 +130,13 @@ static void descriptor(unsigned char *p,unsigned base,unsigned limit,unsigned ac
     p[5]=access;p[6]=((limit>>16)&15)|flags;p[7]=base>>24;
 }
 void process_init(void){
+    if(active)return;
     if(tasks_ready){
         for(unsigned i=0;i<PROCESS_TASKS;i++)task_release(tasks+i);
         kmemset(tasks,0,sizeof(NativeTask)*PROCESS_TASKS);
         tasks_ready=0;
     }
+    schedule_next=0;current_task=0;output=0;
     release_owner(synchronous_owner);synchronous_owner=0;
     native_files_init();
     unsigned a,b,c,d;
@@ -148,50 +168,86 @@ int process_run(const void *file,unsigned bytes,const ProgramIO *io){
     int resume_audio=audio_status()->state==AUDIO_PLAYING;
     if(resume_audio)audio_pause(1);
     fpu_enter(0);
-    int result=process_enter(h[1]);active=0;
-    fpu_leave(0);
+    int result=process_enter(h[1]);
+    fpu_leave(0);active=0;
     release_owner(synchronous_owner);synchronous_owner=0;output=0;
     if(resume_audio)audio_pause(0);
     return result;
 }
-static NativeTask *task_at(int owner) {
-    return tasks_ready&&owner>=0&&owner<PROCESS_TASKS?tasks+owner:0;
+static NativeTask *task_lookup(ProcessHandle process) {
+    if(!tasks_ready||!process)return 0;
+    for(unsigned i=0;i<PROCESS_TASKS;i++)
+        if(tasks[i].state!=PROCESS_TASK_EMPTY&&tasks[i].owner_id==process)return tasks+i;
+    return 0;
 }
-int process_task_start(int owner,const void *file,unsigned bytes,const ProgramIO *io) {
-    return process_task_start_with_arg(owner,file,bytes,io,0,0);
-}
-int process_task_start_with_arg(int owner,const void *file,unsigned bytes,const ProgramIO *io,
-                                const char *argument,unsigned argument_length) {
+int process_create(const void *file,unsigned bytes,const char *argument,
+                   unsigned argument_length,ProcessHandle *out_process) {
     uint32_t h[4];
-    if(active||owner<0||owner>=PROCESS_TASKS||!io||!io->print||!io->plot||
-       !valid_image(file,bytes,h))return -2;
+    if(active||!out_process||!valid_image(file,bytes,h))return -2;
     if(argument_length>PROCESS_ARGUMENT_MAX||
        (argument_length&&(!argument||argument[0]!='/')))return -2;
     for(unsigned i=0;i<argument_length;i++)
         if(argument[i]<32||argument[i]>126)return -2;
     if(!tasks_ready){kmemset(tasks,0,sizeof(NativeTask)*PROCESS_TASKS);tasks_ready=1;}
-    NativeTask *task=tasks+owner;
-    if(task->state==PROCESS_TASK_READY||task->state==PROCESS_TASK_SLEEPING)return -1;
+    NativeTask *task=0;
+    for(unsigned i=0;i<PROCESS_TASKS;i++)
+        if(tasks[i].state==PROCESS_TASK_EMPTY){task=tasks+i;break;}
+    if(!task)return -1;
     BosHandle owner_id=allocate_owner();
     if(!owner_id)return -2;
-    task_release(task);
     kmemset(task,0,sizeof(*task));
-    task->owner_id=owner_id;
-    kmemcpy(task->image,file,bytes);task->io=*io;
+    task->state=PROCESS_TASK_CREATING;task->owner_id=owner_id;task->resources_live=1;
+    kmemcpy(task->image,file,bytes);
     if(argument_length)kmemcpy(task->argument,argument,argument_length);
     task->argument_length=argument_length;
     task->frame[8]=task->frame[9]=task->frame[10]=task->frame[11]=0x23;
     task->frame[14]=h[1];task->frame[15]=0x1b;task->frame[16]=0x202;
     task->frame[17]=USER_CAPACITY-16;task->frame[18]=0x23;
     task->canvas_width=PROGRAM_CANVAS_DEFAULT_WIDTH;task->canvas_height=PROGRAM_CANVAS_DEFAULT_HEIGHT;
-    task->state=PROCESS_TASK_READY;
+    task->state=PROCESS_TASK_CREATED;
+    *out_process=owner_id;
     return 0;
 }
-int process_task_status(int owner) {
-    NativeTask *task=task_at(owner);return task?task->state:PROCESS_TASK_EMPTY;
+int process_bind(ProcessHandle process,const ProcessIO *io) {
+    NativeTask *task=task_lookup(process);
+    if(active||!task||task->state!=PROCESS_TASK_CREATED||task->bound||!io||
+       !io->print||!io->plot||io->binding.process!=process||
+       io->binding.slot>=PROCESS_TASKS||!io->binding.generation)return 0;
+    task->io=*io;task->legacy_task_id=io->binding.slot+1;task->bound=1;
+    return 1;
 }
-int process_task_result(int owner) {
-    NativeTask *task=task_at(owner);return task?task->result:0;
+int process_unbind(ProcessHandle process) {
+    NativeTask *task=task_lookup(process);
+    if(active||!task||task->state!=PROCESS_TASK_CREATED)return 0;
+    kmemset(&task->io,0,sizeof task->io);task->legacy_task_id=0;task->bound=0;
+    return 1;
+}
+int process_start(ProcessHandle process) {
+    NativeTask *task=task_lookup(process);
+    if(active||!task||task->state!=PROCESS_TASK_CREATED||!task->bound)return 0;
+    task->state=PROCESS_TASK_READY;return 1;
+}
+int process_status(ProcessHandle process) {
+    NativeTask *task=task_lookup(process);return task?task->state:PROCESS_TASK_EMPTY;
+}
+int process_get_result(ProcessHandle process,ProcessResult *out) {
+    NativeTask *task=task_lookup(process);
+    if(!out||!task||task->state!=PROCESS_TASK_DONE)return 0;
+    out->value=task->result;out->reason=task->exit_reason;return 1;
+}
+void process_counts(ProcessCounts *out) {
+    if(!out)return;
+    kmemset(out,0,sizeof *out);
+    if(!tasks_ready)return;
+    for(unsigned i=0;i<PROCESS_TASKS;i++){
+        const NativeTask *task=tasks+i;
+        if(task->state==PROCESS_TASK_EMPTY)continue;
+        out->records++;out->owned+=task->resources_live!=0;
+        if(task->state==PROCESS_TASK_CREATED||task->state==PROCESS_TASK_CREATING)out->created++;
+        else if(task->state==PROCESS_TASK_READY||task->state==PROCESS_TASK_SLEEPING)out->live++;
+        else if(task->state==PROCESS_TASK_EXITING)out->exiting++;
+        else if(task->state==PROCESS_TASK_DONE)out->done++;
+    }
 }
 /* Polling an owned completion never drives disk I/O. A sleeping operation
  * waiter stores no borrowed pointer or live kernel stack between slices. */
@@ -209,23 +265,40 @@ static int task_wake(NativeTask *task) {
     task->state=PROCESS_TASK_READY;
     return 1;
 }
-int process_task_step(int owner) {
-    NativeTask *task=task_at(owner);
+int process_step(ProcessHandle process) {
+    NativeTask *task=task_lookup(process);
     if(active||!task)return 0;
+    if(task->stop_requested){
+        task_mark_exit(task,PROCESS_TASK_STOPPED,PROCESS_EXIT_STOP);task_finalize(task);return 0;
+    }
     if(!task_wake(task))return 0;
     protect_memory();
     kmemcpy((void *)USER_BASE,task->image,USER_CAPACITY);
     canvas_width=task->canvas_width;canvas_height=task->canvas_height;
-    output=&task->io;current_task=task;active=1;process_result=0;
+    output=0;current_task=task;active=1;process_result=0;
     fpu_enter(task);
     process_resume(task->frame);
-    active=0;fpu_leave(task);current_task=0;output=0;
-    /* Preserve changes exactly once, including completed syscall effects. */
-    kmemcpy(task->image,(const void *)USER_BASE,USER_CAPACITY);
+    /* First return to the kernel context, then save or release owned backing.
+     * A completed image is never copied through a future freed page list. */
+    fpu_leave(task);active=0;current_task=0;
+    if(task->stop_requested)task_mark_exit(task,PROCESS_TASK_STOPPED,PROCESS_EXIT_STOP);
+    if(task->state==PROCESS_TASK_EXITING)task_finalize(task);
+    else kmemcpy(task->image,(const void *)USER_BASE,USER_CAPACITY);
     return 1;
 }
-int process_task_key(int owner,int key) {
-    NativeTask *task=task_at(owner);
+ProcessHandle process_schedule_one(void) {
+    if(active||!tasks_ready)return 0;
+    for(unsigned i=0;i<PROCESS_TASKS;i++){
+        unsigned index=(schedule_next+i)%PROCESS_TASKS;
+        NativeTask *task=tasks+index;
+        if(!process_step(task->owner_id))continue;
+        schedule_next=(index+1)%PROCESS_TASKS;
+        return task->owner_id;
+    }
+    return 0;
+}
+int process_key(ProcessHandle process,int key) {
+    NativeTask *task=task_lookup(process);
     if(!task||(task->state!=PROCESS_TASK_READY&&task->state!=PROCESS_TASK_SLEEPING))return 0;
     /* A full queue drops the newest key; task input never escapes to another owner. */
     if(key>0&&key<=255&&task->key_count<TASK_KEYS){
@@ -234,18 +307,46 @@ int process_task_key(int owner,int key) {
     }
     return 1;
 }
-void process_task_stop(int owner) {
-    NativeTask *task=task_at(owner);
-    if(active||!task)return;
-    if(task->state==PROCESS_TASK_READY||task->state==PROCESS_TASK_SLEEPING){
-        task->state=PROCESS_TASK_DONE;task->result=PROCESS_TASK_STOPPED;
-        task->key_head=task->key_count=0;
-        task_release(task);
-    }
+int process_request_stop(ProcessHandle process) {
+    NativeTask *task=task_lookup(process);
+    if(!task)return 1;
+    if(active){task->stop_requested=1;return 0;}
+    task_mark_exit(task,PROCESS_TASK_STOPPED,PROCESS_EXIT_STOP);
+    task_finalize(task);return 1;
 }
-void process_task_clear(int owner) {
-    NativeTask *task=task_at(owner);
-    if(!active&&task){task_release(task);kmemset(task,0,sizeof(*task));}
+int process_reap(ProcessHandle process) {
+    NativeTask *task=task_lookup(process);
+    if(!task)return 1;
+    if(active||task->state!=PROCESS_TASK_DONE)return 0;
+    kmemset(task,0,sizeof(*task));return 1;
+}
+/* Native callbacks carry a copied attachment. Synchronous BASIC/exec keeps its
+ * small ProgramIO adapter and never borrows a desktop process's callbacks. */
+static void output_print(const char *text) {
+    if(current_task)current_task->io.print(&current_task->io.binding,text);
+    else if(output&&output->print)output->print(text);
+}
+static void output_plot(int x,int y,int color) {
+    if(current_task)current_task->io.plot(&current_task->io.binding,x,y,color);
+    else if(output&&output->plot)output->plot(x,y,color);
+}
+static void output_present(void) {
+    if(current_task){
+        if(current_task->io.present)current_task->io.present(&current_task->io.binding);
+    }else if(output&&output->present)output->present();
+}
+static int output_resize(int width,int height) {
+    if(current_task)return current_task->io.resize?
+        current_task->io.resize(&current_task->io.binding,width,height):-1;
+    return output&&output->resize?output->resize(width,height):-1;
+}
+static void output_rect(unsigned x,unsigned y,unsigned width,unsigned height,int color) {
+    if(current_task&&current_task->io.rect)
+        current_task->io.rect(&current_task->io.binding,(int)x,(int)y,(int)width,(int)height,color);
+    else if(!current_task&&output&&output->rect)
+        output->rect((int)x,(int)y,(int)width,(int)height,color);
+    else for(unsigned row=0;row<height;row++)for(unsigned col=0;col<width;col++)
+        output_plot((int)(x+col),(int)(y+row),color);
 }
 static void task_suspend(uint32_t *frame,int state) __attribute__((noreturn));
 static void task_suspend(uint32_t *frame,int state) {
@@ -253,13 +354,11 @@ static void task_suspend(uint32_t *frame,int state) {
     current_task->state=state;
     process_leave();
 }
-static void finish(int result) __attribute__((noreturn));
-static void finish(int result) {
+static void finish(int result,unsigned reason) __attribute__((noreturn));
+static void finish(int result,unsigned reason) {
     process_result=result;
-    if(current_task){
-        current_task->result=result;current_task->state=PROCESS_TASK_DONE;
-        task_release(current_task);
-    }else {release_owner(synchronous_owner);synchronous_owner=0;}
+    if(current_task)task_mark_exit(current_task,result,reason);
+    /* Synchronous and desktop owners remain live through process_leave. */
     process_leave();
 }
 static int user_range(unsigned offset, unsigned bytes) {
@@ -376,26 +475,26 @@ int process_interrupt(uint32_t *r){
     if(vector==32){
         if(current_task)task_suspend(r,PROCESS_TASK_READY);
         if(timer_ticks()-began<2*TIMER_HZ)return 1;
-        finish(-3);
+        finish(-3,PROCESS_EXIT_ERROR);
     }
-    if(vector!=128)finish(-(int)vector-100);
+    if(vector!=128)finish(-(int)vector-100,PROCESS_EXIT_ERROR);
     unsigned call=r[7],a=r[4],b=r[6],c=r[5],d=r[1],e=r[0]; /* eax, ebx, ecx, edx */
     if(call==BOS_CALL_EXIT){
         /* Explicit application completion publishes even a nonzero return code.
          * Exceptions, watchdogs and external stops do not use this boundary. */
-        if(current_task&&output->present)output->present();
-        finish((int)a);
+        if(current_task)output_present();
+        finish((int)a,PROCESS_EXIT_APP);
     }
     if(call==BOS_CALL_WRITE){
         if(a>=USER_CAPACITY||b>4096||b>USER_CAPACITY-a){r[7]=(unsigned)-1;return 1;}
         char line[81];unsigned n=0;
         for(unsigned i=0;i<b;i++){
             char ch=*(char *)(USER_BASE+a+i);
-            if(ch=='\n'||n==80){line[n]=0;output->print(line);n=0;if(ch=='\n')continue;}
+            if(ch=='\n'||n==80){line[n]=0;output_print(line);n=0;if(ch=='\n')continue;}
             line[n++]=(ch>=32&&ch<=126)?ch:'.';
         }
-        if(n){line[n]=0;output->print(line);}r[7]=b;
-    }else if(call==BOS_CALL_PLOT){output->plot((int)a,(int)b,(int)c);r[7]=0;}
+        if(n){line[n]=0;output_print(line);}r[7]=b;
+    }else if(call==BOS_CALL_PLOT){output_plot((int)a,(int)b,(int)c);r[7]=0;}
     else if(call==BOS_CALL_TICKS)r[7]=timer_ticks();
     else if(call==BOS_CALL_KEY){
         if(current_task){
@@ -409,22 +508,20 @@ int process_interrupt(uint32_t *r){
     }
     else if(call==BOS_CALL_PRESENT){
         r[7]=0;
-        if(output->present)output->present();
+        output_present();
         if(current_task)task_suspend(r,PROCESS_TASK_READY);
     }
     else if(call>=BOS_CALL_READ_FILE&&call<=BOS_CALL_FILE_SIZE)r[7]=(unsigned)file_call(call,a,b,c,d,0);
     else if(call==BOS_CALL_RECT){
         if(c>canvas_width||d>canvas_height){r[7]=(unsigned)-1;return 1;}
-        if(c&&d&&output->rect)output->rect((int)a,(int)b,(int)c,(int)d,(int)e);
-        else for(unsigned y=0;y<d;y++)for(unsigned x=0;x<c;x++)
-            output->plot((int)(a+x),(int)(b+y),(int)e);
+        if(c&&d)output_rect(a,b,c,d,(int)e);
         r[7]=0;
     }
     else if(call==BOS_CALL_YIELD||call==BOS_CALL_SLEEP){
         /* Sleep is bounded and wrap-safe; zero milliseconds is a yield. */
         if(!current_task||(call==BOS_CALL_SLEEP&&a>TASK_MAX_SLEEP_MS)){r[7]=(unsigned)-1;return 1;}
         r[7]=0;
-        if(output->present)output->present();
+        output_present();
         current_task->wait_operation=0;
         if(call==BOS_CALL_SLEEP&&a){
             current_task->wake=timer_ticks()+(a*TIMER_HZ+999u)/1000u;
@@ -432,12 +529,12 @@ int process_interrupt(uint32_t *r){
         }
         task_suspend(r,PROCESS_TASK_READY);
     }
-    else if(call==BOS_CALL_TASK_ID)r[7]=current_task?(unsigned)(current_task-tasks)+1:0;
+    else if(call==BOS_CALL_TASK_ID)r[7]=current_task?current_task->legacy_task_id:0;
     else if(call==BOS_CALL_READ_FILE_AT)r[7]=(unsigned)file_call(call,a,b,c,d,e);
     else if(call==BOS_CALL_CANVAS_SIZE){
         int supported=(a==PROGRAM_CANVAS_DEFAULT_WIDTH&&b==PROGRAM_CANVAS_DEFAULT_HEIGHT)||
                       (a==PROGRAM_CANVAS_MAX_WIDTH&&b==PROGRAM_CANVAS_MAX_HEIGHT);
-        if(!supported||!output->resize||output->resize((int)a,(int)b)){
+        if(!supported||output_resize((int)a,(int)b)){
             r[7]=(unsigned)-1;return 1;
         }
         canvas_width=a;canvas_height=b;
@@ -485,7 +582,7 @@ int process_interrupt(uint32_t *r){
             if(call==BOS_CALL_SYNC_WAIT&&b&&result==BOS_PENDING){
                 current_task->wait_operation=a;
                 current_task->wake=timer_ticks()+(b*TIMER_HZ+999u)/1000u;
-                if(output->present)output->present();
+                output_present();
                 task_suspend(r,PROCESS_TASK_SLEEPING);
             }
         }

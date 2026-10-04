@@ -79,6 +79,8 @@ are distinct; each uses nonzero serials that never wrap or reset during a boot.
 Exhaustion fails closed. Applications must not derive meaning from their bits,
 write them to persistent storage for later reuse, or pass them to another app.
 A reused Terminal gets a fresh identity, independently of the old slot API.
+Process records are allocated independently of Terminal slots; call 12 stores
+its legacy display ID explicitly rather than deriving it from a record index.
 
 Every new service checks the owning process and resource lifetime. Closing a
 handle invalidates it. Normal exit, nonzero exit, generic failure completion,

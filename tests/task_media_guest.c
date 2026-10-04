@@ -4,14 +4,14 @@
 #include "../src/browser.h"
 #include "media_fixture.h"
 #include "task_media_examples.h"
+#include "process_guest_fixture.h"
+static ProcessHandle media_handles[2];
 #ifndef HTTP_PORT
 #define HTTP_PORT "18080"
 #endif
 #define TASK_ORIGIN "http://10.0.2.2:" HTTP_PORT
 static void check(int ok,const char *why){if(!ok)panic(why);}
 static void command(const char *text){while(*text)term_char(*text++);term_enter();}
-static void quiet(const char *text){(void)text;}
-static void pixel(int x,int y,int c){(void)x;(void)y;(void)c;}
 static void draw_test(void){
     cursor_restore();draw_desktop();draw_ui();
     browser_draw(625,88,620,555);flip_vga();cursor_on=0;
@@ -33,15 +33,14 @@ void feature_test(void){
     wins[second].x=22;wins[second].y=385;wins[second].w=580;wins[second].h=285;
     check(first==0&&second==1&&term_task_running(first)&&term_task_running(second),"counter owners");
     term_task_key(first,'+');term_task_key(first,'+');term_task_key(second,'+');
-    ProgramIO io={quiet,pixel,0,0,0,0};
-    check(!process_task_start(6,task_fpu_a,sizeof task_fpu_a,&io),"media FPU task A");
-    check(!process_task_start(7,task_fpu_b,sizeof task_fpu_b,&io),"media FPU task B");
+    check(!guest_process_launch(&media_handles[0],6,task_fpu_a,sizeof task_fpu_a,0,0),"media FPU task A");
+    check(!guest_process_launch(&media_handles[1],7,task_fpu_b,sizeof task_fpu_b,0,0),"media FPU task B");
     browser_init();browser_open(TASK_ORIGIN "/slow");
     audio_set_volume(100);check(!audio_play(media_fixture,sizeof media_fixture),"MP3 playback start");
     unsigned began=timer_ticks(),last_draw=began,draws=0;int stopped=0,saved=0,heard=0;
     while(timer_ticks()-began<6*TIMER_HZ){
         unsigned now=timer_ticks();poll_time();platform_poll();browser_tick();term_task_poll();
-        check(process_task_status(6)!=PROCESS_TASK_DONE&&process_task_status(7)!=PROCESS_TASK_DONE,"MP3 changed task x87 state");
+        check(process_status(media_handles[0])!=PROCESS_TASK_DONE&&process_status(media_handles[1])!=PROCESS_TASK_DONE,"MP3 changed task x87 state");
         if(!stopped&&net_http_result()->state==NET_HTTP_RECEIVING){
             unsigned input_start=timer_ticks();browser_key(0x26,0,BROWSER_MOD_CTRL);browser_key(0,'x',0);
             draw_test();check(timer_ticks()-input_start<TIMER_HZ,"UI blocked by native tasks or network");
@@ -65,10 +64,10 @@ void feature_test(void){
     check(a>=22&&b>=12&&a>b&&a-b>=8&&a-b<=12,"independent counter saves");
     term_task_close(first);check(!term_task_running(first)&&term_task_running(second),"counter close isolation");
     term_task_stop(second);check(!term_task_running(second),"counter keyboard stop");
-    process_task_key(6,'q');process_task_key(7,'q');
-    for(int i=0;i<5;i++){process_task_step(6);process_task_step(7);}
-    check(process_task_status(6)==PROCESS_TASK_DONE&&!process_task_result(6)&&process_task_status(7)==PROCESS_TASK_DONE&&!process_task_result(7),"FPU tasks failed during MP3");
-    process_task_clear(6);process_task_clear(7);
+    process_key(media_handles[0],'q');process_key(media_handles[1],'q');
+    for(int i=0;i<5;i++){process_step(media_handles[0]);process_step(media_handles[1]);}
+    check(process_status(media_handles[0])==PROCESS_TASK_DONE&&guest_process_result(media_handles[0],PROCESS_EXIT_APP,0)&&process_status(media_handles[1])==PROCESS_TASK_DONE&&guest_process_result(media_handles[1],PROCESS_EXIT_APP,0),"FPU tasks failed during MP3");
+    check(guest_process_release(&media_handles[0]),"media record release");check(guest_process_release(&media_handles[1]),"media record release");
     check(!fs_sync(),"counter persistence flush");
     draw_test();platform_log("TASK-MEDIA-HTTP-PASS\n");
     for(;;)__asm__ volatile("hlt");
