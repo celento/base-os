@@ -73,6 +73,13 @@ void feature_test(void){
     task_check(record(2).steps==two.steps,"stopped task changed file");
     task_check(!process_task_start(0,task_app,sizeof task_app,&task_io),"task restart");round_for(5);
     one=record(1);task_check(one.keys==0&&one.value==100,"restart inherited stale image or input");
+    /* Legacy exec still times out and cannot overwrite suspended task images. */
+    unsigned before_exec=timer_ticks(),before_steps=one.steps;
+    task_check(process_run(spin,sizeof spin,&task_io)==-3,"legacy watchdog changed");
+    task_check(timer_ticks()-before_exec>=2*TIMER_HZ,"legacy watchdog returned early");
+    round_for(5);one=record(1);
+    task_check(one.value==100&&one.keys==0&&one.steps>before_steps,"legacy exec damaged a saved task");
+    platform_log("TASK-LEGACY-WATCHDOG-PASS\n");
     process_task_clear(0);
     task_check(!process_task_start(0,task_app,sizeof task_app,&task_io),"queue test start");
     for(int key=33;key<73;key++)process_task_key(0,key);

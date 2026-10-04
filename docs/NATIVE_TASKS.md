@@ -54,6 +54,7 @@ The legacy synchronous `process_run` still has its two-second watchdog, checked 
 - An uncooperative CPU-bound loop returns at a PIT slice and does not starve the two apps
 - Two different live x87 stacks plus the kernel's x87 state survive interleaving; a fresh task gets cleared x87 register storage
 - Graceful exit, cancellation, restart, terminal selection, close and reset
+- The legacy two-second watchdog still terminates CPU-bound `exec`, without changing saved task images
 - A legacy synchronous C app still reads/writes its persistent document
 
 The test does not use intentional invalid instructions, privilege violations, malformed executables, or memory-fault probes. Those are separate from normal runtime/lifecycle coverage.
