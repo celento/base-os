@@ -12,15 +12,15 @@ static unsigned number(char *out,unsigned n){
     out[count]=0;return count;
 }
 static void draw(unsigned id){
-    bos_rect(0,0,160,100,128);
-    bos_rect(4,4,152,4,paused?173:134);
+    bos_rect(0,0,160,100,0);
+    bos_rect(4,4,152,4,paused?6:7);
     unsigned n=value%10000;
     for(int i=3;i>=0;i--){
         unsigned digit=n%10;n/=10;
         for(unsigned y=0;y<5;y++)for(unsigned x=0;x<3;x++)
-            if(digits[digit][y]&(1u<<(2-x)))bos_rect(12+i*37+x*8,22+y*10,7,9,134+id%6);
+            if(digits[digit][y]&(1u<<(2-x)))bos_rect(12+i*37+x*8,22+y*10,7,9,id%2?8:6);
     }
-    bos_rect(4,86,(value%38)*4+4,6,paused?173:145);
+    bos_rect(4,86,(value%38)*4+4,6,paused?6:8);
     bos_present();
 }
 int main(void){
@@ -40,7 +40,7 @@ int main(void){
             if(key==' ')paused=!paused;
             if(key=='s'||key=='S'){
                 unsigned n=number(saved,value);saved[n++]='\n';
-                if(bos_write_file(path,saved,n)>=0){bos_print("Saved ");bos_print(path);bos_print("\n");}
+                if(bos_write_file(path,saved,n)>=0){char message[]="Saved /Documents/counter-1.txt\n";message[25]=(char)('0'+id);bos_print(message);}
                 else bos_print("Save failed.\n");
             }
         }

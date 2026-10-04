@@ -33,6 +33,16 @@ void feature_test(void){
     task_check(one.value==295&&two.value==322&&one.keys==2&&two.keys==1&&one.checksum==195&&two.checksum==122,"isolated keys and file effects");
     task_check(process_task_status(0)!=PROCESS_TASK_DONE&&process_task_status(1)!=PROCESS_TASK_DONE,"unexpected watchdog in task mode");
     platform_log("TASK-TWO-LONG-RUNNING-PASS\n");
+    /* A sleeping task does not run early or wake just because input arrives. */
+    task_check(!process_task_start(5,task_sleep,sizeof task_sleep,&task_io),"start sleeper");
+    unsigned sleep_start=timer_ticks();
+    task_check(process_task_step(5)&&process_task_status(5)==PROCESS_TASK_SLEEPING,"sleep did not suspend");
+    task_check(process_task_key(5,'x'),"sleeping task input");
+    round_for(20);
+    task_check(process_task_status(5)==PROCESS_TASK_SLEEPING,"sleep returned too early");
+    round_for(TIMER_HZ);
+    task_check(timer_ticks()-sleep_start>=TIMER_HZ&&process_task_status(5)==PROCESS_TASK_DONE&&!process_task_result(5),"sleep deadline or input lost");
+    platform_log("TASK-SLEEP-DEADLINE-PASS\n");
     /* A CPU-bound task does not need to cooperate. Each step returns at PIT. */
     const unsigned char spin[]={0x42,0x45,0x58,0x31,16,0,0,0,18,0,0,0,0,0,0,0,0xeb,0xfe};
     task_check(!process_task_start(2,spin,sizeof spin,&task_io),"start bounded CPU task");
@@ -63,6 +73,13 @@ void feature_test(void){
     task_check(record(2).steps==two.steps,"stopped task changed file");
     task_check(!process_task_start(0,task_app,sizeof task_app,&task_io),"task restart");round_for(5);
     one=record(1);task_check(one.keys==0&&one.value==100,"restart inherited stale image or input");
+    process_task_clear(0);
+    task_check(!process_task_start(0,task_app,sizeof task_app,&task_io),"queue test start");
+    for(int key=33;key<73;key++)process_task_key(0,key);
+    round_for(5);one=record(1);
+    task_check(one.keys==32&&one.last_key==64&&one.checksum==1552,"key queue overflow order");
+    process_task_key(0,'A');round_for(5);one=record(1);
+    task_check(one.keys==33&&one.last_key=='A'&&one.checksum==1617,"key queue wrap");
     for(int owner=0;owner<PROCESS_TASKS;owner++)process_task_clear(owner);
     platform_log("TASK-STOP-RESTART-PASS\n");
     /* Terminal owner selection survives polling; close/reset discards a task. */

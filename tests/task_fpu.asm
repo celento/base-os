@@ -2,6 +2,14 @@ bits 32
 org 0
     dd 0x31584542, entry, file_end, 0
 entry:
+    fnsave [initial]
+    mov esi, initial+28
+    mov ecx, 20
+.clean:
+    cmp dword [esi], 0
+    jne .bad
+    add esi, 4
+    loop .clean
     fninit
     fild dword [number]
 .loop:
@@ -27,4 +35,5 @@ entry:
     int 0x80
 number: dd VALUE
 actual: dd 0
+initial: times 108 db 0
 file_end:
