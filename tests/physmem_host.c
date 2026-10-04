@@ -309,6 +309,8 @@ static uint32_t host_tables[3072] __attribute__((aligned(PHYS_PAGE_BYTES)));
 static int paging_ready;
 #undef PAGING_BASE
 #define PAGING_BASE ((uintptr_t)host_tables)
+#undef KERNEL_DIRECTORY_BASE
+#define KERNEL_DIRECTORY_BASE ((uintptr_t)(host_tables+2048))
 #include "physmem_paging_construction.inc"
 static void identity_reachability(void) {
     MemoryRange map = {0x100000, PHYS_MANAGED_END - 0x100000, 1, 1};
