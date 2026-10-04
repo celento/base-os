@@ -5,6 +5,7 @@
 #include <string.h>
 #include "layout.h"
 #include "term.h"
+#include "app_view.h"
 #include "canvas_view.h"
 #include "../assets/cursor_art.h"
 static uint8_t test_mirror[FB_CAPACITY];
@@ -28,6 +29,7 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define CURSOR_H CURSOR_ART_H
 #define MAX_WIN 8
 #define WK_TERM 11
+#define WK_NATIVE 12
 static uint8_t ui_border=2,ui_body=15,ui_chrome=3,ui_chrome_dk=2;
 static uint8_t ui_text=0,ui_text_dim=1,ui_accent=9,ui_track=3;
 typedef struct {int x,y,w,h,open,min,z,kind;} Win;
@@ -40,6 +42,8 @@ static int mouse_x,mouse_y,cursor_sx,cursor_sy,cursor_on;
 static uint8_t cursor_saved[CURSOR_W*CURSOR_H];
 typedef struct {uint8_t pixels[64000];int w,h,on;} TestCanvas;
 static TestCanvas canvases[MAX_WIN];
+static int output_visible[MAX_WIN];
+int app_view_output_visible(int slot){assert(slot>=0&&slot<MAX_WIN);return output_visible[slot];}
 #define canvas_pixels (canvases[context_slot].pixels)
 #define canvas_w (canvases[context_slot].w)
 #define canvas_h (canvases[context_slot].h)
@@ -79,6 +83,7 @@ static uint8_t back[1280*800],linear[1280*800*4];
 static uint8_t expected[sizeof back],expected_linear[sizeof linear],expected_cursor[sizeof cursor_saved];
 static void fixture_reset(void){
     memset(wins,0,sizeof wins);memset(canvases,0,sizeof canvases);context_slot=0;
+    memset(output_visible,0,sizeof output_visible);
     for(int i=0;i<MAX_WIN;i++){canvases[i].w=160;canvases[i].h=100;canvases[i].on=1;}
 }
 static void full_scene(Win *w) {
@@ -141,6 +146,24 @@ static void eligibility(void) {
     wins[2].open=0;assert(term_task_render_action(canvas)==TERM_RENDER_NONE);
     assert(term_task_render_action((TermTaskUpdate){-1,0})==TERM_RENDER_NONE);
     assert(!partial_client_ready(-1)&&!partial_client_ready(MAX_WIN));
+}
+static void owned_eligibility(void){
+    fixture_reset();
+    wins[2]=(Win){.x=100,.y=100,.w=360,.h=240,.open=1,.z=1,.kind=WK_NATIVE};
+    assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_CANVAS})==TERM_RENDER_FULL);
+    assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_OUTPUT})==TERM_RENDER_NONE);
+    output_visible[2]=1;
+    assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_OUTPUT})==TERM_RENDER_FULL);
+    assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_LAYOUT})==TERM_RENDER_FULL);
+    wins[2].min=1;
+    assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_CANVAS})==TERM_RENDER_NONE);
+    assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_OUTPUT})==TERM_RENDER_NONE);
+    assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_LIFECYCLE})==TERM_RENDER_FULL);
+    wins[2].min=0;
+    wins[3]=(Win){.x=90,.y=60,.w=380,.h=300,.open=1,.z=2};
+    assert(window_content_hidden(2));
+    assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_CANVAS})==TERM_RENDER_NONE);
+    assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_LIFECYCLE})==TERM_RENDER_FULL);
 }
 static void pixels(int screen_w,int screen_h,int ww,int wh,int sw,int bpp) {
     gfx_init(back,linear,screen_w,screen_h,bpp,screen_w*(bpp/8));
@@ -299,7 +322,7 @@ static void occlusion_pixels(int bpp){
     composite_update(TERM_RENDER_FULL,TERM_TASK_CANVAS,31);dragging_win=drag_cached=-1;
 }
 int main(void) {
-    geometry();eligibility();canvas_guards();
+    geometry();eligibility();owned_eligibility();canvas_guards();
     for(int bpp=16;bpp<=32;bpp+=8){
         fixture_reset();
         pixels(800,600,360,200,160,bpp);
