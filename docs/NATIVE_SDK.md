@@ -104,7 +104,15 @@ cryptographic hash. Reads remain 4 KiB each; DocStats cooperatively yields every
 64 KiB and redraws progress every 256 KiB. PIT user-mode preemption remains active
 throughout. Its progress arithmetic also covers the opt-in 16 MiB file limit.
 
-## Extended ABI
+## Additive platform services
+
+The shared [platform ABI 1.0](NATIVE_PLATFORM_ABI.md) adds capability/limit
+discovery, process identities, versioned file handles, conditional replacement
+and owned asynchronous IDE completion at calls18–27. Existing calls and binaries
+remain unchanged. New code should query capabilities and use the documented
+extended errors; it must not assume every execution context/backend offers sync.
+
+## Extended legacy ABI
 
 The first thirteen syscall numbers retain their behavior. Default native and
 BASIC graphics are still 160×100. Other returning registers are preserved; EAX
@@ -157,7 +165,9 @@ into the beginning of the file. A final partial chunk copies only the remaining
 bytes and leaves the rest of the output buffer unchanged.
 
 `bos_read_file` retains its original start-of-file, at-most-4096-byte behavior.
-There are no file handles or retained filesystem pointers.
+Those legacy path calls have no file handles or retained filesystem pointers.
+New code may use the additive owner-bound [platform ABI](NATIVE_PLATFORM_ABI.md)
+for versioned file handles and conditional replacement.
 
 ### Canvas modes
 
