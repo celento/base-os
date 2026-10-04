@@ -1,5 +1,6 @@
 #include "player.h"
 #include "audio.h"
+#include "video.h"
 #include "app.h"
 #include "fs.h"
 #include "platform.h"
@@ -11,7 +12,7 @@ static int source_id = -1;
 static unsigned source_identity;
 static char title[FS_NAME_LEN], message[96];
 static unsigned refresh_time, last_position, last_volume;
-static int last_state, last_error, initialized;
+static int last_state, last_error, initialized, video_mode;
 
 static void copy_text(char *to, const char *from, unsigned size) {
     if (!size) return;
@@ -33,9 +34,13 @@ static int extension(const char *name, const char *suffix) {
     for (unsigned i = 0; i < len; ++i) if (lower(name[n-len+i]) != suffix[i]) return 0;
     return 1;
 }
-static int is_audio(int id) {
+static int is_video(int id) {
     const char *name = fs_name(id);
-    return extension(name, ".wav") || extension(name, ".wave") || extension(name, ".mp3");
+    return extension(name, ".mpg") || extension(name, ".mpeg");
+}
+static int is_media(int id) {
+    const char *name = fs_name(id);
+    return extension(name, ".wav") || extension(name, ".wave") || extension(name, ".mp3") || is_video(id);
 }
 static void keep_selection_visible(void) {
     if (selected < 0) { first_visible = 0; return; }
@@ -51,7 +56,7 @@ void player_refresh(void) {
     file_count = 0; selected = -1;
     int trash = fs_find_child(fs_root(), "trash");
     for (int id = 0; id < FS_MAX_NODES; ++id) {
-        if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id) || !is_audio(id)) continue;
+        if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id) || !is_media(id)) continue;
         int parent = fs_parent(id), excluded = 0;
         for (int depth = 0; depth < FS_MAX_NODES && parent > 0; ++depth) {
             if (parent == trash) { excluded = 1; break; }
@@ -87,16 +92,20 @@ void player_init(void) {
 int player_open_file(int id) {
     player_init();
     if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id)) {
-        copy_text(message, "This audio file is no longer available.", sizeof message);
+        copy_text(message, "This media file is no longer available.", sizeof message);
         return MEDIA_BAD_FILE;
     }
     int bytes = fs_size(id);
-    if (bytes <= 0 || (unsigned)bytes > audio_capacity_bytes()) {
+    unsigned capacity = is_video(id) ? VIDEO_MAX_FILE_BYTES : audio_capacity_bytes();
+    if (bytes <= 0 || (unsigned)bytes > capacity) {
         int error = bytes <= 0 ? MEDIA_BAD_FILE : MEDIA_TOO_LARGE;
         copy_text(message, media_error_string(error), sizeof message); return error;
     }
-    int error = audio_play(fs_data(id), (unsigned)bytes);
-    if (error) { copy_text(message, media_error_string(error), sizeof message); return error; }
+    int opening_video = is_video(id);
+    int error = opening_video ? video_play(fs_data(id), (unsigned)bytes) : audio_play(fs_data(id), (unsigned)bytes);
+    if (error) { copy_text(message, opening_video ? video_error_string(error) : media_error_string(error), sizeof message); return error; }
+    if (opening_video) audio_stop(); else video_stop();
+    video_mode = opening_video;
     source_id = id; source_identity = fs_identity(id);
     copy_text(title, fs_name(id), sizeof title); message[0] = 0;
     player_refresh();
@@ -105,7 +114,7 @@ int player_open_file(int id) {
 }
 static int open_selected(void) {
     if (selected < 0 || selected >= file_count) {
-        copy_text(message, "Add a WAV or MP3 file, then choose Play.", sizeof message); return 1;
+        copy_text(message, "Add a WAV, MP3 or MPEG-1 file, then choose Play.", sizeof message); return 1;
     }
     if (!fs_valid(files[selected]) || fs_identity(files[selected]) != identities[selected]) {
         player_refresh(); copy_text(message, "The selected file changed. Choose it again.", sizeof message); return 1;
@@ -113,22 +122,27 @@ static int open_selected(void) {
     player_open_file(files[selected]); return 1;
 }
 static int play_pause(void) {
+    if (video_mode) {
+        int state = video_status()->state;
+        if (state == VIDEO_PLAYING || state == VIDEO_LOADING) { video_pause(1); return 1; }
+        if (state == VIDEO_PAUSED) { video_pause(0); return 1; }
+    }
     const AudioStatus *status = audio_status();
-    if (status->state == AUDIO_PLAYING) { audio_pause(1); return 1; }
-    if (status->state == AUDIO_PAUSED) { audio_pause(0); return 1; }
-    if (status->state == AUDIO_LOADING) return 0;
+    if (!video_mode && status->state == AUDIO_PLAYING) { audio_pause(1); return 1; }
+    if (!video_mode && status->state == AUDIO_PAUSED) { audio_pause(0); return 1; }
+    if (!video_mode && status->state == AUDIO_LOADING) return 0;
     if (selected >= 0 && selected < file_count) return open_selected();
     if (source_id >= 0 && fs_valid(source_id) && fs_identity(source_id) == source_identity) {
         player_open_file(source_id); return 1;
     }
-    copy_text(message, "Choose an audio file from the list below.", sizeof message); return 1;
+    copy_text(message, "Choose a media file from the list below.", sizeof message); return 1;
 }
 static void time_string(char *out, unsigned milliseconds) {
     unsigned seconds = milliseconds / 1000;
     fmt_uint(out, seconds / 60);
     unsigned n = (unsigned)kstrlen(out); out[n++] = ':';
     fmt_pad2(out+n, (int)(seconds % 60));
-    if (audio_duration_ms() < 10000) {
+    if ((video_mode ? video_duration_ms() : audio_duration_ms()) < 10000) {
         n += 2; out[n++] = '.'; out[n++] = (char)('0' + milliseconds/100%10); out[n] = 0;
     }
 }
@@ -148,12 +162,69 @@ static void button(int x, int y, int w, const char *label, int primary) {
     int text_x = x + (w - ui_string_w(label)) / 2;
     draw_string(label, text_x, y + 7, primary ? COLOR_WHITE : app_text);
 }
+static void video_geometry(int h, int *viewport_height, int *buttons_y, int *library_y) {
+    *viewport_height = h - 294;
+    if (*viewport_height < 68) *viewport_height = 68;
+    *buttons_y = 76 + *viewport_height + 46;
+    *library_y = *buttons_y + 62;
+}
+static void draw_video(int x, int y, int w, int h) {
+    const VideoStatus *status = video_status();
+    int viewport_h, buttons_y, library_y;
+    video_geometry(h, &viewport_h, &buttons_y, &library_y);
+    draw_string_bold("Media Player", x+16, y+12, app_text);
+    const char *state = state_string(status->state);
+    draw_string(state, x+w-16-ui_string_w(state), y+12, app_text_dim);
+    draw_string_bold_clip(title[0] ? title : "Choose a video", x+16, y+40, app_text, x+w-16);
+    char text[96], number[20];
+    copy_text(text, "MPEG-1 / Video only (no audio)", sizeof text);
+    if (status->width) {
+        append(text, " / ", sizeof text); fmt_uint(number,status->width); append(text,number,sizeof text);
+        append(text," x ",sizeof text); fmt_uint(number,status->height); append(text,number,sizeof text);
+    }
+    draw_string_clip(text,x+16,y+62,app_text_dim,x+w-16);
+    video_draw(x+16,y+86,w-32,viewport_h-10);
+    unsigned position=video_position_ms(),duration=video_duration_ms();
+    int bar_y=76+viewport_h+10,bar_width=w-32;
+    draw_round_rect(x+16,y+bar_y,bar_width,6,3,app_chrome_dk);
+    unsigned scale=duration/65535u+1;
+    unsigned progress=duration?(position/scale)*(unsigned)bar_width/(duration/scale):0;
+    if (progress>(unsigned)bar_width) progress=(unsigned)bar_width;
+    if (progress) draw_rect(x+16,y+bar_y,(int)progress,6,app_accent);
+    time_string(text,position);draw_string(text,x+16,y+bar_y+12,app_text_dim);
+    time_string(text,duration);draw_string(text,x+w-16-ui_string_w(text),y+bar_y+12,app_text_dim);
+    const char *play=status->state==VIDEO_PLAYING || status->state==VIDEO_LOADING?"Pause":"Play";
+    button(x+16,y+buttons_y,96,play,1);
+    button(x+120,y+buttons_y,76,"Stop",0);
+    button(x+204,y+buttons_y,96,"Clear error",0);
+    button(x+w-96,y+buttons_y,80,"Refresh",0);
+    const char *hint=message[0]?message:"Space: play/pause   Enter: open   S: stop";
+    draw_string_clip(hint,x+16,y+buttons_y+38,message[0]?gfx_rgb(176,47,42):app_text_dim,x+w-16);
+    copy_text(text,"Media files (",sizeof text);fmt_uint(number,(unsigned)file_count);
+    append(text,number,sizeof text);append(text,")",sizeof text);
+    draw_string_bold(text,x+16,y+library_y,app_text);
+    draw_string("^",x+w-66,y+library_y,app_text_dim);draw_string("v",x+w-36,y+library_y,app_text_dim);
+    int list_y=library_y+24,list_h=h-list_y-30;
+    visible_rows=list_h/PLAYER_ROW;
+    if (visible_rows<1) visible_rows=1;
+    keep_selection_visible();
+    draw_round_frame(x+16,y+list_y,w-32,list_h,6,app_chrome_dk);
+    if (!file_count) draw_string_clip("Import a WAV, MP3 or MPEG-1 file.",x+26,y+list_y+5,app_text_dim,x+w-26);
+    else for (int row=0;row<visible_rows && first_visible+row<file_count;++row) {
+        int index=first_visible+row,id=files[index],row_y=y+list_y+row*PLAYER_ROW;
+        if (index==selected) draw_rect(x+18,row_y+1,w-36,PLAYER_ROW-1,gfx_lighter(app_accent,85));
+        draw_string_clip(fs_name(id),x+26,row_y+5,app_text,x+w-86);
+        draw_string(is_video(id)?"MPEG":extension(fs_name(id),".mp3")?"MP3":"WAV",x+w-72,row_y+5,app_text_dim);
+    }
+    draw_string_clip("MPEG-1 video / 2 MiB / up to 640 x 480 / no audio",x+16,y+h-24,app_text_dim,x+w-16);
+}
 void player_draw(int x, int y, int w, int h) {
     player_init();
     draw_rect(x, y, w, h, COLOR_WHITE);
     if (w < 420 || h < 362) {
         draw_string_clip("Enlarge Media Player to show its controls.", x+8, y+12, app_text, x+w-8); return;
     }
+    if (video_mode) { draw_video(x,y,w,h); return; }
     const AudioStatus *status = audio_status();
     draw_string_bold("Media Player", x+16, y+12, app_text);
     const char *device = status->available ? "Sound Blaster 16" : "No audio device";
@@ -193,7 +264,7 @@ void player_draw(int x, int y, int w, int h) {
     draw_string(text, x+w-64, y+216, app_text);
     const char *hint = message[0] ? message : "Space: play/pause   Enter: open   +/-: volume";
     draw_string_clip(hint, x+16, y+244, message[0] ? gfx_rgb(176,47,42) : app_text_dim, x+w-16);
-    copy_text(text, "Audio files (", sizeof text); fmt_uint(number, (unsigned)file_count);
+    copy_text(text, "Media files (", sizeof text); fmt_uint(number, (unsigned)file_count);
     append(text, number, sizeof text); append(text, ")", sizeof text);
     draw_string_bold(text, x+16, y+272, app_text);
     draw_string("^", x+w-66, y+272, app_text_dim); draw_string("v", x+w-36, y+272, app_text_dim);
@@ -203,14 +274,14 @@ void player_draw(int x, int y, int w, int h) {
     keep_selection_visible();
     draw_round_frame(x+16, list_y, w-32, list_h, 6, app_chrome_dk);
     if (!file_count) {
-        draw_string_clip("No audio files. Import a .wav or .mp3 to begin.", x+26, list_y+10, app_text_dim, x+w-26);
+        draw_string_clip("Import a WAV, MP3 or MPEG-1 video to begin.", x+26, list_y+10, app_text_dim, x+w-26);
     } else for (int row = 0; row < visible_rows && first_visible+row < file_count; ++row) {
         int index = first_visible+row, id = files[index], row_y = list_y+row*PLAYER_ROW;
         if (index == selected) draw_rect(x+18, row_y+1, w-44, PLAYER_ROW-1, gfx_lighter(app_accent, 85));
         int current = id == source_id && fs_identity(id) == source_identity;
         draw_round_rect(x+27, row_y+10, 6, 6, 3, current ? app_accent : app_chrome_dk);
         draw_string_clip(fs_name(id), x+43, row_y+5, app_text, x+w-100);
-        const char *format = extension(fs_name(id), ".mp3") ? "MP3" : "WAV";
+        const char *format = is_video(id) ? "MPEG" : extension(fs_name(id), ".mp3") ? "MP3" : "WAV";
         draw_string(format, x+w-80, row_y+5, app_text_dim);
     }
     if (file_count > visible_rows) {
@@ -226,6 +297,22 @@ void player_draw(int x, int y, int w, int h) {
 int player_click(int x, int y, int w, int h, int mx, int my) {
     player_init();
     if (w < 420 || h < 362) return 0;
+    if (video_mode) {
+        int viewport_h,buttons_y,library_y;
+        video_geometry(h,&viewport_h,&buttons_y,&library_y);
+        if (hit(mx,my,x+16,y+buttons_y,96,32)) return play_pause();
+        if (hit(mx,my,x+120,y+buttons_y,76,32)) { video_stop(); return 1; }
+        if (hit(mx,my,x+204,y+buttons_y,96,32)) { message[0]=0;video_clear_error();return 1; }
+        if (hit(mx,my,x+w-96,y+buttons_y,80,32)) { player_refresh();return 1; }
+        if (hit(mx,my,x+w-76,y+library_y-4,28,24)) return player_key(KEY_UP,0);
+        if (hit(mx,my,x+w-46,y+library_y-4,28,24)) return player_key(KEY_DOWN,0);
+        int list_y=library_y+24;
+        if (hit(mx,my,x+16,y+list_y,w-32,h-list_y-30)) {
+            int row=(my-(y+list_y))/PLAYER_ROW;
+            if (row<visible_rows && first_visible+row<file_count) { selected=first_visible+row;return 1; }
+        }
+        return 0;
+    }
     if (hit(mx,my,x+16,y+170,96,32)) return play_pause();
     if (hit(mx,my,x+120,y+170,76,32)) { audio_stop(); return 1; }
     if (hit(mx,my,x+204,y+170,96,32)) { message[0]=0; audio_clear_error(); return 1; }
@@ -253,17 +340,20 @@ int player_key(int scancode, char character) {
     if (character=='+' || character=='=') { audio_set_volume(audio_status()->volume+5);return 1; }
     if (character=='-') { unsigned volume=audio_status()->volume;audio_set_volume(volume>5?volume-5:0);return 1; }
     if (character=='r' || character=='R') { player_refresh();return 1; }
-    if (character=='s' || character=='S') { audio_stop();return 1; }
+    if (character=='s' || character=='S') { if (video_mode) video_stop();else audio_stop();return 1; }
     return 0;
 }
 int player_tick(void) {
     if (!initialized) return 0;
+    int changed=video_poll();
     const AudioStatus *status=audio_status();
-    unsigned position=audio_position_ms()/100;
-    int changed=status->state!=last_state || status->error!=last_error || position!=last_position || status->volume!=last_volume;
-    if (status->error && status->error!=last_error)
-        copy_text(message,media_error_string(status->error),sizeof message);
-    last_state=status->state;last_error=status->error;last_position=position;last_volume=status->volume;
+    int state=video_mode?video_status()->state:status->state;
+    int error=video_mode?video_status()->error:status->error;
+    unsigned position=(video_mode?video_position_ms():audio_position_ms())/100;
+    changed|=state!=last_state || error!=last_error || position!=last_position || status->volume!=last_volume;
+    if (error && error!=last_error)
+        copy_text(message,video_mode?video_error_string(error):media_error_string(error),sizeof message);
+    last_state=state;last_error=error;last_position=position;last_volume=status->volume;
     if (timer_ticks()-refresh_time>=TIMER_HZ) {
         player_refresh();
         /* Renames and size changes can keep the same file identity. */
@@ -272,3 +362,5 @@ int player_tick(void) {
     return changed;
 }
 const char *player_title(void) { return title; }
+
+void player_close(void) { audio_stop();video_stop(); }

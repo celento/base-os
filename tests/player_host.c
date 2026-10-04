@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "audio.h"
+#include "video.h"
 #include "app.h"
 #include "fs.h"
 
@@ -11,6 +12,7 @@ static unsigned generations[FS_MAX_NODES];
 static int parents[FS_MAX_NODES], valid[FS_MAX_NODES];
 static unsigned now;
 static AudioStatus fake={.available=1,.volume=75};
+static VideoStatus fake_video;
 int kstrlen(const char *s){return (int)strlen(s);}
 int kstrcmp(const char *a,const char *b){return strcmp(a,b);}
 int fs_root(void){return 0;}
@@ -33,11 +35,21 @@ void audio_pause(int paused){fake.state=paused?AUDIO_PAUSED:AUDIO_PLAYING;}
 void audio_stop(void){fake.state=AUDIO_STOPPED;fake.error=0;fake.played_frames=0;}
 void audio_set_volume(unsigned n){fake.volume=n>100?100:n;}
 void audio_clear_error(void){fake.error=0;}
+const VideoStatus *video_status(void){return &fake_video;}
+int video_play(const void *data,uint32_t bytes){(void)data;(void)bytes;fake_video=(VideoStatus){.state=VIDEO_LOADING,.width=320,.height=240,.fps_num=25,.fps_den=1,.total_frames=75};return 0;}
+void video_pause(int paused){fake_video.state=paused?VIDEO_PAUSED:VIDEO_PLAYING;}
+void video_stop(void){fake_video.state=VIDEO_STOPPED;fake_video.displayed_frames=0;fake_video.error=0;}
+void video_clear_error(void){fake_video.error=0;}
+int video_poll(void){return 0;}
+uint32_t video_position_ms(void){return fake_video.displayed_frames*40;}
+uint32_t video_duration_ms(void){return fake_video.total_frames*40;}
+const char *video_error_string(int error){(void)error;return "Video unavailable";}
 const char *media_error_string(int error){(void)error;return "Audio unavailable";}
 uint8_t app_accent=9,app_accent_dk=13,app_text=0,app_text_dim=2,app_chrome=3,app_chrome_dk=2;
 static int origin_x,origin_y,bounds_w,bounds_h,draws;
 static void bounds(int x,int y,int w,int h){assert(w>=0&&h>=0);assert(x>=origin_x&&y>=origin_y&&x+w<=origin_x+bounds_w&&y+h<=origin_y+bounds_h);draws++;}
 void draw_rect(int x,int y,int w,int h,uint8_t c){(void)c;bounds(x,y,w,h);}
+void video_draw(int x,int y,int w,int h){bounds(x,y,w,h);}
 void draw_round_rect(int x,int y,int w,int h,int r,uint8_t c){(void)r;draw_rect(x,y,w,h,c);}
 void draw_round_frame(int x,int y,int w,int h,int r,uint8_t c){(void)r;draw_rect(x,y,w,h,c);}
 int ui_string_w(const char *s){return (int)strlen(s)*7;}
@@ -70,6 +82,16 @@ int main(void){
     assert(player_tick());assert(!player_tick());now+=TIMER_HZ;assert(player_tick());
     fake.error=MEDIA_NO_DEVICE;assert(player_tick()&&message[0]);
     assert(player_click(25,30,420,390,25+220,30+185));assert(!message[0]);
+    strcpy(names[2],"Film.mpg");player_refresh();assert(player_open_file(2)==0);
+    assert(video_mode&&fake_video.state==VIDEO_LOADING&&fake.state==AUDIO_STOPPED);
+    draw_at(640,584);draw_at(420,390);draw_at(420,362);
+    assert(player_key(KEY_SPACE,0));assert(fake_video.state==VIDEO_PAUSED);
+    assert(player_key(KEY_SPACE,0));assert(fake_video.state==VIDEO_PLAYING);
+    fake_video.displayed_frames=18;assert(player_tick());draw_at(640,584);
+    assert(player_click(25,30,640,584,25+130,30+414));assert(fake_video.state==VIDEO_STOPPED);
+    assert(player_key(KEY_ENTER,0));assert(fake_video.state==VIDEO_LOADING);
+    player_close();assert(fake_video.state==VIDEO_STOPPED&&fake.state==AUDIO_STOPPED);
+    assert(player_open_file(3)==0);assert(!video_mode&&fake_video.state==VIDEO_STOPPED);
     for(int i=2;i<34;i++)valid[i]=0;
     player_refresh();assert(!file_count);draw_at(420,390);
     puts("Player list, selection, transport, volume, refresh, and client bounds passed.");

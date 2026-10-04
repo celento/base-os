@@ -1,0 +1,26 @@
+--- upstream/pl_mpeg.h
++++ baseos/pl_mpeg.h
+@@ -1607,6 +1607,10 @@
+ }
+ 
+ void plm_buffer_discard_read_bytes(plm_buffer_t *self) {
++	// BaseOS: immutable fixed-memory streams must retain length/total_size.
++	if (self->mode == PLM_BUFFER_MODE_FIXED_MEM) {
++		return;
++	}
+ 	size_t byte_pos = self->bit_index >> 3;
+ 	if (byte_pos == self->length) {
+ 		self->bit_index = 0;
+@@ -2868,10 +2872,8 @@
+ 				if (
+ 					self->has_reference_frame &&
+ 					!self->assume_no_b_frames &&
+-					plm_buffer_has_ended(self->buffer) && (
+-						self->picture_type == PLM_VIDEO_PICTURE_TYPE_INTRA ||
+-						self->picture_type == PLM_VIDEO_PICTURE_TYPE_PREDICTIVE
+-					)
++					plm_buffer_has_ended(self->buffer)
++					// BaseOS: the delayed reference also remains after a final B picture.
+ 				) {
+ 					self->has_reference_frame = FALSE;
+ 					frame = &self->frame_backward;
