@@ -12,7 +12,9 @@ static void check_copy_stopped(void) {
 static void check_scan_or_copy(void) {
     if (status.state == AUDIO_PLAYING) {
         assert(hardware_running && mp3.data == source_buffer);
-        ++scan_polls;
+        /* A long scan may need actual refills of the prior owned decoder. */
+        position = (position + 512 * status.channels * 2) % RING_BYTES;
+        ++now; ++scan_polls;
     } else check_copy_stopped();
 }
 static uint8_t *make_large_wave(unsigned bytes) {
@@ -76,7 +78,7 @@ static void test_owned_wave_boundaries(int large) {
         audio_stop();
     }
 }
-static void test_large_mp3(const char *path) {
+static void test_large_mp3(const char *path, const char *different_path) {
     FILE *input=fopen(path,"rb");assert(input);
     assert(!fseek(input,0,SEEK_END));long length=ftell(input);
     assert(length>AUDIO_WORK_CAPACITY&&length<AUDIO_LARGE_WORK_CAPACITY);
@@ -89,6 +91,20 @@ static void test_large_mp3(const char *path) {
     assert(!memcmp(source_buffer,data,bytes)&&mp3.data==source_buffer);
     for(unsigned i=0;status.state==AUDIO_LOADING;i++){assert(i<100);audio_poll();}
     assert(status.state==AUDIO_PLAYING);
+    /* Both segments are real encoded audio. A rate/channel change remains an
+     * explicitly unsupported candidate and must not replace the old decoder. */
+    input=fopen(different_path,"rb");assert(input);
+    assert(!fseek(input,0,SEEK_END));long extra=ftell(input);assert(extra>0&&extra<16384);
+    uint8_t *changing=malloc(bytes+(unsigned)extra);assert(changing);
+    memcpy(changing,data,bytes);rewind(input);
+    assert(fread(changing+bytes,1,(unsigned)extra,input)==(unsigned)extra);fclose(input);
+    unsigned old_total=status.total_frames,old_decoded=mp3.decoded_frames;
+    scan_polls=copy_polls=0;background_check=check_scan_or_copy;
+    assert(audio_play(changing,bytes+(unsigned)extra)==MEDIA_UNSUPPORTED);background_check=0;
+    assert(scan_polls>100&&!copy_polls&&status.state==AUDIO_PLAYING);
+    assert(status.error==MEDIA_UNSUPPORTED&&status.total_frames==old_total);
+    assert(mp3.decoded_frames>old_decoded&&mp3.data==source_buffer);
+    assert(!memcmp(source_buffer,data,bytes));free(changing);audio_clear_error();
     scan_polls=copy_polls=0;background_check=check_scan_or_copy;
     assert(!audio_play(data,bytes));background_check=0;
     assert(scan_polls>100&&copy_polls==(bytes+16383)/16384);
@@ -142,8 +158,11 @@ static void test_large_mp3(const char *path) {
     assert(audio_capacity_bytes()==AUDIO_WORK_CAPACITY&&source_buffer==audio_test_source);
 }
 int main(int argc,char **argv) {
-    assert(argc==2);assert(!audio_init());
-    test_eligibility();test_owned_wave_boundaries(0);test_owned_wave_boundaries(1);
-    test_large_mp3(argv[1]);
+    assert(argc==3);assert(!audio_init());
+    test_eligibility();test_owned_wave_boundaries(0);
+    uint8_t *old=malloc(AUDIO_WORK_CAPACITY);assert(old);
+    memcpy(old,audio_test_source,AUDIO_WORK_CAPACITY);
+    test_owned_wave_boundaries(1);test_large_mp3(argv[1],argv[2]);
+    assert(!memcmp(old,audio_test_source,AUDIO_WORK_CAPACITY));free(old);
     puts("Large owned audio eligibility, exact boundaries, independent sources, polled replacement, complete 3-minute MP3 and bounded decode passed.");
 }

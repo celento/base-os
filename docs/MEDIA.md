@@ -25,7 +25,7 @@ Source-rate metadata/time stay separate from `AudioStatus.output_rate`.
 
 The default IDE data volume supports 2 MiB per file and roughly 8 MiB total
 payload; its owned audio-input arena accepts up to 2 MiB. An explicitly mounted
-large storage profile, with verified high filesystem arenas, permits up to
+[large storage profile](LARGE_VOLUMES.md), with verified high filesystem arenas, permits up to
 **16 MiB of owned WAV/MP3 source data**. This is a file-size bound rather than a
 duration guarantee: PCM sample rate/channels/bit depth or MP3 bitrate determine
 how much playback fits. The optional legacy floppy-only volume retains its
@@ -200,6 +200,8 @@ with FFmpeg, then compares every simulated DMA sample with a separate decoder
 through EOF. It also checks exact 2 MiB/16 MiB WAV boundaries, a legal ID3-padded
 MP3 at exactly 16 MiB, complete byte ownership after source mutation/deletion,
 all four active-profile/available-memory combinations, replacement rejection,
-configuration refusal during live playback, pause/resume/volume and the unchanged
+configuration refusal during live playback, preservation of the default buffer,
+continued old-decoder refills while rejecting a real rate/channel-changing MP3
+candidate, pause/resume/volume and the unchanged
 one-frame-per-poll decode bound. These are host-driver checks; real SB16/QEMU
 capture evidence is recorded separately after running the production workload.
