@@ -61,3 +61,35 @@ Results and exact source/build hashes are in `session-2026-10-04/`:
 and `NATIVE_PUBLICATION_PROVENANCE.sha256`. The build was from `f3be79c` plus this
 publication diff. Screenshot directories are recorded in each result. These are
 functional publication checks; they make no new performance or audio claim.
+
+## Unchanged snapshot/audio workload
+
+After the functional runs, the unchanged `snapshot_responsiveness_test.py` and
+`snapshot_responsive_app.c` passed the default-profile workload with the same
+45-second audio source and verified original seed. This runner uses 128 MiB RAM
+for both volume profiles; the independent default functional run above used the
+standard 64 MiB. It verified all file bytes after durable save and again after
+reboot. The snapshot took 2,050 PIT ticks (29.286 s); eight input-to-visible sample
+upper bounds were 21.94–124.91 ms, and the mouse sample was 35.11 ms. These are
+single-run observations, not guarantees or a claimed timing improvement.
+
+Every one of the 3,972,096 source samples in 1,986,048 stereo frames matched the
+existing PCM comparison tolerance (peak error 1; 45.035 s; zero leading frames).
+`tools/check_snapshot_canvas.py` then checked the complete 3,840-pixel footer
+against the decoded phase in all 15 saved live screenshots and both reboot
+screenshots. No cleared or partial footer was present. This check reads only saved
+screenshots and does not observe guest memory.
+
+The first snapshot invocation stopped before launching QEMU because its supplied
+seed path did not exist; the corrected invocation reused
+`/workspace/shared/snapshot-rep-default-attempt1/seed.img`. Full evidence is
+`/workspace/shared/snapshot-publication-f3be79c-attempt2`; repository summaries
+are `NATIVE_PUBLICATION_SNAPSHOT_RESULTS.json` and
+`NATIVE_PUBLICATION_FOOTER_RESULTS.json` beside the other session results.
+The snapshot result records the source commit `3bca6a7`; the exact tested kernel
+still carries its earlier `f3be79c +changes` build label and matches the frozen
+source/build hashes. No production code changed after that build.
+
+![Complete frame during snapshot keyboard input](../screenshots/native-publication-snapshot-echo.png)
+![Last complete frame retained after Ctrl+C](../screenshots/native-publication-stopped.png)
+![Published 320×200 canvas on the large profile](../screenshots/native-publication-large-resized.png)
