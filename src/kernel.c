@@ -4002,7 +4002,8 @@ static void draw_native_window(int slot,int inactive){
     draw_round_rect(w->x+8,top+3,72,NATIVE_TOOLBAR_H-6,4,output?ui_accent:ui_chrome);
     draw_string(app_view_output_dropped(slot)?"Output*":"Output",w->x+16,top+7,output?COLOR_WHITE:ui_text);
     AppViewResult result;
-    const char *status=app_view_result(slot,&result)?
+    int ended=app_view_result(slot,&result);
+    const char *status=ended?
         (result.reason==PROCESS_EXIT_STOP?"Stopped":"Ended; see Output"):
         "Ctrl+C stops; Close ends task";
     if(output&&app_view_output_dropped(slot))status="Older output discarded";
@@ -4026,7 +4027,8 @@ static void draw_native_window(int slot,int inactive){
     }else{
         AppCanvasFrame frame=app_view_frame(slot);CanvasView view=native_canvas_geometry(slot);
         if(frame.pixels)draw_app_canvas(frame,&view);
-        else draw_string_clip("Starting...",w->x+16,top+NATIVE_TOOLBAR_H+16,TERM_FG,w->x+w->w-16);
+        else draw_string_clip(ended?"No published frame; see Output":"Starting...",
+                              w->x+16,top+NATIVE_TOOLBAR_H+16,TERM_FG,w->x+w->w-16);
     }
 }
 
