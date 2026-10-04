@@ -6155,6 +6155,7 @@ static void draw_namedlg(void) {
     const char *message = name_failed ?
         (name_target >= 4 ? spreadsheet_status() : name_target >= 2 ? writer_status() : name_failure_message ? name_failure_message :
          "Save failed. Check storage and file name.") :
+        name_target == 5 ? "Other apps may run formula-like CSV text." :
         name_target == 1 ? "Saved to the Pictures folder" : location;
     draw_string_clip(message, x + 22, y + 20 + CHAR_H + 6, ui_text_dim, x + w - 22);
     int fx = x + 22, fy = y + 64, fw = w - 44, fh = 34;

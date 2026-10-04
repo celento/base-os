@@ -98,6 +98,18 @@ static void test_admission(void) {
     assert(fs_size(pref("draft1.txt"))==21);
     puts("Spreadsheet session: node/byte preflight and cross-app shrink-before-growth ordering passed");
 }
+static void test_small_volume_limit(void) {
+    spreadsheet_close();reset(0);sheet_start();sheet_init(&checked);
+    char text[96];memset(text,'x',95);text[95]=0;
+    for(unsigned i=0;i<200;i++)assert(!sheet_set(&checked,i/26,i%26,SHEET_TEXT,text,95));
+    unsigned bytes;assert(!sheet_native_encode(&checked,buffer,sizeof buffer,&bytes));
+    assert(bytes>fs_file_limit());
+    assert(spreadsheet_restore(buffer,bytes,-1,0,1,0,0));
+    int count=fs_node_count();unsigned used=fs_used_bytes();session_save();
+    assert(*session_status&&fs_node_count()==count&&fs_used_bytes()==used);
+    assert(pref("sheet-draft.bsh")<0&&spreadsheet_dirty());expect_cell(0,0,text);
+    puts("Spreadsheet session: floppy per-file rejection preserves the full live draft and filesystem");
+}
 static void test_budget(void) {
     unsigned n=example_budget_sheet(buffer,sizeof buffer);assert(n>16&&n<1024);
     assert(!sheet_native_decode(&checked,buffer,n));
@@ -106,4 +118,4 @@ static void test_budget(void) {
     assert(bytes==strlen(example_budget_csv)&&!memcmp(buffer,example_budget_csv,bytes));
     puts("Spreadsheet budget: native formulas and exact value CSV agree");
 }
-int main(void) { test_pending_recovery();test_pairing();test_admission();test_budget();return 0; }
+int main(void) { test_pending_recovery();test_pairing();test_admission();test_small_volume_limit();test_budget();return 0; }
