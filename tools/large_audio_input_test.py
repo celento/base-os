@@ -125,24 +125,33 @@ def run_profile(build, work, profile, song, reference):
         event('128 MiB RAM selected only the mounted profile source arena')
         if profile == 'large':
             files = FilesCheck(session, build); terminal = TerminalCheck(session, build)
-            session.launch('terminal'); native_slot = files.front()['slot']
+            session.launch('terminal')
+            session.wait(lambda: files.front()['kind'] == 11, 'native Terminal launch is focused')
+            native_slot = files.front()['slot']
             session.text('start /Programs/counter.bex'); session.key('ret')
             session.wait(lambda: terminal.terminal(native_slot)['canvas_on'] == 1, 'native counter is running')
             report_path = f'/Documents/counter-{native_slot + 1}.txt'
             event('protected native counter is running beside large audio')
-            session.launch('files'); files_slot = files.front()['slot']
+            session.launch('files')
+            session.wait(lambda: files.front()['kind'] == 4, 'Files launch is focused')
             files.folder(disk, '/Documents'); files.select(4); files.clipboard('ctrl-c')
             files.folder(disk, '/Target'); files.clipboard('ctrl-v')
             nodes = load(disk.read_bytes())[2]
             assert nodes[resolve(nodes, '/Target/bulk.txt')]['data'] == bulk
             event('2 MiB copy and snapshot save retain complete bytes')
-            session.launch('terminal'); command_slot = files.front()['slot']
+            session.launch('terminal')
+            session.wait(lambda: files.front()['kind'] == 11 and files.front()['slot'] != native_slot,
+                         'second command Terminal launch is focused')
+            command_slot = files.front()['slot']
             for path in ('/Documents/pad.bin', '/Documents/' + song.name):
                 session.text('rm ' + path); session.key('ret')
                 session.wait(lambda: not node_exists(disk, path), 'file deletion and compacting save complete', 60)
                 event('compaction synchronized after deleting ' + path)
             assert load(disk.read_bytes())[2][4]['data'] == bulk
-            session.key('ctrl-w'); files.focus(native_slot)
+            session.key('ctrl-w')
+            session.wait(lambda: not observed.windows()[command_slot]['open'],
+                         'command Terminal close finishes before taskbar targeting')
+            files.focus(native_slot)
             saves = []
 
             def save_counter():
@@ -199,7 +208,8 @@ def main():
     work = pathlib.Path(tempfile.mkdtemp(prefix='baseos-large-audio-input-'))
     print('Large audio evidence: ' + str(work), flush=True)
     results = []
-    for profile in ('default', 'large') if args.profile == 'both' else (args.profile,):
+    profiles = ('default', 'large') if args.profile == 'both' else (args.profile,)
+    for profile in profiles:
         folder = work / profile; folder.mkdir()
         song = folder / ('long.mp3' if profile == 'large' else 'short.mp3')
         if profile == 'large':
@@ -212,7 +222,8 @@ def main():
             song.write_bytes((ROOT / 'assets/examples/harbor.mp3').read_bytes())
         reference = host_decode(song, folder)
         results.append(run_profile(build, folder, profile, song, reference))
-        (work / 'results.json').write_text(json.dumps(dict(passed=True, results=results), indent=2) + '\n')
+        (work / 'results.json').write_text(json.dumps(dict(
+            passed=len(results) == len(profiles), requested_profiles=profiles, results=results), indent=2) + '\n')
     print('Complete profile-owned audio verification passed: ' + str(work / 'results.json'), flush=True)
 
 

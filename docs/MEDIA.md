@@ -207,3 +207,40 @@ continued old-decoder refills while rejecting a real rate/channel-changing MP3
 candidate, pause/resume/volume and the unchanged
 one-frame-per-poll decode bound. These are host-driver checks; real SB16/QEMU
 capture evidence is recorded separately after running the production workload.
+
+## Large-source production QEMU verification
+
+`python3 tools/large_audio_input_test.py build` runs fresh default and large
+volumes serially with 128 MiB RAM and the ordinary production desktop. Use
+`--profile default` or `--profile large` to run one case. The runner requires
+FFmpeg, QEMU and the existing production-input/reference-decoder dependencies.
+All commands use normal PS/2 input. Named-symbol memory reads observe source
+ownership and state; no guest calls, guest memory writes, test kernel, fuzzing
+or intentional memory-fault probes are used. Saved user images are never opened.
+
+The October 4 verification used production kernel `19f5028`:
+
+- Default 16 MiB volume plus 128 MiB RAM kept its 2 MiB source at 23–25 MiB,
+  alongside the live low filesystem pool and staging. An ordinary filesystem
+  save succeeded during playback. Every one of 796,032 stereo PCM frames was
+  verified; RMS difference 0.021133 LSB, peak 1, zero reported underruns.
+- The explicitly mounted 64 MiB large volume selected the owned 16 MiB source
+  at 32–48 MiB and high filesystem pool/staging. Its original Harbor-derived
+  192 kb/s MP3 was 4,320,862 bytes. Playback finished all 7,939,584 stereo PCM
+  frames (15,879,168 samples), including the complete encoded tail, in
+  180.035918 seconds. RMS difference was 0.020736 LSB, peak 1; zero underruns.
+- During that complete large capture, Files copied and synchronized an exact
+  2 MiB document. Terminal deleted a preceding 2 MiB padding file and then the
+  playing MP3 itself, each with compaction and a verified disk save. Playback
+  remained independent of both operations. A protected native counter stayed
+  active through EOF and durably saved increasing values 11, 61 and 116.
+
+The production input harness waits for actual focused-window creation and
+completed close before selecting taskbar coordinates. Two initial large
+attempts stopped on harness observation races at those transitions; their
+partial captures are not counted as complete-playback evidence. No audio code
+change was needed for the final complete run. The retained measured results
+are in [LARGE_AUDIO_RESULTS.json](session-2026-10-04/LARGE_AUDIO_RESULTS.json),
+with a [workload screenshot](../screenshots/large-audio-files-native.png).
+This is evidence for a bounded QEMU workload, not arbitrary-media compatibility,
+real-hardware timing, streaming, MP4/H.264 or Internet video support.
