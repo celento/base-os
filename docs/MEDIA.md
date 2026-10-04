@@ -103,3 +103,29 @@ imports it into the guest filesystem and captures actual SB16 output. It checks
 playback completion, no underruns, x87 environment preservation, and agreement
 with a separately decoded host PCM reference. Normal MPEG-1 stereo 44.1 kHz,
 MPEG-2 stereo 22.05 kHz, and MPEG-2.5 mono 8 kHz fixtures have been verified.
+
+## Media Player client
+
+`src/player.c` is a singleton client-area app. The desktop owns its window and
+calls `player_init`, `player_draw`, `player_click`, `player_key`, and
+`player_tick`. `player_open_file(id)` opens and plays a filesystem item directly;
+`player_refresh()` updates its alphabetical WAV/MP3 library. The library skips
+Trash descendants, preserves selection across refreshes, checks file identity
+before opening a previously selected slot, and shows the actual decoder input
+limit. It can accept larger filesystem files later without a new player API.
+
+Controls include Play/Pause, Stop, Clear error, Refresh, a clickable volume
+slider, elapsed/total time and progress. Arrow keys move through the library;
+Enter opens the selected file; Space toggles playback; `+`/`-` change volume;
+`R` refreshes and `S` stops. A single list click selects a track. The source
+name remains visible if its file is moved or changed during playback because
+the audio engine owns a separate input copy.
+
+The caller must keep servicing `audio_poll()` even if the player window is
+minimized or closed. `player_tick()` only reports visual changes. Suggested
+outer size is `PLAYER_W` × `PLAYER_H` (560×504), with a minimum 420×414.
+
+`python3 tools/player_test.py build` exercises real QEMU playback, keyboard
+pause/resume, volume, playlist selection and stopping. It also captures the
+client inside the native BaseOS window chrome. `test_player.py` checks legal
+input workflows and rendering bounds under ASan/UBSan.
