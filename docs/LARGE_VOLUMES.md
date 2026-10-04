@@ -98,8 +98,9 @@ uncertain commit outcomes protect the disk until remount.
 The default file pool stays at `0x2000000..0x2800000` and default staging at
 `0x2800000..0x3000000`. The selected large pool is
 `0x3F00000..0x5F00000`, with staging at `0x5F00000..0x7F00000`.
-All kernel, stack, app, native-task, editor and media addresses stay unchanged.
-The large pool and staging each reserve 32 MiB. They are runtime addresses,
+This storage-only change preserves every preexisting kernel, stack, app,
+native-task, editor and media arena constant. The large pool and staging each
+reserve 32 MiB. They are runtime addresses,
 not large kernel BSS arrays.
 
 Before reading or writing either high arena, the kernel calls
@@ -137,8 +138,11 @@ before `fs_init()` or mount reconfiguration. `fs_init()` always seeds default
 low storage. Mounted-large normal reads/writes/save and marker reads do not
 borrow the old arenas; the marker uses a bounded kernel-stack buffer. Protected
 fallback is conservative, even when migration happened to keep high staging.
-This storage change does not raise audio, video, download, editor or native
-program-image limits; each remains independently bounded.
+This storage-only change does not raise audio, video, download, editor or native
+program-image limits; each remains independently bounded. A separately
+integrated audio feature may select the vacated 32–48 MiB interval only under
+the active-and-verified profile contract above; its supported formats and
+runtime bounds are specified independently in [the media guide](MEDIA.md).
 
 ## Verification
 
