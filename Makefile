@@ -28,7 +28,7 @@ CFLAGS = -std=gnu11 -ffreestanding -Os -g -Wall -Wextra -m32 \
 ASFLAGS = -f elf
 LDFLAGS = -T $(OUT)/linker.ld -nostdlib -m elf_i386 -z noexecstack
 
-CSRC = audio.c media.c display.c decimal.c basic.c process.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c mines.c game2048.c breakout.c sysmon.c
+CSRC = net.c net_wire.c net_rtl8139.c audio.c media.c display.c decimal.c basic.c process.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c mines.c game2048.c breakout.c sysmon.c
 OBJS = $(OUT)/kernel_entry.o $(OUT)/interrupts.o $(OUT)/process_entry.o $(addprefix $(OUT)/,$(CSRC:.c=.o))
 HDRS = $(wildcard $(SRC)/*.h) $(wildcard assets/*.h)
 IMG = $(OUT)/baseos.img
@@ -77,12 +77,12 @@ $(IMG): $(OUT)/boot.bin $(OUT)/kernel.bin tools/update_image.py tools/layout.py 
 	$(PYTHON) tools/update_image.py $@ $(OUT)/boot.bin $(OUT)/kernel.bin
 
 run: $(IMG)
-	qemu-system-i386 -m 32M -vga std \
+	qemu-system-i386 -m 32M -vga std -nic user,model=rtl8139 \
 		-drive file=$(IMG),format=raw,index=0,if=floppy \
 		-serial file:$(OUT)/serial.out -no-reboot -display $(QEMU_DISPLAY)
 
 headless: $(IMG)
-	qemu-system-i386 -m 32M -vga std \
+	qemu-system-i386 -m 32M -vga std -nic user,model=rtl8139 \
 		-drive file=$(IMG),format=raw,index=0,if=floppy \
 		-serial stdio -display none -no-reboot
 
