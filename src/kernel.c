@@ -18,6 +18,7 @@
 #include "example_docs.h"
 #include "example_sheet.h"
 #include "file_clipboard.h"
+#include "file_view.h"
 #include "video.h"
 #include "image_viewer.h"
 #include "audio_example.h"
@@ -1518,6 +1519,9 @@ typedef struct {
     int ids[FS_MAX_NODES];
     unsigned ids_identity[FS_MAX_NODES];
     int count;
+    int files_total;
+    FileViewOptions files_view;
+    int filter_open, filter_focus, filter_select_all;
     uint32_t last_click_frame;
     int last_click_item;
     Document doc, undo[8];
@@ -1537,6 +1541,11 @@ _Static_assert(sizeof(WindowState) * MAX_WIN < EDITOR_CAPACITY - 2 * EDIT_BUF_SI
 #define fm_ids (window_state[context_slot].ids)
 #define fm_ids_identity (window_state[context_slot].ids_identity)
 #define fm_count (window_state[context_slot].count)
+#define fm_total (window_state[context_slot].files_total)
+#define fm_view (window_state[context_slot].files_view)
+#define fm_filter_open (window_state[context_slot].filter_open)
+#define fm_filter_focus (window_state[context_slot].filter_focus)
+#define fm_filter_select_all (window_state[context_slot].filter_select_all)
 #define fm_last_click_frame (window_state[context_slot].last_click_frame)
 #define fm_last_click_item (window_state[context_slot].last_click_item)
 #define edit_search (window_state[context_slot].search)
@@ -1583,9 +1592,20 @@ static void fm_set_cwd(int id) {
     WindowState *state=&window_state[context_slot];
     if(!fs_is_dir(id))id=fs_root();
     unsigned identity=fs_identity(id);
-    if(state->cwd!=id||state->cwd_identity!=identity)state->manual_files_scroll=0;
+    if(state->cwd!=id||state->cwd_identity!=identity){
+        state->manual_files_scroll=state->first=state->count=state->files_total=0;
+        state->selected=0;
+        state->files_view.filter[0]=0;
+        state->filter_open=state->filter_focus=state->filter_select_all=0;
+        state->last_click_item=-1;
+    }
     state->cwd=state->cwd_tracked=id;
     state->cwd_identity=identity;
+}
+static int fm_cwd_valid(void) {
+    WindowState *state=&window_state[context_slot];
+    return fs_is_dir(state->cwd)&&state->cwd_tracked==state->cwd&&
+           state->cwd_identity==fs_identity(state->cwd);
 }
 static int fm_checked_cwd(void) {
     WindowState *state=&window_state[context_slot];
@@ -1718,11 +1738,14 @@ static int icon_last = -1;
 static int fm_dragging = 0;
 static int fm_drag_active = 0;
 static int fm_drag_id = -1;
+static unsigned fm_drag_identity;
+static int fm_drag_parent = -1;
 static int fm_drag_sx = 0;
 static int fm_drag_sy = 0;
 
 static int fm_renaming = 0;
 static int fm_rename_id = -1;
+static unsigned fm_rename_identity;
 static char fm_rename_buf[FS_NAME_LEN];
 static int fm_rename_len = 0;
 
@@ -2003,7 +2026,7 @@ static int menu_item_enabled(int m, int item) {
         if (open_dlg)
             return 0;
         if (front_kind() == WK_FILES) {
-            if (item == 2) return file_clipboard_can_paste(fm_cwd);
+            if (item == 2) return fm_cwd_valid()&&file_clipboard_can_paste(fm_cwd);
             int id=fm_row_id(fm_selected);
             return (item==0||item==1)&&id>=0&&id!=fs_root()&&!fs_is_app(id);
         }
@@ -2094,34 +2117,90 @@ static int fm_vis_count(void) {
 }
 
 static int fm_row_id(int row) {
+    if(!fm_cwd_valid())return -2;
     int up = fm_has_parent() ? 1 : 0;
     if (up && row == 0)
         return -1; /* synthetic ".." */
     int i = row - up;
-    if (i < 0 || i >= fm_count)
-        return -2;
+    if (i < 0 || i >= fm_count ||
+        !file_view_valid(fm_cwd,fm_ids[i],fm_ids_identity[i])) return -2;
     return fm_ids[i];
 }
 
 static void fm_refresh(void) {
+    /* A row position is not a selection identity. Preserve only the same live
+     * object; filtering, deletion or node-slot reuse clears the selection. */
+    int selected_id=fm_row_id(fm_selected);
+    unsigned selected_identity=selected_id>=0?fs_identity(selected_id):0;
+    int parent_selected=selected_id==-1;
     fm_checked_cwd();
-    int raw[FS_MAX_NODES];
-    int n = fs_list(fm_cwd, raw, FS_MAX_NODES);
-    fm_count = 0;
-    for (int i = 0; i < n; i++) {
-        /* Desktop Trash is the trash; hide /trash and /prefs at root. */
-        if (fm_cwd == fs_root() && trash_id >= 0 && raw[i] == trash_id)
-            continue;
-        if (fm_cwd == fs_root() && prefs_id >= 0 && raw[i] == prefs_id)
-            continue;
-        fm_ids_identity[fm_count] = fs_identity(raw[i]);
-        fm_ids[fm_count++] = raw[i];
+    fm_view.hidden[0]=fm_cwd==fs_root()?trash_id:-1;
+    fm_view.hidden[1]=fm_cwd==fs_root()?prefs_id:-1;
+    fm_count=file_view_build(fm_cwd,&fm_view,fm_ids,fm_ids_identity,FS_MAX_NODES,&fm_total);
+    int index=file_view_find(fm_ids,fm_ids_identity,fm_count,selected_id,selected_identity);
+    fm_selected=index>=0?index+(fm_has_parent()?1:0):parent_selected&&fm_has_parent()?0:-1;
+}
+
+/* The filter belongs to this folder; leaving the folder clears it. */
+static void fm_filter_show(void) {
+    fm_rename_cancel();
+    fm_filter_open=fm_filter_focus=1;
+    fm_filter_select_all=fm_view.filter[0]!=0;
+    fm_last_click_item=-1;
+    dirty=1;
+}
+
+static void fm_filter_clear(int close) {
+    fm_rename_cancel();
+    fm_view.filter[0]=0;
+    fm_filter_open=fm_filter_focus=!close;
+    fm_filter_select_all=0;
+    fm_manual_scroll=fm_first=0;
+    fm_last_click_item=-1;
+    fm_refresh();
+    dirty=1;
+}
+
+static void fm_sort_by(int sort) {
+    fm_rename_cancel();
+    fm_filter_focus=fm_filter_select_all=0;
+    if(fm_view.sort==sort)fm_view.descending=!fm_view.descending;
+    else {fm_view.sort=sort;fm_view.descending=sort==FILE_VIEW_MODIFIED;}
+    fm_manual_scroll=0;
+    if(fm_selected<0)fm_first=0;
+    fm_last_click_item=-1;
+    fm_refresh();
+    dirty=1;
+}
+
+static int fm_filter_key(void) {
+    if(!fm_filter_open)return 0;
+    if(key_sc==KEY_ESC){fm_filter_clear(1);return 1;}
+    if(!fm_filter_focus||key_sc==0x44)return 0;
+    if(key_sc==KEY_ENTER||key_sc==KEY_TAB){fm_filter_focus=fm_filter_select_all=0;dirty=1;return 1;}
+    if(ctrl_down){
+        if(key_sc==0x1e){fm_filter_select_all=1;dirty=1;return 1;}
+        /* File clipboard shortcuts must never act on a hidden input selection. */
+        if(key_sc==0x2d||key_sc==0x2e||key_sc==0x2f)return 1;
+        return 0;
     }
-    int vis = fm_vis_count();
-    if (fm_selected >= vis)
-        fm_selected = vis ? vis - 1 : 0;
-    if (fm_selected < 0)
-        fm_selected = 0;
+    if(alt_down)return 0;
+    int length=kstrlen(fm_view.filter),changed=0;
+    if(key_sc==KEY_BACKSPACE||key_sc==0x53){
+        if(fm_filter_select_all){fm_view.filter[0]=0;changed=1;}
+        else if(key_sc==KEY_BACKSPACE&&length){fm_view.filter[length-1]=0;changed=1;}
+        fm_filter_select_all=0;
+    }else if(key_char>=32&&key_char<=126){
+        if(fm_filter_select_all)length=0;
+        fm_filter_select_all=0;
+        if(length<FILE_VIEW_FILTER_LEN-1){fm_view.filter[length++]=key_char;fm_view.filter[length]=0;changed=1;}
+    }else if(key_sc==KEY_UP||key_sc==KEY_DOWN){
+        fm_filter_focus=fm_filter_select_all=0;dirty=1;
+        if(fm_selected<0&&fm_count){fm_selected=(key_sc==KEY_UP?fm_count-1:0)+(fm_has_parent()?1:0);return 1;}
+        return 0;
+    }else return 1;
+    if(changed){fm_manual_scroll=fm_first=0;fm_last_click_item=-1;fm_refresh();}
+    dirty=1;return 1;
 }
 
 static void edit_sel_collapse(void) {
@@ -4287,7 +4366,7 @@ static void fm_open_selected(void) {
         fm_go_up();
         return;
     }
-    if (id < 0) return;
+    if (id < 0) {fm_refresh();dirty=1;return;}
     int index=fm_selected-(fm_has_parent()?1:0);
     if(fs_identity(id)!=fm_ids_identity[index]){fm_refresh();dirty=1;return;}
     if (fs_is_dir(id)) {
@@ -4301,6 +4380,7 @@ static void fm_open_selected(void) {
 }
 
 static void fm_go_up(void) {
+    if(!fm_cwd_valid()){fm_refresh();dirty=1;return;}
     int p = fs_parent(fm_cwd);
     if (p >= 0) {
         fm_set_cwd(p);
@@ -4310,7 +4390,10 @@ static void fm_go_up(void) {
     }
 }
 
+static void fm_select_id(int id);
+
 static void fm_new_file(void) {
+    if(!fm_cwd_valid()){fm_refresh();dirty=1;return;}
     char name[FS_NAME_LEN];
     if (fs_unique_file(fm_cwd, name) < 0)
         return;
@@ -4318,20 +4401,22 @@ static void fm_new_file(void) {
     if (id < 0)
         return;
     fm_refresh();
-    for (int i = 0; i < fm_count; i++) {
-        if (fm_ids[i] == id)
-            fm_selected = i + (fm_has_parent() ? 1 : 0);
-    }
+    fm_select_id(id);
     dirty = 1;
 }
 
 static void od_refresh(void);
 
 static void fm_select_id(int id) {
-    for (int i = 0; i < fm_count; i++) {
-        if (fm_ids[i] == id)
-            fm_selected = i + (fm_has_parent() ? 1 : 0);
+    unsigned identity=fs_identity(id);
+    if(!fm_cwd_valid()||!file_view_valid(fm_cwd,id,identity))return;
+    /* Completed new/paste/rename actions reveal their exact result. */
+    if(!file_view_matches(fs_name(id),fm_view.filter)){
+        fm_view.filter[0]=0;fm_filter_select_all=0;fm_refresh();
     }
+    int index=file_view_find(fm_ids,fm_ids_identity,fm_count,id,identity);
+    fm_selected=index>=0?index+(fm_has_parent()?1:0):-1;
+    fm_manual_scroll=0;
 }
 
 static void fm_rename_cancel(void) {
@@ -4339,13 +4424,14 @@ static void fm_rename_cancel(void) {
         return;
     fm_renaming = 0;
     fm_rename_id = -1;
+    fm_rename_identity=0;
     fm_rename_len = 0;
     fm_rename_buf[0] = 0;
     dirty = 1;
 }
 
 static void fm_rename_begin(int id) {
-    if (id < 0 || !fs_valid(id))
+    if (id < 0 || fm_row_id(fm_selected)!=id)
         return;
     if (fm_renaming && fm_rename_id == id)
         return;
@@ -4358,6 +4444,8 @@ static void fm_rename_begin(int id) {
     fm_rename_buf[n] = 0;
     fm_rename_len = n;
     fm_rename_id = id;
+    fm_rename_identity=fs_identity(id);
+    fm_filter_focus=fm_filter_select_all=0;
     fm_renaming = 1;
     dirty = 1;
 }
@@ -4365,6 +4453,9 @@ static void fm_rename_begin(int id) {
 static void fm_rename_commit(void) {
     if (!fm_renaming)
         return;
+    if(!fm_cwd_valid()||!file_view_valid(fm_cwd,fm_rename_id,fm_rename_identity)){
+        fm_rename_cancel();fm_refresh();dirty=1;return;
+    }
     if (fm_rename_len <= 0) {
         dirty = 1;
         return;
@@ -4405,6 +4496,8 @@ static void do_duplicate(void) {
 
 static void files_clipboard_action(int item) {
     if(front_kind()!=WK_FILES||open_dlg||name_dlg)return;
+    if(!fm_cwd_valid()){fm_refresh();dirty=1;return;}
+    fm_filter_focus=fm_filter_select_all=0;
     fm_rename_cancel();
     int owner=context_slot;
     if(item==0||item==1){
@@ -4429,6 +4522,7 @@ static void do_new_folder(void) {
     /* Disk window only. untitled folder, then untitled folder 2. */
     if (front_kind() != WK_FILES || open_dlg)
         return;
+    if(!fm_cwd_valid()){fm_refresh();dirty=1;return;}
     fm_rename_cancel();
     char name[FS_NAME_LEN];
     if (fs_unique_dir(fm_cwd, name) < 0)
@@ -4561,7 +4655,22 @@ static void files_info(char *info, int max) {
         const char *message=file_clipboard_status();int i=0;
         while(i+1<max&&message[i]){info[i]=message[i];i++;}
         if(max>0)info[i]=0;
-    }else fs_path(fm_cwd, info, max);
+    }else {
+        char number[12];int n=0;
+        fmt_uint(number,(unsigned)fm_count);
+        while(number[n]&&n+1<max){info[n]=number[n];n++;}
+        info[n]=0;
+        const char *label=fm_view.filter[0]?" of ":fm_count==1?" item | ":" items | ";
+        for(int i=0;label[i]&&n+1<max;i++)info[n++]=label[i];
+        if(fm_view.filter[0]){
+            fmt_uint(number,(unsigned)fm_total);
+            for(int i=0;number[i]&&n+1<max;i++)info[n++]=number[i];
+            label=" shown | ";
+            for(int i=0;label[i]&&n+1<max;i++)info[n++]=label[i];
+        }
+        info[n]=0;
+        if(n+1<max)fs_path(fm_cwd,info+n,max-n);
+    }
 }
 
 static void draw_mini_folder(int x, int y, uint8_t fg, uint8_t bg) {
@@ -4662,7 +4771,8 @@ static void draw_mini_wordle(int x, int y, uint8_t fg, uint8_t bg) {
 }
 
 static void draw_file_row_named(int x, int y, int w, const char *name,
-                               int is_dir, int is_app, int sel, int dim, int cut) {
+                               int is_dir, int is_app, int sel, int dim, int cut,
+                               const char *detail, int detail_width) {
     uint8_t fg = dim ? ui_text_dim : (sel ? COLOR_WHITE : ui_text);
     uint8_t bg = sel ? ui_accent : COLOR_WHITE;
     if (dim) {
@@ -4692,7 +4802,11 @@ static void draw_file_row_named(int x, int y, int w, const char *name,
         draw_mini_doc(x + 6, icon_y, fg, bg);
     int ty = y + (ROW_H - CHAR_H) / 2;
     int end=x+w-12;
-    if(w>420){
+    if(detail&&detail_width){
+        if(cut)detail="Cut";
+        draw_string_clip(detail,x+w-detail_width,ty,sel?COLOR_WHITE:ui_text_dim,x+w-10);
+        end=x+w-detail_width-12;
+    }else if(w>420){
         const char *kind=cut?"Cut":is_dir?"Folder":(is_app?"Application":"Document");
         draw_string(kind,x+w-110,ty,sel?COLOR_WHITE:ui_text_dim);
         end=x+w-130;
@@ -4703,7 +4817,8 @@ static void draw_file_row_named(int x, int y, int w, const char *name,
     draw_string_clip(name, x + 28, ty, fg, end);
 }
 
-static void draw_file_row(int x, int y, int w, int id, int sel, int dim) {
+static void draw_file_row_detail(int x, int y, int w, int id, int sel, int dim,
+                                 const char *detail, int detail_width) {
     const char *nm = fs_name(id);
     int is_app = 0;
     if (fs_is_app(id) || kstrcmp(nm, "Calculator") == 0) {
@@ -4724,10 +4839,11 @@ static void draw_file_row(int x, int y, int w, int id, int sel, int dim) {
     } else if (is_image_file(id)) {
         is_app = 4;
     }
-    int renaming = fm_renaming && id == fm_rename_id;
+    int renaming = fm_renaming && id == fm_rename_id && fs_identity(id)==fm_rename_identity;
     draw_file_row_named(x, y, w, renaming ? "" : fs_name(id),
                         fs_is_dir(id), is_app, sel, dim,
-                        file_clipboard_mode()==FILE_CLIPBOARD_CUT&&file_clipboard_source()==id);
+                        file_clipboard_mode()==FILE_CLIPBOARD_CUT&&file_clipboard_source()==id&&
+                        file_clipboard_identity()==fs_identity(id),detail,detail_width);
     if (!renaming)
         return;
     int fx = x + 26;
@@ -4737,8 +4853,9 @@ static void draw_file_row(int x, int y, int w, int id, int sel, int dim) {
     if (tw < 80)
         tw = 80;
     int fw = tw;
-    if (fx + fw > x + w - 4)
-        fw = x + w - 4 - fx;
+    int end=x+w-(detail_width?detail_width+12:4);
+    if (fx + fw > end)
+        fw = end - fx;
     if (fw < 24)
         fw = 24;
     /* White field, black type, 1px inset. */
@@ -4757,17 +4874,82 @@ static void draw_file_row(int x, int y, int w, int id, int sel, int dim) {
     }
 }
 
-static int files_list_y(int wy) {
-    return wy + TITLE_H + INFO_H + 34;
+static void draw_file_row(int x, int y, int w, int id, int sel, int dim) {
+    draw_file_row_detail(x,y,w,id,sel,dim,0,0);
 }
+
+static const int files_sort_width[FILE_VIEW_SORT_COUNT]={60,58,52,82};
+static const char *files_sort_name[FILE_VIEW_SORT_COUNT]={"Name","Type","Size","Modified"};
+
+static int files_filter_y(int wy) {return wy+TITLE_H+INFO_H+34;}
+static int files_list_y(int wy) {return files_filter_y(wy)+(fm_filter_open?34:0);}
+static int files_rows(int wy,int wh) {return (wy+wh-4-SB-files_list_y(wy))/ROW_H;}
 
 static void files_scroll(int rows){
     if(rows<1)rows=1;
-    if(fm_manual_scroll){int max=fm_vis_count()-rows;if(max<0)max=0;if(fm_first>max)fm_first=max;if(fm_first<0)fm_first=0;return;}
-    if(fm_selected<fm_first)fm_first=fm_selected;
-    if(fm_selected>=fm_first+rows)fm_first=fm_selected-rows+1;
+    if(!fm_manual_scroll&&fm_selected>=0){
+        if(fm_selected<fm_first)fm_first=fm_selected;
+        if(fm_selected>=fm_first+rows)fm_first=fm_selected-rows+1;
+    }
+    int max=fm_vis_count()-rows;if(max<0)max=0;
+    if(fm_first>max)fm_first=max;
     if(fm_first<0)fm_first=0;
 }
+
+static void files_modified_label(int id,char *out,int with_time) {
+    unsigned stamp=fs_modified(id);
+    if(!stamp){kstrcpy(out,"Unknown");return;}
+    unsigned days=stamp/86400,year=2000,month=1;
+    int md[]={31,28,31,30,31,30,31,31,30,31,30,31};
+    for(;;){unsigned yd=(year%4==0&&(year%100!=0||year%400==0))?366:365;
+        if(days<yd)break;
+        days-=yd;year++;}
+    md[1]=(year%4==0&&(year%100!=0||year%400==0))?29:28;
+    while(month<12&&days>=(unsigned)md[month-1])days-=md[month++-1];
+    fmt_uint(out,year);int n=kstrlen(out);out[n++]='-';fmt_pad2(out+n,month);n+=2;
+    out[n++]='-';fmt_pad2(out+n,days+1);n+=2;out[n]=0;
+    if(with_time){out[n++]=' ';fmt_pad2(out+n,stamp/3600%24);n+=2;
+        out[n++]=':';fmt_pad2(out+n,stamp/60%60);n+=2;out[n]=0;}
+}
+
+static int files_detail_width(int width) {
+    if(fm_view.sort==FILE_VIEW_MODIFIED)return width>=560?154:106;
+    if(fm_view.sort==FILE_VIEW_SIZE)return 110;
+    return width>420?110:0;
+}
+
+static void draw_files_controls(int wx,int wy,int ww,int inactive) {
+    int x=wx+8,y=wy+TITLE_H+INFO_H+3;
+    for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++){
+        int width=files_sort_width[sort],active=fm_view.sort==sort;
+        if(active)draw_round_rect(x,y,width,26,5,ui_chrome);
+        draw_string(files_sort_name[sort],x+6,y+4,active?ui_text:ui_text_dim);
+        if(active){int ax=x+width-12,ay=y+10;
+            for(int n=0;n<4;n++)draw_hline(ax-n,ay+(fm_view.descending?3-n:n),2*n+1,ui_text);}
+        x+=width+3;
+    }
+    int end=wx+ww-SB-8;
+    draw_button_styled(end-62,y,62,26,"Filter",fm_filter_open);
+    if(!fm_filter_open)return;
+    y=files_filter_y(wy);
+    int field_x=wx+8,field_w=end-field_x-120;
+    draw_round_rect(field_x,y,field_w,28,4,COLOR_WHITE);
+    draw_round_frame(field_x,y,field_w,28,4,fm_filter_focus&&!inactive?ui_accent:ui_chrome_dk);
+    int text_x=field_x+7,limit=field_x+field_w-7;
+    const char *text=fm_view.filter;
+    while(*text&&ui_string_w(text)>field_w-16)text++;
+    if(fm_filter_select_all&&fm_filter_focus&&!inactive&&text[0])
+        draw_rect(text_x,y+4,ui_string_w(text),CHAR_H,ui_accent);
+    draw_string_clip(text[0]?text:"Name contains...",text_x,y+5,
+        text[0]?(fm_filter_select_all&&fm_filter_focus&&!inactive?COLOR_WHITE:ui_text):ui_text_dim,limit);
+    if(fm_filter_focus&&!inactive&&!fm_filter_select_all&&(frame_count/35)%2==0){
+        int caret=text_x+ui_string_w(text);
+        if(caret<limit)draw_rect(caret,y+5,1,CHAR_H,ui_text);
+    }
+    draw_button(end-114,y,54,28,"Clear");
+    draw_button(end-56,y,56,28,"Close");
+}
+
 static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
     char title[24];
     char info[FS_PATH_LEN];
@@ -4775,28 +4957,29 @@ static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
     files_info(info, FS_PATH_LEN);
     gui_draw_window(wx, wy, ww, wh, title, info,
                     WIN_INFO | WIN_SCROLL | (inactive ? WIN_INACTIVE : 0));
-
-    int head_y=wy+TITLE_H+INFO_H+6;
-    draw_string("Name",wx+36,head_y,ui_text_dim);
-    if(ww-16-SB>420)draw_string("Type",wx+ww-SB-118,head_y,ui_text_dim);
-    draw_hline(wx+12,head_y+CHAR_H+5,ww-SB-24,ui_chrome_dk);
-    int list_y = files_list_y(wy);
-    int list_b = wy + wh - 4 - SB;
-    int rows = (list_b - list_y) / ROW_H;
-    int lw = ww - 16 - SB;
-    int vis = fm_vis_count();
-    int up = fm_has_parent() ? 1 : 0;
-    if (vis == 0) {
-        draw_string("This folder is empty", wx + 20, list_y + 12, ui_text_dim);
-        return;
-    }
+    draw_files_controls(wx,wy,ww,inactive);
+    int list_y=files_list_y(wy),rows=files_rows(wy,wh);
+    int lw=ww-16-SB,vis=fm_vis_count(),up=fm_has_parent()?1:0;
     files_scroll(rows);
-    for (int i = fm_first; i < vis && i < fm_first+rows; i++) {
-        int iy = list_y + (i-fm_first) * ROW_H;
-        if (up && i == 0)
-            draw_file_row_named(wx + 8, iy, lw, "..", 1, 0, i == fm_selected, 0, 0);
-        else
-            draw_file_row(wx + 8, iy, lw, fm_ids[i - up], i == fm_selected, 0);
+    for(int i=fm_first;i<vis&&i<fm_first+rows;i++){
+        int iy=list_y+(i-fm_first)*ROW_H;
+        if(up&&i==0)
+            draw_file_row_named(wx+8,iy,lw,"..",1,0,i==fm_selected,0,0,0,0);
+        else {
+            int id=fm_ids[i-up],detail_width=files_detail_width(lw);
+            char detail[32];
+            if(fm_view.sort==FILE_VIEW_MODIFIED)files_modified_label(id,detail,lw>=560);
+            else if(fm_view.sort==FILE_VIEW_SIZE){
+                if(fs_is_dir(id)||fs_is_app(id))kstrcpy(detail,file_view_type(id));
+                else {fmt_uint(detail,(unsigned)fs_size(id));kstrcpy(detail+kstrlen(detail)," B");}
+            }else kstrcpy(detail,file_view_type(id));
+            draw_file_row_detail(wx+8,iy,lw,id,i==fm_selected,0,detail,detail_width);
+        }
+    }
+    if(!fm_count){
+        int y=list_y+up*ROW_H+4;
+        if(y+CHAR_H<=wy+wh-SB-4)
+            draw_string_clip(fm_view.filter[0]?"No matching names":"This folder is empty",wx+20,y,ui_text_dim,wx+ww-SB-10);
     }
 }
 
@@ -4817,8 +5000,10 @@ static void draw_rename_overlay(void) {
     if (tw < 96)
         tw = 96;
     fw = tw;
-    if (fx + fw > wx + ww - 8 - SB)
-        fw = wx + ww - 8 - SB - fx;
+    int detail=files_detail_width(ww-16-SB);
+    int end=wx+ww-8-SB-(detail?detail+12:4);
+    if (fx + fw > end)
+        fw = end - fx;
     if (fw < 24)
         fw = 24;
     draw_rect(fx, fy, fw, fh, COLOR_WHITE);
@@ -5437,7 +5622,7 @@ static int fm_name_hit(int wx, int iy, int id) {
     int ny = iy;
     int nh = ROW_H;
     int nw;
-    if (fm_renaming && fm_rename_id == id) {
+    if (fm_renaming && fm_rename_id == id && fs_identity(id)==fm_rename_identity) {
         nw = ui_string_w(fm_rename_buf) + 24;
         if (nw < 100)
             nw = 100;
@@ -5459,7 +5644,7 @@ static int click_on_rename_field(void) {
     up = fm_has_parent() ? 1 : 0;
     row = -1;
     for (i = 0; i < fm_count; i++) {
-        if (fm_ids[i] == fm_rename_id) {
+        if (fm_ids[i] == fm_rename_id && fm_ids_identity[i]==fm_rename_identity) {
             row = i + up;
             break;
         }
@@ -5471,6 +5656,21 @@ static int click_on_rename_field(void) {
 }
 
 static void handle_files_click(int wx, int wy, int ww, int wh) {
+    int x=wx+8,y=wy+TITLE_H+INFO_H+3,end=wx+ww-SB-8;
+    for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++){
+        if(hit(mouse_x,mouse_y,x,y,files_sort_width[sort],26)){fm_sort_by(sort);return;}
+        x+=files_sort_width[sort]+3;
+    }
+    if(hit(mouse_x,mouse_y,end-62,y,62,26)){fm_filter_show();return;}
+    if(fm_filter_open){
+        y=files_filter_y(wy);
+        if(hit(mouse_x,mouse_y,end-114,y,54,28)){fm_filter_clear(0);return;}
+        if(hit(mouse_x,mouse_y,end-56,y,56,28)){fm_filter_clear(1);return;}
+        if(hit(mouse_x,mouse_y,wx+8,y,end-wx-128,28)){
+            fm_rename_cancel();fm_filter_focus=1;fm_filter_select_all=fm_view.filter[0]!=0;dirty=1;return;
+        }
+    }
+    fm_filter_focus=fm_filter_select_all=0;
     int list_y = files_list_y(wy);
     int list_b = wy + wh - 4 - SB;
     int rows = (list_b - list_y) / ROW_H;
@@ -5482,6 +5682,7 @@ static void handle_files_click(int wx, int wy, int ww, int wh) {
         int iy = list_y + (i-fm_first) * ROW_H;
         if (hit(mouse_x, mouse_y, wx + 8, iy, lw, ROW_H)) {
             int id = fm_row_id(i);
+            if(id < -1){fm_refresh();dirty=1;return;}
             int already = (i == fm_selected);
             int dbl = double_click(i, &fm_last_click_item, &fm_last_click_frame);
             int fast = dbl;
@@ -5525,7 +5726,9 @@ static void handle_files_click(int wx, int wy, int ww, int wh) {
             fm_selected = i;
             fm_dragging = 1;
             fm_drag_active = 0;
-            fm_drag_id = fm_ids[i - up];
+            fm_drag_id = id;
+            fm_drag_identity=fs_identity(id);
+            fm_drag_parent=fm_cwd;
             fm_drag_sx = mouse_x;
             fm_drag_sy = mouse_y;
             return;
@@ -5540,7 +5743,7 @@ static void files_drop(void) {
     fm_dragging = 0;
     fm_drag_active = 0;
     fm_drag_id = -1;
-    if (!active || !fs_valid(id))
+    if (!active || !file_view_valid(fm_drag_parent,id,fm_drag_identity))
         return;
     if (id == trash_id)
         return;
@@ -5567,7 +5770,7 @@ static void files_drop(void) {
 }
 
 static void draw_drag_ghost(void) {
-    if (!fm_drag_active || !fs_valid(fm_drag_id))
+    if (!fm_drag_active || !file_view_valid(fm_drag_parent,fm_drag_id,fm_drag_identity))
         return;
     int w = 18, h = 18;
     int x = mouse_x + 12;
@@ -6478,7 +6681,7 @@ static void handle_wheel(int amount) {
         int cols=aw/EDIT_CHAR_W;if(cols<1)cols=1;edit_caret=edit_len;edit_caret_cell(cols,&row,&col);edit_caret=old;
         int max=row+1-ah/EDIT_LINE_H;if(max<0)max=0;
         edit_scroll+=amount*3;if(edit_scroll<0)edit_scroll=0;if(edit_scroll>max)edit_scroll=max;edit_manual_scroll=1;
-    }else if(w->kind==WK_FILES){fm_first+=amount*3;fm_manual_scroll=1;files_scroll((w->h-TITLE_H-INFO_H-40)/ROW_H);}
+    }else if(w->kind==WK_FILES){fm_first+=amount*3;fm_manual_scroll=1;files_scroll(files_rows(w->y,w->h));}
     context_set(original);dirty=1;
 }
 
@@ -6494,6 +6697,11 @@ static void handle_key(void) {
     context_set(win_front());
     if(front_kind()==WK_EDIT)edit_manual_scroll=0;
     if(front_kind()==WK_FILES)fm_manual_scroll=0;
+    if(front_kind()==WK_FILES&&!name_dlg&&!open_dlg&&!launcher_on&&open_menu<0){
+        if(ctrl_down&&key_sc==0x21){fm_filter_show();return;}
+        if(ctrl_down&&key_sc>=0x02&&key_sc<=0x05){fm_sort_by(key_sc-0x02);return;}
+        if(!fm_renaming&&fm_filter_key())return;
+    }
     if(front_kind()==WK_EDIT&&!name_dlg&&!open_dlg&&!launcher_on&&open_menu<0){
         if(ctrl_down&&(key_sc==0x21||key_sc==0x23)){edit_search_open(key_sc==0x23);return;}
         if(key_sc==0x3d){if(!edit_search.open)edit_search_open(0);edit_find_next(shift_down?-1:1);return;}
@@ -6659,11 +6867,11 @@ static void handle_key(void) {
         int vis = fm_vis_count();
         if (key_sc == KEY_UP) {
             if (vis)
-                fm_selected = (fm_selected - 1 + vis) % vis;
+                fm_selected = fm_selected<0?vis-1:(fm_selected - 1 + vis) % vis;
             dirty = 1;
         } else if (key_sc == KEY_DOWN) {
             if (vis)
-                fm_selected = (fm_selected + 1) % vis;
+                fm_selected = fm_selected<0?0:(fm_selected + 1) % vis;
             dirty = 1;
         } else if (key_sc == KEY_ENTER) {
             fm_open_selected();

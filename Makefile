@@ -29,7 +29,7 @@ CFLAGS = -std=gnu11 -ffreestanding -Os -g -Wall -Wextra -m32 \
 ASFLAGS = -f elf
 LDFLAGS = -T $(OUT)/linker.ld -nostdlib -m elf_i386 -z noexecstack
 
-CSRC = example_sheet.c sheet.c sheet_model.c sheet_codec.c file_clipboard.c example_docs.c writer.c writer_codec.c download.c video.c video_draw.c image_decode.c image_viewer.c text_search.c ata.c player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c mines.c game2048.c breakout.c sysmon.c
+CSRC = example_sheet.c sheet.c sheet_model.c sheet_codec.c file_clipboard.c file_view.c example_docs.c writer.c writer_codec.c download.c video.c video_draw.c image_decode.c image_viewer.c text_search.c ata.c player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c mines.c game2048.c breakout.c sysmon.c
 OBJS = $(OUT)/kernel_entry.o $(OUT)/interrupts.o $(OUT)/process_entry.o $(addprefix $(OUT)/,$(CSRC:.c=.o))
 HDRS = $(wildcard $(SRC)/*.h) $(wildcard assets/*.h)
 IMG = $(OUT)/baseos.img

@@ -12,6 +12,16 @@ Editor, Files, and Terminal support small windows. Other applications retain min
 
 Each Editor, Files, and Terminal window owns its document, folder selection, or terminal state. Opening these apps again creates another instance. File > New (Ctrl+N) creates another window of the active Editor, Files, or Terminal app. Other built-in apps remain single instances.
 
+### Files sorting and filtering
+
+Click Name, Type, Size or Modified to sort; click again to reverse. Ctrl+1 through
+Ctrl+4 do the same. Folders stay first and equal keys use stable name ordering.
+Ctrl+F opens a case-insensitive, 23-character in-folder name filter. Clear empties
+it; Close or Escape clears and exits. Enter/Tab returns to the list while keeping
+the filter. The parent row remains available, and the status shows matching/total
+counts. Selection follows the same file identity through reordering and clears
+when hidden/deleted. See [Files](docs/FILES.md) for controls and safety details.
+
 ## 3. Undo and redo
 
 Editor and Paint keep eight undo steps. Use Ctrl+Z to undo and Ctrl+Y or Ctrl+Shift+Z to redo. An editor step is an edit operation; a Paint step is a stroke, shape, fill, text edit, or clear. Editing after undo discards the redo branch. History is held in RAM and resets on restart.
