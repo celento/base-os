@@ -145,3 +145,12 @@ viewport and progress. See [VIDEO.md](VIDEO.md).
 pause/resume, volume, playlist selection and stopping. It also captures the
 client inside the native BaseOS window chrome. `test_player.py` checks legal
 input workflows and rendering bounds under ASan/UBSan.
+
+## Host scheduling load
+
+The normal desktop played the full original 18-second Harbor MP3 and nine-second
+MPEG soundtrack with sample-accurate captures and no underruns when run as one
+QEMU instance. A development stress run with several concurrent emulators
+triggered the explicit underrun stop. This is not a real-time guarantee: a host
+that cannot service the guest often enough may stop playback with an error.
+The driver does not hide the problem by replaying stale DMA data.

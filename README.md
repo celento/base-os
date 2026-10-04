@@ -12,7 +12,7 @@ BaseOS runs in QEMU with 64 MiB of RAM. The desktop is rendered entirely in soft
 - Edit documents up to 65,535 bytes with selection, clipboard, eight undo steps, and case-sensitive or insensitive find/replace. Draw with Paint's brushes, shapes, fill and text tools.
 - Store files up to 2 MiB on a separate 16 MiB data disk. Its dual snapshots hold about 8 MiB of file data; the filesystem has 64 total file, folder and application nodes. Existing boot-disk files migrate without changing the old snapshots.
 - Read HTTP pages in Browser, follow links, navigate history, and save complete HTML for offline reading. Download binary files in the background from Terminal while other apps keep running.
-- Play PCM WAV and MP3 through QEMU's SB16 device, with pause, resume, volume and a playlist. MPEG-1 video is supported with the limits documented in the media guide.
+- Play PCM WAV and MP3 through QEMU's SB16 device, with pause, resume, volume and a playlist. Play MPEG-1 program streams with synchronized MP2 audio; 48 kHz audio is resampled to 44.1 kHz for QEMU SB16. Exact bounds are in the media guides.
 - View JPEG, PNG, BMP, GIF's first frame and BaseOS images, with fit, actual size, zoom, pan and transparency. Images are bounded to 1,024 pixels per side and 786,432 pixels total.
 - Build small C applications with the included SDK. Use Terminal's `start` command for independent long-running protected tasks with keyboard input, timers and persistent documents.
 - Run shell scripts, Tiny BASIC and the legacy synchronous `exec` interface. Calculator, Todo, Clock, Calendar, System Monitor and the original games remain included.
@@ -20,7 +20,7 @@ BaseOS runs in QEMU with 64 MiB of RAM. The desktop is rendered entirely in soft
 
 BaseOS is an educational custom BIOS/i386 OS, not a Linux distribution or a POSIX environment. Built-ins cooperate inside the kernel; each native task has a protected 64 KiB region and a bounded execution slice. Browser is HTTP-only: no TLS/HTTPS, JavaScript, CSS layout, forms, authentication or embedded web images. There is one network request at a time. Real network tests use controlled QEMU host fixtures; public upstream DNS did not respond in the development environment, so unrestricted internet access is not claimed. UEFI and general-purpose virtual-memory processes are not implemented.
 
-Detailed guides: [Browser](docs/BROWSER.md), [networking](docs/NETWORK.md), [downloads](docs/DOWNLOADS.md), [native SDK](FEATURES.md#building-a-c-application), [image formats](docs/IMAGE_FORMATS.md), and the [technical reference](docs/TECHNICAL.md).
+Detailed guides: [Browser](docs/BROWSER.md), [networking](docs/NETWORK.md), [downloads](docs/DOWNLOADS.md), [native SDK](FEATURES.md#building-a-c-application), [image formats](docs/IMAGE_FORMATS.md), [audio](docs/MEDIA.md), [video](docs/VIDEO.md), and the [technical reference](docs/TECHNICAL.md).
 
 ## Screenshots
 
@@ -82,7 +82,7 @@ At the first boot with a newly marked data disk, BaseOS reads the existing flopp
 
 Normal rebuilds preserve the filesystem area and back up an existing image before changing it. `make clean` keeps both disk images and backups. Shut QEMU down before rebuilding its disk or using the host file exchange tool. Use **System → Shutdown** to flush pending saves before closing the emulator.
 
-Host and reference-media tests additionally need Clang, FFmpeg and Pillow (`python3-pil` on Debian). The normal build uses checked-in font data. Regenerating it with `python3 tools/gen_font.py` additionally requires Pillow.
+Host and reference-media tests additionally need Clang, FFmpeg and Pillow (`python3-pil` on Debian). The [original Harbor examples](assets/examples/) provide 18 seconds of music and a nine-second animation; release data disks include both. The normal build uses checked-in font data. Regenerating it with `python3 tools/gen_font.py` additionally requires Pillow.
 
 ## Start exploring
 
