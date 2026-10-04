@@ -29,6 +29,17 @@ void term_backspace(void);
 void term_enter(void);
 
 /* Desktop-owned task integration. Poll once per desktop turn, never in IRQs. */
+#define TERM_TASK_NAME_LEN 24
+typedef struct {
+    char name[TERM_TASK_NAME_LEN]; /* Copied basename, not a mutable filesystem pointer. */
+    int owner;                   /* Zero-based terminal/window slot. */
+    int state;                   /* PROCESS_TASK_READY or PROCESS_TASK_SLEEPING. */
+    unsigned started_ticks;      /* PIT time at the accepted start. */
+    unsigned elapsed_sec;        /* Wall-clock lifetime, including sleep. */
+    unsigned instance;           /* Changes on each accepted terminal task start. */
+} TermTaskInfo;
+/* Returns 1 for a live task, otherwise 0 and a cleared output. No selection change. */
+int term_task_info(int slot, TermTaskInfo *out);
 int term_task_poll(void);
 int term_task_running(int slot);
 int term_task_key(int slot, int key);

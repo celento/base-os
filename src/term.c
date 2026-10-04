@@ -4,12 +4,15 @@
 #include "layout.h"
 #include "net.h"
 #include "download.h"
+#include "platform.h"
 typedef struct {
     char lines[TERM_LINES][TERM_COLS+1], input[TERM_COLS+1];
     char history[16][TERM_COLS+1], draft[TERM_COLS+1];
     int head,count,len,cwd,hcount,hpos,canvas_on,scroll,rows,view_count;
     unsigned cwd_identity;
     int task_dirty;
+    char task_name[TERM_TASK_NAME_LEN];
+    unsigned task_started, task_instance;
     unsigned char canvas[160*100];
 } Terminal;
 #ifndef TERM_MEMORY
@@ -17,6 +20,8 @@ typedef struct {
 #endif
 static Terminal *terms=(Terminal *)TERM_MEMORY;
 static int selected;
+static unsigned next_task_instance;
+_Static_assert(TERM_TASK_NAME_LEN >= FS_NAME_LEN,"task filename buffer too small");
 _Static_assert(sizeof(Terminal)*8<=0xC0000,"terminal arena overflow");
 #define T (terms[selected])
 void term_select(int slot){if(slot>=0&&slot<8)selected=slot;}
@@ -139,12 +144,30 @@ int term_task_running(int slot){
     int state=process_task_status(slot);
     return state==PROCESS_TASK_READY||state==PROCESS_TASK_SLEEPING;
 }
+int term_task_info(int slot,TermTaskInfo *out){
+    if(!out)return 0;
+    kmemset(out,0,sizeof *out);
+    if(slot<0||slot>=PROCESS_TASKS)return 0;
+    int state=process_task_status(slot);
+    if(state!=PROCESS_TASK_READY&&state!=PROCESS_TASK_SLEEPING)return 0;
+    const Terminal *t=&terms[slot];
+    kstrcpy(out->name,t->task_name[0]?t->task_name:"Native task");
+    out->owner=slot;out->state=state;
+    out->started_ticks=t->task_started;out->instance=t->task_instance;
+    out->elapsed_sec=t->task_instance?(unsigned)(timer_ticks()-t->task_started)/TIMER_HZ:0;
+    return 1;
+}
+static void task_metadata_clear(int slot){
+    if(slot<0||slot>=PROCESS_TASKS)return;
+    kmemset(terms[slot].task_name,0,sizeof terms[slot].task_name);
+    terms[slot].task_started=terms[slot].task_instance=0;
+}
 int term_task_key(int slot,int key){return process_task_key(slot,key);}
-void term_task_close(int slot){process_task_clear(slot);}
+void term_task_close(int slot){process_task_clear(slot);task_metadata_clear(slot);}
 void term_task_stop(int slot){
     if(!term_task_running(slot))return;
     int previous=selected;term_select(slot);process_task_stop(slot);
-    push("Native task stopped.");process_task_clear(slot);selected=previous;
+    push("Native task stopped.");term_task_close(slot);selected=previous;
 }
 int term_task_poll(void){
     static unsigned next;
@@ -160,7 +183,7 @@ int term_task_poll(void){
             if(!result)push("Native task finished.");
             else if(result==PROCESS_TASK_STOPPED)push("Native task stopped.");
             else push("Native task ended with an error or fault.");
-            process_task_clear(slot);
+            term_task_close(slot);
         }
         changed=T.task_dirty;
         break;
@@ -229,6 +252,9 @@ static int execute(const char *s,int depth,int *budget){
         if(process_task_start(selected,fs_data(id),fs_size(id),&io)){
             push("Cannot start: this terminal is busy or the BEX1 file is invalid.");return -1;
         }
+        kstrcpy(T.task_name,fs_name(id));T.task_started=timer_ticks();
+        if(!++next_task_instance)++next_task_instance;
+        T.task_instance=next_task_instance;
         kmemset(T.canvas,0,sizeof T.canvas);T.canvas_on=0;
         push("Native task started. Ctrl+C stops; close ends it.");
     }
