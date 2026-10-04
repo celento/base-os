@@ -21,6 +21,10 @@ int browser_tick(void);
 int browser_open(const char *url);
 int browser_open_file(int fs_id);
 void browser_close(void);
+/* Save original completed page bytes to a new local path. Never overwrites.
+ * Return the new file ID or -1; browser_status describes the result. */
+int browser_save_page(int cwd, const char *path);
+int browser_can_save(void);
 const char *browser_title(void);
 const char *browser_url(void);
 const char *browser_status(void);

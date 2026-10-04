@@ -6,7 +6,8 @@
  * wrappers return immediately; call net_poll() from the desktop loop. */
 #define NET_URL_MAX 256
 #define NET_HOST_MAX 128
-#define NET_HTTP_BODY_MAX 32768
+#define NET_HTTP_BODY_MAX 32768 /* Browser presentation buffer; keep bounded. */
+#define NET_HTTP_TRANSFER_MAX 2097153 /* 2 MiB file plus convenience NUL. */
 
 enum { NET_HTTP_IDLE, NET_HTTP_RESOLVING, NET_HTTP_CONNECTING,
        NET_HTTP_RECEIVING, NET_HTTP_DONE, NET_HTTP_ERROR };

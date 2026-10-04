@@ -19,8 +19,11 @@ or private information over its unencrypted HTTP client.
 
 Terminal commands are `net`, `ping HOST`, `nslookup HOST`, and
 `fetch http://host[:port]/path`. Fetch prints at most 4,095 body bytes and does
-not save a file. `man COMMAND` describes each operation. The Terminal remains
-inside the cooperative command handler while a bounded request is in progress.
+not save a file. `download HTTP_URL PATH` starts a background file transfer;
+`downloads` reports progress and `cancel` stops only that transfer. See
+[DOWNLOADS.md](DOWNLOADS.md). `man COMMAND` describes each operation. Ping,
+nslookup and fetch remain inside the cooperative command handler while a
+bounded request is in progress; download returns immediately.
 
 ## Implemented path
 
@@ -43,7 +46,9 @@ There is no cryptographic source authentication or DNSSEC.
 HTTP accepts `http://host[:port]/path` and handles Content-Length,
 chunked transfer encoding, and close-delimited responses. Header storage is
 4,096 bytes; hostnames are at most 127 characters; the path is at most 255
-characters; response buffers are at most 32,768 bytes including their NUL.
+characters; Browser response buffers remain 32,768 bytes including their NUL. Separate
+caller-owned transfer buffers may be up to 2,097,153 bytes including their NUL,
+permitting an exact 2 MiB binary file download.
 The result explicitly reports truncation. Chunk trailers are limited to 2 KB.
 Compressed content and interim responses are rejected. Redirect status and
 Location are exposed to the caller, rather than silently followed by the stack.
@@ -62,7 +67,9 @@ per desktop loop. The network arena occupies `NET_BASE` / `NET_CAPACITY`; DMA
 buffers and protocol state fit within 64 KB. HTTP callers own their body buffer
 until completion or cancellation.
 
-`net_http_start(url, body, capacity)` returns zero when accepted, minus one when
+`net_http_start(url, body, capacity)` accepts 2..`NET_HTTP_TRANSFER_MAX`
+(2,097,153) bytes; the smaller `NET_HTTP_BODY_MAX` (32,768) remains Browser
+presentation policy. It returns zero when accepted, minus one when
 busy or invalid. Check `net_busy()` before starting: only one DNS, ping, or HTTP
 operation can run at once. A busy rejection preserves the active result.
 `net_http_result()` exposes state, status, body length, content type, Location,

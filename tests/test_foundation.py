@@ -102,7 +102,7 @@ class NativeTests(unittest.TestCase):
     def test_text_search(self): self.run_native("text_search_host")
     def test_decimal(self): self.run_native("decimal_host")
     def test_graphics(self): self.run_native("gfx_host")
-    def test_features(self): self.run_native("features_host", [ROOT / 'tests/net_stub.c'])
+    def test_features(self): self.run_native("features_host", [ROOT / 'tests/net_stub.c', ROOT / 'src/download.c', '-DDOWNLOAD_HOST_TEST'])
     def test_floppy(self): self.run_native("persist_host")
     def test_bootinfo(self): self.run_native("bootinfo_host")
     def test_filesystem(self): self.run_native('fs_host')

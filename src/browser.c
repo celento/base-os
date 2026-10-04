@@ -44,7 +44,7 @@ typedef struct {
     unsigned text_len, body_len, request_id, received;
     int link_count, anchor_count, line_count, history_count, history_pos;
     int scroll, rows, width, focus, cursor, selected, address_start, focused_link;
-    int loading, request_state, redirects, truncated, html;
+    int loading, request_state, redirects, truncated, html, body_complete;
 } BrowserState;
 
 #ifdef BROWSER_HOST_TEST
@@ -70,7 +70,9 @@ static const char home_html[] =
     "<p>Ctrl+L focuses the address. Ctrl+R or F5 reloads. Escape stops loading.</p>"
     "<h2>Know the limits</h2><p>HTTP is unencrypted. HTTPS / TLS is not supported. "
     "Do not enter passwords or private information. CSS, JavaScript, forms, "
-    "images and downloads are not supported. Pages are limited to 32 KB.</p>"
+    "images are not supported. Pages are limited to 32 KB.</p>"
+    "<p>Save or Ctrl+S keeps the complete original page in /Downloads. "
+    "Terminal download can save HTTP files up to 2 MiB in the background.</p>"
     "<p>Local HTML and text files can be opened with file:///path.</p>";
 
 static void zero(void *p, unsigned n) { unsigned char *d=p; while(n--) *d++=0; }
@@ -366,7 +368,7 @@ static void stop_request(void) {
     B.loading=0;
 }
 static void error_document(const char *title,const char *message) {
-    document_reset();copy(B.title,sizeof B.title,title);emit_string(title,STYLE_BOLD,0);newline(1);emit_string(message,0,0);
+    B.body_complete=0;document_reset();copy(B.title,sizeof B.title,title);emit_string(title,STYLE_BOLD,0);newline(1);emit_string(message,0,0);
     newline(1);emit_string("Use Back to return, or enter another address.",0,0);set_status(message);
 }
 static int open_internal(const char *input,int add_history);
@@ -392,11 +394,11 @@ static int local_open(void) {
     for(int i=0;path[i];i++)if(path[i]=='#'||path[i]=='?'){path[i]=0;break;}
     int id=fs_resolve(fs_root(),path);
     if(id<0||fs_is_dir(id)||fs_is_app(id)){error_document("File not found","Open an existing local HTML or text file.");return 1;}
-    int n=fs_read(id,B.body,sizeof B.body-1);
+    int n=fs_read(id,B.body,sizeof B.body);
     if(n<0){error_document("File could not be read","The local file could not be read.");return 1;}
-    B.body[n]=0;B.body_len=(unsigned)n;
+    B.body[n]=0;B.body_len=(unsigned)n;B.body_complete=fs_size(id)==n;
     int plen=len(path);B.html=(plen>=5&&starts(path+plen-5,".html"))||(plen>=4&&starts(path+plen-4,".htm"));
-    parse_document(B.body,B.body_len,B.html);set_status("Local file | HTTP only browser");jump_fragment(B.url);return 1;
+    parse_document(B.body,B.body_len,B.html);set_status(B.body_complete?"Local file | HTTP only browser":"Local file | Page truncated; cannot save an incomplete copy");jump_fragment(B.url);return 1;
 }
 static int open_internal(const char *input,int add_history) {
     char url[NET_URL_MAX];
@@ -412,7 +414,7 @@ static int open_internal(const char *input,int add_history) {
         if(!jump_fragment(url))set_status("This page does not contain that named anchor.");
         return 1;
     }
-    stop_request();if(add_history)history_add(url);
+    stop_request();B.body_complete=0;if(add_history)history_add(url);
     copy(B.url,sizeof B.url,url);address_set(url);B.focus=0;B.redirects=0;
     if(equal(url,"about:home")){B.html=1;parse_document(home_html,sizeof home_html-1,1);set_status("Ready | HTTP is unencrypted | No HTTPS / TLS");return 1;}
     if(starts(url,"https:")){error_document("HTTPS is not supported","This browser supports unencrypted HTTP only. TLS / HTTPS is not available.");return 1;}
@@ -433,6 +435,33 @@ const char *browser_title(void){browser_init();return B.title;}
 const char *browser_url(void){browser_init();return B.url;}
 const char *browser_status(void){browser_init();return B.status;}
 int browser_loading(void){return browser_ready&&B.loading;}
+
+int browser_can_save(void){return browser_ready&&!B.loading&&B.body_complete;}
+int browser_save_page(int cwd,const char *path){
+    browser_init();
+    if(!browser_can_save()){set_status("Only a completely loaded HTML or text page can be saved. Reload first.");return -1;}
+    char name[FS_NAME_LEN];int parent=fs_destination(cwd,path,name);
+    if(parent<0){set_status("Choose a new file name in an existing folder.");return -1;}
+    if(fs_find_child(parent,name)>=0){set_status("That file already exists. Choose another name; nothing was replaced.");return -1;}
+    if(B.body_len>fs_file_limit()||B.body_len>fs_capacity()-fs_used_bytes()){set_status("Not enough space for the complete page. No file was saved.");return -1;}
+    int id=fs_create(parent,name);if(id<0){set_status("Could not create the file. Check available file slots.");return -1;}
+    if(fs_write(id,B.body,(int)B.body_len)!=(int)B.body_len){fs_delete(id);set_status("Could not save the complete page. No destination file was left.");return -1;}
+    set_status("Saved original page: ");append(B.status,sizeof B.status,path);
+    append(B.status,sizeof B.status,fs_storage_status()?" | RAM only; disk unavailable":" | Disk autosave pending");return id;
+}
+static int save_page(void){
+    if(!browser_can_save()){set_status("Wait for a complete page before saving. Truncated pages cannot be saved.");return 1;}
+    int parent=fs_find_child(fs_root(),"Downloads");
+    if(parent<0)parent=fs_mkdir(fs_root(),"Downloads");
+    if(!fs_is_dir(parent)){set_status("Cannot create /Downloads. Check that it is a folder and space is available.");return 1;}
+    char name[FS_NAME_LEN],path[64],digits[12];
+    for(unsigned n=1;n<=FS_MAX_NODES;n++){
+        copy(name,sizeof name,"page");if(n>1){append(name,sizeof name,"-");number(digits,n);append(name,sizeof name,digits);}
+        append(name,sizeof name,B.html?".html":".txt");
+        if(fs_find_child(parent,name)<0){copy(path,sizeof path,"/Downloads/");append(path,sizeof path,name);browser_save_page(fs_root(),path);return 1;}
+    }
+    set_status("No unused page file name is available in /Downloads.");return 1;
+}
 
 static void completion_status(const NetHttpResult *result) {
     char digits[12];copy(B.status,sizeof B.status,"HTTP ");number(digits,(unsigned)result->status);append(B.status,sizeof B.status,digits);
@@ -459,8 +488,9 @@ int browser_tick(void) {
             B.loading=1;B.request_id=net_http_result()->request_id;B.request_state=-1;B.received=0;set_status("Following redirect...");return 1;
         }
         B.body_len=r->length<sizeof B.body?r->length:sizeof B.body-1;B.body[B.body_len]=0;
+        B.body_complete=!r->truncated&&r->length<sizeof B.body;
         B.html=!r->content_type[0]||starts(r->content_type,"text/html")||starts(r->content_type,"application/xhtml+xml");
-        if(r->content_type[0]&&!B.html&&!starts(r->content_type,"text/")){error_document("Content type not supported","This browser displays HTML and plain text. Images, documents and downloads are not supported.");return 1;}
+        if(r->content_type[0]&&!B.html&&!starts(r->content_type,"text/")){error_document("Content type not supported","This browser displays HTML and plain text. Use Terminal download to save image or document bytes.");return 1;}
         parse_document(B.body,B.body_len,B.html);completion_status(r);
         if(B.history_pos>=0)B.scroll=B.history_scroll[B.history_pos];
         jump_fragment(B.url);return 1;
@@ -497,6 +527,7 @@ static void select_link(int direction) {
 }
 int browser_key(int sc,char ch,int modifiers) {
     browser_init();
+    if((modifiers&BROWSER_MOD_CTRL)&&(sc==0x1f||lower(ch)=='s'))return save_page();
     if((modifiers&BROWSER_MOD_CTRL)&&(sc==0x26||lower(ch)=='l')){B.focus=1;B.selected=1;B.cursor=len(B.address);return 1;}
     if(((modifiers&BROWSER_MOD_CTRL)&&(sc==0x13||lower(ch)=='r'))||sc==0x3f)return reload();
     if(modifiers&BROWSER_MOD_ALT){if(sc==KEY_LEFT)return history_step(-1);if(sc==KEY_RIGHT)return history_step(1);if(sc==0x47)return open_internal("about:home",1);}
@@ -536,10 +567,10 @@ int browser_key(int sc,char ch,int modifiers) {
     return 0;
 }
 
-static const char *const button_labels[]={"Back","Forward","Reload","Stop","Home"};
-static const int button_widths[]={46,64,58,46,50};
+static const char *const button_labels[]={"Back","Forward","Reload","Stop","Home","Save"};
+static const int button_widths[]={46,64,58,46,50,50};
 static int button_x(int x,int index){int pos=x+8;for(int i=0;i<index;i++)pos+=button_widths[i]+4;return pos;}
-static int button_enabled(int index){return index==0?B.history_pos>0:index==1?B.history_pos+1<B.history_count:index==3?B.loading:1;}
+static int button_enabled(int index){return index==0?B.history_pos>0:index==1?B.history_pos+1<B.history_count:index==3?B.loading:index==5?browser_can_save():1;}
 static int address_left(int x){return x+10;}
 static int address_width(int w){return w-64;}
 static void fit_address(int w) {
@@ -552,7 +583,7 @@ void browser_draw(int x,int y,int w,int h) {
     browser_init();if(w<BROWSER_MIN_W||h<BROWSER_MIN_H)return;geometry(w,h);
     uint8_t paper=COLOR_WHITE,ink=gfx_gray(35),muted=gfx_gray(112),border=gfx_gray(218),link_color=gfx_rgb(35,92,172);
     draw_rect(x,y,w,h,paper);draw_rect(x,y,w,TOOL_H,app_chrome);draw_hline(x,y+TOOL_H-1,w,border);
-    for(int i=0;i<5;i++){int bx=button_x(x,i),enabled=button_enabled(i);draw_round_rect(bx,y+7,button_widths[i],26,4,enabled?paper:app_chrome);
+    for(int i=0;i<6;i++){int bx=button_x(x,i),enabled=button_enabled(i);draw_round_rect(bx,y+7,button_widths[i],26,4,enabled?paper:app_chrome);
         draw_round_frame(bx,y+7,button_widths[i],26,4,border);draw_string(button_labels[i],bx+(button_widths[i]-ui_string_w(button_labels[i]))/2,y+11,enabled?app_text:muted);}
     int ax=address_left(x),aw=address_width(w);draw_round_rect(ax,y+41,aw,28,4,paper);draw_round_frame(ax,y+41,aw,28,4,B.focus?app_accent:border);
     fit_address(aw);int tx=ax+7,limit=ax+aw-8;
@@ -581,9 +612,9 @@ void browser_draw(int x,int y,int w,int h) {
 }
 int browser_click(int x,int y,int w,int h,int mx,int my) {
     browser_init();if(w<BROWSER_MIN_W||h<BROWSER_MIN_H)return 0;geometry(w,h);
-    for(int i=0;i<5;i++)if(hit(mx,my,button_x(x,i),y+7,button_widths[i],26)) {
+    for(int i=0;i<6;i++)if(hit(mx,my,button_x(x,i),y+7,button_widths[i],26)) {
         if(!button_enabled(i))return 0;
-        return i==0?history_step(-1):i==1?history_step(1):i==2?reload():i==3?stop():open_internal("about:home",1);
+        return i==0?history_step(-1):i==1?history_step(1):i==2?reload():i==3?stop():i==4?open_internal("about:home",1):save_page();
     }
     if(hit(mx,my,x+w-46,y+41,36,28))return open_internal(B.address,1);
     if(hit(mx,my,address_left(x),y+41,address_width(w),28)) {
