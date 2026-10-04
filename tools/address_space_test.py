@@ -213,5 +213,5 @@ if __name__=='__main__':
     parser.add_argument('--work',type=Path,required=True);parser.add_argument('--profile',choices=('default','large','both'),default='both')
     parser.add_argument('--prepare-only',action='store_true');parser.add_argument('--timeout',type=int,default=180)
     parser.add_argument('--old-build',type=Path);parser.add_argument('--expected-old-revision')
-    parser.add_argument('--old-result',type=int,default=-1)
+    parser.add_argument('--old-result',type=int,default=-2)
     main(parser.parse_args())

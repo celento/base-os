@@ -3,7 +3,7 @@
 #define FEATURE_TEST
 #include "kernel.c"
 #ifndef AS_ROLLBACK_EXPECT
-#define AS_ROLLBACK_EXPECT (-1)
+#define AS_ROLLBACK_EXPECT (-2)
 #endif
 static unsigned rb_total,rb_printed;
 static void rb_check(int ok,const char *why){if(!ok)panic(why);}
