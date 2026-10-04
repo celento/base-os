@@ -1,5 +1,6 @@
 #define FEATURE_TEST
 #include "../src/kernel.c"
+#include "process_guest_fixture.h"
 static void check(int ok,const char *why){if(!ok)panic(why);}
 static void command(const char *s){while(*s)term_char(*s++);term_enter();}
 static int file(const char *path){return fs_resolve(fs_root(),path);}
@@ -36,6 +37,7 @@ static void report_ready(int owner,const char *expected){
     term_task_key(owner,'q');until_done(owner);
 }
 void feature_test(void){
+    const PhysmemStats backing_before=guest_process_memory();
     check(fs_file_limit()==FS_FILE_MAX,"SDK requires disposable IDE data disk");
     int done=file("/Documents/sdk-done.txt");
     if(done>=0){
@@ -43,6 +45,7 @@ void feature_test(void){
         check(fs_used_bytes()==fs_capacity(),"SDK reboot full volume mismatch");
         term_select(0);term_reset();command("exec /Programs/capacity.bex");
         check(has_line("Program finished."),"SDK full-volume reboot regression");
+        guest_process_memory_restored(&backing_before);
         platform_log("NATIVE-SDK-EXPANDED-REBOOT-PASS\n");return;
     }
     check(fs_size(file("/Programs/stream.bex"))>32768,"SDK large C image absent");
@@ -99,5 +102,6 @@ void feature_test(void){
     int nodes=fs_node_count();term_select(0);term_reset();command("exec /Programs/capacity.bex");
     check(has_line("Program finished.")&&fs_node_count()==nodes&&!kstrcmp(fs_data(capacity),"keep"),"SDK failed write changed original");
     check(fs_sync()==0,"SDK final durable snapshot");
+    guest_process_memory_restored(&backing_before);
     platform_log("NATIVE-SDK-CAPACITY-PASS\nNATIVE-SDK-EXPANDED-PASS\n");
 }

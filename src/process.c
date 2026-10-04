@@ -4,6 +4,7 @@
 #include "fs.h"
 #include "native_files.h"
 #include "native_sync.h"
+#include "physmem.h"
 #include "../sdk/baseos_abi.h"
 extern unsigned char gdt_user_code[],gdt_user_data[],gdt_tss[];
 extern int process_enter(unsigned entry);
@@ -18,11 +19,13 @@ static unsigned canvas_width,canvas_height;
 /* Only ring-3 execution is preempted. Syscalls finish atomically on the kernel
  * stack before the desktop regains control. Task images never overlap USER_BASE. */
 #define TASK_KEYS 32
+#define TASK_BACKING_PAGES (USER_CAPACITY / PHYS_PAGE_BYTES)
+_Static_assert(TASK_BACKING_PAGES==16&&USER_CAPACITY%PHYS_PAGE_BYTES==0,"BEX1 backing must remain exactly 16 pages");
 #define FRAME_WORDS 19
 #define TASK_MAX_SLEEP_MS 60000u
 typedef struct { unsigned char bytes[108]; } FpuState;
 typedef struct {
-    unsigned char image[USER_CAPACITY];
+    uint32_t backing[TASK_BACKING_PAGES];
     uint32_t frame[FRAME_WORDS];
     FpuState fpu;
     ProcessIO io;
@@ -59,7 +62,14 @@ static void release_owner(BosHandle owner) {
 /* A completion retains its identity/result until the display consumes it.
  * Resource release is legal only after the active process has returned. */
 static void task_release(NativeTask *task) {
-    if(task->resources_live){release_owner(task->owner_id);task->resources_live=0;}
+    if(task->resources_live){
+        /* This list is private, immutable while live, and released only after
+         * process_leave and x87/kernel restoration. Never retain freed frames. */
+        if(physmem_release(task->owner_id,PHYS_BEX1_BACKING,task->backing,
+                           TASK_BACKING_PAGES)!=PHYS_OK)panic("native backing ownership");
+        kmemset(task->backing,0,sizeof task->backing);
+        release_owner(task->owner_id);task->resources_live=0;
+    }
     task->wait_operation=0;
     task->key_head=task->key_count=0;
 }
@@ -71,6 +81,31 @@ static void task_finalize(NativeTask *task) {
     if(active||task->state!=PROCESS_TASK_EXITING)return;
     task_release(task);
     task->state=PROCESS_TASK_DONE;
+}
+/* A BEX1 image is logically contiguous but its owned frames need not be.
+ * Creation writes only validated file bytes; allocation already cleared the
+ * full image including BSS and stack. Continuing slices scatter all 64 KiB. */
+static void task_image_write(NativeTask *task,const void *source,unsigned bytes) {
+    const unsigned char *input=source;
+    for(unsigned page=0;bytes;page++){
+        unsigned count=bytes<PHYS_PAGE_BYTES?bytes:PHYS_PAGE_BYTES;
+        kmemcpy((void *)(uintptr_t)task->backing[page],input,count);
+        input+=count;bytes-=count;
+    }
+}
+static void task_image_read(const NativeTask *task,void *destination) {
+    unsigned char *output=destination;
+    for(unsigned page=0;page<TASK_BACKING_PAGES;page++){
+        kmemcpy(output,(const void *)(uintptr_t)task->backing[page],PHYS_PAGE_BYTES);
+        output+=PHYS_PAGE_BYTES;
+    }
+}
+static void task_reset_all(void) {
+    if(tasks_ready){
+        for(unsigned i=0;i<PROCESS_TASKS;i++)task_release(tasks+i);
+        kmemset(tasks,0,sizeof(NativeTask)*PROCESS_TASKS);
+        tasks_ready=0;
+    }
 }
 static FpuState kernel_fpu, sync_fpu;
 static unsigned kernel_cr0;
@@ -131,11 +166,7 @@ static void descriptor(unsigned char *p,unsigned base,unsigned limit,unsigned ac
 }
 void process_init(void){
     if(active)return;
-    if(tasks_ready){
-        for(unsigned i=0;i<PROCESS_TASKS;i++)task_release(tasks+i);
-        kmemset(tasks,0,sizeof(NativeTask)*PROCESS_TASKS);
-        tasks_ready=0;
-    }
+    task_reset_all();
     schedule_next=0;current_task=0;output=0;
     release_owner(synchronous_owner);synchronous_owner=0;
     native_files_init();
@@ -196,8 +227,14 @@ int process_create(const void *file,unsigned bytes,const char *argument,
     BosHandle owner_id=allocate_owner();
     if(!owner_id)return -2;
     kmemset(task,0,sizeof(*task));
-    task->state=PROCESS_TASK_CREATING;task->owner_id=owner_id;task->resources_live=1;
-    kmemcpy(task->image,file,bytes);
+    task->state=PROCESS_TASK_CREATING;task->owner_id=owner_id;
+    if(physmem_alloc(owner_id,PHYS_BEX1_BACKING,TASK_BACKING_PAGES,task->backing)!=PHYS_OK){
+        /* Allocation publishes nothing on failure. Keep the consumed serial,
+         * but expose neither a partial record nor a fallback inline image. */
+        kmemset(task,0,sizeof(*task));return PROCESS_CREATE_MEMORY;
+    }
+    task->resources_live=1;
+    task_image_write(task,file,bytes);
     if(argument_length)kmemcpy(task->argument,argument,argument_length);
     task->argument_length=argument_length;
     task->frame[8]=task->frame[9]=task->frame[10]=task->frame[11]=0x23;
@@ -273,7 +310,7 @@ int process_step(ProcessHandle process) {
     }
     if(!task_wake(task))return 0;
     protect_memory();
-    kmemcpy((void *)USER_BASE,task->image,USER_CAPACITY);
+    task_image_read(task,(void *)USER_BASE);
     canvas_width=task->canvas_width;canvas_height=task->canvas_height;
     output=0;current_task=task;active=1;process_result=0;
     fpu_enter(task);
@@ -283,7 +320,7 @@ int process_step(ProcessHandle process) {
     fpu_leave(task);active=0;current_task=0;
     if(task->stop_requested)task_mark_exit(task,PROCESS_TASK_STOPPED,PROCESS_EXIT_STOP);
     if(task->state==PROCESS_TASK_EXITING)task_finalize(task);
-    else kmemcpy(task->image,(const void *)USER_BASE,USER_CAPACITY);
+    else task_image_write(task,(const void *)USER_BASE,USER_CAPACITY);
     return 1;
 }
 ProcessHandle process_schedule_one(void) {

@@ -291,7 +291,8 @@ int term_task_start_file_with_arg(int slot,int file,unsigned identity,
         /* No task runs between this identity check and the loader's owned copy. */
         int created=process_create(fs_data(file),fs_size(file),argument,argument_length,&process);
         if(created)
-            push(created==-1?"Cannot start: all native process records are in use.":
+            push(created==PROCESS_CREATE_MEMORY?"Cannot start: native backing memory is unavailable.":
+                 created==-1?"Cannot start: all native process records are in use.":
                  "Cannot start: not a supported BEX1 program (maximum 49152 bytes).");
         else {
             ProcessIO io={{process,(unsigned)slot,T.binding_generation+1},

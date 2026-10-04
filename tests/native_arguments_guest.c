@@ -15,9 +15,11 @@ static void record(int owner,const char *expected){
 static void tick(void){poll_time();platform_poll();__asm__ volatile("hlt");}
 static int has_line(const char *s){for(int i=0;i<term_count();i++)if(!kstrcmp(term_get(i),s))return 1;return 0;}
 void feature_test(void){
+    const PhysmemStats backing_before=guest_process_memory();
     int app=file("/Programs/arguments.bex");check(app>=0,"argument app missing");
     if(file("/Documents/arguments-done.txt")>=0){
         record(1,"/Documents/a sample.txt");record(3,"none");
+        guest_process_memory_restored(&backing_before);
         platform_log("NATIVE-ARGUMENTS-REBOOT-PASS\n");return;
     }
     char first[]="/Documents/a sample.txt",second[PROCESS_ARGUMENT_MAX+1],saved_second[PROCESS_ARGUMENT_MAX+1];
@@ -72,5 +74,6 @@ void feature_test(void){
     check(has_line("Native task finished."),"no-argument slot reuse");record(3,"none");
     int done=fs_create(file("/Documents"),"arguments-done.txt");
     check(done>=0&&fs_write(done,"done",4)==4&&!fs_sync(),"argument reports sync");
+    guest_process_memory_restored(&backing_before);
     platform_log("NATIVE-ARGUMENTS-PASS\n");
 }

@@ -24,6 +24,7 @@ static void round_for(unsigned duration){
 }
 static void command(const char *text){while(*text)term_char(*text++);term_enter();}
 void feature_test(void){
+    const PhysmemStats backing_before=guest_process_memory();
     task_check(!guest_process_launch(&task_handles[0],0,task_app,sizeof task_app,0,0),"start first task");
     task_check(!guest_process_launch(&task_handles[1],1,task_app,sizeof task_app,0,0),"start second task");
     task_check(!process_start(task_handles[0]),"replace running task");
@@ -111,5 +112,6 @@ void feature_test(void){
     command("exec /Programs/notebook.bex");
     task_check(!kstrcmp(term_get(term_count()-1),"Program finished."),"legacy synchronous exec regression");
     task_check(fs_sync()==0,"task document persistence");
+    guest_process_memory_restored(&backing_before);
     platform_log("NATIVE-TASK-RUNTIME-PASS\n");
 }

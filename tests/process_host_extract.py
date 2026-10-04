@@ -9,7 +9,8 @@ from test_editor_binding import function
 
 FUNCTIONS = (
     'allocate_owner', 'current_owner', 'release_owner', 'task_release',
-    'task_mark_exit', 'task_finalize', 'valid_image', 'task_lookup',
+    'task_mark_exit', 'task_finalize', 'task_image_write', 'task_image_read',
+    'task_reset_all', 'valid_image', 'task_lookup',
     'process_create', 'process_bind', 'process_unbind', 'process_start',
     'process_status', 'process_get_result', 'process_counts', 'task_wake',
     'process_key', 'process_request_stop', 'process_reap',
