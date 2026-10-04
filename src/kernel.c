@@ -1586,6 +1586,7 @@ static const CalcKey calc_keys[] = {
 
 static int open_dlg = 0;
 static int name_dlg = 0;
+static int name_failed;
 /* A close request owns a window incarnation, never whichever app draws last. */
 static int edit_close_owner = -1, edit_close_seq;
 static int edit_close_dlg, edit_close_focus, edit_close_failed;
@@ -2277,8 +2278,12 @@ static int edit_save(void) {
 }
 
 static int writer_save_document(void) {
+    int had_binding = writer_file() >= 0;
     int result = writer_save();
-    if (result == WRITER_SAVE_NEEDS_NAME) namedlg_open(2, "untitled.bwr");
+    if (result == WRITER_SAVE_NEEDS_NAME) {
+        namedlg_open(2, "untitled.bwr");
+        if (had_binding) name_failed = 1; /* Explain a changed-file conflict. */
+    }
     dirty = 1;
     return result == WRITER_SAVE_OK;
 }
@@ -5794,7 +5799,7 @@ static void sysinfo_fill(SysInfo *si) {
 static int name_target = 0;
 static char name_buf[FS_NAME_LEN];
 static int name_len = 0;
-static int name_focus, name_failed, name_owner, name_owner_seq;
+static int name_focus, name_owner, name_owner_seq;
 
 static void namedlg_open(int target, const char *initial) {
     name_dlg = 1;
@@ -6865,6 +6870,9 @@ static void boot_splash(void) {
 
 typedef struct { int open,kind,x,y,w,h,min,z,caret; char path[FS_PATH_LEN]; } SavedWindow;
 typedef struct { unsigned magic,version; SavedWindow win[MAX_WIN]; } SavedSession;
+typedef struct { unsigned magic,version,valid; WriterBinding source; } SavedWriterBinding;
+#define WRITER_BINDING_MAGIC 0x31425257u
+_Static_assert(sizeof(SavedWriterBinding)==24,"Writer recovery binding ABI changed");
 static int session_ready;
 
 static int session_put(int dir,const char *name,const void *data,int size){
@@ -6884,28 +6892,31 @@ static void session_save(void){
     unsigned writer_size=0;
     const unsigned char *writer_draft=0;
     int writer_slot=find_open_kind(WK_WRITER);
+    SavedWriterBinding binding={WRITER_BINDING_MAGIC,1,0,{0,0,0}};
     if(writer_slot>=0){
         writer_draft=writer_snapshot(&writer_size);
         if(!writer_draft){session_status="Writer recovery could not be prepared.";return;}
+        binding.valid=(unsigned)writer_binding(&binding.source);
     }
     int needed=0,projected=(int)fs_used_bytes();
     if(!fs_is_dir(dir))goto failure;
-    for(int i=-3;i<MAX_WIN;i++){
+    for(int i=-4;i<MAX_WIN;i++){
         char draft[]="draft0.txt";const char *name;
-        if(i==-3){if(writer_slot<0)continue;name="writer-draft.bwr";}
+        if(i==-4){if(writer_slot<0)continue;name="writer-binding";}
+        else if(i==-3){if(writer_slot<0)continue;name="writer-draft.bwr";}
         else if(i==-2)name="session";
         else if(i==-1){if(!paint_ready)continue;name="paint-draft";}
         else {if(!wins[i].open||wins[i].kind!=WK_EDIT)continue;draft[5]+=(char)i;name=draft;}
-        int size=i==-3?(int)writer_size:i==-2?(int)sizeof(SavedSession):i==-1?PAINT_W*PAINT_H:window_state[i].doc.len;
+        int size=i==-4?(int)sizeof(binding):i==-3?(int)writer_size:i==-2?(int)sizeof(SavedSession):i==-1?PAINT_W*PAINT_H:window_state[i].doc.len;
         if(size<0||(unsigned)size>fs_file_limit())goto failure;
         int id=fs_find_child(dir,name);
         if(id<0)needed++;
         else {
             if(fs_is_dir(id)||fs_is_app(id))goto failure;
             int old_size=fs_size(id);
-            /* Paint/session metadata are committed last, so do not spend
-             * space that an unusually large older file might free later. */
-            projected-=(i==-2||i==-1)&&old_size>size?size:old_size;
+            /* Small metadata is committed last, so do not spend space
+             * that an unusually large older metadata file might free later. */
+            projected-=(i==-4||i==-2||i==-1)&&old_size>size?size:old_size;
         }
         projected+=size;
     }
@@ -6939,6 +6950,7 @@ static void session_save(void){
         if((edit_len>old_size)!=growing)continue;
         if(session_put(dir,name,edit_buf,edit_len)<0)goto failure;
     }
+    if(writer_slot>=0 && session_put(dir,"writer-binding",&binding,sizeof binding)<0)goto failure;
     if(paint_ready && session_put(dir,"paint-draft",paint_pix,PAINT_W*PAINT_H)<0)goto failure;
     if(session_put(dir,"session",&snap,sizeof snap)<0)goto failure;
     session_status="";context_set(win_front());return;
@@ -6961,8 +6973,16 @@ static void session_restore(void){
                 int draft=fs_find_child(dir,"writer-draft.bwr");
                 if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)){
                     unsigned caret=v->caret>=0?(unsigned)v->caret:0;
+                    int source=-1,metadata=fs_find_child(dir,"writer-binding");
+                    SavedWriterBinding binding;
+                    if(metadata>=0&&!fs_is_dir(metadata)&&!fs_is_app(metadata)&&fs_size(metadata)==sizeof binding){
+                        kmemcpy(&binding,fs_data(metadata),sizeof binding);
+                        if(binding.magic==WRITER_BINDING_MAGIC&&binding.version==1&&binding.valid==1&&
+                           writer_binding_matches(target,&binding.source))source=target;
+                    }
+                    /* A path alone cannot identify a file replaced while offline. */
                     if(!writer_restore((const unsigned char *)fs_data(draft),(unsigned)fs_size(draft),
-                        target,fs_identity(target),1,caret,caret))
+                        source,fs_identity(source),1,caret,caret))
                         session_status="Writer recovery could not be restored.";
                 }
                 int docs=fs_find_child(fs_root(),"Documents");
