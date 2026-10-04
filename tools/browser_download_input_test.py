@@ -104,7 +104,9 @@ def control(session, symbols, index):
 
 def finished(session, path):
     session.wait(lambda: download_status(session)['state'] == DONE, 'Download did not complete')
-    session.wait(lambda: present(session, path) and present(session, 'Complete: 90001 bytes'), 'Browser completion missing')
+    session.wait(lambda: present(session, path + '\nComplete: 90001 bytes'), 'Browser completion missing')
+    # The observed app state becomes visible on the next compositor turn.
+    time.sleep(.25)
 
 
 def main():
