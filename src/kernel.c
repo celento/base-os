@@ -14,6 +14,7 @@
 #include "browser.h"
 #include "player.h"
 #include "writer.h"
+#include "example_docs.h"
 #include "video.h"
 #include "image_viewer.h"
 #include "audio_example.h"
@@ -3611,9 +3612,23 @@ static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
     int ay = wy + TITLE_H + 1 + TERM_PAD;
     int canvas_height=0;
     const unsigned char *canvas=term_canvas();
-    if(canvas){int scale=wh>360?2:1;canvas_height=100*scale+8;
-        for(int y=0;y<100;y++)for(int x=0;x<160;x++)draw_rect(ax+x*scale,ay+y*scale,scale,scale,canvas[y*160+x]);
-        ay+=canvas_height;
+    if(canvas){
+        int source_w=term_canvas_width(),source_h=term_canvas_height();
+        int target_h=source_w>160&&wh>550?400:wh>360?200:100;
+        int available_h=wh-TITLE_H-2-TERM_PAD*2-EDIT_LINE_H*2-8;
+        int available_w=ww-2-TERM_PAD*2;
+        if(target_h>available_h)target_h=available_h;
+        if(target_h>0&&available_w>0&&source_w>0&&source_h>0){
+            int target_w=source_w*target_h/source_h;
+            if(target_w>available_w){target_w=available_w;target_h=source_h*target_w/source_w;}
+            for(int y=0;y<target_h;y++){
+                int source_row=(y*source_h/target_h)*source_w;
+                for(int x=0;x<target_w;x++)
+                    put_pixel(ax+x,ay+y,canvas[source_row+x*source_w/target_w]);
+                if(!(y&31))platform_poll();
+            }
+            canvas_height=target_h+8;ay+=canvas_height;
+        }
     }
     int cols = (ww - 2 - TERM_PAD * 2) / EDIT_CHAR_W;
     int rows = (wh - TITLE_H - 2 - TERM_PAD * 2 - canvas_height) / EDIT_LINE_H;
@@ -7024,6 +7039,14 @@ static void install_examples(void){
     if(fs_find_child(dir,"hello-c.bex")<0){int id=fs_create(dir,"hello-c.bex");if(id>=0)fs_write(id,(const char *)sdk_hello,sizeof sdk_hello);}
     if(fs_find_child(dir,"notebook.bex")<0){int id=fs_create(dir,"notebook.bex");if(id>=0)fs_write(id,(const char *)sdk_notebook,sizeof sdk_notebook);}
     if(fs_find_child(dir,"counter.bex")<0){int id=fs_create(dir,"counter.bex");if(id>=0)fs_write(id,(const char *)sdk_counter,sizeof sdk_counter);}
+    if(fs_find_child(dir,"docstats.bex")<0){int id=fs_create(dir,"docstats.bex");if(id>=0)fs_write(id,(const char *)sdk_docstats,sizeof sdk_docstats);}
+    if(docs>=0&&fs_find_child(docs,"stats-sample.txt")<0){
+        unsigned length=example_stats_document(edit_scratch,EDIT_BUF_SIZE);
+        if(length&&length<=fs_file_limit()){
+            int id=fs_create(docs,"stats-sample.txt");
+            if(id>=0&&fs_write(id,edit_scratch,(int)length)<0)fs_delete(id);
+        }
+    }
     const char *demo="10 PRINT \"BASIC: press a key while the picture draws\"\n20 LET A=0\n30 RECT A,A/2,8,8,A+32\n40 INKEY B\n50 IF B > 0 THEN 100\n60 WAIT 20\n70 LET A=A+2\n80 IF A < 150 THEN 30\n90 END\n100 PRINT B\n110 END\n";
     if(fs_find_child(dir,"demo.bas")<0){int id=fs_create(dir,"demo.bas");if(id>=0)fs_write(id,demo,kstrlen(demo));}
     const char *script="pwd\nls /\necho Scripts run one command per line.\ndf\n";

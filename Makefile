@@ -29,7 +29,7 @@ CFLAGS = -std=gnu11 -ffreestanding -Os -g -Wall -Wextra -m32 \
 ASFLAGS = -f elf
 LDFLAGS = -T $(OUT)/linker.ld -nostdlib -m elf_i386 -z noexecstack
 
-CSRC = writer.c writer_codec.c download.c video.c video_draw.c image_decode.c image_viewer.c text_search.c ata.c player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c mines.c game2048.c breakout.c sysmon.c
+CSRC = example_docs.c writer.c writer_codec.c download.c video.c video_draw.c image_decode.c image_viewer.c text_search.c ata.c player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c mines.c game2048.c breakout.c sysmon.c
 OBJS = $(OUT)/kernel_entry.o $(OUT)/interrupts.o $(OUT)/process_entry.o $(addprefix $(OUT)/,$(CSRC:.c=.o))
 HDRS = $(wildcard $(SRC)/*.h) $(wildcard assets/*.h)
 IMG = $(OUT)/baseos.img
@@ -75,10 +75,14 @@ $(OUT)/notebook.bex: examples/c/notebook.c sdk/baseos.h sdk/start.c sdk/app.ld t
 $(OUT)/counter.bex: examples/c/counter.c sdk/baseos.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
 	$(PYTHON) tools/build_app.py $< $@
 
-$(OUT)/sdk_examples.h: $(OUT)/hello-c.bex $(OUT)/notebook.bex $(OUT)/counter.bex tools/bin2c.py Makefile
+$(OUT)/docstats.bex: examples/c/docstats.c sdk/baseos.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
+	$(PYTHON) tools/build_app.py $< $@
+
+$(OUT)/sdk_examples.h: $(OUT)/hello-c.bex $(OUT)/notebook.bex $(OUT)/counter.bex $(OUT)/docstats.bex tools/bin2c.py Makefile
 	$(PYTHON) tools/bin2c.py $(OUT)/hello-c.bex sdk_hello > $@
 	$(PYTHON) tools/bin2c.py $(OUT)/notebook.bex sdk_notebook >> $@
 	$(PYTHON) tools/bin2c.py $(OUT)/counter.bex sdk_counter >> $@
+	$(PYTHON) tools/bin2c.py $(OUT)/docstats.bex sdk_docstats >> $@
 
 $(OUT)/chime.wav: tools/make_audio_example.py | $(OUT)
 	$(PYTHON) tools/make_audio_example.py $@

@@ -3,7 +3,7 @@
 
 #include "layout.h"
 #define FS_NAME_LEN  24
-#define FS_MAX_SIZE  16384 /* Legacy floppy, scripts and BEX image buffer limit. */
+#define FS_MAX_SIZE  16384 /* Legacy floppy, command scripts and Tiny BASIC buffer limit. */
 #define FS_FILE_MAX  2097152 /* Data-volume file limit, inclusive. */
 
 int kstrlen(const char *s);
