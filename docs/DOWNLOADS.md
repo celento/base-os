@@ -38,6 +38,40 @@ Writes are all-or-nothing in RAM. Normal filesystem autosave persists the result
 `downloads` explicitly distinguishes pending synchronization or disk errors.
 Use System → Shutdown to flush saves before stopping the emulator.
 
+## Browser Download
+
+Type an HTTP URL in Browser's address field and click **Download** or press
+**Ctrl+D**, without pressing Enter first. This saves binary bodies directly
+through the background service; the 32 KB page buffer is neither enlarged nor
+used as the file-transfer buffer. To choose an existing page link, use Tab then
+Ctrl+D, or click **Pick link**, click the media link, then **Download**. Following
+a link normally still navigates; an unsupported media page can also be downloaded
+from its current address afterward. Navigation never starts a download itself.
+
+Browser chooses a new file under `/Downloads`, creating that folder if needed.
+The bounded name comes only from the URL path, with unsafe characters replaced,
+leading/trailing dots removed, and recognized file extensions preserved when
+truncating. Query strings and fragments are excluded, and percent escapes are
+not decoded into path separators. Empty path names use `download`. Existing
+names get deterministic `-2`, `-3`, etc. suffixes before a recognized extension.
+There is no overwrite. HTTPS, other schemes and credential-bearing addresses
+are rejected. Redirects keep the download service's explicit failure behavior.
+
+The **Progress** panel displays the chosen path, received bytes, HTTP result,
+volume file limit and completion/error message. Complete RAM data and disk
+synchronization are distinguished using the service's current status. **Page**
+returns to the original readable document, whose Save / Ctrl+S behavior remains
+unchanged. Scroll the panel for all details at small window sizes.
+
+**Cancel**, or Escape while the progress panel is visible, cancels only a
+transfer whose accepted request ID belongs to Browser. Other apps' transfers
+are never adopted or cancelled. If another app replaces the service result,
+Browser retains its own previous result or reports that the active result was
+replaced. Closing Browser does not cancel its background transfer; reopen and
+choose Progress to inspect it. The one-request network limit still applies:
+a pending page must be stopped or finish before a download starts, and a busy
+external request is reported without interruption.
+
 ## Browser Save
 
 Click **Save** or press **Ctrl+S** after loading an HTML or text page. Browser
@@ -100,7 +134,9 @@ Terminal responsiveness and quoted paths, cancellation, request ownership,
 existing-file preservation, destination identity/rename changes, HTTP failures,
 size limits, full volume/slots, and the smaller legacy volume limit. Browser
 tests verify original byte preservation, unique Save destinations, incomplete
-page rejection, reboot, Ctrl+S, actual Save hit testing, and client-area bounds.
+page rejection, reboot, Ctrl+S, actual Save hit testing, direct binary downloads,
+link selection, progress/cancellation, ownership, unique safe download names,
+RAM-versus-disk results, and client-area bounds.
 
 The QEMU test creates disposable floppy and 16 MiB data disks. It downloads
 20,037-byte and exact 2 MiB binary fixtures through RTL8139, checks cancellation
@@ -125,3 +161,10 @@ QMP memory observations are read-only; no app entry points or private kernel
 functions are invoked. The host independently decodes the saved volume and
 compares every binary and HTML byte. The printed evidence directories contain
 screenshots, serial logs, the disposable data image, and verification hashes.
+
+
+`python3 tools/browser_download_input_test.py build` exercises the production
+Browser with real PS/2 keyboard and mouse input: direct and selected-link binary
+downloads, Cancel, collision suffixes, close/reopen, busy Terminal ownership and
+unchanged original-page saving. It uses only disposable disks and a controlled
+loopback HTTP fixture, and verifies committed bytes independently from the volume.

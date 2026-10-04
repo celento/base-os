@@ -20,6 +20,10 @@ int browser_scroll(int lines);
 int browser_tick(void);
 int browser_open(const char *url);
 int browser_open_file(int fs_id);
+/* Close stops only the Browser page request. Its background download keeps
+ * running; Progress restores its status after reopening. Ctrl+D downloads the
+ * edited address or selected link. Escape cancels only an owned transfer when
+ * the download progress view is shown. */
 void browser_close(void);
 /* Save original completed page bytes to a new local path. Never overwrites.
  * Return the new file ID or -1; browser_status describes the result. */

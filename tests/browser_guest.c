@@ -28,7 +28,7 @@ void browser_guest(void){
     browser_key(0x26,0,BROWSER_MOD_CTRL);const char *typed=ORIGIN "/index";while(*typed)browser_key(0,*typed++,0);browser_key(KEY_ENTER,0,0);
     check(browser_loading(),"asynchronous Go");wait_page("BaseOS live HTTP");check(contains(browser_status(),"HTTP 200"),"HTTP status visible");platform_log("BROWSER-HTTP-PASS\n");
     /* The first rendered row is an actual link from the network response. */
-    browser_click(40,40,760,580,60,132);wait_page("Next live page");check(equals(browser_url(),ORIGIN "/next"),"click follows relative link");platform_log("BROWSER-LINK-PASS\n");
+    browser_click(40,40,760,580,60,166);wait_page("Next live page");check(equals(browser_url(),ORIGIN "/next"),"click follows relative link");platform_log("BROWSER-LINK-PASS\n");
     browser_key(KEY_LEFT,0,BROWSER_MOD_ALT);wait_page("BaseOS live HTTP");browser_key(KEY_RIGHT,0,BROWSER_MOD_ALT);wait_page("Next live page");
     browser_key(0x3f,0,0);wait_page("Next live page");platform_log("BROWSER-HISTORY-PASS\n");
     browser_open(ORIGIN "/slow");unsigned wait_start=timer_ticks();

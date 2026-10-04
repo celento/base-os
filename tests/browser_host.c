@@ -34,7 +34,7 @@ int net_http_start(const char *url,char *body,unsigned cap){
 }
 static const char sample_html[]="<title>Local sample</title><h1>Local file</h1><p>Saved on the BaseOS disk.</p>";
 static uint8_t back[1024*768],linear[1024*768*4];
-static void reset_browser(void){reset();fs_empty_dir(0);int sample=fs_create(0,"sample.html");assert(sample==1);assert(fs_write(sample,sample_html,sizeof sample_html-1)==sizeof sample_html-1);browser_ready=0;busy=0;starts_count=0;cancels=0;serial=0;memset(&result,0,sizeof result);browser_init();}
+static void reset_browser(void){download_cancel();reset();fs_empty_dir(0);int sample=fs_create(0,"sample.html");assert(sample==1);assert(fs_write(sample,sample_html,sizeof sample_html-1)==sizeof sample_html-1);browser_ready=0;busy=0;starts_count=0;cancels=0;serial=0;memset(&result,0,sizeof result);browser_init();}
 static void complete(const char *html,const char *type){
     assert(busy);unsigned n=(unsigned)strlen(html);assert(n<http_capacity);memcpy(http_body,html,n+1);
     result.state=NET_HTTP_DONE;result.status=200;result.length=n;strcpy(result.content_type,type);busy=0;
@@ -150,6 +150,89 @@ static void test_save_original_pages(void){
     before=fs_node_count();while(fs_node_count()<FS_MAX_NODES){char name[24];snprintf(name,sizeof name,"file%d",fs_node_count());assert(fs_create(0,name)>0);}
     assert(browser_save_page(0,"/no-slots.txt")==-1&&fs_node_count()==FS_MAX_NODES);assert(before<FS_MAX_NODES);
 }
+static void edit_download_address(const char *url){browser_key(0x26,0,BROWSER_MOD_CTRL);while(*url)browser_key(0,*url++,0);}
+static void start_address_download(const char *url){edit_download_address(url);assert(browser_key(0x20,0,BROWSER_MOD_CTRL));}
+static void reset_browser_data_volume(void){
+    reset_browser();memset(data_disk,0,sizeof data_disk);unsigned *m=(unsigned *)data_disk;
+    m[0]=DATA_MARKER_MAGIC;m[1]=DATA_MARKER_VERSION;m[2]=DATA_DISK_SECTORS;
+    m[3]=DATA_SLOT_SECTORS;m[4]=DATA_FIRST_LBA;m[5]=DATA_SECOND_LBA;m[6]=crc32(m,24);
+    data_present=1;fs_init();assert(fs_load_disk()==FS_LOAD_BLANK);fs_empty_dir(0);
+}
+static void finish_binary(unsigned count){
+    assert(busy&&count<http_capacity);for(unsigned i=0;i<count;i++)http_body[i]=(char)((i*37+91)&255);
+    result.state=NET_HTTP_DONE;result.status=200;result.length=count;busy=0;
+    assert(download_tick());assert(browser_tick());
+}
+static void test_download_names(void){
+    reset_browser();
+    const char *urls[]={"http://example.com/?file=secret.wav#track", "http://example.com/folder/", "http://example.com/a/../music.mp3?name=evil.bin#other", "http://example.com/this-is-a-very-long-filename.MPEG?q=x", "http://example.com/%2e%2e%2fphoto.png", "http://example.com/.wav"};
+    const char *names[]={"download", "download", "music.mp3", "this-is-a-very-lon.mpeg", "_2e_2e_2fphoto.png", "download.wav"};
+    for(unsigned i=0;i<sizeof urls/sizeof urls[0];i++){
+        start_address_download(urls[i]);assert(download_active());char path[64];snprintf(path,sizeof path,"/Downloads/%s",names[i]);
+        if(strcmp(download_status()->path,path))fprintf(stderr,"name %u: %s expected %s\n",i,download_status()->path,path);
+        assert(!strcmp(download_status()->path,path));assert(!strcmp(B.download_path,path));assert(B.download_id==result.request_id);
+        assert(cancel_download());assert(!busy&&download_status()->state==DOWNLOAD_CANCELLED);
+    }
+    start_address_download("http://example.com/music.mp3?other=foo.wav#fragment");finish_binary(123);
+    int first=fs_resolve(0,"/Downloads/music.mp3");assert(first>0);start_address_download("http://example.com/music.mp3?other=x");
+    assert(!strcmp(download_status()->path,"/Downloads/music-2.mp3"));finish_binary(234);assert(fs_size(first)==123);
+    int count=starts_count;
+    const char *unsupported[]={"https://example.com/secret", "ftp://example.com/file", "file:///sample.html", "javascript:alert(1)", "http://user:password@example.com/a"};
+    for(unsigned i=0;i<sizeof unsupported/sizeof unsupported[0];i++){start_address_download(unsupported[i]);assert(starts_count==count&&!busy);assert(B.download_notice[0]);}
+    assert(!strstr(B.download_text,"password"));
+}
+static void test_browser_binary_download(void){
+    reset_browser_data_volume();browser_open("http://example.com/article");complete(example_html,"text/html");
+    int history=B.history_count;start_address_download("http://example.com/audio.wav?source=browser#track");
+    assert(B.history_count==history&&browser_can_save()&&!browser_loading());assert(B.download_visible);
+    assert(http_body!=B.body&&http_capacity>sizeof B.body);assert(strstr(B.text,"Readable & clickable"));
+    result.state=NET_HTTP_RECEIVING;result.length=47000;assert(download_tick());assert(browser_tick());
+    assert(strstr(B.download_text,"47000 bytes"));assert(fs_resolve(0,"/Downloads/audio.wav")<0);
+    browser_close();assert(download_active()&&busy);finish_binary(90001);
+    int file=fs_resolve(0,"/Downloads/audio.wav");assert(file>0&&fs_size(file)==90001);
+    for(unsigned i=0;i<90001;i++)assert((unsigned char)fs_data(file)[i]==((i*37+91)&255));
+    assert(strstr(B.download_text,"RAM")&&strstr(B.download_text,"pending"));
+    assert(fs_sync()==0);assert(browser_tick());assert(strstr(B.download_text,"disk is synchronized"));
+    assert(browser_save_page(0,"/original.html")>0);assert(!memcmp(fs_data(fs_resolve(0,"/original.html")),example_html,sizeof example_html-1));
+    start_address_download("http://example.com/cancel.bin");result.state=NET_HTTP_RECEIVING;result.length=5000;download_tick();browser_tick();
+    assert(browser_key(KEY_ESC,0,0));assert(!busy&&download_status()->state==DOWNLOAD_CANCELLED);assert(strstr(B.download_text,"No file was saved"));
+    assert(fs_resolve(0,"/Downloads/cancel.bin")<0);
+    start_address_download("http://example.com/fail.bin");strcpy(result.error,"Server closed the incomplete response");result.state=NET_HTTP_ERROR;busy=0;
+    download_tick();browser_tick();assert(strstr(B.download_text,"Server closed the incomplete response"));assert(fs_resolve(0,"/Downloads/fail.bin")<0);
+}
+static void test_browser_download_ownership(void){
+    reset_browser();assert(!download_start(0,"http://example.com/terminal.bin","/terminal.bin"));unsigned terminal=result.request_id;int before=cancels;
+    start_address_download("http://example.com/browser.bin");assert(busy&&result.request_id==terminal&&cancels==before);assert(!download_button_enabled(1));
+    assert(strstr(B.download_notice,"another app"));browser_key(KEY_ESC,0,0);browser_close();assert(busy&&cancels==before);
+    download_cancel();
+    browser_open("http://example.com/loading");unsigned page=result.request_id;start_address_download("http://example.com/browser.bin");
+    assert(busy&&result.request_id==page&&strstr(B.download_notice,"Use Stop"));browser_key(KEY_ESC,0,0);assert(!busy);
+    start_address_download("http://example.com/owned.bin");unsigned owned=B.download_id;
+    start_address_download("http://example.com/new.bin");assert(B.download_id==owned&&result.request_id==owned&&strstr(B.download_notice,"already running"));
+    download_cancel();assert(!download_start(0,"http://example.com/terminal.bin","/terminal.bin"));before=cancels;
+    assert(browser_tick());assert(!download_button_enabled(1));assert(strstr(B.download_text,"replaced"));assert(!strstr(B.download_text,"/terminal.bin"));
+    cancel_download();browser_close();assert(busy&&cancels==before);download_cancel();
+}
+static void test_browser_download_mouse_and_bounds(void){
+    reset_browser();browser_open("http://example.com/index");complete("<a href='/sound.wav?x=1#track'>Download sound</a><p>Read while downloading</p>","text/html");
+    browser_draw(40,30,360,200);int before=starts_count;
+    browser_click(40,30,360,200,download_button_x(40,2)+5,30+85);assert(B.pick_link);
+    browser_click(40,30,360,200,40+PAD+3,30+TOOL_H+8+5);assert(B.focused_link==1&&!B.pick_link&&starts_count==before);
+    browser_click(40,30,360,200,download_button_x(40,0)+5,30+85);assert(download_active()&&starts_count==before+1);
+    assert(!strcmp(started_url,"http://example.com/sound.wav?x=1#track"));assert(!strcmp(B.download_path,"/Downloads/sound.wav"));
+    for(int i=0;i<4;i++)assert(download_button_x(40,i)+download_button_widths[i]<=400);
+    int sizes[][2]={{360,200},{520,350},{720,520},{960,680}};
+    for(unsigned k=0;k<sizeof sizes/sizeof sizes[0];k++){
+        memset(back,0x55,sizeof back);browser_draw(20,20,sizes[k][0],sizes[k][1]);
+        for(int yy=0;yy<768;yy++)for(int xx=0;xx<1024;xx++)if(xx<20||xx>=20+sizes[k][0]||yy<20||yy>=20+sizes[k][1])assert(back[yy*1024+xx]==0x55);
+    }
+    browser_draw(40,30,360,200);assert(B.download_line_count>B.rows);browser_scroll(2);assert(B.download_scroll==2);
+    browser_key(0x4f,0,0);assert(B.download_scroll==B.download_line_count-B.rows);browser_key(0x47,0,0);assert(!B.download_scroll);
+    browser_click(40,30,360,200,download_button_x(40,3)+5,30+85);assert(!B.download_visible&&download_active());
+    browser_click(40,30,360,200,download_button_x(40,3)+5,30+85);assert(B.download_visible);
+    browser_click(40,30,360,200,download_button_x(40,1)+5,30+85);assert(!busy&&download_status()->state==DOWNLOAD_CANCELLED);
+    browser_key(KEY_TAB,0,0);assert(B.focused_link==1&&!B.download_visible);browser_key(0x20,0,BROWSER_MOD_CTRL);assert(download_active());download_cancel();browser_tick();
+}
 static void write_preview(const char *path){
     reset_browser();browser_open("http://10.0.2.2:8000/docs/index.html");complete(example_html,"text/html");
     memset(back,0x55,sizeof back);browser_draw(32,28,760,600);
@@ -158,7 +241,7 @@ static void write_preview(const char *path){
 }
 int main(int argc,char **argv){
     gfx_init(back,linear,1024,768,32,4096);
-    test_url_resolution();test_document_and_async();test_navigation();test_address_and_clicks();test_redirects_and_ownership();test_scroll_reflow_and_bounds();test_save_original_pages();
+    test_url_resolution();test_document_and_async();test_navigation();test_address_and_clicks();test_redirects_and_ownership();test_scroll_reflow_and_bounds();test_save_original_pages();test_download_names();test_browser_binary_download();test_browser_download_ownership();test_browser_download_mouse_and_bounds();
     if(argc>1)write_preview(argv[1]);
     puts("browser: HTTP lifecycle, HTML rendering, links, navigation, address editing, redirects, local files, scrolling and client-area bounds passed");return 0;
 }
