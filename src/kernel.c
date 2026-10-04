@@ -1382,7 +1382,7 @@ typedef struct {
 static WindowState *window_state = (WindowState *)APPS_BASE;
 static int context_slot;
 static void context_set(int slot) { if (slot >= 0 && slot < MAX_WIN) { context_slot = slot; term_select(slot); } }
-_Static_assert(sizeof(WindowState) * MAX_WIN + 8 * 16000 < 0x300000, "window arena overflow");
+_Static_assert(sizeof(WindowState) * MAX_WIN + 8 * 16000 < 0x2F0000, "window arena overflow");
 #define fm_cwd (window_state[context_slot].cwd)
 #define fm_selected (window_state[context_slot].selected)
 #define fm_first (window_state[context_slot].first)
