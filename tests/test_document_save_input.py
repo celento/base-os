@@ -9,11 +9,12 @@ import types
 import unittest
 from unittest import mock
 from PIL import Image
+import numpy as np
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 from document_save_input_test import (ENTRY_BYTES, MANIFEST_LIMIT, MANIFEST_MAGIC,
-    Session, StoppedDisk, expected_outputs, fixture, fnv, manifest_bytes, native_sheet, native_writer,
+    Session, StoppedDisk, WhiteUiText, expected_outputs, fixture, fnv, manifest_bytes, native_sheet, native_writer,
     pending_generations, snapshot_jobs, verify_payloads)
 from init_data import initialize
 from volume import data_layout, encode_snapshot, load, resolve
@@ -157,6 +158,37 @@ class DocumentCollectorTest(unittest.TestCase):
         session.crop_ocr = crop
         session.complete_ocr(event, ('ALPHAZ', 'Unsaved'))
         self.assertEqual(regions, ['footer'])
+
+    def test_white_ui_glyph_match_and_one_core_pixel_rejection(self):
+        matcher = WhiteUiText(ROOT / 'src/font.h')
+        template = matcher.template('Cancel')
+        self.assertEqual(template.shape, (18, 62))
+        pixels = np.full((80, 150, 3), (40, 92, 177), dtype=np.uint8)
+        x, y = 33, 21
+        pixels[y:y + 18, x:x + 62][template] = (255, 255, 255)
+        self.assertEqual(matcher.find(pixels, 'Cancel'), [[x, y]])
+        row, column = np.argwhere(template)[0]
+        pixels[y + row, x + column] = (40, 92, 177)
+        self.assertEqual(matcher.find(pixels, 'Cancel'), [])
+
+    def test_cancel_glyph_evidence_stays_separate_from_ocr_and_capture_clock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Session.__new__(Session)
+            session.directory = pathlib.Path(temporary)
+            matcher = WhiteUiText(ROOT / 'src/font.h')
+            template = matcher.template('Cancel')
+            pixels = np.full((80, 150, 3), (40, 92, 177), dtype=np.uint8)
+            pixels[21:39, 33:95][template] = 255
+            image = session.directory / 'cancel.png'; Image.fromarray(pixels).save(image)
+            event = dict(ocr='Save changes before closing?', screenshot=str(image),
+                         dumped=12.125, pending_generations=[7])
+            self.assertTrue(session.has_text(event, 'Cancel'))
+            self.assertEqual(event['ocr'], 'Save changes before closing?')
+            self.assertEqual(event['dumped'], 12.125)
+            self.assertEqual(event['pending_generations'], [7])
+            self.assertEqual(event['glyph_matches'][0]['positions'], [[33, 21]])
+            self.assertEqual(event['glyph_matches'][0]['font_sha256'], matcher.font_sha256)
+            self.assertFalse(session.has_text(event, 'Discard'))
 
     def test_floppy_does_not_wait_for_async_markers(self):
         session = Session.__new__(Session)
