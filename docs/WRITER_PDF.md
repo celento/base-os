@@ -208,7 +208,10 @@ hits, both export shortcuts while searching, exact per-file/storage boundaries,
 projected-node accounting, full node slots, failed create/write/sync, repeated
 sync-only retry, changed bytes, changed size, reused IDs, changed document/paper,
 native binding/selection/history preservation, read-only PDF rejection and
-512 KiB rejection. The ordinary host suite uses ASan/UBSan.
+512 KiB rejection and a complete 1,214-page file. The ordinary host suite uses
+ASan/UBSan. `tests/test_writer_dialog.py` also executes the exact production
+name-dialog functions with real Writer wrappers, testing focus/paper input,
+retry, cancellation, stale owners and unchanged legacy save/export dispatch.
 
 `python3 tools/writer_pdf_input_test.py build` uses a copy of the unmodified packed
 production floppy and a fresh disposable data volume. It drives only normal
