@@ -120,3 +120,19 @@ integrated guest tests.
 
 If `/tmp` has no free space, point `TMPDIR` at a writable scratch directory with
 room before invoking the suite; both Python and the C compiler honor it.
+
+
+## Verified desktop controls
+
+Files supports Ctrl+X / Ctrl+C / Ctrl+V and the Edit menu. A pending Cut is marked
+in the row; bounded operation feedback temporarily replaces the path strip.
+Completed mutations refresh every open Files window and select the resulting
+node. File and text clipboard formats are exclusive: a file cannot paste stale
+text or delete a Writer selection, and new text clears pending file selections.
+
+`tools/file_clipboard_input_test.py` verifies actual production keyboard/menu
+input, safe repeated copies, Cut collision rejection, identity-preserving moves,
+same-folder no-op, recursive copy and subtree rejection, an exact 65,792-byte
+binary, source deletion/reuse, Writer/Editor clipboard separation and reboot
+persistence. Tests use new disposable images and inspect bounded compiled data
+layouts without writing guest memory.
