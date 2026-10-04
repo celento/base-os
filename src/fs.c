@@ -70,6 +70,7 @@ _Static_assert(FS_SECOND_LBA >= FS_DISK_LBA + FS_DISK_SECTORS &&
                FS_SECOND_LBA + FS_DISK_SECTORS <= DISK_SECTORS, "disk layout overlap");
 
 __attribute__((weak)) unsigned fs_clock(void) { return 0; }
+__attribute__((weak)) void fs_background_poll(void) {}
 unsigned fs_modified(int id) { return fs_valid(id) ? nodes[id].modified : 0; }
 unsigned fs_capacity(void) {
     return data_backend ? FS_DATA_CAPACITY : (FS_MAX_NODES - 1) * (FS_MAX_SIZE - 1);
@@ -271,7 +272,10 @@ static void release_data(int id) {
     if (!nodes[id].size) return;
     unsigned offset = nodes[id].offset, bytes = nodes[id].size + 1;
     unsigned char *pool = (unsigned char *)FS_POOL_BASE;
-    for (unsigned i = offset; i < pool_used - bytes; ++i) pool[i] = pool[i + bytes];
+    for (unsigned i = offset; i < pool_used - bytes; ++i) {
+        pool[i] = pool[i + bytes];
+        if((i & 4095u)==4095u)fs_background_poll();
+    }
     for (int i = 0; i < FS_MAX_NODES; ++i)
         if (nodes[i].used && nodes[i].size && nodes[i].offset > offset) nodes[i].offset -= bytes;
     pool_used -= bytes;
@@ -665,6 +669,7 @@ static unsigned crc32(const void *data, unsigned n) {
         crc ^= p[i];
         for (unsigned bit = 0; bit < 8; ++bit)
             crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        if((i & 4095u)==4095u)fs_background_poll();
     }
     return ~crc;
 }

@@ -14,6 +14,8 @@ void kmemcpy(void *d, const void *s, int n);
 void kmemset(void *d, int v, int n);
 
 unsigned fs_clock(void);
+/* Device-only servicing during long copies/checksums; must not mutate files. */
+void fs_background_poll(void);
 unsigned fs_modified(int id);
 unsigned fs_identity(int id);
 unsigned fs_capacity(void);
