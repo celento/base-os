@@ -10,7 +10,7 @@ typedef int bos_i32;
 typedef bos_u32 BosHandle;
 _Static_assert(sizeof(bos_u32)==4 && sizeof(bos_i32)==4,"BaseOS ABI requires 32-bit integers");
 #define BOS_ABI_MAJOR 1u
-#define BOS_ABI_MINOR 1u
+#define BOS_ABI_MINOR 2u
 #define BOS_ABI_QUERY_MIN_SIZE 16u
 #define BOS_HANDLE_INVALID 0u
 
@@ -44,6 +44,8 @@ enum BosResult {
 /* This execution context uses BEX2 sparse offsets; not a global exec promise. */
 #define BOS_FEATURE_BEX2           (1u<<5)
 #define BOS_FEATURE_HOSTED_UI      (1u<<6)
+/* Contextual: the caller already owns a primary native window. */
+#define BOS_FEATURE_OWNED_NATIVE_WINDOW (1u<<7)
 #define BOS_CONTEXT_LEGACY_EXEC 1u
 #define BOS_CONTEXT_DESKTOP_TASK 2u
 
@@ -117,18 +119,20 @@ _Static_assert(sizeof(BosFileInfo)==32,"file info wire size");
 #define BOS_HANDLE_TYPE_OPERATION 0x30000000u
 #define BOS_HANDLE_TYPE_UI_TARGET 0x40000000u
 #define BOS_HANDLE_SERIAL_MAX 0x0fffffffu
-/* Opt-in pointer endpoint for the caller's existing hosted canvas. This does
- * not create a window, allocate a surface, or replace the legacy byte keys. */
+/* Opt-in pointer endpoint for an existing hosted canvas or an already-owned
+ * primary native window. Neither OPEN nor ADOPT creates a window, allocates a
+ * surface, or replaces the legacy byte keys. RELEASE closes only the endpoint. */
 #define BOS_UI_MAJOR 1u
-#define BOS_UI_MINOR 0u
+#define BOS_UI_MINOR 1u
 #define BOS_UI_QUERY_MIN_SIZE 16u
 #define BOS_UI_QUEUE_CAPACITY 64u
 #define BOS_UI_WAIT_MAX_MS 60000u
 #define BOS_UI_TARGETS_TOTAL 8u
 #define BOS_UI_KIND_HOSTED_CANVAS 1u
+#define BOS_UI_KIND_OWNED_WINDOW 2u
 enum BosUiOperation {
     BOS_UI_QUERY=0, BOS_UI_HOST_OPEN=1, BOS_UI_INFO=2, BOS_UI_READ=3,
-    BOS_UI_WAIT=4, BOS_UI_RELEASE=5
+    BOS_UI_WAIT=4, BOS_UI_RELEASE=5, BOS_UI_WINDOW_ADOPT=6
 };
 #define BOS_UI_SUB_POINTER (1u<<0)
 #define BOS_UI_SUB_HOVER (1u<<1)
@@ -141,6 +145,8 @@ enum BosUiOperation {
 #define BOS_UI_CAP_BOUNDED_WAIT (1u<<5)
 #define BOS_UI_CAP_LEGACY_KEY_READINESS (1u<<6)
 #define BOS_UI_CAP_HOST_FORCED_CLOSE (1u<<7)
+#define BOS_UI_CAP_OWNED_WINDOW (1u<<8)
+#define BOS_UI_CAP_FORCED_CLOSE (1u<<9)
 #define BOS_UI_BUTTON_LEFT 1u
 #define BOS_UI_BUTTON_RIGHT 2u
 /* These distinguish left/right modifier keys; their OR is the logical key. */

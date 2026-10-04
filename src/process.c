@@ -287,10 +287,18 @@ static int image_plan(const void *file,unsigned bytes,ExecutablePlan *plan) {
     if(image_magic(file,bytes)!=BOS_BEX2_MAGIC)return -2;
     if(!BASEOS_BEX2_ENABLED)return PROCESS_CREATE_UNSUPPORTED;
     ExecutablePolicy policy={BOS_ABI_MAJOR,BOS_ABI_MINOR,fs_file_limit(),PROCESS_PRIVATE_PAGE_LIMIT};
-    int result=executable_plan_bex2(file,bytes,&policy,plan);
+    int result=executable_plan_bex2_flags(file,bytes,&policy,BOS_BEX2_FLAGS_KNOWN,plan);
     if(result==EXECUTABLE_OK)return 0;
     if(result==EXECUTABLE_UNSUPPORTED)return PROCESS_CREATE_UNSUPPORTED;
     return result==EXECUTABLE_CAPACITY?PROCESS_CREATE_LAYOUT:-2;
+}
+int process_probe_launch(const void *file,unsigned bytes,unsigned *out_mode) {
+    if(!out_mode)return -2;
+    ExecutablePlan plan;int result=image_plan(file,bytes,&plan);
+    if(result)return result;
+    *out_mode=(plan.flags&BOS_BEX2_FLAG_NATIVE_WINDOW_V1)?
+        PROCESS_LAUNCH_OWNED_WINDOW:PROCESS_LAUNCH_HOSTED;
+    return 0;
 }
 int process_run(const void *file,unsigned bytes,const ProgramIO *io){
     uint32_t h[4];
@@ -320,12 +328,15 @@ static NativeTask *task_lookup(ProcessHandle process) {
         if(tasks[i].state!=PROCESS_TASK_EMPTY&&tasks[i].owner_id==process)return tasks+i;
     return 0;
 }
-int process_create(const void *file,unsigned bytes,const char *argument,
-                   unsigned argument_length,ProcessHandle *out_process) {
+int process_create_mode(const void *file,unsigned bytes,const char *argument,
+                        unsigned argument_length,unsigned mode,ProcessHandle *out_process) {
     ExecutablePlan plan;
     if(active||!out_process)return -2;
     int validation=image_plan(file,bytes,&plan);
     if(validation)return validation;
+    unsigned required=(plan.flags&BOS_BEX2_FLAG_NATIVE_WINDOW_V1)?
+        PROCESS_LAUNCH_OWNED_WINDOW:PROCESS_LAUNCH_HOSTED;
+    if(mode!=required)return PROCESS_CREATE_UNSUPPORTED;
     if(argument_length>PROCESS_ARGUMENT_MAX||
        (argument_length&&(!argument||argument[0]!='/')))return -2;
     for(unsigned i=0;i<argument_length;i++)
@@ -357,6 +368,16 @@ int process_create(const void *file,unsigned bytes,const char *argument,
     task->state=PROCESS_TASK_CREATED;
     *out_process=owner_id;
     return 0;
+}
+int process_create(const void *file,unsigned bytes,const char *argument,
+                   unsigned argument_length,ProcessHandle *out_process) {
+    return process_create_mode(file,bytes,argument,argument_length,PROCESS_LAUNCH_HOSTED,out_process);
+}
+unsigned process_launch_mode(ProcessHandle process) {
+    NativeTask *task=task_lookup(process);
+    if(!task)return 0;
+    return (task->plan.flags&BOS_BEX2_FLAG_NATIVE_WINDOW_V1)?
+        PROCESS_LAUNCH_OWNED_WINDOW:PROCESS_LAUNCH_HOSTED;
 }
 int process_bind(ProcessHandle process,const ProcessIO *io) {
     NativeTask *task=task_lookup(process);
@@ -603,7 +624,10 @@ static int abi_query(unsigned buffer,unsigned capacity,unsigned major,unsigned r
     info.file_bytes=fs_file_limit();
     info.files_per_process=NATIVE_FILE_PER_OWNER;info.files_total=NATIVE_FILE_CAPACITY;
     info.ticks_per_second=TIMER_HZ;info.processes_total=PROCESS_TASKS+1;
-    if(current_task&&current_task->bound&&native_ui_available())info.features|=BOS_FEATURE_HOSTED_UI;
+    if(current_task&&current_task->bound&&native_ui_available()){
+        info.features|=(current_task->plan.flags&BOS_BEX2_FLAG_NATIVE_WINDOW_V1)?
+            BOS_FEATURE_OWNED_NATIVE_WINDOW:BOS_FEATURE_HOSTED_UI;
+    }
     if(current_task&&native_sync_available()){
         info.features|=BOS_FEATURE_OWNED_SYNC|BOS_FEATURE_OPERATION_WAIT;
         info.operations_per_process=native_sync_per_owner_limit();
@@ -685,16 +709,21 @@ static int native_file_call(unsigned call,unsigned a,unsigned b,unsigned c,unsig
 static int native_ui_call(uint32_t *r,unsigned operation,unsigned a,unsigned b,unsigned c,unsigned d) {
     if(!current_task||!current_task->bound||!native_ui_available())return BOS_E_UNSUPPORTED;
     const ProcessBinding *binding=&current_task->io.binding;
+    unsigned kind=(current_task->plan.flags&BOS_BEX2_FLAG_NATIVE_WINDOW_V1)?
+        BOS_UI_KIND_OWNED_WINDOW:BOS_UI_KIND_HOSTED_CANVAS;
     if(operation==BOS_UI_QUERY){
         if(a!=BOS_UI_MAJOR)return BOS_E_UNSUPPORTED;
         if(d||c<BOS_UI_QUERY_MIN_SIZE||!user_span(b,c,USER_WRITE))return BOS_E_INVALID;
-        BosUiInfoV1 info;native_ui_query(&info,TIMER_HZ);
+        BosUiInfoV1 info;native_ui_query_kind(&info,TIMER_HZ,kind);
         kmemcpy((void *)(USER_BASE+b),&info,c<sizeof info?c:sizeof info);return BOS_OK;
     }
-    if(operation==BOS_UI_HOST_OPEN){
+    if(operation==BOS_UI_HOST_OPEN||operation==BOS_UI_WINDOW_ADOPT){
+        if((operation==BOS_UI_HOST_OPEN&&kind!=BOS_UI_KIND_HOSTED_CANVAS)||
+           (operation==BOS_UI_WINDOW_ADOPT&&kind!=BOS_UI_KIND_OWNED_WINDOW))return BOS_E_UNSUPPORTED;
         if(a!=BOS_UI_MAJOR)return BOS_E_UNSUPPORTED;
         if(c<sizeof(BosUiTargetInfoV1)||!user_span(b,c,USER_WRITE))return BOS_E_INVALID;
-        BosUiTargetInfoV1 info;int result=native_ui_open(binding,d,&info);
+        BosUiTargetInfoV1 info;int result=operation==BOS_UI_HOST_OPEN?
+            native_ui_open(binding,d,&info):native_ui_adopt(binding,d,&info);
         if(result==BOS_OK)kmemcpy((void *)(USER_BASE+b),&info,sizeof info);
         return result;
     }

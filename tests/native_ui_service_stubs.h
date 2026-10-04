@@ -6,6 +6,8 @@
  * dedicated UI dispatcher fixture links the real core and supplies WM hooks. */
 int native_ui_available(void){return 0;}
 void native_ui_query(BosUiInfoV1 *out,unsigned hz){(void)out;(void)hz;}
+void native_ui_query_kind(BosUiInfoV1 *out,unsigned hz,unsigned kind){(void)out;(void)hz;(void)kind;}
+int native_ui_adopt(const ProcessBinding *b,unsigned s,BosUiTargetInfoV1 *out){(void)b;(void)s;(void)out;return BOS_E_UNSUPPORTED;}
 int native_ui_open(const ProcessBinding *b,unsigned s,BosUiTargetInfoV1 *out){(void)b;(void)s;(void)out;return BOS_E_UNSUPPORTED;}
 int native_ui_info(const ProcessBinding *b,BosHandle h,BosUiTargetInfoV1 *out){(void)b;(void)h;(void)out;return BOS_E_STALE;}
 int native_ui_read(const ProcessBinding *b,BosHandle h,BosUiEventV1 *out){(void)b;(void)h;(void)out;return BOS_E_STALE;}

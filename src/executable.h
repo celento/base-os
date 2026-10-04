@@ -12,6 +12,7 @@
 typedef struct { uint32_t offset, bytes, pages; } ExecutableRegion;
 typedef struct {
     uint32_t kind, file_bytes, entry_offset, virtual_bytes, initial_sp;
+    uint32_t flags; /* validated required launch flags; zero for BEX1/hosted */
     /* Region bytes are committed, rounded page bytes. Zero-size regions are
      * present in the plan but require no pages. Text has read-only user pages;
      * data/workspace/stack have writable user pages. No other user pages exist. */
@@ -26,6 +27,11 @@ enum ExecutableResult {
     EXECUTABLE_OK=0, EXECUTABLE_FORMAT=-1,
     EXECUTABLE_UNSUPPORTED=-2, EXECUTABLE_CAPACITY=-3
 };
+/* Explicit required-flags policy. Unknown bits are never accepted even when
+ * present in accepted_flags. The legacy entry point uses an empty mask. */
+int executable_plan_bex2_flags(const void *image,uint32_t bytes,
+                              const ExecutablePolicy *policy,uint32_t accepted_flags,
+                              ExecutablePlan *out);
 int executable_plan_bex2(const void *image, uint32_t bytes,
                          const ExecutablePolicy *policy, ExecutablePlan *out);
 #endif
