@@ -21,8 +21,12 @@ SECTIONS {
     } :data
     __kernel_end = .;
     ASSERT(_start == KERNEL_LOAD_ADDR, "entry must be first in image")
-    ASSERT(__bootstrap_end - _start <= 0x10000,
-           "real-mode bootstrap exceeds its code segment")
+    ASSERT(__bootstrap_end - _start <= KERNEL_BOOTSTRAP_BYTES,
+           "bootstrap, decoder and GDT exceed plain packed prefix")
+    ASSERT(KERNEL_BOOT_STACK_BOTTOM >= 0x8400 &&
+           KERNEL_BOOT_STACK_TOP <= KERNEL_STAGE_ADDR &&
+           KERNEL_BOOT_STACK_TOP > KERNEL_BOOT_STACK_BOTTOM,
+           "bootstrap stack overlaps BIOS scratch or staged kernel")
     ASSERT(KERNEL_STAGE_ADDR % 16 == 0 && KERNEL_LOAD_ADDR % 16 == 0,
            "kernel addresses must be paragraph aligned")
     ASSERT(KERNEL_STAGE_ADDR + KERNEL_SECTORS * SECTOR_SIZE <= KERNEL_STAGE_LIMIT,
@@ -33,8 +37,7 @@ SECTIONS {
            "relocated kernel must use extended RAM")
     ASSERT(STACK_TOP - STACK_BOTTOM == 0x10000 && STACK_TOP <= FB_BASE,
            "kernel stack must fit below framebuffer")
-    ASSERT(__load_end - KERNEL_LOAD_ADDR <= KERNEL_SECTORS * SECTOR_SIZE,
-           "kernel exceeds boot loader reservation")
+    /* The producer bounds packed disk bytes; RAM still bounds raw code/BSS. */
     ASSERT(__kernel_end <= STACK_BOTTOM, "kernel overlaps reserved stack")
     ASSERT(1 + KERNEL_PRIMARY_SECTORS <= FS_DISK_LBA, "kernel overlaps filesystem")
     ASSERT(KERNEL_EXT_LBA >= FS_SECOND_LBA + FS_DISK_SECTORS,

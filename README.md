@@ -82,6 +82,8 @@ make run
 
 At the first boot with a newly marked data disk, BaseOS reads the existing floppy files and saves a copy to the data disk. Both old floppy snapshots remain untouched. Later boots use the data disk. Without the optional IDE disk, the old floppy filesystem remains usable with its original limits. An unknown or unreadable IDE disk is never formatted automatically; BaseOS exposes the boot files read-only for recovery.
 
+The build keeps the exact linked `kernel.bin` and derives a deterministic `kernel.packed` for the BIOS boot disk. Packing can accommodate initialized kernels above the former raw disk limit, subject to compressed disk capacity and the unchanged kernel/BSS RAM bound. See the [packed boot layout](docs/TECHNICAL.md).
+
 Normal rebuilds preserve the filesystem area and back up an existing image before changing it. `make clean` keeps both disk images and backups. Shut QEMU down before rebuilding its disk or using the host file exchange tool. Use **System → Shutdown** to flush pending saves before closing the emulator.
 
 Host and reference-media tests additionally need Clang, FFmpeg and Pillow (`python3-pil` on Debian). The [original Harbor examples](assets/examples/) provide 18 seconds of music and a nine-second animation; release data disks include both. The normal build uses checked-in font data. Regenerating it with `python3 tools/gen_font.py` additionally requires Pillow.

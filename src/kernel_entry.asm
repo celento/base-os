@@ -3,7 +3,7 @@
 ; The BIOS far-jumps to the staged copy in 16-bit real mode. Relative calls
 ; within this bootstrap work in either copy; absolute code/GDT addresses must
 ; explicitly use the staged address until the protected-mode copy completes.
-; Collect low-memory boot info, enter PM, relocate, then run the linked kernel.
+; Collect low-memory boot info, enter PM, unpack, then run the linked kernel.
 
 section .text.entry
 [bits 16]
@@ -346,18 +346,201 @@ pm_relocate:
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    ; No stack or external call until the initialized kernel image is copied.
+    ; An explicit low stack avoids inherited upper ESP bits. It is disjoint
+    ; from BIOS scratch, the staged source and the high reconstructed image.
+    mov esp, KERNEL_BOOT_STACK_TOP
     cld
-    mov esi, KERNEL_STAGE_ADDR
+
+    mov ebp, KERNEL_STAGE_ADDR + KERNEL_BOOTSTRAP_BYTES
+    cmp dword [ebp], KERNEL_PACK_MAGIC
+    jne packed_failed
+    cmp dword [ebp + 4], KERNEL_PACK_HEADER_BYTES
+    jne packed_failed
+    cmp dword [ebp + 8], 1       ; codec 0 = raw, 1 = LZ4 block
+    ja packed_failed
+    cmp dword [ebp + 24], 0
+    jne packed_failed
+    mov ecx, [ebp + 12]
+    test ecx, ecx
+    jz packed_failed
+    cmp ecx, KERNEL_SECTORS * SECTOR_SIZE - KERNEL_BOOTSTRAP_BYTES - KERNEL_PACK_HEADER_BYTES
+    ja packed_failed
+    mov eax, __load_end
+    sub eax, KERNEL_LOAD_ADDR
+    cmp [ebp + 16], eax         ; exact size from this linked bootstrap
+    jne packed_failed
+    test eax, eax
+    jz packed_failed
+    cmp eax, STACK_BOTTOM - KERNEL_LOAD_ADDR
+    ja packed_failed
+    mov esi, ebp
+    mov ecx, 28
+    call packed_crc32
+    cmp eax, [ebp + 28]
+    jne packed_failed
+
+    lea esi, [ebp + KERNEL_PACK_HEADER_BYTES]
     mov edi, KERNEL_LOAD_ADDR
-    mov ecx, __load_end
-    sub ecx, edi
+    mov ebx, __load_end         ; fixed exclusive destination bound
+    cmp dword [ebp + 8], 0
+    je .raw
+    mov eax, [ebp + 12]
+    lea ebp, [esi + eax]        ; exclusive input bound, already stage-bounded
+.sequence:
+    cmp esi, ebp
+    jae packed_failed
+    movzx edx, byte [esi]
+    inc esi
+    mov ecx, edx
+    shr ecx, 4
+    call packed_length
+    mov eax, ebp
+    sub eax, esi
+    cmp ecx, eax
+    ja packed_failed           ; literal read must stay in payload
+    mov eax, ebx
+    sub eax, edi
+    cmp ecx, eax
+    ja packed_failed           ; literal write must stay in raw image
     rep movsb
-    ; process_init will edit the relocated user/TSS descriptors. Reload GDTR
-    ; before entering C so LTR and later ring-3 returns see those same bytes.
+    cmp esi, ebp
+    je .decoded                ; final sequence ends after literals
+    mov eax, ebp
+    sub eax, esi
+    cmp eax, 2
+    jb packed_failed
+    mov ecx, edx
+    and ecx, 15
+    movzx edx, word [esi]
+    add esi, 2
+    test edx, edx
+    jz packed_failed
+    mov eax, edi
+    sub eax, KERNEL_LOAD_ADDR
+    cmp edx, eax
+    ja packed_failed           ; match cannot start before produced output
+    call packed_length
+    add ecx, 4
+    jc packed_failed
+    mov eax, ebx
+    sub eax, edi
+    cmp ecx, eax
+    ja packed_failed
+    push esi
+    mov esi, edi
+    sub esi, edx
+    rep movsb                  ; forward byte copy supports overlapping matches
+    pop esi
+    jmp .sequence
+.raw:
+    mov ecx, [ebp + 12]
+    cmp ecx, [ebp + 16]
+    jne packed_failed
+    rep movsb
+.decoded:
+    cmp edi, ebx
+    jne packed_failed
+    mov esi, KERNEL_LOAD_ADDR
+    mov ecx, edi
+    sub ecx, esi
+    call packed_crc32
+    cmp eax, [KERNEL_STAGE_ADDR + KERNEL_BOOTSTRAP_BYTES + 20]
+    jne packed_failed
+
+global __packed_verified
+__packed_verified:
+    ; process_init will edit the reconstructed user/TSS descriptors. Reload
+    ; GDTR before C so LTR and later ring-3 returns see those same bytes.
     mov dword [0x7E42], gdt_start
     lgdt [0x7E40]
     jmp CODE_SEG:pm_start
+
+; Extend an LZ4 nibble length in ECX. ESI/EBP bound every extra-byte read.
+; EDX (token or match offset) and EBX/EDI (destination bounds) are preserved.
+packed_length:
+    cmp ecx, 15
+    jne .done
+.more:
+    cmp esi, ebp
+    jae packed_failed
+    movzx eax, byte [esi]
+    inc esi
+    add ecx, eax
+    jc packed_failed
+    cmp ecx, STACK_BOTTOM - KERNEL_LOAD_ADDR
+    ja packed_failed
+    cmp eax, 255
+    je .more
+.done:
+    ret
+
+; IEEE CRC32, same polynomial and initial/final XOR as Python zlib.crc32.
+; Reads exactly ECX bytes from ESI, returns EAX, clobbers EDX only otherwise.
+packed_crc32:
+    mov eax, 0xFFFFFFFF
+.byte:
+    test ecx, ecx
+    jz .done
+    xor al, [esi]
+    inc esi
+    mov edx, 8
+.bit:
+    shr eax, 1
+    jnc .next
+    xor eax, 0xEDB88320
+.next:
+    dec edx
+    jnz .bit
+    dec ecx
+    jmp .byte
+.done:
+    not eax
+    ret
+
+packed_failed:
+    ; Emit a bounded early COM1 diagnostic without calling C or using RAM
+    ; outside the bootstrap reservation. No writes continue after failure.
+    cli
+    mov dx, 0x3F9
+    xor al, al
+    out dx, al
+    mov dx, 0x3FB
+    mov al, 0x80
+    out dx, al
+    mov dx, 0x3F8
+    mov al, 1
+    out dx, al
+    mov dx, 0x3F9
+    xor al, al
+    out dx, al
+    mov dx, 0x3FB
+    mov al, 3
+    out dx, al
+    mov esi, packed_error - KERNEL_LOAD_ADDR + KERNEL_STAGE_ADDR
+.print:
+    lodsb
+    test al, al
+    jz .halt
+    mov bl, al
+    mov dx, 0xE9
+    out dx, al
+    mov ecx, 65536
+.wait:
+    mov dx, 0x3FD
+    in al, dx
+    test al, 0x20
+    jnz .send
+    loop .wait
+    jmp .print
+.send:
+    mov dx, 0x3F8
+    mov al, bl
+    out dx, al
+    jmp .print
+.halt:
+    hlt
+    jmp .halt
+packed_error db 'PACKED KERNEL ERROR', 13, 10, 0
 
 pm_start:
     mov esp, STACK_TOP
