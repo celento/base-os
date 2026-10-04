@@ -57,6 +57,19 @@ content-addressed whole-image backups and atomic replacement. The optional
 `--profile default` on the copy tool can create a new smaller destination only
 if every file, node and aggregate byte count fits; it never truncates data.
 
+For the large profile, `make run-large` or `make headless-large` uses the separate
+`build/baseos-large-data.img` filename and 128 MiB RAM. Every build verifies an
+existing data image against the requested profile without modifying its bytes.
+A profile mismatch is an error, never an instruction to reformat. `make clean`
+retains both data images and all existing backups.
+
+Release archives made with `tools/package_release.py --include-large` contain
+two independent fresh disk pairs. `run-baseos.sh` / `.cmd` selects the default;
+`run-baseos-large.sh` / `.cmd` selects the larger one. They do not share files or
+settings after boot. The manifest records both geometries, and the release check
+boots both profiles separately. Do not overwrite saved disks with those fresh
+examples when updating an existing installation.
+
 ## Geometry and limits
 
 | Property | Default profile | Large profile |

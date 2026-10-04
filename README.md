@@ -2,7 +2,7 @@
 
 A small hobby operating system written from scratch in C and x86 assembly. It boots directly into a graphical desktop with persistent files, document editing, HTTP browsing, media playback, and small protected native applications.
 
-BaseOS runs in QEMU with 64 MiB of RAM. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased bitmap fonts. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
+BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased bitmap fonts. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
 
 ![Files and Editor running side by side in BaseOS](screenshots/gallery/desktop.png)
 
@@ -12,7 +12,7 @@ BaseOS runs in QEMU with 64 MiB of RAM. The desktop is rendered entirely in soft
 - Edit documents up to 65,535 bytes with selection, clipboard, eight undo steps, and case-sensitive or insensitive find/replace. Changed documents have Save/Discard/Cancel on close; saving confirms disk synchronization. Draw with Paint's brushes, shapes, fill and text tools.
 - Calculate small budgets in Spreadsheet: a 128 x 26 grid, bounded formulas, range copy/paste, four-step undo, native .bsh files, CSV value interchange and guarded recovery. Start with Documents/budget.bsh.
 - Write formatted documents with Writer: proportional wrapping, bold/italic/underline, headings, alignment, grouped undo, native save/recovery and a separate RTF export. Writer supports 32,768 ASCII text bytes; the plain Editor remains available.
-- Store files up to 2 MiB on a separate 16 MiB data disk. Its dual snapshots hold about 8 MiB of file data; the IDE filesystem supports 256 total file, folder and application nodes (64 in legacy floppy-only mode). Existing boot-disk files migrate without changing the old snapshots.
+- Store files up to 2 MiB on a separate 16 MiB data disk, or explicitly choose the large profile for 16 MiB files on a 64 MiB disk. Dual snapshots hold about 8 MiB or 32 MiB of file data respectively; both support 256 total file, folder and application nodes (64 in legacy floppy-only mode). Existing boot-disk files migrate without changing the old snapshots.
 - Copy and move files or folders through Files with Ctrl+C/Ctrl+X/Ctrl+V or the Edit menu. Collisions never overwrite unrelated files, and stale file identities are rejected.
 - Read HTTP pages in Browser, follow links, navigate history, and save complete HTML for offline reading. Download binary files with Browser’s Download button or Terminal while other apps keep running.
 - Play PCM WAV and MP3 through QEMU's SB16 device, with pause, resume, volume and a playlist. Play MPEG-1 program streams with synchronized MP2 audio; 48 kHz audio is resampled to 44.1 kHz for QEMU SB16. Exact bounds are in the media guides.
@@ -85,6 +85,12 @@ An [optional large-volume profile](docs/LARGE_VOLUMES.md) uses 128 MiB RAM and
 an explicitly created 64 MiB data disk, with 16 MiB files and about 32 MiB of
 file data. The default build and existing disks stay unchanged; migration is
 a copy into a new image, never an in-place resize.
+
+Use `make run-large` (or `make headless-large`) to create or verify the separate
+`build/baseos-large-data.img` and boot with 128 MiB RAM. This does not copy an
+existing IDE disk: follow the guide's explicit migration command first if you
+want to keep that disk's current documents. WAV/MP3 can use up to 16 MiB of source
+data in this profile; Editor, Writer, MPEG and download limits are unchanged.
 
 At the first boot with a newly marked data disk, BaseOS reads the existing floppy files and saves a copy to the data disk. Both old floppy snapshots remain untouched. Later boots use the data disk. Without the optional IDE disk, the old floppy filesystem remains usable with its original limits. An unknown or unreadable IDE disk is never formatted automatically; BaseOS exposes the boot files read-only for recovery.
 

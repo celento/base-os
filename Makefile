@@ -34,6 +34,7 @@ OBJS = $(OUT)/kernel_entry.o $(OUT)/interrupts.o $(OUT)/process_entry.o $(addpre
 HDRS = $(wildcard $(SRC)/*.h) $(wildcard assets/*.h)
 IMG = $(OUT)/baseos.img
 DATA_IMG = $(OUT)/baseos-data.img
+DATA_PROFILE ?= default
 QEMU_MEMORY ?= 64M
 QEMU_DATA = -drive file=$(DATA_IMG),format=raw,index=0,if=ide,cache=writeback
 
@@ -123,8 +124,8 @@ $(OUT)/kernel.packed: $(OUT)/kernel.bin tools/kernel_pack.py tools/layout.py $(S
 $(IMG): $(OUT)/boot.bin $(OUT)/kernel.packed tools/update_image.py tools/kernel_pack.py tools/layout.py $(SRC)/layout.h
 	$(PYTHON) tools/update_image.py --packed $@ $(OUT)/boot.bin $(OUT)/kernel.packed
 
-$(DATA_IMG): tools/init_data.py tools/layout.py $(SRC)/layout.h | $(OUT)
-	$(PYTHON) tools/init_data.py $@
+$(DATA_IMG): FORCE tools/init_data.py tools/layout.py $(SRC)/layout.h | $(OUT)
+	$(PYTHON) tools/init_data.py $@ --profile $(DATA_PROFILE)
 
 run: $(IMG) $(DATA_IMG)
 	qemu-system-i386 -m $(QEMU_MEMORY) -vga std -nic user,model=rtl8139 $(QEMU_AUDIO) \
@@ -136,10 +137,17 @@ headless: $(IMG) $(DATA_IMG)
 		-boot a -drive file=$(IMG),format=raw,index=0,if=floppy $(QEMU_DATA) \
 		-serial stdio -display none -no-reboot
 
+# Separate data filenames make selecting this profile non-destructive.
+run-large:
+	$(MAKE) run DATA_IMG=$(OUT)/baseos-large-data.img DATA_PROFILE=large QEMU_MEMORY=128M
+
+headless-large:
+	$(MAKE) headless DATA_IMG=$(OUT)/baseos-large-data.img DATA_PROFILE=large QEMU_MEMORY=128M
+
 clean:
 	rm -f $(OBJS) $(OUT)/boot.bin $(OUT)/kernel.bin $(OUT)/kernel.packed $(OUT)/kernel.elf $(OUT)/linker.ld $(OUT)/layout.inc
 
-.PHONY: all run headless clean
+.PHONY: all run headless run-large headless-large clean
 
 # Image and its backups intentionally survive clean.
 test:

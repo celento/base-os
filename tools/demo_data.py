@@ -3,24 +3,26 @@ import pathlib
 import struct
 import subprocess
 from qemu_session import DesktopSession
-from volume import DATA_LAYOUT, data_marker, load, resolve, commit
+from volume import data_layout, data_marker, load, resolve, commit
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def install(build, boot_image, data_image, epoch):
+def install(build, boot_image, data_image, epoch, profile='default'):
     """Boot an explicitly blank release disk, then atomically add original samples.
 
     Refuses all existing nonblank volume data. Called only for disposable release
     staging; ordinary user's disks continue to use the non-overwriting volume CLI.
     """
     build, boot_image, data_image = map(pathlib.Path, (build, boot_image, data_image))
+    layout = data_layout(profile)
     blank = data_image.read_bytes()
-    if len(blank) != DATA_LAYOUT.sectors * 512 or blank[:512] != data_marker() or any(blank[512:]):
+    if len(blank) != layout.sectors * 512 or blank[:512] != data_marker(profile) or any(blank[512:]):
         raise ValueError('Demo seeding requires a newly generated blank data disk')
     symbols = {p[2]: int(p[0], 16) for line in subprocess.check_output(['nm', '-n', str(build / 'kernel.elf')], text=True).splitlines() if len(p := line.split()) == 3}
     with DesktopSession(build, 'demo-seed', image=boot_image.resolve(),
-                        extra=['-drive', f'file={data_image.resolve()},format=raw,index=0,if=ide', '-nic', 'none']) as guest:
+                        extra=['-m', '128M' if profile == 'large' else '64M',
+                               '-drive', f'file={data_image.resolve()},format=raw,index=0,if=ide', '-nic', 'none']) as guest:
         guest.boot()
         guest.wait(lambda: struct.unpack('<I', guest.memory(symbols['fs_touched'], 4))[0] == 0,
                    'Fresh demo disk did not synchronize')
@@ -36,7 +38,7 @@ def install(build, boot_image, data_image, epoch):
     for name, parent, content in examples:
         if any(node['parent'] == parent and node['name'] == name for node in nodes.values()):
             raise ValueError('Fresh demo destination unexpectedly exists: ' + name)
-        ident = next(i for i in range(1, DATA_LAYOUT.node_limit) if i not in nodes)
+        ident = next(i for i in range(1, layout.node_limit) if i not in nodes)
         nodes[ident] = dict(name=name, parent=parent, directory=0, app=0, data=content, modified=modified)
     before = set(data_image.parent.glob(data_image.name + '.*.bak'))
     commit(data_image, data, slot, generation, nodes)
