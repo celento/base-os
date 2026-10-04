@@ -7,6 +7,7 @@
 #include "history.h"
 #include "writer.h"
 #include "sheet.h"
+#include "file_view.h"
 static unsigned char node_arena[FS_CAPACITY], image_arena[FS_IMG_CAPACITY], pool_arena[FS_POOL_CAPACITY];
 #undef FS_BASE
 #undef FS_IMG_BASE
