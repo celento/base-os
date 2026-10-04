@@ -284,3 +284,36 @@ images without starting QEMU. It covers owned argument copies across yield/sleep
 length queries, insufficient-capacity error returns without partial copies,
 independent owners, legacy exec/start, quoted/relative Terminal paths, source
 rename/deletion and synchronized records across reboot.
+
+### DocStats batching workload
+
+`python3 tools/docstats_workload_test.py build` runs two complete inputs on a
+**disposable opt-in large-profile disk** in a 128 MiB QEMU guest. Its comparison
+variant is the same current DocStats C source and argument ABI, with the previous
+per-4-KiB yield/per-64-KiB redraw policy. The production app yields per 64 KiB and
+redraws per 256 KiB; both still perform individual 4-KiB read syscalls.
+
+A 2026-10-04 run measured:
+
+| Input | Previous scheduling | Batched scheduling |
+| --- | ---: | ---: |
+| 2 MiB | 985 PIT ticks / 14.07 s | 68 ticks / 0.97 s |
+| 16 MiB | 7,821 ticks / 111.73 s | 510 ticks / 7.29 s |
+
+A second native Counter continued processing independent input, an idle Terminal
+retained its input, and the desktop was redrawn during every scan. The longest
+observed scheduler-loop interval was two 70-Hz PIT ticks; this is a measurement,
+not a real-time guarantee. Host checks compared every input byte and complete
+report (byte/word/line counts and byte sum); all four reports survived reboot.
+
+Original generated PCM played through QEMU's SB16 throughout each measured scan.
+The guest required positive played frames and zero driver underruns. The host WAV
+check verified sample activity (more than one second of samples and peak amplitude
+above 3,000), **not** a full waveform comparison, absence of silent gaps, or physical
+hardware latency. Each stream was intentionally stopped after the scan finished.
+
+The first persistence-only reboot attempt exposed a test-harness ordering error:
+it required SB16 before taking its completed-run branch, although that reboot has
+no audio device. Moving that check after the branch fixed the test. The already
+completed data, metrics, PCM and screenshot were retained; the rebuilt guest then
+passed the persistence-only reboot. No production scan code changed in that fix.

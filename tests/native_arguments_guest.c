@@ -37,6 +37,11 @@ void feature_test(void){
     for(int owner=0;owner<3;owner++)check(process_task_status(owner)==PROCESS_TASK_DONE&&!process_task_result(owner),"argument runtime copy or bounded output failed");
     record(1,"/Documents/a sample.txt");record(2,saved_second);record(3,"none");
     check(!process_run(fs_data(app),fs_size(app),&io),"legacy exec argument absence");
+    /* Reusing a completed owner through the old wrapper must drop its old path. */
+    check(!process_task_start(1,fs_data(app),fs_size(app),&io),"argument-free owner restart");
+    began=timer_ticks();
+    while(process_task_status(1)!=PROCESS_TASK_DONE&&timer_ticks()-began<5*TIMER_HZ){process_task_step(1);tick();}
+    check(process_task_status(1)==PROCESS_TASK_DONE&&!process_task_result(1),"argument-free restarted app");record(2,"none");
     for(int owner=0;owner<3;owner++)process_task_clear(owner);
     platform_log("NATIVE-ARGUMENT-COPY-ISOLATION-PASS\n");
     /* Two real Terminal paths, one quoted and one relative. Their source image
