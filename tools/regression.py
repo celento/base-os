@@ -22,7 +22,7 @@ def run(build, output, extended=False):
     env.setdefault('ASAN_OPTIONS', 'detect_leaks=0')
     commands = [('build', ['make', '-j4']), ('host', ['make', 'test'])]
     tests = ['extent', 'ui', 'input', 'display', 'editor_input', 'task_input',
-             'desktop_apps', 'images_input', 'download_input', 'sysmon_input', 'browser_download_input', 'editor_close', 'writer_input', 'writer_lifecycle', 'writer_search', 'writer_binding', 'docstats_input', 'node_capacity_input']
+             'desktop_apps', 'images_input', 'download_input', 'sysmon_input', 'browser_download_input', 'editor_close', 'writer_input', 'writer_lifecycle', 'writer_search', 'writer_binding', 'docstats_input', 'file_clipboard_input', 'node_capacity_input']
     if extended:
         tests += ['network', 'browser', 'download', 'data_volume', 'editor',
                   'session_draft', 'native_sdk', 'node_capacity', 'kernel_space', 'storage_audio', 'task_media', 'video', 'video_input', 'demo']

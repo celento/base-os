@@ -15,6 +15,7 @@
 #include "player.h"
 #include "writer.h"
 #include "example_docs.h"
+#include "file_clipboard.h"
 #include "video.h"
 #include "image_viewer.h"
 #include "audio_example.h"
@@ -1529,7 +1530,11 @@ static char *const clip_buf=(char *)(EDITOR_BASE+EDITOR_CAPACITY-EDIT_BUF_SIZE);
 static char *const edit_scratch=(char *)(EDITOR_BASE+EDITOR_CAPACITY-2*EDIT_BUF_SIZE);
 static int clip_len = 0;
 static unsigned clip_generation;
+static uint32_t files_message_until;
 static void clipboard_changed(void) {
+    file_clipboard_clear();
+    files_message_until = 0;
+    dirty = 1;
     if (!++clip_generation) ++clip_generation;
 }
 unsigned writer_clipboard_set(const char *text, unsigned length) {
@@ -1541,7 +1546,7 @@ unsigned writer_clipboard_set(const char *text, unsigned length) {
     return clip_generation;
 }
 int writer_clipboard_get(char *text, unsigned capacity, unsigned *generation) {
-    if (!text || (unsigned)clip_len >= capacity) return -1;
+    if (!text || file_clipboard_mode()!=FILE_CLIPBOARD_NONE || (unsigned)clip_len >= capacity) return -1;
     kmemcpy(text, clip_buf, clip_len + 1);
     if (generation) *generation = clip_generation;
     return clip_len;
@@ -1893,9 +1898,14 @@ static int win_geom_kind(int kind, int *x, int *y, int *w, int *h) {
 static int menu_item_enabled(int m, int item) {
     if (m == MENU_EDITM) {
         if(item>=3)return !open_dlg&&(front_kind()==WK_EDIT||front_kind()==WK_WRITER);
-        /* Files keeps Cut/Copy/Paste dim. Calc: Cut dim, Copy/Paste as below. */
+        /* File and text clipboard formats remain distinct. */
         if (open_dlg)
             return 0;
+        if (front_kind() == WK_FILES) {
+            if (item == 2) return file_clipboard_can_paste(fm_cwd);
+            int id=fm_row_id(fm_selected);
+            return (item==0||item==1)&&id>=0&&id!=fs_root()&&!fs_is_app(id);
+        }
         if (front_kind() == WK_CALC) {
             if (item == 0) /* Cut */
                 return 0;
@@ -4213,6 +4223,28 @@ static void do_duplicate(void) {
     dirty = 1;
 }
 
+static void files_clipboard_action(int item) {
+    if(front_kind()!=WK_FILES||open_dlg||name_dlg)return;
+    fm_rename_cancel();
+    int owner=context_slot;
+    if(item==0||item==1){
+        if(!file_clipboard_set(fm_row_id(fm_selected),item==0?FILE_CLIPBOARD_CUT:FILE_CLIPBOARD_COPY)){
+            clip_len=0;clip_buf[0]=0;
+            if(!++clip_generation)++clip_generation;
+        }
+    }else if(item==2){
+        int result_node=-1;
+        int result=file_clipboard_paste(fm_cwd,&result_node);
+        if(result>=0){
+            for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&wins[i].kind==WK_FILES){context_set(i);fm_refresh();}
+            context_set(owner);fm_manual_scroll=0;fm_refresh();
+            if(result_node>=0)fm_select_id(result_node);
+        }
+    }
+    files_message_until=frame_count+8*TIMER_HZ;
+    dirty=1;
+}
+
 static void do_new_folder(void) {
     /* Disk window only. untitled folder, then untitled folder 2. */
     if (front_kind() != WK_FILES || open_dlg)
@@ -4339,7 +4371,11 @@ static void files_title(char *title, int max) {
 }
 
 static void files_info(char *info, int max) {
-    fs_path(fm_cwd, info, max);
+    if(file_clipboard_status()[0]&&((int32_t)(files_message_until-frame_count)>0||file_clipboard_pending_sync())){
+        const char *message=file_clipboard_status();int i=0;
+        while(i+1<max&&message[i]){info[i]=message[i];i++;}
+        if(max>0)info[i]=0;
+    }else fs_path(fm_cwd, info, max);
 }
 
 static void draw_mini_folder(int x, int y, uint8_t fg, uint8_t bg) {
@@ -4440,7 +4476,7 @@ static void draw_mini_wordle(int x, int y, uint8_t fg, uint8_t bg) {
 }
 
 static void draw_file_row_named(int x, int y, int w, const char *name,
-                               int is_dir, int is_app, int sel, int dim) {
+                               int is_dir, int is_app, int sel, int dim, int cut) {
     uint8_t fg = dim ? ui_text_dim : (sel ? COLOR_WHITE : ui_text);
     uint8_t bg = sel ? ui_accent : COLOR_WHITE;
     if (dim) {
@@ -4471,9 +4507,12 @@ static void draw_file_row_named(int x, int y, int w, const char *name,
     int ty = y + (ROW_H - CHAR_H) / 2;
     int end=x+w-12;
     if(w>420){
-        const char *kind=is_dir?"Folder":(is_app?"Application":"Document");
+        const char *kind=cut?"Cut":is_dir?"Folder":(is_app?"Application":"Document");
         draw_string(kind,x+w-110,ty,sel?COLOR_WHITE:ui_text_dim);
         end=x+w-130;
+    }else if(cut){
+        draw_string("Cut",x+w-38,ty,sel?COLOR_WHITE:ui_text_dim);
+        end=x+w-46;
     }
     draw_string_clip(name, x + 28, ty, fg, end);
 }
@@ -4499,7 +4538,8 @@ static void draw_file_row(int x, int y, int w, int id, int sel, int dim) {
     }
     int renaming = fm_renaming && id == fm_rename_id;
     draw_file_row_named(x, y, w, renaming ? "" : fs_name(id),
-                        fs_is_dir(id), is_app, sel, dim);
+                        fs_is_dir(id), is_app, sel, dim,
+                        file_clipboard_mode()==FILE_CLIPBOARD_CUT&&file_clipboard_source()==id);
     if (!renaming)
         return;
     int fx = x + 26;
@@ -4566,7 +4606,7 @@ static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
     for (int i = fm_first; i < vis && i < fm_first+rows; i++) {
         int iy = list_y + (i-fm_first) * ROW_H;
         if (up && i == 0)
-            draw_file_row_named(wx + 8, iy, lw, "..", 1, 0, i == fm_selected, 0);
+            draw_file_row_named(wx + 8, iy, lw, "..", 1, 0, i == fm_selected, 0, 0);
         else
             draw_file_row(wx + 8, iy, lw, fm_ids[i - up], i == fm_selected, 0);
     }
@@ -5496,7 +5536,9 @@ static void menu_activate(int m, int item) {
         return;
     }
     if (m == MENU_EDITM) {
-        if (front_kind() == WK_WRITER) {
+        if (front_kind() == WK_FILES) {
+            files_clipboard_action(item);
+        } else if (front_kind() == WK_WRITER) {
             const int keys[] = {0x2d, 0x2e, 0x2f};
             if (item >= 0 && item < 3) writer_result(writer_key(keys[item], 0, WRITER_MOD_CTRL));
             else if (item == 3 || item == 4)
@@ -6257,6 +6299,9 @@ static void handle_key(void) {
         return;
     }
     if (ctrl_down && !open_dlg) {
+        if(front_kind()==WK_FILES&&(key_sc==0x2d||key_sc==0x2e||key_sc==0x2f)){
+            files_clipboard_action(key_sc==0x2d?0:key_sc==0x2e?1:2);return;
+        }
         if(key_sc==0x17 && front_kind()==WK_FILES){menu_activate(MENU_FILE,6);return;}
         if (key_sc == 0x2c || key_sc == 0x15) {
             int redo = key_sc == 0x15 || shift_down;
