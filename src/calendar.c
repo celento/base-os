@@ -4,10 +4,10 @@
 #include "calendar.h"
 #include "calendar_agenda.h"
 
-#define ROWS 7
+#define ROWS 6
 #define ROW_H 23
 #define GRID_Y 86
-#define GRID_H 32
+#define GRID_H 28
 #define KEY_DELETE 0x53
 #define KEY_HOME 0x47
 #define KEY_END 0x4f
@@ -229,15 +229,15 @@ void cal_draw(int bx, int by, int bw, int bh) {
         int x = gx + col * cw, y = by + GRID_Y + index / 7 * GRID_H;
         int is_today = view_year == t.year && view_month == t.month && d == t.day;
         if (d == view_day) draw_round_frame(x + 2, y + 1, cw - 4, GRID_H - 2, 6, app_accent);
-        if (is_today) draw_round_rect(x + (cw - 24) / 2, y + 2, 24, 24, 12, app_accent);
+        if (is_today) draw_round_rect(x + (cw - 22) / 2, y + 2, 22, 22, 11, app_accent);
         char s[4]; fmt_uint(s, (unsigned)d);
         draw_string(s, x + (cw - ui_string_w(s)) / 2, y + 5,
                     is_today ? COLOR_WHITE : (col == 0 || col == 6) ? app_text_dim : app_text);
-        if (marked & (1u << (d - 1))) draw_round_rect(x + cw / 2 - 2, y + 26, 4, 4, 2, app_accent);
+        if (marked & (1u << (d - 1))) draw_round_rect(x + cw / 2 - 2, y + 24, 4, 3, 1, app_accent);
     }
-    button(bx + 16, by + 282, 66, "Today", 0);
-    draw_string("Dots mark appointments", bx + 94, by + 286, app_text_dim);
-    draw_vline(bx + bw / 2 + 3, by + 14, 292, app_chrome_dk);
+    button(bx + 16, by + 258, 66, "Today", 0);
+    draw_string("Dots mark appointments", bx + 94, by + 262, app_text_dim);
+    draw_vline(bx + bw / 2 + 3, by + 14, 268, app_chrome_dk);
     char date[11]; date_text(date, view_year, view_month, view_day);
     draw_string_bold(date, right, by + 16, app_text);
     int count = day_count(); fmt_uint(num, (unsigned)count);
@@ -254,63 +254,63 @@ void cal_draw(int bx, int by, int bw, int bh) {
         draw_string_clip(a->title, right + 63, y + 2, app_text, right + rw - 4);
     }
     if (!count) draw_string("No appointments. Add one below.", right, by + 77, app_text_dim);
-    draw_nav(right, by + 241, -1); draw_nav(right + rw - 28, by + 241, 1);
+    draw_nav(right, by + 217, -1); draw_nav(right + rw - 28, by + 217, 1);
     char page[28]; int p = 0;
     fmt_uint(page, (unsigned)(count ? first_row + 1 : 0)); p = length(page); page[p++] = '-';
     fmt_uint(page + p, (unsigned)(first_row + ROWS < count ? first_row + ROWS : count)); p = length(page);
     copy(page + p, " of "); p += 4; fmt_uint(page + p, (unsigned)count);
-    draw_string(page, right + (rw - ui_string_w(page)) / 2, by + 245, app_text_dim);
-    button(right, by + 280, 76, "New", 0);
-    button(right + 84, by + 280, 76, "Edit", 0);
-    button(right + 168, by + 280, rw - 168, "Delete", 0);
-    draw_hline(bx + 16, by + 313, bw - 32, app_chrome_dk);
+    draw_string(page, right + (rw - ui_string_w(page)) / 2, by + 221, app_text_dim);
+    button(right, by + 256, 76, "New", 0);
+    button(right + 84, by + 256, 76, "Edit", 0);
+    button(right + 168, by + 256, rw - 168, "Delete", 0);
+    draw_hline(bx + 16, by + 289, bw - 32, app_chrome_dk);
     const CalAgendaDraft *d = cal_agenda_draft();
     if (confirm) {
         if (confirm == CONFIRM_DELETE) {
             const CalAppointment *a = cal_agenda_find(confirming_id);
-            draw_string_bold_clip("Delete appointment?", bx + 16, by + 320, app_text, bx + bw - 180);
-            draw_string_clip(a ? a->title : "Appointment unavailable", bx + 16, by + 347, app_text, bx + bw - 16);
-        } else draw_string_bold_clip("Discard unfinished entry?", bx + 16, by + 320, app_text, bx + bw - 180);
-        button(bx + bw - 170, by + 317, 74, confirm == CONFIRM_DELETE ? "Delete" : "Discard", 1);
-        button(bx + bw - 88, by + 317, 72, "Keep", 0);
+            draw_string_bold_clip("Delete appointment?", bx + 16, by + 296, app_text, bx + bw - 180);
+            draw_string_clip(a ? a->title : "Appointment unavailable", bx + 16, by + 323, app_text, bx + bw - 16);
+        } else draw_string_bold_clip("Discard unfinished entry?", bx + 16, by + 296, app_text, bx + bw - 180);
+        button(bx + bw - 170, by + 293, 74, confirm == CONFIRM_DELETE ? "Delete" : "Discard", 1);
+        button(bx + bw - 88, by + 293, 72, "Keep", 0);
     } else {
-        draw_string_bold(d->active ? d->edit_id ? "Edit appointment" : "New appointment" : "Select a day, then New", bx + 16, by + 320, app_text);
+        draw_string_bold(d->active ? d->edit_id ? "Edit appointment" : "New appointment" : "Select a day, then New", bx + 16, by + 296, app_text);
         if (d->active) {
-            button(bx + bw - 170, by + 317, 74, "Save", 1);
-            button(bx + bw - 88, by + 317, 72, "Cancel", 0);
+            button(bx + bw - 170, by + 293, 74, "Save", 1);
+            button(bx + bw - 88, by + 293, 72, "Cancel", 0);
         }
     }
     if (!confirm) {
-        draw_string("Date (YYYY-MM-DD)", bx + 16, by + 348, app_text_dim);
-        draw_string("Time (HH:MM)", bx + 188, by + 348, app_text_dim);
+        draw_string("Date (YYYY-MM-DD)", bx + 16, by + 324, app_text_dim);
+        draw_string("Time (HH:MM)", bx + 188, by + 324, app_text_dim);
     }
-    draw_field(bx + 16, by + 369, 156, d->date, 0, d->active);
-    draw_field(bx + 188, by + 369, 100, d->time, 1, d->active);
-    button(bx + 300, by + 370, 82, "All-day", d->active && !d->time[0]);
-    draw_string("Title", bx + 16, by + 417, app_text_dim);
-    draw_field(bx + 60, by + 411, bw - 76, d->title, 2, d->active);
+    draw_field(bx + 16, by + 345, 156, d->date, 0, d->active);
+    draw_field(bx + 188, by + 345, 100, d->time, 1, d->active);
+    button(bx + 300, by + 346, 82, "All-day", d->active && !d->time[0]);
+    draw_string("Title", bx + 16, by + 393, app_text_dim);
+    draw_field(bx + 60, by + 387, bw - 76, d->title, 2, d->active);
     const char *hint = confirm ? "Enter confirms. Escape keeps your work." :
         d->active ? "Tab: fields   Ctrl+A: replace   Enter: save   Esc: close, keep entry" :
         "Arrows: day / appointment   PgUp/PgDn: month   N: new   Enter: edit";
-    draw_string_clip(notice[0] ? notice : hint, bx + 16, by + 448, app_text_dim, bx + bw - 16);
-    draw_string_clip(cal_agenda_status(), bx + 16, by + 474, app_text_dim, bx + bw - 102);
-    button(bx + bw - 88, by + 468, 72, "Retry", 0);
+    draw_string_clip(notice[0] ? notice : hint, bx + 16, by + 424, app_text_dim, bx + bw - 16);
+    draw_string_clip(cal_agenda_status(), bx + 16, by + 450, app_text_dim, bx + bw - 102);
+    button(bx + bw - 88, by + 444, 72, "Retry", 0);
 }
 int cal_click(int bx, int by, int bw, int mx, int my) {
     ensure_open();
     if (bw < CAL_W) return 0;
-    if (hit(mx, my, bx + bw - 88, by + 468, 72, 26)) {
+    if (hit(mx, my, bx + bw - 88, by + 444, 72, 26)) {
         cal_agenda_retry_save(); return CAL_CHANGED;
     }
     if (confirm) {
-        if (hit(mx, my, bx + bw - 170, by + 317, 74, 26)) accept_confirmation();
-        else if (hit(mx, my, bx + bw - 88, by + 317, 72, 26)) confirm = CONFIRM_NONE;
+        if (hit(mx, my, bx + bw - 170, by + 293, 74, 26)) accept_confirmation();
+        else if (hit(mx, my, bx + bw - 88, by + 293, 72, 26)) confirm = CONFIRM_NONE;
         return CAL_CHANGED;
     }
     int left_w = bw / 2 - 6, right = bx + bw / 2 + 16, rw = bw - (right - bx) - 16;
     if (hit(mx, my, bx + 16, by + 14, 28, 26)) { move_month(-1); return CAL_CHANGED; }
     if (hit(mx, my, bx + left_w - 40, by + 14, 28, 26)) { move_month(1); return CAL_CHANGED; }
-    if (hit(mx, my, bx + 16, by + 282, 66, 26)) { today(); return CAL_CHANGED; }
+    if (hit(mx, my, bx + 16, by + 258, 66, 26)) { today(); return CAL_CHANGED; }
     int gx = bx + 16, cw = (left_w - 32) / 7;
     if (hit(mx, my, gx, by + GRID_Y, cw * 7, GRID_H * 6)) {
         int day = (my - by - GRID_Y) / GRID_H * 7 + (mx - gx) / cw - rtc_weekday(view_year, view_month, 1) + 1;
@@ -322,18 +322,18 @@ int cal_click(int bx, int by, int bw, int mx, int my) {
         if (a) { selected = a->id; entry_focus = 0; notice = ""; }
         return CAL_CHANGED;
     }
-    if (hit(mx, my, right, by + 241, 28, 26)) { first_row = first_row > ROWS ? first_row - ROWS : 0; select_row(first_row); entry_focus = 0; return CAL_CHANGED; }
-    if (hit(mx, my, right + rw - 28, by + 241, 28, 26)) { if (first_row + ROWS < day_count()) first_row += ROWS; select_row(first_row); entry_focus = 0; return CAL_CHANGED; }
-    if (hit(mx, my, right, by + 280, 76, 26)) return cal_new();
-    if (hit(mx, my, right + 84, by + 280, 76, 26)) { edit_selected(); return CAL_CHANGED; }
-    if (hit(mx, my, right + 168, by + 280, rw - 168, 26)) { ask_delete(); return CAL_CHANGED; }
+    if (hit(mx, my, right, by + 217, 28, 26)) { first_row = first_row > ROWS ? first_row - ROWS : 0; select_row(first_row); entry_focus = 0; return CAL_CHANGED; }
+    if (hit(mx, my, right + rw - 28, by + 217, 28, 26)) { if (first_row + ROWS < day_count()) first_row += ROWS; select_row(first_row); entry_focus = 0; return CAL_CHANGED; }
+    if (hit(mx, my, right, by + 256, 76, 26)) return cal_new();
+    if (hit(mx, my, right + 84, by + 256, 76, 26)) { edit_selected(); return CAL_CHANGED; }
+    if (hit(mx, my, right + 168, by + 256, rw - 168, 26)) { ask_delete(); return CAL_CHANGED; }
     if (cal_agenda_draft()->active) {
-        if (hit(mx, my, bx + bw - 170, by + 317, 74, 26)) { save_entry(); return CAL_CHANGED; }
-        if (hit(mx, my, bx + bw - 88, by + 317, 72, 26)) { confirm = CONFIRM_CANCEL; return CAL_CHANGED; }
-        if (hit(mx, my, bx + 16, by + 369, 156, 28)) { focus_field(0); return CAL_CHANGED; }
-        if (hit(mx, my, bx + 188, by + 369, 100, 28)) { focus_field(1); return CAL_CHANGED; }
-        if (hit(mx, my, bx + 60, by + 411, bw - 76, 28)) { focus_field(2); return CAL_CHANGED; }
-        if (hit(mx, my, bx + 300, by + 370, 82, 26)) {
+        if (hit(mx, my, bx + bw - 170, by + 293, 74, 26)) { save_entry(); return CAL_CHANGED; }
+        if (hit(mx, my, bx + bw - 88, by + 293, 72, 26)) { confirm = CONFIRM_CANCEL; return CAL_CHANGED; }
+        if (hit(mx, my, bx + 16, by + 345, 156, 28)) { focus_field(0); return CAL_CHANGED; }
+        if (hit(mx, my, bx + 188, by + 345, 100, 28)) { focus_field(1); return CAL_CHANGED; }
+        if (hit(mx, my, bx + 60, by + 387, bw - 76, 28)) { focus_field(2); return CAL_CHANGED; }
+        if (hit(mx, my, bx + 300, by + 346, 82, 26)) {
             CalAgendaDraft d = *cal_agenda_draft(); d.time[0] = 0;
             cal_agenda_set_draft(&d); focus_field(1); return CAL_CHANGED;
         }

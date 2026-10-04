@@ -2,7 +2,7 @@
 #define CALENDAR_H
 
 #define CAL_W 620
-#define CAL_H 498
+#define CAL_H 474
 #define CAL_MOD_CTRL 1
 #define CAL_MOD_SHIFT 2
 #define CAL_MOD_ALT 4
