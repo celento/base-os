@@ -21,11 +21,18 @@ in [VIDEO.md](VIDEO.md). MP3 encoder delay/padding is retained;
 gapless trimming and seeking are not implemented. MP3 streams must keep the
 same sample rate and channel count throughout. Sources above QEMU SB16's
 45 kHz limit (including normal 48 kHz files) are linearly resampled to 44.1 kHz.
-Source-rate metadata/time stay separate from `AudioStatus.output_rate`. The IDE data volume supports 2 MiB per file and roughly 8 MiB total payload.
-The owned audio-input arena also accepts up to 2 MiB. The optional legacy
-floppy-only volume retains its original limits; larger-file support does not
-add streaming file I/O. Uncompressed CD-rate stereo therefore fits only short
-clips, while compressed MP3 can hold more playback time.
+Source-rate metadata/time stay separate from `AudioStatus.output_rate`.
+
+The default IDE data volume supports 2 MiB per file and roughly 8 MiB total
+payload; its owned audio-input arena accepts up to 2 MiB. An explicitly mounted
+large storage profile, with verified high filesystem arenas, permits up to
+**16 MiB of owned WAV/MP3 source data**. This is a file-size bound rather than a
+duration guarantee: PCM sample rate/channels/bit depth or MP3 bitrate determine
+how much playback fits. The optional legacy floppy-only volume retains its
+original limits. Larger RAM alone does not increase audio capacity; a default
+volume running with 128 MiB still uses the independent 2 MiB source arena.
+No streaming file I/O, new codecs, larger MPEG/video bound, or larger network
+download buffer is implied by the large audio profile.
 
 `tools/make_audio_example.py build/chime.wav` generates an original one-second
 melody that fits the filesystem. After booting a fresh disk once and stopping
@@ -44,6 +51,26 @@ Use `audio_play(data, bytes)`, `audio_pause(1/0)`, `audio_stop()` and
 format, source/output rates, channel count, source bit depth, played/total
 source frames and errors.
 Position/duration helpers return milliseconds. Playback and volume are global.
+
+After `fs_load_disk()` selects its backend, call
+`audio_configure_source_workspace(fs_large_profile(), fs_large_arenas_available())`.
+Both conditions must hold before audio owns the vacated low filesystem arenas.
+`fs_init()` alone is too early: it seeds the default low arenas before mount.
+Configuration returns 1 only while `AUDIO_STOPPED`; loading, playing, paused,
+finished and error states return 0 without changing the source pointer or
+capacity. Stop before configuration. Any future filesystem reinitialization or
+mount reconfiguration must first stop audio and release the expanded workspace
+with `audio_configure_source_workspace(0, 0)`. Normal file saves and compaction do
+not reconfigure mounts.
+
+Successful replacement validates before stopping the prior transport. MP3 header
+scans service the device-only poll every 64 frame headers while leaving the old
+decoder intact; no callback occurs after the new decoder metadata is committed.
+The owned copy then services devices after each at-most-16-KiB chunk with audio
+stopped, so it cannot decode a partially replaced source. These hooks collect
+input and service devices without dispatching app actions or filesystem writes.
+Rejected candidates retain existing playback/source bytes and expose the exact
+validation error. `audio_capacity_bytes()` reports the selected runtime limit.
 
 Each poll converts at most 4,096 PCM samples, decodes at most one MP3 frame, or
 calls an `AudioPcmReader` once. `audio_play_pcm_stream` validates a declared
@@ -76,7 +103,9 @@ and device faults return bounded errors and do not block the desktop.
 Memory reservations:
 
 - `0x710000..0x720000`: 64 KiB audio ISA DMA ring
-- `0x1700000..0x1900000`: owned audio input, 2 MiB
+- `0x1700000..0x1900000`: default/legacy owned audio input, 2 MiB
+- `0x2000000..0x3000000`: large-profile owned audio input, 16 MiB, only when
+  filesystem data and staging both use their verified high arenas
 
 ## QEMU and verification
 
@@ -161,3 +190,16 @@ QEMU instance. A development stress run with several concurrent emulators
 triggered the explicit underrun stop. This is not a real-time guarantee: a host
 that cannot service the guest often enough may stop playback with an error.
 The driver does not hide the problem by replaying stale DMA data.
+
+## Large-source host verification
+
+`ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p 'test_audio*.py'`
+checks the default transport and the large owned-source path under ASan/UBSan.
+The large test generates an original Harbor-derived three-minute 192 kb/s MP3
+with FFmpeg, then compares every simulated DMA sample with a separate decoder
+through EOF. It also checks exact 2 MiB/16 MiB WAV boundaries, a legal ID3-padded
+MP3 at exactly 16 MiB, complete byte ownership after source mutation/deletion,
+all four active-profile/available-memory combinations, replacement rejection,
+configuration refusal during live playback, pause/resume/volume and the unchanged
+one-frame-per-poll decode bound. These are host-driver checks; real SB16/QEMU
+capture evidence is recorded separately after running the production workload.

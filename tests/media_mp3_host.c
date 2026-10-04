@@ -8,7 +8,7 @@
 int main(int argc,char **argv) {
     assert(argc==3);
     FILE *input=fopen(argv[1],"rb");assert(input);
-    assert(!fseek(input,0,SEEK_END));long bytes=ftell(input);assert(bytes>0&&(unsigned long)bytes<=AUDIO_WORK_CAPACITY);
+    assert(!fseek(input,0,SEEK_END));long bytes=ftell(input);assert(bytes>0&&(unsigned long)bytes<=AUDIO_LARGE_WORK_CAPACITY);
     rewind(input);uint8_t *data=malloc((size_t)bytes);assert(data);
     assert(fread(data,1,(size_t)bytes,input)==(size_t)bytes);fclose(input);
     MediaMp3 mp3;assert(media_mp3_open(&mp3,data,(uint32_t)bytes)==0);

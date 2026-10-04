@@ -6,6 +6,17 @@
 #include "../src/audio.c"
 
 uint8_t audio_test_dma[RING_BYTES],audio_test_source[AUDIO_WORK_CAPACITY];
+uint8_t audio_test_large_source[AUDIO_LARGE_WORK_CAPACITY];
+static unsigned background_polls;
+static void (*background_check)(void);
+void platform_poll(void) {
+    ++background_polls;
+    if (background_check) background_check();
+    uint32_t decoded = mp3.decoded_frames, read = wave.frame_cursor;
+    audio_poll();
+    assert(mp3.decoded_frames - decoded <= 1152);
+    assert(wave.frame_cursor - read <= PCM_SAMPLES_PER_POLL);
+}
 static uint8_t response[3],read_index,response_length;
 static unsigned now,position,flip,present=1,busy,rate_bytes,programmed_rate;
 uint32_t timer_ticks(void){return now;}
@@ -343,4 +354,5 @@ int main(int argc,char **argv) {
     test_resampled_wave();
     if(argc>1)test_mp3_replacement(argv[1]);
     puts("SB16 state, owned input, bounded PCM callbacks, 48k resampling, refills, pause, completion, replacement, errors, underrun, and timeout tests passed.");
+    return 0;
 }
