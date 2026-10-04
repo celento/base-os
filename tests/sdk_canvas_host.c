@@ -4,7 +4,8 @@
 int main(void){
     reset();executable("canvas.bex");
     memset(terminal_arena+0xC0000,0x5a,0x40000);
-    assert(sizeof(Terminal)==91512 && sizeof(Terminal)*8==732096);
+    /* One additional int retains command-overflow refusal until a fresh line. */
+    assert(sizeof(Terminal)==91516 && sizeof(Terminal)*8==732128);
     for(int owner=0;owner<8;owner++){
         term_select(owner);term_reset();
         assert(!term_canvas()&&term_canvas_width()==160&&term_canvas_height()==100);
@@ -44,5 +45,5 @@ int main(void){
     canvas_resize(320,200);term_reset();
     assert(!term_canvas()&&term_canvas_width()==160&&term_canvas_height()==100);
     for(int i=0xC0000;i<0x100000;i++)assert(terminal_arena[i]==0x5a);
-    puts("native canvas: 732096-byte eight-terminal footprint, independent full canvases, clipping, clear and legacy lifecycle reset passed");
+    puts("native canvas: 732128-byte eight-terminal footprint, independent full canvases, clipping, clear and legacy lifecycle reset passed");
 }
