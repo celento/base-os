@@ -1,6 +1,7 @@
 #ifndef TERM_H
 #define TERM_H
 #include "program.h"
+#include "app_view.h"
 
 #define TERM_COLS  80
 #define TERM_LINES 320 /* Holds one complete 256-node directory listing. */
@@ -43,17 +44,9 @@ void term_enter(void);
 void term_set_program_input(void (*hook)(int active));
 
 /* Desktop-owned task integration. Poll once per desktop turn, never in IRQs. */
-#define TERM_TASK_NAME_LEN 24
-#define TERM_TASK_TITLE_LEN (TERM_TASK_NAME_LEN*2+3)
-typedef struct {
-    char name[TERM_TASK_NAME_LEN]; /* Copied basename, not a mutable filesystem pointer. */
-    char document[TERM_TASK_NAME_LEN]; /* Copied startup basename, or empty. */
-    int owner;                   /* Zero-based terminal/window slot. */
-    int state;                   /* PROCESS_TASK_READY or PROCESS_TASK_SLEEPING. */
-    unsigned started_ticks;      /* PIT time at the accepted start. */
-    unsigned elapsed_sec;        /* Wall-clock lifetime, including sleep. */
-    unsigned instance;           /* Full opaque process handle; recheck before UI actions. */
-} TermTaskInfo;
+#define TERM_TASK_NAME_LEN APP_VIEW_NAME_LEN
+#define TERM_TASK_TITLE_LEN APP_VIEW_TITLE_LEN
+typedef AppViewInfo TermTaskInfo;
 /* Returns 1 for a live task, otherwise 0 and a cleared output. No selection change. */
 int term_task_info(int slot, TermTaskInfo *out);
 /* Copies the live program name, optionally followed by " - document". Returns
@@ -66,12 +59,10 @@ int term_task_start_file(int slot, int file, unsigned identity);
 int term_task_start_file_with_arg(int slot, int file, unsigned identity,
                                    const char *argument, unsigned argument_length);
 enum {
-    TERM_TASK_CANVAS = 1,    /* Published pixels; existing canvas layout is stable. */
-    TERM_TASK_TEXT = 2,      /* Scrollback/live-row content. */
-    TERM_TASK_LAYOUT = 4,    /* First canvas activation, reset or resize. */
-    TERM_TASK_LIFECYCLE = 8  /* Start/end changes the window/taskbar title. */
+    TERM_TASK_CANVAS=APP_VIEW_CANVAS, TERM_TASK_TEXT=APP_VIEW_TEXT,
+    TERM_TASK_LAYOUT=APP_VIEW_LAYOUT, TERM_TASK_LIFECYCLE=APP_VIEW_LIFECYCLE
 };
-typedef struct { int slot; unsigned flags; } TermTaskUpdate;
+typedef AppViewUpdate TermTaskUpdate;
 /* Runs at most one ready task slice, preserving the selected terminal. Pending
  * changes are consumed for that slot; slot is -1 when no task ran. */
 TermTaskUpdate term_task_poll_update(void);
@@ -85,4 +76,7 @@ void term_task_stop(int slot);
 /* Returns 0 while an active process is stopping; callers must not reuse/reset. */
 int term_task_close(int slot);
 
+/* Fixed trusted text sink for hosted views. Copies bytes immediately into the
+ * explicit Terminal's scrollback; never changes selection or retains text. */
+void term_write_at(int slot,const char *text);
 #endif
