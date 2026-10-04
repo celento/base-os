@@ -13,7 +13,7 @@ static unsigned char presented[FB_CAPACITY];
 
 static unsigned polls, ticks, clipboard_generation, clipboard_length;
 static unsigned char clipboard[WRITER_TEXT_MAX + 1];
-static int write_failure, sync_failure, sync_count, write_count;
+static int write_failure, payload_failure, sync_failure, sync_count, write_count;
 static unsigned next_identity = 1;
 static unsigned file_limit = 2097152;
 typedef struct { int valid, folder, size; unsigned identity; char name[FS_NAME_LEN]; unsigned char *data; } File;
@@ -57,7 +57,7 @@ int fs_create(int parent, const char *name) {
 }
 int fs_write(int id, const char *text, int length) {
     write_count++;
-    if (write_failure || !fs_valid(id) || files[id].folder || length < 0 || length > 2097152) return -1;
+    if (write_failure || payload_failure || !fs_valid(id) || files[id].folder || length < 0 || (unsigned)length > file_limit) return -1;
     unsigned char *data = malloc((unsigned)length + 1); assert(data);
     memcpy(data, text, (unsigned)length); data[length] = 0;
     free(files[id].data); files[id].data = data; files[id].size = length;
@@ -227,7 +227,13 @@ static void test_binding_fingerprints(void) {
     assert(!memcmp(fs_data(source), encoded, length));
     assert(writer_save_as(0, "separate.bwr") == WRITER_SAVE_OK); source = writer_file();
     assert(writer_binding(&current)); assert(current.hash_a == baseline.hash_a && current.hash_b == baseline.hash_b);
-    key(0x4f, WRITER_MOD_CTRL); type("!"); sync_failure = 1;
+    key(0x4f, WRITER_MOD_CTRL); type("!");
+    payload_failure = 1;
+    assert(writer_save() == WRITER_SAVE_ERROR); assert(writer_binding_matches(source, &baseline));
+    assert(writer_save_as(0, "write-failed.bwr") == WRITER_SAVE_ERROR);
+    assert(fs_find_child(0, "write-failed.bwr") < 0 && writer_file() == source);
+    assert(writer_binding(&current) && !memcmp(&current, &baseline, sizeof baseline));
+    payload_failure = 0; sync_failure = 1;
     assert(writer_save() == WRITER_SAVE_ERROR && writer_dirty());
     assert(writer_binding(&current)); assert(current.size == baseline.size + 3);
     assert(writer_binding_matches(source, &current) && !writer_binding_matches(source, &baseline));
