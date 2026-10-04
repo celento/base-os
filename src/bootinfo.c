@@ -75,7 +75,8 @@ int video_info_valid(const BootInfo *b) {
 }
 
 _Static_assert(FB_BASE + FB_CAPACITY <= FS_BASE, "backbuffer overlaps FS");
-_Static_assert(FS_BASE + FS_CAPACITY <= PAINT_MEM, "FS overlaps paint");
+_Static_assert(FS_BASE + FS_CAPACITY <= WRITER_BASE, "FS metadata overlaps Writer");
+_Static_assert(WRITER_BASE + WRITER_CAPACITY <= PAINT_MEM, "Writer overlaps Paint");
 _Static_assert(PAINT_MEM + PAINT_CAPACITY <= DMA_BASE, "paint overlaps DMA");
 _Static_assert(DMA_BASE % 65536 == 0 && DMA_CAPACITY <= 65536 &&
                DMA_BASE + DMA_CAPACITY <= 0x1000000, "invalid ISA DMA arena");
