@@ -1144,7 +1144,7 @@ static int mouse_type;
 static InputIngress device_input;
 static uint32_t input_sample_ticks;
 static int input_routing, input_cursor_moved, input_tail_pending;
-static unsigned input_suppressed, input_saver_buttons, input_unknown_buttons;
+static unsigned input_suppressed, input_saver_buttons, input_unknown_buttons, input_sync_loss;
 static uint64_t input_wake_serial;
 static void desktop_input_cancel(unsigned buttons);
 static void desktop_input_fence(void);
@@ -8281,7 +8281,12 @@ static unsigned desktop_input_turn(void) {
 static void desktop_program_input(int active) {
     /* Preserve legacy keyboard typeahead when the synchronous owner returns.
      * Pointer backlog is fenced; it cannot click the resumed desktop. */
-    if(!active)input_tail_pending=input_acquire(1024)==1024;
+    if(active)input_sync_loss=0;
+    else {
+        input_tail_pending=input_acquire(1024)==1024;
+        if(input_sync_loss)desktop_keyboard_loss();
+        input_sync_loss=0;
+    }
     desktop_input_fence();
     if(!active) {
         if(device_input.loss&INPUT_LOSS_DEVICE)input_unknown_buttons=INPUT_LEFT|INPUT_RIGHT;
@@ -8302,7 +8307,17 @@ static int desktop_program_key(void) {
         if(sample.kind==INPUT_KEY && (sample.flags&INPUT_MAKE)) {
             if(sample.character)result=(int)sample.character;
             else if(sample.scancode==KEY_ESC)result=27;
-        } else if(sample.kind==INPUT_POINTER || sample.kind==INPUT_RESET)desktop_input_reset(&sample);
+        } else if(sample.kind==INPUT_POINTER || sample.kind==INPUT_RESET) {
+            /* A legacy KEY syscall consumes samples, never re-enters another
+             * UI handler. The begin hook already cancelled desktop gestures. */
+            if(sample.kind==INPUT_RESET) {
+                input_sync_loss|=sample.reason;
+                if(sample.reason&INPUT_LOSS_DEVICE)input_unknown_buttons=INPUT_LEFT|INPUT_RIGHT;
+            } else input_unknown_buttons&=sample.buttons;
+            input_suppressed=sample.buttons;
+            input_cursor_moved |= mouse_x!=sample.x || mouse_y!=sample.y;
+            mouse_x=sample.x;mouse_y=sample.y;
+        }
     }
     return result;
 }

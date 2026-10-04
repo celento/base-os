@@ -18,7 +18,7 @@ static uint32_t frame_count, last_input_frame;
 static int input_routing,input_cursor_moved,input_tail_pending;
 static uint32_t input_sample_ticks;
 static uint64_t input_wake_serial;
-static unsigned input_suppressed,input_saver_buttons,input_unknown_buttons;
+static unsigned input_suppressed,input_saver_buttons,input_unknown_buttons,input_sync_loss;
 static InputIngress device_input;
 static int mouse_x,mouse_y,mouse_left,mouse_right,mouse_moved,shift_down,ctrl_down,alt_down;
 static uint8_t key_sc;static char key_char;
@@ -44,11 +44,11 @@ static void win_minimum(Win *w,int *x,int *y){(void)w;*x=100;*y=100;}
 static int win_geom_kind(int kind,int *x,int *y,int *w,int *h){(void)kind;*x=*y=0;*w=*h=100;return 1;}
 static int edit_index_at(int x,int y,int w,int h,int mx,int my){(void)x;(void)y;(void)w;(void)h;(void)my;return mx;}
 static int fs_root(void){return 0;}
-static int arranged,drops,releases,paint_commits,paint_last_x,writer_active,writer_moves;
+static int arranged,drops,releases,paint_commits,paint_last_x,writer_active,writer_moves,writer_releases;
 static void win_arrange(int i,int mode){(void)i;(void)mode;++arranged;}
 static void fm_go_up(void){}
 static void files_drop(void){++drops;fm_dragging=fm_drag_active=0;}
-static void writer_release(void){writer_active=0;}
+static void writer_release(void){writer_active=0;++writer_releases;}
 static void spreadsheet_release(void){}
 static void paint_mouse_up(void){++releases;if(paint_shape_drag)++paint_commits;paint_shape_drag=paint_dragging=0;}
 static void paint_drag_tick(void){paint_last_x=mouse_x;}
@@ -94,7 +94,7 @@ static void fresh(void){
     mouse_x=400;mouse_y=300;mouse_left=mouse_right=mouse_moved=0;
     input_init(&device_input,800,600,400,300);input_mouse_type(&device_input,3);
     open_menu=-1;open_dlg=name_dlg=edit_close_dlg=launcher_on=saver_on=display_pending=0;
-    input_suppressed=input_saver_buttons=input_unknown_buttons=0;input_wake_serial=0;input_cursor_moved=input_routing=input_tail_pending=0;acquire_tail=0;
+    input_suppressed=input_saver_buttons=input_unknown_buttons=input_sync_loss=0;input_wake_serial=0;input_cursor_moved=input_routing=input_tail_pending=0;acquire_tail=0;
     dragging_win=resizing_win=-1;drag_active=fm_dragging=fm_drag_active=0;paint_shape_drag=paint_dragging=0;
     records=0;terminal_losses=0;releases=drops=arranged=paint_commits=writer_active=writer_moves=double_clicks=0;mode=CLICK_ONLY;
     pick_last_click_item=title_click_window=icon_last=-1;pick_last_click_frame=0;
@@ -167,7 +167,8 @@ int main(void){
     puts("Desktop saver: release-only, same-batch activation/wake and multi-batch wake backlog passed.");
 
     fresh();key(0x1e,1);pointer(0,0,1,0,2);key(0x30,3);desktop_program_input(1);
-    assert(desktop_program_key()=='b' && !records && !mouse_left);
+    int before_releases=writer_releases;
+    assert(desktop_program_key()=='b' && !records && !mouse_left && writer_releases==before_releases);
     key(0x2e,4);pointer(3,0,1,0,5);desktop_program_input(0);
     assert(input_pending(&device_input) && desktop_input_turn()==2 && records==1 && record[0].value=='c' && mouse_x==403);
     pointer(0,0,1,0,6);pointer(0,0,0,0,7);desktop_input_turn();assert(records==1);
