@@ -18,6 +18,7 @@ static unsigned char node_arena[FS_CAPACITY], image_arena[FS_IMG_CAPACITY], pool
 static unsigned char floppy[DISK_SECTORS * SECTOR_SIZE], ide[DATA_DISK_SECTORS * SECTOR_SIZE];
 static int ide_present;
 void platform_poll(void) {}
+int platform_memory_range_available(uint32_t base, uint32_t end) { (void)base; (void)end; return 0; }
 void platform_log(const char *text) { (void)text; }
 uint32_t timer_ticks(void) { return 0; }
 unsigned disk_sector_count(void) { return DISK_SECTORS; }
