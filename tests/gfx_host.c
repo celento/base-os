@@ -11,6 +11,8 @@ static uint8_t test_mirror[FB_CAPACITY];
 void kmemset(void *d,int v,int n){memset(d,v,(size_t)n);}
 void kmemcpy(void *d,const void *s,int n){memmove(d,s,(size_t)n);}
 static uint8_t back[73*53],linear[73*53*4+53*12],reference[sizeof linear];
+static int serviced;
+static void service_hook(void){serviced++;}
 static void output_equivalence(int bpp){
     int pitch=73*(bpp/8)+12;
     memset(linear,0xa5,sizeof linear);gfx_init(back,linear,73,53,bpp,pitch);
@@ -28,6 +30,12 @@ static void output_equivalence(int bpp){
 int main(void){
     output_equivalence(16);output_equivalence(24);output_equivalence(32);
     gfx_init(back,linear,73,53,32,73*4);
+    draw_rect(0,0,73,53,COLOR_WHITE);gfx_present();
+    gfx_set_flip_hook(service_hook);serviced=0;
+    draw_rect(10,17,12,1,COLOR_BLUE);gfx_present();
+    assert(serviced>=2); /* Row 17 never reaches flip_rect's 64-row hook. */
+    serviced=0;gfx_present();assert(serviced>=2); /* Unchanged frame still services devices. */
+    gfx_set_flip_hook(0);
     draw_rect(0,0,73,53,COLOR_GREEN);uint8_t saved[256];gfx_window_corners(10,10,40,30,saved,0,COLOR_GRAY);
     draw_rect(10,10,40,30,COLOR_WHITE);gfx_window_corners(10,10,40,30,saved,1,COLOR_GRAY);
     assert(get_pixel(10,10)==COLOR_GREEN&&get_pixel(49,39)==COLOR_GREEN&&get_pixel(30,25)==COLOR_WHITE);
