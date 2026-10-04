@@ -20,7 +20,8 @@
  * is rejected. All inputs must remain stable until the operation returns.
  * NULL input is accepted only for zero-length CSV. NULL out + zero capacity
  * measures exact output bytes. written is required; output has no NUL byte.
- * Export requires valid recalculated caches (call sheet_recalculate after edits).
+ * CSV export requires recalculated caches (call sheet_recalculate after edits).
+ * Native encoding uses only source/kind and does not require fresh caches.
  */
 int sheet_native_decode(SheetDoc *doc, const unsigned char *data, unsigned length);
 int sheet_native_encode(const SheetDoc *doc, unsigned char *out,
