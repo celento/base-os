@@ -27,8 +27,9 @@ class NativePublicationProcessTests(unittest.TestCase):
             source = source.replace(declaration + ' ' + name + '(',
                                     'static ' + declaration + ' ' + name + '(')
         code = ''.join(function(source, name) for name in
-                       ('task_at', 'task_suspend', 'finish', 'user_range',
-                        'process_task_stop', 'process_interrupt'))
+                       ('current_owner', 'release_owner', 'task_release', 'task_at',
+                        'task_suspend', 'finish', 'user_range', 'user_path',
+                        'abi_query', 'native_file_call', 'process_task_stop', 'process_interrupt'))
         # The shared extractor recognizes static definitions; retain these two
         # functions' original external linkage in the generated host include.
         code = code.replace('static void process_task_stop(', 'void process_task_stop(')

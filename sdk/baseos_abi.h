@@ -49,7 +49,8 @@ enum BosResult {
 typedef struct {
     bos_u32 struct_size, abi_major, abi_minor, features;
     bos_u32 context, process;
-    bos_u32 user_bytes, image_bytes, stack_min_bytes, path_bytes;
+    /* Linker image/BSS reservation only, not a guarded or guaranteed usable stack. */
+    bos_u32 user_bytes, image_bytes, stack_reserved_bytes, path_bytes;
     bos_u32 file_chunk_bytes, replace_bytes, file_bytes;
     bos_u32 files_per_process, files_total;
     bos_u32 operations_per_process, operations_total;

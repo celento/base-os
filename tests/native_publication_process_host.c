@@ -8,6 +8,7 @@
 #include "program.h"
 #include "platform.h"
 #include "fs.h"
+#include "native_platform_service_stubs.h"
 #include "native_publication_process_types.inc"
 
 static unsigned char user_memory[USER_CAPACITY];
@@ -18,6 +19,7 @@ static NativeTask *tasks=task_memory,*current_task;
 static const ProgramIO *output;
 static int tasks_ready,active,process_result;
 static uint32_t began,now;
+static BosHandle synchronous_owner;
 static unsigned canvas_width,canvas_height;
 static jmp_buf leave_target;
 static unsigned publications,leaves,plots;
@@ -26,6 +28,7 @@ static char events[8];
 static unsigned event_count;
 
 void kmemcpy(void *to,const void *from,int bytes){memcpy(to,from,(size_t)bytes);}
+void kmemset(void *to,int value,int bytes){memset(to,value,(size_t)bytes);}
 uint32_t timer_ticks(void){return now;}
 int fs_sync(void){assert(!"Publication tests must not execute the fs_sync shim");return -1;}
 static int file_call(unsigned call,unsigned a,unsigned b,unsigned c,unsigned d,unsigned e){

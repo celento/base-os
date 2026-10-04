@@ -29,9 +29,9 @@ CFLAGS = -std=gnu11 -ffreestanding -Os -g -Wall -Wextra -m32 \
 ASFLAGS = -f elf
 LDFLAGS = -T $(OUT)/linker.ld -nostdlib -m elf_i386 -z noexecstack
 
-CSRC = example_sheet.c sheet.c sheet_model.c sheet_codec.c file_clipboard.c file_view.c example_docs.c writer.c writer_codec.c writer_pdf.c download.c video.c video_draw.c image_decode.c image_viewer.c text_search.c ata.c player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c calendar_agenda.c mines.c game2048.c breakout.c sysmon.c
+CSRC = example_sheet.c sheet.c sheet_model.c sheet_codec.c file_clipboard.c file_view.c example_docs.c writer.c writer_codec.c writer_pdf.c download.c video.c video_draw.c image_decode.c image_viewer.c text_search.c ata.c player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c native_files.c native_sync.c history.c platform.c bootinfo.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c calendar_agenda.c mines.c game2048.c breakout.c sysmon.c
 OBJS = $(OUT)/kernel_entry.o $(OUT)/interrupts.o $(OUT)/process_entry.o $(addprefix $(OUT)/,$(CSRC:.c=.o))
-HDRS = $(wildcard $(SRC)/*.h) $(wildcard assets/*.h)
+HDRS = $(wildcard $(SRC)/*.h) $(wildcard assets/*.h) $(wildcard sdk/*.h)
 IMG = $(OUT)/baseos.img
 DATA_IMG = $(OUT)/baseos-data.img
 DATA_PROFILE ?= default
@@ -67,16 +67,16 @@ $(OUT)/hello.bex: examples/hello.asm | $(OUT)
 $(OUT)/native_example.h: $(OUT)/hello.bex tools/bin2c.py
 	$(PYTHON) tools/bin2c.py $< > $@
 
-$(OUT)/hello-c.bex: examples/c/hello.c sdk/baseos.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
+$(OUT)/hello-c.bex: examples/c/hello.c sdk/baseos.h sdk/baseos_abi.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
 	$(PYTHON) tools/build_app.py $< $@
 
-$(OUT)/notebook.bex: examples/c/notebook.c sdk/baseos.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
+$(OUT)/notebook.bex: examples/c/notebook.c sdk/baseos.h sdk/baseos_abi.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
 	$(PYTHON) tools/build_app.py $< $@
 
-$(OUT)/counter.bex: examples/c/counter.c sdk/baseos.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
+$(OUT)/counter.bex: examples/c/counter.c sdk/baseos.h sdk/baseos_abi.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
 	$(PYTHON) tools/build_app.py $< $@
 
-$(OUT)/docstats.bex: examples/c/docstats.c sdk/baseos.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
+$(OUT)/docstats.bex: examples/c/docstats.c sdk/baseos.h sdk/baseos_abi.h sdk/start.c sdk/app.ld tools/build_app.py | $(OUT)
 	$(PYTHON) tools/build_app.py $< $@
 
 $(OUT)/sdk_examples.h: $(OUT)/hello-c.bex $(OUT)/notebook.bex $(OUT)/counter.bex $(OUT)/docstats.bex tools/bin2c.py Makefile

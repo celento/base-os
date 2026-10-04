@@ -19,7 +19,9 @@ node incarnation before activation; the loader copies the current program.
 - Minimizing or switching away leaves a task running. Closing or resetting its Terminal cancels it. A reused window slot starts clean.
 - A native exit or fault ends only that task. A canceled task does not receive another slice or perform another syscall.
 - The desktop session does not save live executable state. Apps explicitly save documents through the file API. Counter uses `/Documents/counter-N.txt`, where N is its terminal slot; S writes and explicitly synchronizes the disk; a later start in that slot loads the saved number. A failed sync says RAM only instead of Saved. Notebook follows the same explicit-sync rule.
-- Runtime ownership is per slot, not a durable process identity. The same slot may be reused after close.
+- The legacy task-id API still identifies a reusable display slot. The additive
+  [platform query](NATIVE_PLATFORM_ABI.md) provides a separate nonreused process
+  identity; owned file/completion resources are released on exit or close.
 
 ## Execution model
 
@@ -28,6 +30,11 @@ There are eight fixed owner slots. Each stores a 64 KiB image, a complete ring-3
 Only one image is mapped into `USER_BASE` at a time. A desktop poll selects the next runnable owner fairly, copies its image into the protected region, restores its registers and x87 state, and resumes with IRET. A PIT interrupt returns to the desktop after at most one tick of uninterrupted user execution (about 14.3 ms at 70 Hz). `present`, `yield`, and `sleep` can return earlier. The saved EIP is the instruction after a completed syscall; filesystem operations are not replayed on resume. Before another app runs, the outgoing image and FPU state are saved and the kernel FPU state restored.
 
 Only ring-3 execution is preempted. A syscall completes atomically on the kernel's bounded exception stack. Syscall buffer checks, transfer limits, canvas clipping, and `/Documents` write restrictions are shared with legacy `exec`. No kernel task, filesystem operation, or GUI handler is interrupted by another native task. A task can be delayed by rendering, disk access, BASIC, synchronous `exec`, or other cooperative work. This provides responsive bounded native slices, not real-time guarantees or a general-purpose kernel scheduler.
+
+Owned operation waits use the existing sleeping state. They store only an opaque
+operation handle and bounded deadline, poll without driving disk I/O, and resume
+with a terminal result or explicit timeout. Stop/close releases resources even
+while waiting; input remains queued. Ordinary sleep semantics are unchanged.
 
 Tasks have no cumulative runtime limit. A CPU-bound loop is repeatedly preempted and can be canceled from the desktop. No arbitrary kernel stack is kept suspended across a yield. The only resumed stacks belong to the isolated user image.
 
