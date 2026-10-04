@@ -4,6 +4,7 @@
  */
 
 #include "canvas_view.h"
+#include "app_view.h"
 #include "gfx.h"
 #include "build_info.h"
 #include "decimal.h"
@@ -7612,7 +7613,7 @@ static void boot_splash(void) {
         }
         if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
         if(player_tick()&&find_open_kind(WK_PLAYER)>=0)dirty=1;
-        if(term_task_poll())dirty=1;
+        if(app_view_poll())dirty=1;
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
         drain_8042();
@@ -8545,7 +8546,7 @@ void kmain(void) {
         int player_update=player_tick();
         int player_slot=find_open_kind(WK_PLAYER);
         if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
-        TermTaskUpdate term_update=term_task_poll_update();
+        TermTaskUpdate term_update=app_view_poll_update();
         /* Publication/clear changes become visible to input before the next
          * routed sample, including when rendering is occluded or deferred. */
         native_ui_refresh(timer_ticks(),device_input.buttons);

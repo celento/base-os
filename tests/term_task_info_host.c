@@ -6,7 +6,11 @@ static unsigned char terminal_arena[0x100000];
 static unsigned char published_arena[NATIVE_CANVAS_CAPACITY];
 #define NATIVE_CANVAS_MEMORY ((uintptr_t)published_arena)
 #define TERM_MEMORY ((uintptr_t)terminal_arena)
+#include "../src/app_storage.c"
+#include "../src/app_canvas.c"
+#include "../src/app_view.c"
 #include "../src/term.c"
+#define V (views[selected])
 #include "../sdk/baseos_abi.h"
 /* Exact handles resolve records first. Slot-indexed views keep the Terminal
  * assertions readable without making a display slot the process identity. */
@@ -16,7 +20,7 @@ static ProcessIO callbacks[PROCESS_TASKS];
 static char arguments[PROCESS_TASKS][PROCESS_ARGUMENT_MAX+1];
 typedef struct {
     ProcessHandle handle;
-    int slot,state;
+    int slot,state,stop_requested;
     ProcessResult result;
     char argument[PROCESS_ARGUMENT_MAX+1];
 } FixtureProcess;
@@ -102,6 +106,13 @@ ProcessHandle process_schedule_one(void){
 int process_status(ProcessHandle handle){
     FixtureProcess *p=fixture_process(handle);return p?fixture_state(p):PROCESS_TASK_EMPTY;
 }
+int process_binding_live(const ProcessBinding *binding){
+    if(!binding||binding->slot>=PROCESS_TASKS)return 0;
+    FixtureProcess *p=fixture_process(binding->process);
+    return p&&!p->stop_requested&&p->slot==(int)binding->slot&&
+        (fixture_state(p)==PROCESS_TASK_READY||fixture_state(p)==PROCESS_TASK_SLEEPING)&&
+        callbacks[p->slot].binding.generation==binding->generation;
+}
 int process_get_result(ProcessHandle handle,ProcessResult *out){
     FixtureProcess *p=fixture_process(handle);
     if(!p||fixture_state(p)!=PROCESS_TASK_DONE||!out)return 0;
@@ -114,6 +125,7 @@ int process_key(ProcessHandle handle,int key){
 int process_request_stop(ProcessHandle handle){
     FixtureProcess *p=fixture_process(handle);
     if(!p)return 1;
+    p->stop_requested=1;
     if(p->slot>=0&&stop_deferred[p->slot])return 0;
     if(fixture_state(p)!=PROCESS_TASK_DONE){
         p->result=(ProcessResult){PROCESS_TASK_STOPPED,PROCESS_EXIT_STOP};
@@ -161,9 +173,9 @@ int main(void){
     command("exec /extended.bex");
     assert(exec_calls==1&&!strcmp(term_get(term_count()-2),"Legacy exec supports BEX1 only; use start for this program."));
     term_select(0);term_reset();canvas_resize(320,200);plot(17,23,9);
-    unsigned generation=terms[0].binding_generation;
+    unsigned generation=views[0].binding.generation;
     create_result=PROCESS_CREATE_MEMORY;command("start /counter.bex");
-    assert(!term_task_running(0)&&!terms[0].process&&terms[0].binding_generation==generation);
+    assert(!term_task_running(0)&&!views[0].binding.process&&views[0].binding.generation==generation);
     assert(term_canvas_width()==320&&term_canvas_height()==200&&term_canvas()[23*320+17]==9);
     assert(!strcmp(term_get(term_count()-2),"Cannot start: native backing memory is unavailable."));
     create_result=0;
@@ -187,7 +199,7 @@ int main(void){
     assert(selected==1&&!strcmp(term_input(),"x")&&term_task_running(1)&&!term_task_running(0));
     memset(&info,0xa5,sizeof info);assert(!term_task_info(0,&info));
     TermTaskInfo zero={0};assert(!memcmp(&info,&zero,sizeof info));
-    assert(!terms[0].task_name[0]&&!terms[0].task_started&&!terms[0].process);
+    assert(!views[0].task_name[0]&&!views[0].task_started&&!views[0].binding.process);
     term_select(0);assert(!strcmp(term_get(term_count()-1),"Native task stopped."));
     command("echo Terminal is still alive");assert(!strcmp(term_get(term_count()-1),"Terminal is still alive"));
     command("start /another.bex");assert(term_task_info(0,&info));
@@ -197,11 +209,11 @@ int main(void){
     /* Normal completion clears metadata and leaves the caller's selection alone. */
     term_select(1);exit_next[0]=1;int before_steps=steps[1];
     for(int i=0;i<3&&term_task_running(0);i++)term_task_poll();
-    assert(!term_task_running(0)&&!terms[0].task_name[0]&&selected==1&&!strcmp(term_input(),"x"));
+    assert(!term_task_running(0)&&!views[0].task_name[0]&&selected==1&&!strcmp(term_input(),"x"));
     assert(term_task_running(1)&&steps[1]>=before_steps);
-    term_task_close(1);assert(!term_task_info(1,&info)&&!terms[1].process);
+    term_task_close(1);assert(!term_task_info(1,&info)&&!views[1].binding.process);
     term_backspace();command("start /another.bex");assert(term_task_info(1,&info));
-    term_reset();assert(!term_task_info(1,&info)&&!terms[1].task_name[0]);
+    term_reset();assert(!term_task_info(1,&info)&&!views[1].task_name[0]);
     /* Lifetime remains correct across the unsigned PIT counter rollover. */
     now=UINT32_MAX-10;command("start /another.bex");now+=70;
     assert(term_task_info(1,&info)&&info.elapsed_sec==1);

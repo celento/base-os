@@ -5,55 +5,19 @@
 #include "net.h"
 #include "download.h"
 #include "platform.h"
-typedef struct {
-    char lines[TERM_LINES][TERM_COLS+1], input[TERM_COLS+1];
-    char history[16][TERM_COLS+1], draft[TERM_COLS+1];
-    int head,count,len,cwd,hcount,hpos,canvas_on,scroll,rows,view_count,input_overflow;
-    int input_invalid,draft_invalid;
-    unsigned cwd_identity;
-    unsigned task_dirty;
-    char task_name[TERM_TASK_NAME_LEN];
-    char task_document[TERM_TASK_NAME_LEN];
-    unsigned task_started, binding_generation;
-    ProcessHandle process;
-    int canvas_width,canvas_height;
-    int canvas_buffered,canvas_pending;
-    int published_on,published_width,published_height;
-    unsigned char canvas[PROGRAM_CANVAS_MAX_WIDTH*PROGRAM_CANVAS_MAX_HEIGHT];
-} Terminal;
-#ifndef TERM_MEMORY
-#define TERM_MEMORY (APPS_BASE+0x300000)
-#endif
-static Terminal *terms=(Terminal *)TERM_MEMORY;
-#ifndef NATIVE_CANVAS_MEMORY
-#define NATIVE_CANVAS_MEMORY NATIVE_CANVAS_BASE
-#endif
-#define CANVAS_PIXELS (PROGRAM_CANVAS_MAX_WIDTH*PROGRAM_CANVAS_MAX_HEIGHT)
-static unsigned char (*published_canvases)[CANVAS_PIXELS]=(void *)NATIVE_CANVAS_MEMORY;
-static int selected,terms_ready;
-_Static_assert(TERM_TASK_NAME_LEN >= FS_NAME_LEN,"task filename buffer too small");
-_Static_assert(sizeof(Terminal)*8<=0xC0000,"terminal arena overflow");
-_Static_assert(PROCESS_TASKS*CANVAS_PIXELS<=NATIVE_CANVAS_CAPACITY,"published canvas arena overflow");
+#include "app_storage.h"
+typedef TerminalText Terminal;
+static Terminal *terms=((AppStorage *)TERM_MEMORY)->terminals;
+static int selected;
 #define T (terms[selected])
-void term_select(int slot){if(slot>=0&&slot<8)selected=slot;}
-static void push_at(Terminal *t,const char *s){t->task_dirty|=TERM_TASK_TEXT;int slot=(t->head+t->count)%TERM_LINES;if(t->count<TERM_LINES)t->count++;else t->head=(t->head+1)%TERM_LINES;int i=0;while(s[i]&&i<TERM_COLS){t->lines[slot][i]=s[i];i++;}t->lines[slot][i]=0;}
+void term_select(int slot){if(slot>=0&&slot<PROCESS_TASKS)selected=slot;}
+static void push_at(Terminal *t,const char *s){app_view_mark((int)(t-terms),TERM_TASK_TEXT);int slot=(t->head+t->count)%TERM_LINES;if(t->count<TERM_LINES)t->count++;else t->head=(t->head+1)%TERM_LINES;int i=0;while(s[i]&&i<TERM_COLS){t->lines[slot][i]=s[i];i++;}t->lines[slot][i]=0;}
+void term_write_at(int slot,const char *text){if(slot>=0&&slot<PROCESS_TASKS)push_at(terms+slot,text);}
 static void push(const char *s){push_at(&T,s);}
-static void canvas_reset(void){
-    T.task_dirty|=TERM_TASK_LAYOUT;
-    kmemset(T.canvas,0,sizeof T.canvas);T.canvas_on=0;
-    T.canvas_width=PROGRAM_CANVAS_DEFAULT_WIDTH;T.canvas_height=PROGRAM_CANVAS_DEFAULT_HEIGHT;
-    /* Invalidate the old frame without exposing its bytes. The next publication
-     * copies every active pixel from the cleared working canvas. Keep buffered
-     * mode: a script may clear its terminal while a native task is still live. */
-    T.canvas_pending=0;T.published_on=0;
-    T.published_width=PROGRAM_CANVAS_DEFAULT_WIDTH;T.published_height=PROGRAM_CANVAS_DEFAULT_HEIGHT;
-}
+static void canvas_reset(void){app_view_canvas_reset(selected);}
 void term_reset(void){
-    if(!terms_ready){kmemset(terms,0,sizeof(Terminal)*PROCESS_TASKS);terms_ready=1;}
-    if(!term_task_close(selected))return;
-    unsigned generation=T.binding_generation;
-    kmemset(&T,0,sizeof T);T.binding_generation=generation;
-    canvas_reset();T.cwd=fs_root();T.cwd_identity=fs_identity(T.cwd);
+    if(!app_view_reset(selected))return;
+    kmemset(&T,0,sizeof T);T.cwd=fs_root();T.cwd_identity=fs_identity(T.cwd);
     push("Type help for commands; man NAME for examples.");push("Page Up / Page Down scroll through output.");
 }
 int term_count(void){return T.count;}
@@ -61,19 +25,10 @@ const char *term_get(int i){return i>=0&&i<T.count?T.lines[(T.head+i)%TERM_LINES
 const char *term_input(void){return T.input;}
 int term_cwd(void){if(!fs_is_dir(T.cwd)||fs_identity(T.cwd)!=T.cwd_identity){T.cwd=fs_root();T.cwd_identity=fs_identity(T.cwd);}return T.cwd;}
 void term_set_cwd(int id){if(fs_is_dir(id)){T.cwd=id;T.cwd_identity=fs_identity(id);}}
-const unsigned char *term_canvas(void){return T.canvas_buffered?(T.published_on?published_canvases[selected]:0):(T.canvas_on?T.canvas:0);}
-int term_canvas_width(void){return T.canvas_buffered?T.published_width:T.canvas_width;}
-int term_canvas_height(void){return T.canvas_buffered?T.published_height:T.canvas_height;}
-int term_canvas_size(int slot,int *width,int *height){
-    if(width)*width=0;
-    if(height)*height=0;
-    if(slot<0||slot>=PROCESS_TASKS||!width||!height)return 0;
-    const Terminal *t=&terms[slot];
-    if(!(t->canvas_buffered?t->published_on:t->canvas_on))return 0;
-    *width=t->canvas_buffered?t->published_width:t->canvas_width;
-    *height=t->canvas_buffered?t->published_height:t->canvas_height;
-    return 1;
-}
+const unsigned char *term_canvas(void){return app_view_frame(selected).pixels;}
+int term_canvas_width(void){return app_view_frame(selected).width;}
+int term_canvas_height(void){return app_view_frame(selected).height;}
+int term_canvas_size(int slot,int *width,int *height){return app_view_canvas_size(slot,width,height);}
 void term_prompt(char *out,int max){char path[FS_PATH_LEN];fs_path(term_cwd(),path,sizeof path);int p=0;for(int i=0;path[i]&&p<max-3;i++)out[p++]=path[i];if(max>2){out[p++]='>';out[p++]=' ';out[p]=0;}}
 void term_char(char c){T.scroll=0;if(c>=32&&c<=126){if(T.len<TERM_COLS){T.input[T.len++]=c;T.input[T.len]=0;}else T.input_overflow=1;}}
 void term_backspace(void){T.scroll=0;if(T.len)T.input[--T.len]=0;if(!T.len)T.input_overflow=T.input_invalid=0;}
@@ -195,225 +150,25 @@ static int download_command(int cwd,const char *url,const char *remaining,int qu
     push("Download started in background. Use downloads for status; cancel to stop.");return 0;
 }
 static void cat(int id){char row[81];int n=0;for(int i=0;i<fs_size(id);i++){char c=fs_data(id)[i];if(c=='\r')continue;if(c=='\n'){row[n]=0;push(row);n=0;continue;}row[n++]=c>=32&&c<=126?c:'.';if(n==80){row[n]=0;push(row);n=0;}}if(n){row[n]=0;push(row);}}
-static void plot_at(Terminal *t,int x,int y,int color){
-    if(x>=0&&x<t->canvas_width&&y>=0&&y<t->canvas_height){
-        if(t->canvas_buffered)t->canvas_pending=1;
-        else {
-            t->task_dirty|=TERM_TASK_CANVAS;
-            if(!t->canvas_on)t->task_dirty|=TERM_TASK_LAYOUT;
-        }
-        t->canvas_on=1;t->canvas[y*t->canvas_width+x]=(unsigned char)color;
-    }
+/* Synchronous BASIC/exec retain their selected-Terminal, unbuffered adapter. */
+static void plot(int x,int y,int color){app_view_plot(selected,x,y,color);}
+static void canvas_rect(int x,int y,int width,int height,int color){app_view_rect(selected,x,y,width,height,color);}
+static int canvas_resize(int width,int height){return app_view_resize(selected,width,height);}
+int term_binding_matches(const ProcessBinding *binding){return app_view_binding_matches(binding);}
+int term_task_running(int slot){return app_view_running(slot);}
+int term_task_start_file(int slot,int file,unsigned identity){return term_task_start_file_with_arg(slot,file,identity,0,0);}
+int term_task_start_file_with_arg(int slot,int file,unsigned identity,const char *argument,unsigned argument_length){
+    int result=app_view_start_file(slot,file,identity,argument,argument_length,APP_VIEW_OUTPUT_TERMINAL);
+    if(!result)terms[slot].scroll=0;
+    return result;
 }
-/* Clip before adding coordinates: callers may supply any signed origin.
- * Only working pixels change; publication still belongs to an explicit frame
- * boundary. Empty/offscreen rectangles must not activate or dirty the canvas. */
-static void canvas_rect_at(Terminal *t,int x,int y,int width,int height,int color){
-    if(width<=0||height<=0||x>=t->canvas_width||y>=t->canvas_height)return;
-    if(x<0){if(x<=-width)return;width+=x;x=0;}
-    if(y<0){if(y<=-height)return;height+=y;y=0;}
-    if(width>t->canvas_width-x)width=t->canvas_width-x;
-    if(height>t->canvas_height-y)height=t->canvas_height-y;
-    if(t->canvas_buffered)t->canvas_pending=1;
-    else {
-        t->task_dirty|=TERM_TASK_CANVAS;
-        if(!t->canvas_on)t->task_dirty|=TERM_TASK_LAYOUT;
-    }
-    t->canvas_on=1;
-    unsigned char *row=t->canvas+y*t->canvas_width+x;
-    for(int i=0;i<height;i++)kmemset(row+i*t->canvas_width,color,width);
-}
-static int canvas_resize_at(Terminal *t,int width,int height){
-    if(!((width==(int)PROGRAM_CANVAS_DEFAULT_WIDTH&&height==(int)PROGRAM_CANVAS_DEFAULT_HEIGHT)||
-         (width==(int)PROGRAM_CANVAS_MAX_WIDTH&&height==(int)PROGRAM_CANVAS_MAX_HEIGHT)))return -1;
-    kmemset(t->canvas,0,sizeof t->canvas);
-    t->canvas_width=width;t->canvas_height=height;t->canvas_on=1;
-    if(t->canvas_buffered)t->canvas_pending=1;
-    else t->task_dirty|=TERM_TASK_LAYOUT;
-    return 0;
-}
-/* Called only at a native task's explicit frame boundary for its explicit
- * Terminal attachment. The bounded copy never polls or dispatches apps. PIT
- * interrupts cannot switch ring-0 work, so pixels and metadata publish together. */
-static void canvas_publish_at(Terminal *t){
-    if(!t->canvas_buffered||!t->canvas_pending)return;
-    int layout=t->published_on!=t->canvas_on||t->published_width!=t->canvas_width||
-               t->published_height!=t->canvas_height;
-    if(t->canvas_on)kmemcpy(published_canvases[t-terms],t->canvas,t->canvas_width*t->canvas_height);
-    t->published_on=t->canvas_on;t->published_width=t->canvas_width;t->published_height=t->canvas_height;
-    t->canvas_pending=0;
-    t->task_dirty|=layout?TERM_TASK_LAYOUT:TERM_TASK_CANVAS;
-}
-static void plot(int x,int y,int color){plot_at(&T,x,y,color);}
-static void canvas_rect(int x,int y,int width,int height,int color){canvas_rect_at(&T,x,y,width,height,color);}
-static int canvas_resize(int width,int height){return canvas_resize_at(&T,width,height);}
-/* Resolve all three fields; callbacks for an old process/binding are discarded.
- * No callback changes selected or dispatches another process. */
-static Terminal *binding_terminal(const ProcessBinding *binding){
-    if(!binding||binding->slot>=PROCESS_TASKS||!binding->process||!binding->generation)return 0;
-    Terminal *t=terms+binding->slot;
-    return t->process==binding->process&&t->binding_generation==binding->generation?t:0;
-}
-int term_binding_matches(const ProcessBinding *binding){return binding_terminal(binding)!=0;}
-static void native_print(const ProcessBinding *binding,const char *text){
-    Terminal *t=binding_terminal(binding);if(t)push_at(t,text);
-}
-static void native_plot(const ProcessBinding *binding,int x,int y,int color){
-    Terminal *t=binding_terminal(binding);if(t)plot_at(t,x,y,color);
-}
-static void native_present(const ProcessBinding *binding){
-    Terminal *t=binding_terminal(binding);if(t)canvas_publish_at(t);
-}
-static int native_resize(const ProcessBinding *binding,int width,int height){
-    Terminal *t=binding_terminal(binding);return t?canvas_resize_at(t,width,height):-1;
-}
-static void native_rect(const ProcessBinding *binding,int x,int y,int width,int height,int color){
-    Terminal *t=binding_terminal(binding);if(t)canvas_rect_at(t,x,y,width,height,color);
-}
-int term_task_running(int slot){
-    if(slot<0||slot>=PROCESS_TASKS)return 0;
-    int state=process_status(terms[slot].process);
-    return state==PROCESS_TASK_READY||state==PROCESS_TASK_SLEEPING;
-}
-int term_task_start_file(int slot,int file,unsigned identity){
-    return term_task_start_file_with_arg(slot,file,identity,0,0);
-}
-int term_task_start_file_with_arg(int slot,int file,unsigned identity,
-                                   const char *argument,unsigned argument_length){
-    if(slot<0||slot>=PROCESS_TASKS)return -1;
-    int previous=selected;term_select(slot);
-    int result=-1;
-    if(T.process&&process_status(T.process)==PROCESS_TASK_DONE)term_task_close(slot);
-    if(!identity||!fs_valid(file)||fs_is_dir(file)||fs_is_app(file)||fs_identity(file)!=identity)
-        push("Cannot start: the selected program changed or is no longer a file.");
-    else if(T.process)
-        push("Cannot start: this terminal already has a native task.");
-    else if(argument_length>PROCESS_ARGUMENT_MAX||
-            (argument_length&&(!argument||argument[0]!='/')))
-        push("Cannot start: use an absolute document path of at most 128 bytes.");
-    else if(T.binding_generation==UINT32_MAX)
-        push("Cannot start: this terminal's binding identities are exhausted.");
-    else {
-        ProcessHandle process=0;
-        /* No task runs between this identity check and the loader's owned copy. */
-        int created=process_create(fs_data(file),fs_size(file),argument,argument_length,&process);
-        if(created)
-            push(created==PROCESS_CREATE_MEMORY?"Cannot start: native backing memory is unavailable.":
-                 created==-1?"Cannot start: all native process records are in use.":
-                 created==PROCESS_CREATE_UNSUPPORTED?"Cannot start: this executable format or ABI is not enabled.":
-                 created==PROCESS_CREATE_LAYOUT?"Cannot start: executable exceeds this context's file or memory policy.":
-                 "Cannot start: invalid native executable header or layout.");
-        else {
-            ProcessIO io={{process,(unsigned)slot,T.binding_generation+1},
-                          native_print,native_plot,native_present,native_resize,native_rect};
-            if(!process_bind(process,&io)){
-                process_request_stop(process);process_reap(process);
-                push("Cannot start: native output attachment is unavailable.");
-                selected=previous;return -1;
-            }
-            /* Commit both sides before it can run; START never invokes output. */
-            T.process=process;T.binding_generation=io.binding.generation;
-            if(!process_start(process)){
-                T.process=0;process_request_stop(process);process_reap(process);
-                push("Cannot start: native process is unavailable.");
-                selected=previous;return -1;
-            }
-            kstrcpy(T.task_name,fs_name(file));T.task_started=timer_ticks();
-            unsigned first=0;
-            for(unsigned i=0;i<argument_length;i++)if(argument[i]=='/')first=i+1;
-            unsigned n=argument_length-first;
-            if(n>=sizeof T.task_document)n=sizeof T.task_document-1;
-            if(n)kmemcpy(T.task_document,argument+first,n);
-            T.task_document[n]=0;
-            T.task_dirty|=TERM_TASK_LIFECYCLE;
-            canvas_reset();T.canvas_buffered=1;T.scroll=0;
-            push(T.task_name);
-            push("Native task started. Ctrl+C stops; close ends it.");
-            result=0;
-        }
-    }
-    selected=previous;return result;
-}
-int term_task_info(int slot,TermTaskInfo *out){
-    if(!out)return 0;
-    kmemset(out,0,sizeof *out);
-    if(slot<0||slot>=PROCESS_TASKS)return 0;
-    int state=process_status(terms[slot].process);
-    if(state!=PROCESS_TASK_READY&&state!=PROCESS_TASK_SLEEPING)return 0;
-    const Terminal *t=&terms[slot];
-    kstrcpy(out->name,t->task_name[0]?t->task_name:"Native task");
-    kstrcpy(out->document,t->task_document);
-    out->owner=slot;out->state=state;
-    out->started_ticks=t->task_started;out->instance=t->process;
-    out->elapsed_sec=t->process?(unsigned)(timer_ticks()-t->task_started)/TIMER_HZ:0;
-    return 1;
-}
-int term_task_title(int slot,char *out,int capacity){
-    if(!out||capacity<=0)return 0;
-    out[0]=0;TermTaskInfo info;
-    if(!term_task_info(slot,&info))return 0;
-    const char *parts[3]={info.name,info.document[0]?" - ":"",info.document};
-    int used=0;
-    for(int p=0;p<3;p++)for(int i=0;parts[p][i]&&used<capacity-1;i++)out[used++]=parts[p][i];
-    out[used]=0;return 1;
-}
-static void task_metadata_clear(int slot){
-    if(slot<0||slot>=PROCESS_TASKS)return;
-    if(terms[slot].process)terms[slot].task_dirty|=TERM_TASK_LIFECYCLE;
-    kmemset(terms[slot].task_name,0,sizeof terms[slot].task_name);
-    kmemset(terms[slot].task_document,0,sizeof terms[slot].task_document);
-    terms[slot].task_started=terms[slot].process=0;
-}
-int term_task_key(int slot,int key){
-    return slot>=0&&slot<PROCESS_TASKS?process_key(terms[slot].process,key):0;
-}
-int term_task_close(int slot){
-    if(slot<0||slot>=PROCESS_TASKS)return 1;
-    ProcessHandle process=terms[slot].process;
-    if(process){
-        if(!process_request_stop(process))return 0;
-        ProcessResult result;
-        /* Completion is consumed before record reuse, even for explicit close. */
-        process_get_result(process,&result);
-        if(!process_reap(process))return 0;
-    }
-    task_metadata_clear(slot);
-    /* Stop/error/close discards unfinished work, retaining the published view. */
-    terms[slot].canvas_pending=0;return 1;
-}
-void term_task_stop(int slot){
-    if(!term_task_running(slot))return;
-    if(!process_request_stop(terms[slot].process))return;
-    push_at(terms+slot,"Native task stopped.");term_task_close(slot);
-}
-TermTaskUpdate term_task_poll_update(void){
-    TermTaskUpdate update={-1,0};
-    int slot=-1;
-    /* Consume retained completions before another slice, so a continuously
-     * runnable peer cannot starve a deferred stop's display/reap. */
-    for(unsigned i=0;i<PROCESS_TASKS;i++)
-        if(terms[i].process&&process_status(terms[i].process)==PROCESS_TASK_DONE){slot=(int)i;break;}
-    if(slot<0){
-        ProcessHandle ran=process_schedule_one();
-        for(unsigned i=0;i<PROCESS_TASKS;i++)
-            if(ran&&terms[i].process==ran){slot=(int)i;break;}
-        /* A queued stop may complete without running a slice. */
-        if(slot<0)for(unsigned i=0;i<PROCESS_TASKS;i++)
-            if(terms[i].process&&process_status(terms[i].process)==PROCESS_TASK_DONE){slot=(int)i;break;}
-    }
-    if(slot>=0){
-        Terminal *t=terms+slot;ProcessResult result;
-        if(process_get_result(t->process,&result)){
-            if(result.reason==PROCESS_EXIT_STOP)push_at(t,"Native task stopped.");
-            else if(result.reason==PROCESS_EXIT_APP&&!result.value)push_at(t,"Native task finished.");
-            else push_at(t,"Native task ended with an error or fault.");
-            term_task_close(slot);
-        }
-        update.slot=slot;update.flags=t->task_dirty;t->task_dirty=0;
-    }
-    return update;
-}
-int term_task_poll(void){return term_task_poll_update().flags!=0;}
+int term_task_info(int slot,TermTaskInfo *out){return app_view_info(slot,out);}
+int term_task_title(int slot,char *out,int capacity){return app_view_title(slot,out,capacity);}
+int term_task_key(int slot,int key){return app_view_key(slot,key);}
+int term_task_close(int slot){return app_view_close(slot);}
+void term_task_stop(int slot){app_view_stop(slot);}
+TermTaskUpdate term_task_poll_update(void){return app_view_poll_update();}
+int term_task_poll(void){return app_view_poll();}
 static void (*program_input_hook)(int active);
 void term_set_program_input(void (*hook)(int active)) { program_input_hook=hook; }
 static int execute(const char *,int,int *);
@@ -552,9 +307,9 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"df")){print_number("Bytes used: ",fs_used_bytes());print_number("Payload capacity: ",fs_capacity());print_number("Free node slots: ",fs_node_limit()-fs_node_count());print_number("Maximum file bytes: ",fs_file_limit());push(fs_storage_name());push("Folders also consume file slots.");push(fs_storage_status()?fs_storage_status():"Disk is synchronized.");}
     else if(!kstrcmp(cmd,"run"))return script(id,depth,budget);
     else if(!kstrcmp(cmd,"tasks")){
-        int found=0;
+        int found=0;TermTaskInfo info;
         for(int slot=0;slot<PROCESS_TASKS;slot++)if(term_task_running(slot)){
-            print_number(process_status(terms[slot].process)==PROCESS_TASK_SLEEPING?"Sleeping, terminal slot ":"Running, terminal slot ",(unsigned)slot+1);found=1;
+            print_number((term_task_info(slot,&info)&&info.state==PROCESS_TASK_SLEEPING)?"Sleeping, terminal slot ":"Running, terminal slot ",(unsigned)slot+1);found=1;
             char title[TERM_TASK_TITLE_LEN];term_task_title(slot,title,sizeof title);push(title);
         }
         if(!found)push("No native tasks are running.");
@@ -571,7 +326,7 @@ static int execute(const char *s,int depth,int *budget){
         if(!kstrcmp(cmd,"exec")&&fs_size(id)>=4&&image[0]=='B'&&image[1]=='E'&&image[2]=='X'&&image[3]=='2'){
             push("Legacy exec supports BEX1 only; use start for this program.");return -1;
         }
-        ProgramIO io={push,plot,program_key,program_present,canvas_resize,canvas_rect};T.canvas_buffered=0;canvas_reset();
+        ProgramIO io={push,plot,program_key,program_present,canvas_resize,canvas_rect};app_view_canvas_unbuffered(selected);canvas_reset();
         if(program_input_hook)program_input_hook(1);
         int rc=!kstrcmp(cmd,"basic")?basic_run(fs_data(id),fs_size(id),&io):process_run(fs_data(id),fs_size(id),&io);
         if(program_input_hook)program_input_hook(0);
