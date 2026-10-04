@@ -34,6 +34,8 @@ from volume import data_layout, encode_snapshot, load, resolve
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = '33870aeacf4629007713c13afed98be43fe523ac'
+IMMUTABLE_SOURCE_PATHS = ('src', 'sdk', 'examples', 'assets', 'third_party', 'Makefile',
+                          'tests/snapshot_responsive_app.c', 'tests/media_mp3_host.c')
 AUDIO_SECONDS = 45
 SAVE_TIMEOUT = 180
 LANES = ('production-boot', 'peer-live-input', 'owned-pointer-draw-publication',
@@ -69,7 +71,7 @@ def prepare(build, output, build_log):
                          'HTTP/network coverage', 'hardware beyond this QEMU SB16 profile'])
     save_json(output/'manifest.json', manifest)
     try:
-        changed = subprocess.check_output(['git', 'diff', REVISION, '--', 'src', 'sdk', 'examples', 'assets', 'third_party', 'Makefile'], cwd=ROOT)
+        changed = subprocess.check_output(['git', 'diff', REVISION, '--', *IMMUTABLE_SOURCE_PATHS], cwd=ROOT)
         require(not changed, 'Runtime, SDK, original assets and examples must remain frozen')
         manifest['collector_worktree_dirty'] = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT))
         manifest['collector_revision'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
@@ -188,7 +190,19 @@ class Session(InputSession):
     """Only four QMP operations; inherited memory API always raises."""
     def __init__(self, *args, **kwargs):
         self.events = []; self.canvas = None; self.last_input = time.monotonic()
-        super().__init__(*args, **kwargs)
+        try:
+            super().__init__(*args, **kwargs)
+        except BaseException as error:
+            # DesktopSession may fail after spawning but before this instance
+            # reaches the caller's context manager. Keep and stop that guest.
+            try:
+                if hasattr(self, 'process'): self.close()
+                elif hasattr(self, 'stderr'): self.stderr.close()
+            finally:
+                if hasattr(self, 'directory'):
+                    save_json(self.directory/'startup-failure.json', dict(error=repr(error),
+                        input_events=self.events, process_stopped=not hasattr(self, 'process') or self.process.poll() is not None))
+            raise RuntimeError('QEMU startup failed; retained evidence: '+str(getattr(self, 'directory', 'not allocated'))) from error
 
     def command(self, name, arguments=None):
         require(name in ('qmp_capabilities', 'send-key', 'input-send-event', 'screendump'),
@@ -300,6 +314,7 @@ def run_profile(manifest, prepared, folder, profile):
             session.observe_until(lambda s:s['phase']==0, 'unchanged peer is visible', keep='peer-ready')
             session.launch('pointer-window.bex'); session.key('alt-right'); session.move(1275,670)
             before = read_pair(session,font,'both-ready'); record['samples'].append(before)
+            require(before['probe']['keys']==0, 'Peer input baseline is not fresh')
             session.launch('media player'); session.key('alt-ret')
             for _ in range(5): session.key('equal')
             time.sleep(6); session.idle_saves('arranged application session finishes saving before audio')
@@ -341,7 +356,19 @@ def run_profile(manifest, prepared, folder, profile):
                 require(tuple(logical[start[1],start[0]])==(42,167,200), 'Published original cyan ink is missing')
                 require(up['probe']['phase']==1 and up['probe']['iterations']>down['probe']['iterations'] and
                         up['probe']['ticks']>down['probe']['ticks'], 'Peer did not progress throughout native publication during save')
-                record['samples'] += [prior,down,up]; save_json(folder/'results.json',record)
+                # A screenshot can contain a previously published peer frame.
+                # Causally bracket the completed Pointer publication with a
+                # NEW peer key, whose persisted guest tick must still be busy.
+                session.click(100,52); session.move(1275,670)
+                sent_after=time.monotonic(); session.key('a')
+                echo,_,echo_wall=session.observe_until(lambda s:s['keys']>up['probe']['keys'],
+                    'post-publication peer key visibly consumed', seconds=10, keep=f'pointer-{index}-post-key')
+                require(echo['phase']==1 and echo['busy']>0, 'Pointer publication has no post-key save overlap')
+                record['input_to_visible_upper_bounds_ms'].append((echo_wall-sent_after)*1000)
+                post=read_pair(session,font,f'pointer-{index}-post-bracket')
+                require(post['probe']['phase']==1 and post['probe']['busy']>0 and
+                        post['probe']['keys']>up['probe']['keys'], 'Fresh post-publication bracket is missing')
+                record['samples'] += [prior,down,up,post]; save_json(folder/'results.json',record)
             session.launch('media player')
             record['audio_after_overlap']=player_state(session,shell,'Playing','mp3-still-playing-after-overlap')
             session.key('ctrl-m'); session.move(1275,670)
@@ -360,6 +387,10 @@ def run_profile(manifest, prepared, folder, profile):
         require('PANIC:' not in serial and 'result=error' not in serial and 'FS save failed' not in serial,
                 'Production guest reported a failure')
         record['stopped_disk']=validate_saved(disk,original)
+        require(record['stopped_disk']['report_words'][8]==4 and
+                len(record['stopped_disk']['key_samples'])==4 and
+                all(s['busy'] for s in record['stopped_disk']['key_samples']),
+                'Four causal pre/post Pointer key brackets were not durably recorded during save')
         measured=[job for job in record['serial_snapshot_jobs'] if
                   job['begin_tick']>=record['stopped_disk']['report_words'][3]]
         require(measured and measured[0].get('result')=='durable', 'Measured snapshot did not finish durably')
@@ -401,10 +432,18 @@ def run_profile(manifest, prepared, folder, profile):
     return record
 
 
+def require_release_window(now=None):
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    # Reserve a conservative 90 minutes before this release's freeze. Normal
+    # execution is estimated at 12–15 minutes, but failure bounds are longer.
+    minute = now.hour*60+now.minute
+    require(not (now.date() == datetime.date(2026,10,4) and 21*60+50 <= minute < 23*60+35),
+            'Release reservation: admit the next guest run at or after 23:35 UTC')
+
+
 def run(prepared,output,slot_grant):
     require(slot_grant=='GRANTED-BY-PARENT','Explicit exclusive QEMU slot grant is required')
-    now=datetime.datetime.now(datetime.timezone.utc)
-    require(not (now.hour==23 and 20<=now.minute<35), 'Release freeze: no heavy work 23:20–23:35 UTC')
+    require_release_window()
     manifest=json.loads((prepared/'manifest.json').read_text()); verify_inputs(manifest)
     output.mkdir(parents=True,exist_ok=False)
     report=dict(status='RUNNING',prepared_manifest=file_record(prepared/'manifest.json'),
@@ -412,6 +451,7 @@ def run(prepared,output,slot_grant):
     save_json(output/'results.json',report)
     try:
         for profile in PROFILES:
+            require_release_window()
             report['profiles'][profile]=run_profile(manifest,prepared,output/profile,profile)
             save_json(output/'results.json',report)
         report['status']='PASSED'
