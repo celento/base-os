@@ -3,6 +3,7 @@ static void task_test_step(int owner);
 #define TERM_TASK_STEP_HOOK task_test_step
 #define TERM_TASK_FIXTURE_ONLY
 #include "term_task_info_host.c"
+#include "canvas_view.h"
 enum { IDLE, CLEAR, FOOTER, PUBLISH, SMALL, LARGE, CLEAR_TEXT };
 static int operation;
 static void task_test_step(int owner) {

@@ -254,6 +254,7 @@ static Terminal *binding_terminal(const ProcessBinding *binding){
     Terminal *t=terms+binding->slot;
     return t->process==binding->process&&t->binding_generation==binding->generation?t:0;
 }
+int term_binding_matches(const ProcessBinding *binding){return binding_terminal(binding)!=0;}
 static void native_print(const ProcessBinding *binding,const char *text){
     Terminal *t=binding_terminal(binding);if(t)push_at(t,text);
 }

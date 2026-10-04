@@ -133,3 +133,50 @@ Existing native-platform, publication-process, process-lifetime and private
 address-space host gates also pass. A freestanding kernel build passes. None of
 these host results substitute for the still-pending ordinary production guest
 routing and unchanged BEX1 compatibility gates.
+
+## Stage 3: production routing candidate and C example
+
+The ordinary desktop now configures trusted hooks when PS/2 initialization
+succeeds. Native pointer input uses the sole ordered ingress. Device polling still
+only acquires records. The front-to-back WM point owner, shell overlays, taskbar,
+chrome, padding and the owner's published canvas decide eligibility. A shell
+left/right gesture already underway cannot be stolen by a later chord over a
+native canvas. Native capture bypasses other windows and remains exclusive until
+its accepted buttons are released or a cancellation occurs. Unsubscribed paths
+retain the existing shell/built-in handlers.
+
+The snapshot adapter validates both `process_binding_live` and the complete
+Terminal incarnation. It reads `term_canvas_size(slot)` without changing the
+selected Terminal. Rendering and routing use `canvas_view_layout`. The task
+publication boundary is refreshed before later routed samples even when its
+paint is occluded/deferred. Changed working size remains private until present.
+
+Cancellation conservatively consumes a held gesture across newly chorded
+buttons: after cancelled LEFT, a RIGHT press while LEFT remains held is also
+suppressed until all held buttons are released. It does not become a gesture in
+another application. A scene-discard/input-loss boundary that authoritatively
+observes all buttons released clears the old suppression baseline.
+
+`examples/c/pointer.c` installs as `/Programs/pointer.bex` on a new volume only.
+It is a regular BEX1 SDK app, also buildable as BEX2. Left/right draw separate ink;
+a chord previews both. Only ordinary final UP commits the preview. RESET/CANCEL
+aborts it. R toggles 160×100/320×200 with explicit publication; C clears; O
+releases/reopens; P prints normal Terminal diagnostics; Q/Esc exits. A separate
+model/event adapter keeps window-backend details outside drawing logic. It drains
+both sources, presents dirty frames explicitly, then waits with QUEUE|LEGACY_KEY.
+No independent window or keyboard-event service is implied.
+
+Additional executed host gates:
+
+- Real WM adapter + ingress + UI core: exposed-point ownership, focus-before-down,
+  outside capture across a peer, overlays, geometry publication, legacy point
+  exclusion and decoded-input loss reset.
+- Direct finite-state unit boundaries: last target serial never reused even after
+  initialization, sequence/geometry/stream exhaustion revoke safely, stale output
+  remains untouched, and a fresh endpoint can reopen after token exhaustion.
+- Real example under ASan/UBSan: chords, cancelled-preview rollback, signed outside
+  positions, unknown event/capability bits, resize publication, reopen and bounded
+  waits. Both BEX1 and BEX2 builds pass.
+
+Production guest validation and final full-suite results are recorded separately
+once run; these host checks alone do not qualify the candidate for integration.
