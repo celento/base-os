@@ -154,8 +154,8 @@ int physmem_core_alloc(PhysmemCore *core, BosHandle owner, enum PhysPageKind kin
     core->busy = 0;
     return PHYS_OK;
 }
-int physmem_core_release(PhysmemCore *core, BosHandle owner, enum PhysPageKind kind,
-                         const uint32_t *frames, unsigned count) {
+int physmem_core_validate(const PhysmemCore *core, BosHandle owner, enum PhysPageKind kind,
+                          const uint32_t *frames, unsigned count) {
     int status = core_status(core);
     if (status) return status;
     if (!owner_valid(owner) || !kind_valid(kind) || !frames || !count || count > PHYS_BATCH_MAX)
@@ -168,6 +168,12 @@ int physmem_core_release(PhysmemCore *core, BosHandle owner, enum PhysPageKind k
         /* Bounded by PHYS_BATCH_MAX; no temporary metadata writes or rollback. */
         for (unsigned j = 0; j < i; ++j) if (frames[j] == frame) return PHYS_INVALID;
     }
+    return PHYS_OK;
+}
+int physmem_core_release(PhysmemCore *core, BosHandle owner, enum PhysPageKind kind,
+                         const uint32_t *frames, unsigned count) {
+    int status = physmem_core_validate(core, owner, kind, frames, count);
+    if (status) return status;
     for (unsigned i = 0; i < count; ++i) {
         unsigned pfn = frames[i] / PHYS_PAGE_BYTES;
         core->owners[pfn] = 0;
@@ -225,6 +231,9 @@ int physmem_init(void) {
 }
 int physmem_alloc(BosHandle owner, enum PhysPageKind kind, unsigned count, uint32_t *frames) {
     return physmem_core_alloc(&physical, owner, kind, count, frames);
+}
+int physmem_validate(BosHandle owner, enum PhysPageKind kind, const uint32_t *frames, unsigned count) {
+    return physmem_core_validate(&physical, owner, kind, frames, count);
 }
 int physmem_release(BosHandle owner, enum PhysPageKind kind, const uint32_t *frames, unsigned count) {
     return physmem_core_release(&physical, owner, kind, frames, count);

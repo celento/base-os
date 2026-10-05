@@ -10,7 +10,7 @@ typedef int bos_i32;
 typedef bos_u32 BosHandle;
 _Static_assert(sizeof(bos_u32)==4 && sizeof(bos_i32)==4,"BaseOS ABI requires 32-bit integers");
 #define BOS_ABI_MAJOR 1u
-#define BOS_ABI_MINOR 2u
+#define BOS_ABI_MINOR 3u
 #define BOS_ABI_QUERY_MIN_SIZE 16u
 #define BOS_HANDLE_INVALID 0u
 
@@ -27,7 +27,7 @@ enum BosSyscall {
     BOS_CALL_SYNC_WAIT=21, BOS_CALL_SYNC_RELEASE=22, BOS_CALL_FILE_OPEN=23,
     BOS_CALL_FILE_INFO=24, BOS_CALL_FILE_READ_AT=25,
     BOS_CALL_FILE_REPLACE=26, BOS_CALL_FILE_CLOSE=27,
-    BOS_CALL_MEMORY_INFO=28, BOS_CALL_UI=29
+    BOS_CALL_MEMORY_INFO=28, BOS_CALL_UI=29, BOS_CALL_FILE_TRANSACTION=30
 };
 enum BosResult {
     BOS_OK=0, BOS_PENDING=1,
@@ -46,6 +46,7 @@ enum BosResult {
 #define BOS_FEATURE_HOSTED_UI      (1u<<6)
 /* Contextual: the caller already owns a primary native window. */
 #define BOS_FEATURE_OWNED_NATIVE_WINDOW (1u<<7)
+#define BOS_FEATURE_FILE_TRANSACTIONS (1u<<8)
 #define BOS_CONTEXT_LEGACY_EXEC 1u
 #define BOS_CONTEXT_DESKTOP_TASK 2u
 
@@ -112,12 +113,64 @@ typedef struct {
 } BosFileInfo;
 _Static_assert(sizeof(BosFileInfo)==32,"file info wire size");
 
+/* Private staged conditional writes, desktop IDE only. No implicit sync.
+ * QUERY validates the full output span, copies min(capacity,96), preserves tail.
+ * Limits are non-reserving. pages_used/transactions_used are global snapshots;
+ * total_bytes is the service ceiling, file_bytes the backend file ceiling. */
+#define BOS_FILE_TRANSACTION_MAJOR 1u
+#define BOS_FILE_TRANSACTION_MINOR 0u
+#define BOS_FILE_TRANSACTION_VERSION 1u
+#define BOS_FILE_TRANSACTION_QUERY_MIN_SIZE 16u
+#define BOS_FILE_TRANSACTION_CAP_REPLACE (1u<<0)
+#define BOS_FILE_TRANSACTION_CAP_CREATE (1u<<1)
+#define BOS_FILE_TRANSACTION_REPLACE 1u
+#define BOS_FILE_TRANSACTION_CREATE 2u
+#define BOS_FILE_TRANSACTION_UPLOADING 1u
+#define BOS_FILE_TRANSACTION_COMPLETE 2u
+#define BOS_FILE_TRANSACTION_INVALIDATED 3u
+enum BosFileTransactionOperation {
+    BOS_FILE_TRANSACTION_QUERY=0, BOS_FILE_TRANSACTION_BEGIN_REPLACE=1,
+    BOS_FILE_TRANSACTION_BEGIN_CREATE=2, BOS_FILE_TRANSACTION_APPEND=3,
+    BOS_FILE_TRANSACTION_INFO=4, BOS_FILE_TRANSACTION_ACCEPT_RAM=5,
+    BOS_FILE_TRANSACTION_ABORT=6
+};
+typedef struct {
+    bos_u32 struct_size, major, minor, capabilities;
+    bos_u32 context, chunk_bytes, total_bytes, transactions_per_process;
+    bos_u32 transactions_total, page_bytes, pages_per_transaction, pages_total;
+    bos_u32 pages_used, transactions_used, file_bytes, path_bytes;
+    bos_u32 file_info_bytes, begin_bytes, status_bytes, reserved[5];
+} BosFileTransactionInfoV1;
+/* Input is exactly 64 bytes, version1, flags/reserved zero. Replace: path words
+ * zero and source_handle/expected_revision nonzero. Create: source/revision zero;
+ * path_offset is a user offset, path_bytes excludes NUL (1..128 printable ASCII).
+ * All necessary input bytes are copied before publishing any output. */
+typedef struct {
+    bos_u32 struct_size, version, source_handle, expected_revision;
+    bos_u32 total_bytes, path_offset, path_bytes, flags, reserved[8];
+} BosFileTransactionBeginV1;
+/* INFO retains declared total/mode/handle after mount invalidation, but reports
+ * received_bytes=0 and INVALIDATED; no frames remain. ABORT still succeeds once.
+ * Closing a replacement's source file aborts that transaction immediately. */
+typedef struct {
+    bos_u32 struct_size, version, handle, mode, total_bytes, received_bytes, state;
+    bos_u32 reserved[9];
+} BosFileTransactionStatusV1;
+_Static_assert(sizeof(BosFileTransactionInfoV1)==96,"file transaction query wire size");
+_Static_assert(sizeof(BosFileTransactionBeginV1)==64,"file transaction begin wire size");
+_Static_assert(sizeof(BosFileTransactionStatusV1)==64,"file transaction status wire size");
+_Static_assert(__builtin_offsetof(BosFileTransactionInfoV1,pages_used)==48 &&
+               __builtin_offsetof(BosFileTransactionBeginV1,flags)==28 &&
+               __builtin_offsetof(BosFileTransactionStatusV1,state)==24,
+               "file transaction wire offsets");
+
 /* Internal allocation domains, shared to prevent cross-service collisions.
  * Their encoding is not an application permission or a public parsing API. */
 #define BOS_HANDLE_TYPE_PROCESS 0x10000000u
 #define BOS_HANDLE_TYPE_FILE 0x20000000u
 #define BOS_HANDLE_TYPE_OPERATION 0x30000000u
 #define BOS_HANDLE_TYPE_UI_TARGET 0x40000000u
+#define BOS_HANDLE_TYPE_FILE_TRANSACTION 0x50000000u
 #define BOS_HANDLE_SERIAL_MAX 0x0fffffffu
 /* Opt-in pointer endpoint for an existing hosted canvas or an already-owned
  * primary native window. Neither OPEN nor ADOPT creates a window, allocates a
