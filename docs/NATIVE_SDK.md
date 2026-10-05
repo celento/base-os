@@ -123,10 +123,12 @@ throughout. Its progress arithmetic also covers the opt-in 16 MiB file limit.
 
 ## Additive platform services
 
-The shared [platform ABI 1.2](NATIVE_PLATFORM_ABI.md) provides capability/limit
+The shared [platform ABI 1.3 candidate](NATIVE_PLATFORM_ABI.md) provides capability/limit
 discovery, process identities, versioned file handles, conditional replacement
 and owned asynchronous IDE completion at calls 18–27, plus memory discovery at
 call 28. Call 29 is the independently negotiated [UI 1.1 gateway](NATIVE_UI.md).
+Candidate call 30 adds [conditional staged file transactions](NATIVE_FILE_TRANSACTIONS.md);
+its standalone release qualification is still pending. Close/Stop remains forced.
 Bound hosted tasks advertise feature bit 6; eligible owned-window tasks instead
 advertise bit 7 and use WINDOW_ADOPT, not HOST_OPEN. Both require trusted input
 hooks. Existing calls and binaries remain unchanged. Query
@@ -278,6 +280,32 @@ returns zero only on successful synchronization. Failure can leave the new data
 in RAM and pending for a later retry. It is not a per-file transaction and does
 not roll a failed synchronization back to the old RAM contents. Disk work is
 bounded but runs in the syscall's kernel context and can delay other tasks.
+
+### Candidate chunked conditional writes
+
+Desktop IDE tasks can negotiate `bos_file_transaction_query` before using the
+new stage helpers. Each process may reserve one stage of at most 256 KiB, upload
+through a reusable 4 KiB buffer, then conditionally accept the complete document
+into RAM. There are eight global stage records and 128 private stage pages in
+total; reported usage is a non-reserving snapshot. BEX1 and BEX2 formats and
+their user-memory limits stay unchanged.
+
+Use `bos_file_transaction_begin_replace` with the selected writable file handle
+and revision, or `bos_file_transaction_begin_create` for an absent path. APPEND
+must start at the reported received offset. `bos_file_transaction_accept_ram`
+consumes the stage only on successful publication. BUSY/conflict/capacity leaves
+the stage intact in the same mount; retry BUSY after yielding, and resolve
+conflicts explicitly. `bos_file_transaction_abort`, source close and owner
+exit/Stop release private staging pages.
+
+Capture the accepted revision before requesting durability.
+`bos_file_sync_revision(file, revision)` obtains a new owned receipt and then
+checks that the same file handle still reports exactly those content bytes.
+It makes no promise about subsequent path/metadata edits. Acceptance is a
+synchronous RAM operation with no elapsed-time or scheduling guarantee; the
+existing 32 KiB replacement API remains available unchanged. Old runtimes,
+synchronous `exec` and floppy return UNSUPPORTED, with no automatic fallback.
+See the [public contract and streaming example](NATIVE_FILE_TRANSACTIONS.md).
 
 ## Verification
 

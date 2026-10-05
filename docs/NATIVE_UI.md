@@ -9,7 +9,8 @@ contract and staged evidence below remain compatible and keep their historical
 identities; they do not substitute for the newer owned-window gates.
 
 The current qualified hosted-pointer contract provides one kernel-owned endpoint
-for an existing native Terminal canvas. The general [platform ABI is 1.2](NATIVE_PLATFORM_ABI.md);
+for an existing native Terminal canvas. The standalone file candidate raises the
+general [platform ABI to 1.3](NATIVE_PLATFORM_ABI.md), with its qualification pending;
 UI **1.1** is negotiated independently through gateway **29**. UI1.0
 hosted clients retain their unchanged operations and records. Hosted-UI feature
 bit **6** is advertised only for bound desktop tasks when trusted production

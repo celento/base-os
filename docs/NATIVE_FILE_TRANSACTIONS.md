@@ -4,12 +4,22 @@ This candidate adds a desktop IDE service for privately uploading and atomically
 publishing up to 256 KiB. It is synchronous RAM acceptance, not an implicit disk
 save or a scheduling/latency guarantee. The existing whole-buffer replacement
 limit remains 32 KiB; built-in document models, BEX1/BEX2 formats and disk formats
-are unchanged. The current candidate is host-verified, not guest-qualified.
+are unchanged. General ABI is 1.3; the independently negotiated UI stays 1.1
+and Close/Stop remains forced. The standalone integration is **UNQUALIFIED**
+until archived-binary compatibility, near-full placement and its own final-source
+profile boots pass. Guest evidence from the separately pinned source runtime
+does not establish binary identity for this integration.
 
 Use `bos_file_transaction_query` to negotiate support. It returns UNSUPPORTED on
 old runtimes, legacy synchronous execution and floppy; never truncate or silently
 fall back to an unconditional path write. Protected IDE remains discoverable but
 refuses BEGIN/ACCEPT with PROTECTED. Limits and usage snapshots reserve nothing.
+There is one stage per process, eight global records, 64 private 4-KiB pages
+per maximal stage and 128 pages globally. Thus two simultaneous maximal stages
+fit the global page budget; smaller stages can share the remaining records.
+The complete call-30 register contract is in the
+[platform ABI guide](NATIVE_PLATFORM_ABI.md#conditional-staged-publication-call-30),
+with exact wire layouts in `sdk/baseos_abi.h`.
 
 1. Use `bos_file_transaction_begin_replace(file, revision, total, &status)` for
    an open writable file and an explicitly selected current revision, or
@@ -19,7 +29,8 @@ refuses BEGIN/ACCEPT with PROTECTED. Limits and usage snapshots reserve nothing.
    source buffer after each return. A zero-byte document is complete at BEGIN.
 3. Call `bos_file_transaction_accept_ram(stage, &file_info)` after all bytes are
    uploaded. Success consumes the stage and returns the updated/new file handle
-   and content revision. Other readers retain their old bound revision.
+   and content revision. Other readers retain their old bound revision and
+   report CHANGED when they next read or inspect that handle.
 4. Request a separate owned sync and, after success, compare FILE_INFO on that
    same handle to the captured accepted revision. The explicit
    `bos_file_sync_revision` helper performs that protocol. It proves only those
@@ -71,5 +82,6 @@ Run two instances against the same path, stage both, accept one, then accept the
 other to see a real conditional conflict. S is explicit conflict recovery. Output
 logs include STAGED, RAM_ACCEPTED, DURABLE_CONFIRMED and VERIFY_EXACT records for
 ordinary external-input guest observation. PIT ticks are never used to claim
-acceptance elapsed time. Launch/Stop and persistence require later scheduled
-normal guest verification on both mandatory profiles.
+acceptance elapsed time. Source-equivalent guest evidence and this integration's
+own final-source boots remain separately identified in the integration ledger;
+neither host results nor design documents waive the remaining qualification gates.
