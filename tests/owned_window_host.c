@@ -83,7 +83,7 @@ static void owned_dispatch(void){
     memset(user_memory+OUT,0xa5,256);
     assert(invoke(BOS_CALL_ABI_QUERY,OUT,112,1,0,0)==BOS_OK);
     BosAbiInfo abi;memcpy(&abi,user_memory+OUT,sizeof abi);
-    assert(abi.abi_minor==2&&(abi.features&BOS_FEATURE_BEX2)&&(abi.features&BOS_FEATURE_OWNED_NATIVE_WINDOW));
+    assert(abi.abi_minor==BOS_ABI_MINOR&&(abi.features&BOS_FEATURE_BEX2)&&(abi.features&BOS_FEATURE_OWNED_NATIVE_WINDOW));
     assert(!(abi.features&BOS_FEATURE_HOSTED_UI));unchanged(OUT+96,16);
     memset(user_memory+OUT,0xa5,256);
     assert(ui(BOS_UI_QUERY,1,OUT,80,0)==BOS_OK);

@@ -48,13 +48,20 @@ def require_pointer_service(source):
         'info.features|=(current_task->plan.flags&BOS_BEX2_FLAG_NATIVE_WINDOW_V1)?'
         'BOS_FEATURE_OWNED_NATIVE_WINDOW:BOS_FEATURE_HOSTED_UI;}',
     )
+    # The standalone file service appends gateway 30 without changing UI 29.
+    # Admit only these two reviewed enum tails; do not accept an arbitrary
+    # replacement, reordered gateway or new trailing declaration implicitly.
+    syscall_tails = (
+        'BOS_CALL_MEMORY_INFO=28,BOS_CALL_UI=29};',
+        'BOS_CALL_MEMORY_INFO=28,BOS_CALL_UI=29,BOS_CALL_FILE_TRANSACTION=30};',
+    )
     required = {
         'src/kernel.c': ('if(mouse_ok){const NativeUiHooks native_hooks={native_host_snapshot,native_host_acquired,native_host_focus};native_ui_init(&native_hooks);}',),
         'src/process.c': (
             'if(!current_task||!current_task->bound||!native_ui_available())return BOS_E_UNSUPPORTED;',
             'else if(call==BOS_CALL_UI)r[7]=(unsigned)native_ui_call(r,a,b,c,d,e);'),
         'src/native_ui.c': ('int native_ui_available(void){return hooks.snapshot&&hooks.acquired&&hooks.focus;}',),
-        'sdk/baseos_abi.h': ('#define BOS_FEATURE_HOSTED_UI (1u<<6)', 'BOS_CALL_MEMORY_INFO=28,BOS_CALL_UI=29};', '#define BOS_UI_MAJOR 1u'),
+        'sdk/baseos_abi.h': ('#define BOS_FEATURE_HOSTED_UI (1u<<6)', '#define BOS_UI_MAJOR 1u'),
     }
     try:
         makefile = (source / 'Makefile').read_text()
@@ -67,6 +74,8 @@ def require_pointer_service(source):
             code = re.sub(r'\s+', '', code)
             if any(code.count(re.sub(r'\s+', '', part)) != 1 for part in fragments):
                 raise ValueError('Pointer example requires known source-installed hosted UI wiring: ' + name)
+            if name == 'sdk/baseos_abi.h' and sum(code.count(part) for part in syscall_tails) != 1:
+                raise ValueError('Pointer example requires known source-installed hosted UI syscall wiring')
             if name == 'src/process.c' and (
                     sum(code.count(part) for part in hosted_feature_wirings) != 1 or
                     code.count('BOS_FEATURE_HOSTED_UI') != 1):
