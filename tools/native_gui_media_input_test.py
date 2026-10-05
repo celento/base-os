@@ -49,12 +49,27 @@ def verify_records(records):
                 'Held input changed: ' + name)
 
 
+def verify_executing_source(manifest, root=None):
+    """Bind the actual imported checkout, not just the manifest's old paths."""
+    root = ROOT if root is None else Path(root)
+    for name, expected in manifest['source'].items():
+        relative = Path(name)
+        require(not relative.is_absolute() and relative.parts and
+                '..' not in relative.parts and relative.as_posix() == name,
+                'Invalid held source-relative path: ' + name)
+        actual = file_record(root / relative)
+        require(actual['bytes'] == expected['bytes'] and
+                actual['sha256'] == expected['sha256'],
+                'Executing source differs from held input: ' + name)
+
+
 def verify_inputs(manifest):
     for group in ('build', 'source', 'apps', 'media', 'fixtures'):
         verify_records(manifest[group])
     require(manifest['source_revision'] == REVISION, 'Wrong frozen source revision')
     require(manifest['build_info']['revision'] == REVISION and not manifest['build_info']['dirty'],
             'Build is not the clean hour14 source')
+    verify_executing_source(manifest)
 
 
 def prepare(build, output, build_log):

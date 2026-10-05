@@ -76,6 +76,30 @@ class GuiMediaCollectorTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError,'Held input changed'):
                 gate.verify_records(record)
 
+    def test_identical_executing_checkout_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);held=root/'held.py';held.write_bytes(b'exact collector')
+            actual=root/'actual';(actual/'tools').mkdir(parents=True)
+            (actual/'tools/collector.py').write_bytes(held.read_bytes())
+            manifest={'source':{'tools/collector.py':gate.file_record(held)}}
+            gate.verify_executing_source(manifest,actual)
+
+    def test_other_checkout_cannot_reuse_unchanged_held_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);held=root/'held.py';held.write_bytes(b'exact collector')
+            actual=root/'actual';(actual/'tools').mkdir(parents=True)
+            (actual/'tools/collector.py').write_bytes(b'other collector')
+            manifest={'source':{'tools/collector.py':gate.file_record(held)}}
+            gate.verify_records(manifest['source'])
+            with self.assertRaisesRegex(AssertionError,'Executing source differs'):
+                gate.verify_executing_source(manifest,actual)
+            self.assertEqual(held.read_bytes(),b'exact collector')
+
+    def test_executing_source_requires_canonical_relative_names(self):
+        for name in ('/other.py','../other.py','tools/../other.py','tools//other.py',''):
+            with self.subTest(name=name), self.assertRaisesRegex(AssertionError,'source-relative'):
+                gate.verify_executing_source({'source':{name:{}}},Path('/unused'))
+
     def test_pair_decodes_peer_and_real_native_viewport(self):
         font=gate.NativeFont()
         screen=np.full((720,1280,3),32,dtype=np.uint8)
