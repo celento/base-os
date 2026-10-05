@@ -1,4 +1,11 @@
-# Additive native platform ABI 1.2
+# Additive native platform ABI 1.3 candidate
+
+This standalone candidate adds `BOS_FEATURE_FILE_TRANSACTIONS` (bit 8) and
+gateway 30 for conditional staged file publication. Qualification is pending;
+the independently negotiated UI remains **1.1**, and window Close/Stop remains
+forced. The existing ABI 1.2 window contract and calls 0–29 remain compatible.
+The public operation and durability contract is specified below and in
+[conditional file transactions](NATIVE_FILE_TRANSACTIONS.md).
 
 The qualified independent-window increment adds current-context feature bit 7
 and the separately negotiated UI 1.1 extension. See [native windows](NATIVE_WINDOWS.md)
@@ -67,6 +74,9 @@ Feature bits are (unknown output bits must be ignored):
 - `BOS_FEATURE_BEX2`: this running process uses the BEX2 sparse memory contract.
   It is never advertised by BEX1 or synchronous exec and does not advertise a
   global capability to launch arbitrary BEX2 files.
+- `BOS_FEATURE_FILE_TRANSACTIONS` (bit 8): call 30 is available to this desktop
+  BEX1/BEX2 task on an IDE backend. It is absent in synchronous `exec` and floppy
+  contexts. Protected IDE remains discoverable, but BEGIN/ACCEPT return PROTECTED.
 
 The query reports context, process identity, runtime backend file limit,
 per-process/global service capacities, copy/replacement/path limits, wait limit
@@ -93,7 +103,7 @@ or a promise that the user can launch nine apps from the desktop.
 
 ## Owned resources and errors
 
-Handles are opaque32-bit numbers. Process, file, operation and UI-target allocation domains
+Handles are opaque32-bit numbers. Process, file, operation, UI-target and file-transaction allocation domains
 are distinct; each uses nonzero serials that never wrap or reset during a boot.
 Exhaustion fails closed. Applications must not derive meaning from their bits,
 write them to persistent storage for later reuse, or pass them to another app.
@@ -145,6 +155,7 @@ copies only the current structure. Errors never copy partial metadata.
 |26 conditional replace|handle, data, byte count, info output, info capacity|`BOS_OK`|
 |27 file close|handle,0,0,0,0|`BOS_OK`|
 |28 memory info|output, capacity, requested version,0,0|`BOS_OK`; memory prefix|
+|30 file transaction|operation, a, b, c, d|operation-specific result; see below|
 
 Call29 is the negotiated UI gateway. Its independent operation namespace and
 64/96-byte layouts are specified in [hosted native UI](NATIVE_UI.md). Existing
@@ -158,6 +169,59 @@ Replacement is an atomic RAM update, not durable success. Successful replacement
 refreshes this handle's bound revision; another previously opened handle gets
 CHANGED. See [versioned files](VERSIONED_FILES.md) for rename/move/delete/remount,
 capacity and access semantics. Directory APIs are not present or advertised.
+
+## Conditional staged publication (call 30)
+
+Discover general bit 8, then call `bos_file_transaction_query`. Its helper
+returns UNSUPPORTED on older runtimes without silently falling back to a path
+write. The operation number occupies EBX; the four remaining registers are:
+
+| Operation | Number | ECX, EDX, ESI, EDI | Result |
+|---|---:|---|---|
+| QUERY | 0 | requested major 1, output, capacity, 0 | `BOS_OK`; query prefix |
+| BEGIN_REPLACE | 1 | begin input, 64, status output, capacity | `BOS_OK`; private stage |
+| BEGIN_CREATE | 2 | begin input, 64, status output, capacity | `BOS_OK`; unpublished stage |
+| APPEND | 3 | stage, input bytes, length, received offset | exact copied length |
+| INFO | 4 | stage, status output, capacity, 0 | `BOS_OK`; current stage status |
+| ACCEPT_RAM | 5 | stage, file-info output, capacity, 0 | `BOS_OK`; stage consumed |
+| ABORT | 6 | stage, 0, 0, 0 | `BOS_OK`; stage consumed |
+
+`BosFileTransactionInfoV1` is 96 bytes, service major 1/minor 0. QUERY requires
+at least 16 writable bytes, validates the whole declared span, copies
+min(capacity, 96), and preserves the tail. `BosFileTransactionBeginV1` and
+`BosFileTransactionStatusV1` are each 64 bytes, version 1; their exact field
+order and checked offsets are in `sdk/baseos_abi.h`. BEGIN requires exact input
+size, zero flags/reserved words and a valid full output span. Replace supplies
+an open writable file handle, its chosen nonzero revision and total byte count;
+its path fields are zero. Create supplies the absent path offset/byte length and
+total, with source handle/revision zero. Paths exclude NUL, have at most 128
+printable ASCII bytes and must name an ordinary leaf under `/Documents`.
+
+Limits are one stage per process, eight global records, 256 KiB/64 private
+4-KiB pages per stage, and 128 pages globally. Two maximal stages fit the page
+budget; more smaller stages may fit within the record budget. QUERY's limits
+and current usage are non-reserving snapshots. Stages use owned kernel pages,
+not extra user mappings or the filesystem snapshot arena. APPEND copies 1–4096
+bytes at exactly the current received offset; its input can be reused after
+return. Zero-byte stages are complete at BEGIN without APPEND.
+
+ACCEPT_RAM checks the original object/revision or continued path absence and
+all capacity before publication. Success atomically changes RAM and returns the
+new 32-byte `BosFileInfo`; previously bound readers return CHANGED. BUSY,
+CAPACITY and conflicts preserve the complete stage within the same mount.
+Yield before a BUSY retry; conflict recovery requires an explicit abort and
+reopen/reupload, or a new Save As path. There is no rebase or retarget operation.
+Closing a replacement source aborts its stage; owner exit/Stop/reset releases
+private pages. Mount changes release pages and leave INVALIDATED metadata for
+INFO/ABORT; APPEND/ACCEPT return CHANGED. Foreign/consumed handles are STALE.
+
+RAM acceptance is synchronous, with no scheduling or elapsed-time guarantee.
+Durability requires a separate new owned sync receipt and, after success, a
+FILE_INFO comparison against the captured accepted content revision.
+`bos_file_sync_revision` performs this explicit check and returns CHANGED if
+the same handle no longer reports that revision. This proves content only, not
+later pathname/metadata edits. Existing whole-buffer replacement stays at
+32 KiB; no old syscall, file format or UI wire contract changes.
 
 ## Async progress, waiting and saving
 
