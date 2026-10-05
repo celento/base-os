@@ -6,6 +6,13 @@ Query `BOS_FEATURE_VERSIONED_FILES` before using the extended service; an older
 kernel returns its legacy `-1` for the unknown query. The shared wire definitions
 are in `sdk/baseos_abi.h`; the SDK supplies wrappers in `sdk/baseos.h`.
 
+These calls retain their 32 KiB whole-buffer replacement limit. The separately
+negotiated [ABI 1.3 transactions](NATIVE_FILE_TRANSACTIONS.md) adds
+private chunked upload and conditional RAM acceptance up to 256 KiB for desktop
+IDE tasks, with separate content-durability confirmation. See the
+[qualification record](NATIVE_FILE_TRANSACTIONS_QUALIFICATION.md); old file calls
+and UI 1.1 behavior remain compatible.
+
 ## Contract
 
 - Open an ordinary file using an absolute printable ASCII path of 1–128 bytes.
