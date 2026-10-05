@@ -149,7 +149,11 @@ class GuiMediaCollectorTests(unittest.TestCase):
     def test_prepare_failure_retains_unrun_status_without_guest(self):
         with tempfile.TemporaryDirectory() as temporary:
             folder=Path(temporary)
-            with mock.patch.object(gate,'Session',side_effect=AssertionError('guest created')):
+            # This unit case reaches missing-artifact handling on the current
+            # source. The real collector retains its historical runtime pin.
+            revision=gate.subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+            with mock.patch.object(gate,'REVISION',revision), \
+                 mock.patch.object(gate,'Session',side_effect=AssertionError('guest created')):
                 with self.assertRaises(FileNotFoundError):
                     gate.prepare(folder/'missing-build',folder/'evidence',folder/'missing-log')
             result=json.loads((folder/'evidence/manifest.json').read_text())
