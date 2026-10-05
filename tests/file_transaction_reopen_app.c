@@ -8,7 +8,8 @@ static unsigned char chunk[4096];
 static char path[129];
 static void number(unsigned value){char text[11],reverse[10];unsigned n=0;
     do{reverse[n++]=(char)('0'+value%10);value/=10;}while(value);
-    for(unsigned i=0;i<n;++i)text[i]=reverse[n-i-1];text[n]=0;bos_print(text);
+    for(unsigned i=0;i<n;++i)text[i]=reverse[n-i-1];
+    text[n]=0;bos_print(text);
 }
 int main(void){
     if(bos_argument(path,sizeof path)<=0){const char *p="/Documents/staged.txt";unsigned i=0;do{path[i]=p[i];}while(p[i++]);}
