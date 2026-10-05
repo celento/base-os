@@ -11,7 +11,7 @@
 #define PHYS_BATCH_MAX 1024u
 enum PhysPageKind {
     PHYS_UNAVAILABLE, PHYS_FREE, PHYS_BEX1_BACKING, PHYS_USER_IMAGE,
-    PHYS_PAGE_TABLE, PHYS_PAGE_DIRECTORY, PHYS_KIND_LIMIT
+    PHYS_PAGE_TABLE, PHYS_PAGE_DIRECTORY, PHYS_FILE_STAGE, PHYS_KIND_LIMIT
 };
 enum PhysResult {
     PHYS_OK = 0, PHYS_INVALID = -1, PHYS_CAPACITY = -2,
@@ -56,6 +56,10 @@ int physmem_core_init(PhysmemCore *core, uint32_t *owners, uint8_t *kinds,
  * kernel memory, distinct from metadata and the frames being allocated. */
 int physmem_core_alloc(PhysmemCore *core, BosHandle owner, enum PhysPageKind kind,
                        unsigned count, uint32_t *frames);
+/* Read-only full-list ownership/uniqueness preflight. The serialized caller may
+ * copy from these frames and subsequently release them without a new failure. */
+int physmem_core_validate(const PhysmemCore *core, BosHandle owner, enum PhysPageKind kind,
+                          const uint32_t *frames, unsigned count);
 int physmem_core_release(PhysmemCore *core, BosHandle owner, enum PhysPageKind kind,
                          const uint32_t *frames, unsigned count);
 int physmem_core_release_owner(PhysmemCore *core, BosHandle owner);
@@ -67,6 +71,7 @@ unsigned physmem_core_owner_pages(const PhysmemCore *core, BosHandle owner);
  * Desktop BEX1 creation claims 16 zeroed backing frames; legacy exec does not. */
 int physmem_init(void);
 int physmem_alloc(BosHandle owner, enum PhysPageKind kind, unsigned count, uint32_t *frames);
+int physmem_validate(BosHandle owner, enum PhysPageKind kind, const uint32_t *frames, unsigned count);
 int physmem_release(BosHandle owner, enum PhysPageKind kind, const uint32_t *frames, unsigned count);
 int physmem_release_owner(BosHandle owner);
 int physmem_stats(PhysmemStats *stats);

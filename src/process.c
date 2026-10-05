@@ -623,6 +623,7 @@ static int abi_query(unsigned buffer,unsigned capacity,unsigned major,unsigned r
     info.replace_bytes=fs_file_limit()<NATIVE_FILE_REPLACE_MAX?fs_file_limit():NATIVE_FILE_REPLACE_MAX;
     info.file_bytes=fs_file_limit();
     info.files_per_process=NATIVE_FILE_PER_OWNER;info.files_total=NATIVE_FILE_CAPACITY;
+    if(current_task&&native_file_transactions_available())info.features|=BOS_FEATURE_FILE_TRANSACTIONS;
     info.ticks_per_second=TIMER_HZ;info.processes_total=PROCESS_TASKS+1;
     if(current_task&&current_task->bound&&native_ui_available()){
         info.features|=(current_task->plan.flags&BOS_BEX2_FLAG_NATIVE_WINDOW_V1)?
@@ -703,6 +704,63 @@ static int native_file_call(unsigned call,unsigned a,unsigned b,unsigned c,unsig
     }
     if(b||c||d||e)return BOS_E_INVALID;
     return native_file_close(owner,a);
+}
+/* Every app span and all BEGIN input are checked/copied before service entry.
+ * In particular output may alias the BEGIN record/path: neither is reread once
+ * the service can publish output. Output tails always belong to the caller. */
+static int native_file_transaction_call(unsigned operation,unsigned a,unsigned b,unsigned c,unsigned d) {
+    if(operation==BOS_FILE_TRANSACTION_QUERY){
+        if(a!=BOS_FILE_TRANSACTION_MAJOR)return BOS_E_UNSUPPORTED;
+        if(d||c<BOS_FILE_TRANSACTION_QUERY_MIN_SIZE||!user_span(b,c,USER_WRITE))return BOS_E_INVALID;
+        if(!current_task||!native_file_transactions_available())return BOS_E_UNSUPPORTED;
+        BosFileTransactionInfoV1 info;native_file_transactions_query(&info);
+        kmemcpy((void *)(USER_BASE+b),&info,c<sizeof info?c:sizeof info);return BOS_OK;
+    }
+    if(operation==BOS_FILE_TRANSACTION_BEGIN_REPLACE||operation==BOS_FILE_TRANSACTION_BEGIN_CREATE){
+        if(b!=sizeof(BosFileTransactionBeginV1)||!user_span(a,b,USER_READ)||
+            d<sizeof(BosFileTransactionStatusV1)||!user_span(c,d,USER_WRITE))return BOS_E_INVALID;
+        BosFileTransactionBeginV1 input;
+        kmemcpy(&input,(const void *)(USER_BASE+a),sizeof input);
+        if(input.version!=BOS_FILE_TRANSACTION_VERSION)return BOS_E_UNSUPPORTED;
+        if(input.struct_size!=sizeof input||input.flags)return BOS_E_INVALID;
+        for(unsigned i=0;i<8;++i)if(input.reserved[i])return BOS_E_INVALID;
+        char path[NATIVE_FILE_PATH_MAX+1];
+        if(operation==BOS_FILE_TRANSACTION_BEGIN_CREATE){
+            if(input.source_handle||input.expected_revision||!user_path(input.path_offset,input.path_bytes,path))
+                return BOS_E_INVALID;
+        }else if(!input.source_handle||!input.expected_revision||input.path_offset||input.path_bytes)return BOS_E_INVALID;
+        if(!current_task)return BOS_E_UNSUPPORTED;
+        BosFileTransactionStatusV1 info;
+        int result=native_file_transaction_begin(current_owner(),operation,&input,
+                    operation==BOS_FILE_TRANSACTION_BEGIN_CREATE?path:0,&info);
+        if(result==BOS_OK)kmemcpy((void *)(USER_BASE+c),&info,sizeof info);
+        return result;
+    }
+    if(operation==BOS_FILE_TRANSACTION_APPEND){
+        if(!c||c>NATIVE_FILE_TRANSACTION_CHUNK||!user_span(b,c,USER_READ))return BOS_E_INVALID;
+        if(!current_task)return BOS_E_UNSUPPORTED;
+        return native_file_transaction_append(current_owner(),a,(const void *)(USER_BASE+b),c,d);
+    }
+    if(operation==BOS_FILE_TRANSACTION_INFO||operation==BOS_FILE_TRANSACTION_ACCEPT_RAM){
+        unsigned required=operation==BOS_FILE_TRANSACTION_INFO?sizeof(BosFileTransactionStatusV1):sizeof(BosFileInfo);
+        if(d||c<required||!user_span(b,c,USER_WRITE))return BOS_E_INVALID;
+        if(!current_task)return BOS_E_UNSUPPORTED;
+        if(operation==BOS_FILE_TRANSACTION_INFO){
+            BosFileTransactionStatusV1 info;
+            int result=native_file_transaction_info(current_owner(),a,&info);
+            if(result==BOS_OK)kmemcpy((void *)(USER_BASE+b),&info,sizeof info);
+            return result;
+        }
+        BosFileInfo info;int result=native_file_transaction_accept(current_owner(),a,&info);
+        if(result==BOS_OK)kmemcpy((void *)(USER_BASE+b),&info,sizeof info);
+        return result;
+    }
+    if(operation==BOS_FILE_TRANSACTION_ABORT){
+        if(b||c||d)return BOS_E_INVALID;
+        if(!current_task)return BOS_E_UNSUPPORTED;
+        return native_file_transaction_abort(current_owner(),a);
+    }
+    return BOS_E_UNSUPPORTED;
 }
 /* UI output spans are checked before allocation or consumption. WAIT stores
  * only owned identity, flags and deadline; it deliberately never publishes. */
@@ -857,6 +915,7 @@ int process_interrupt(uint32_t *r){
     else if(call==BOS_CALL_ABI_QUERY)r[7]=(unsigned)abi_query(a,b,c,d,e);
     else if(call==BOS_CALL_MEMORY_INFO)r[7]=(unsigned)memory_info(a,b,c,d,e);
     else if(call==BOS_CALL_UI)r[7]=(unsigned)native_ui_call(r,a,b,c,d,e);
+    else if(call==BOS_CALL_FILE_TRANSACTION)r[7]=(unsigned)native_file_transaction_call(a,b,c,d,e);
     else if(call>=BOS_CALL_SYNC_BEGIN&&call<=BOS_CALL_SYNC_RELEASE){
         if(!current_task){r[7]=(unsigned)BOS_E_UNSUPPORTED;return 1;}
         if(c||d||e||(call!=BOS_CALL_SYNC_WAIT&&b)){

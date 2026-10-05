@@ -25,4 +25,24 @@ int native_file_replace(uint32_t owner, uint32_t handle, const void *data,
                         uint32_t length, BosFileInfo *out);
 int native_file_close(uint32_t owner, uint32_t handle);
 
+#define NATIVE_FILE_TRANSACTION_MAX 262144u
+#define NATIVE_FILE_TRANSACTION_CHUNK 4096u
+#define NATIVE_FILE_TRANSACTION_CAPACITY 8u
+#define NATIVE_FILE_TRANSACTION_PER_OWNER 1u
+#define NATIVE_FILE_TRANSACTION_PAGES 64u
+#define NATIVE_FILE_TRANSACTION_TOTAL_PAGES 128u
+/* These methods receive only copied/validated kernel inputs. BEGIN path is a
+ * copied terminated path corresponding exactly to input.path_bytes, never an
+ * app pointer. No source buffer survives APPEND. Serialized calls only. */
+int native_file_transactions_available(void);
+void native_file_transactions_tick(void);
+void native_file_transactions_query(BosFileTransactionInfoV1 *out);
+int native_file_transaction_begin(uint32_t owner, unsigned mode,
+    const BosFileTransactionBeginV1 *input, const char *path, BosFileTransactionStatusV1 *out);
+int native_file_transaction_append(uint32_t owner, uint32_t handle, const void *data,
+                                   unsigned length, unsigned offset);
+int native_file_transaction_info(uint32_t owner, uint32_t handle, BosFileTransactionStatusV1 *out);
+int native_file_transaction_accept(uint32_t owner, uint32_t handle, BosFileInfo *out);
+int native_file_transaction_abort(uint32_t owner, uint32_t handle);
+
 #endif

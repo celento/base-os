@@ -389,14 +389,69 @@ static void release_data(int id) {
     nodes[id].size = 0;
     nodes[id].offset = 0;
 }
+/* Shared logical/physical preflight, including removal credit and nonempty
+ * convenience terminators. Subtraction is performed only after its bound check. */
+static int file_bytes_fit(int id, unsigned length, unsigned count) {
+    unsigned old = id >= 0 ? (unsigned)nodes[id].size : 0;
+    unsigned used = fs_used_bytes(), allowance = fs_capacity_for_nodes(count);
+    unsigned previous = old ? old + 1 : 0;
+    unsigned required = length ? length + 1 : 0;
+    if (!allowance || used < old || used - old > allowance ||
+        length > allowance - (used - old)) return 0;
+    if (pool_used < previous || pool_used - previous > pool_capacity ||
+        required > pool_capacity - (pool_used - previous)) return 0;
+    return 1;
+}
+int fs_publish_private(int id, int parent, const char *name, unsigned length,
+                       FsPrivateSource source, void *context) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
+    int creating = id == -1, slot = id;
+    if (length > fs_file_limit() || (length && !source) ||
+        !fs_version_available(creating)) return -1;
+    if (creating) {
+        if (!fs_is_dir(parent) || !valid_name(name) ||
+            fs_find_child(parent, name) >= 0 || !tree_fits(-1, parent, name)) return -1;
+        for (slot = 0; slot < fs_node_limit() && nodes[slot].used; ++slot) {}
+        if (slot == fs_node_limit()) return -1;
+    } else if (!fs_valid(id) || nodes[id].is_dir || nodes[id].is_app) return -1;
+    if (!file_bytes_fit(id, length, (unsigned)fs_node_count() + creating)) return -1;
+
+    /* No fallible operation follows this point. The private source and frame
+     * ownership were validated by the caller in this same serialized turn.
+     * Device-only polling cannot start snapshots or expose intermediate data. */
+    if (creating) {
+        kmemset(&nodes[slot], 0, sizeof nodes[slot]);
+        kstrcpy(nodes[slot].name, name);
+        nodes[slot].parent = parent;
+        nodes[slot].used = 1;
+        identities[slot] = new_identity();
+    } else if (length != (unsigned)nodes[slot].size) release_data(slot);
+    if (length) {
+        int reuse = !creating && length == (unsigned)nodes[slot].size;
+        if (!reuse) nodes[slot].offset = pool_used;
+        char *destination = (char *)pool_base + nodes[slot].offset;
+        for (unsigned offset = 0; offset < length;) {
+            unsigned bytes = length - offset;
+            if (bytes > 4096) bytes = 4096;
+            source(context, offset, destination + offset, bytes);
+            offset += bytes;
+            fs_background_poll();
+        }
+        destination[length] = 0;
+        if (!reuse) pool_used += length + 1;
+    }
+    nodes[slot].size = (int)length;
+    nodes[slot].modified = fs_clock();
+    content_revisions[slot] = new_content_revision();
+    fs_touched = 1;
+    return slot;
+}
 int fs_write(int id, const char *data, int len) {
     if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(id) || nodes[id].is_dir || nodes[id].is_app || len < 0 ||
         (unsigned)len > fs_file_limit() || (len && !data)) return -1;
-    if ((unsigned)len > fs_capacity() - (fs_used_bytes() - nodes[id].size)) return -1;
-    unsigned previous = nodes[id].size ? nodes[id].size + 1 : 0;
+    if (!file_bytes_fit(id, (unsigned)len, (unsigned)fs_node_count())) return -1;
     unsigned required = len ? (unsigned)len + 1 : 0;
-    if (required > pool_capacity - (pool_used - previous)) return -1;
     /* fs_write(dst, fs_data(src), n), self-overwrite, and fs_copy all work even
      * when compaction moves the source. Staging is idle outside disk commits. */
     uintptr_t source = (uintptr_t)data;

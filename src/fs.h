@@ -70,6 +70,15 @@ int fs_create_app(int parent, const char *name);
 #define FS_ERR_BUSY (-2)
 /* Atomic: writes all bytes, or returns a negative error without changing it. */
 int fs_write(int id, const char *data, int len);
+/* Kernel-only serialized conditional service publication. id=-1 creates an
+ * absent ordinary file at parent/name; otherwise replaces that ordinary id.
+ * Every node/byte/version check precedes mutation. source copies exactly length
+ * bytes, cannot fail/reenter/allocate/mutate FS, and must refer to stable private
+ * storage, never the compact FS pool or shared image arena. No user callbacks.
+ * Returns the final node, FS_ERR_BUSY, or -1 with FS unchanged. */
+typedef void (*FsPrivateSource)(void *context, unsigned offset, void *out, unsigned length);
+int fs_publish_private(int id, int parent, const char *name, unsigned length,
+                       FsPrivateSource source, void *context);
 int fs_read(int id, char *out, int max);
 int fs_list(int parent, int *ids, int max);
 int fs_list_files(int *ids, int max);

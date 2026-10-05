@@ -43,6 +43,7 @@
 #include "sysmon.h"
 #include "fs.h"
 #include "native_sync.h"
+#include "native_files.h"
 #include "native_ui.h"
 #include "wordle.h"
 #include "term.h"
@@ -8228,6 +8229,7 @@ static void render_desktop_frame(void) {
 
 /* Device polling never dispatches app work or filesystem mutations. */
 static enum FsSyncProgress storage_poll(void) {
+    native_file_transactions_tick();
     native_sync_tick();
     const char *before = fs_storage_status();
     unsigned started = timer_ticks();
