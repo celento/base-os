@@ -76,7 +76,7 @@ static void begin(unsigned creating,unsigned save_as){
         char *out=append(destination,"/Documents/staged-copy-");char n[11];
         number(n,bos_task_id());out=append(out,n);out=append(out,"-");
         number(n,++copy_number);out=append(out,n);append(out,".txt");
-    }else append(destination,primary);
+    }else append(destination,creating?"/Documents/created.txt":primary);
     int result;
     if(creating)result=bos_file_transaction_begin_create(destination,262144,&stage);
     else{
@@ -133,7 +133,7 @@ int main(void){
        (info.capabilities&3u)!=3u){bos_print("Staged document needs desktop IDE file transactions; no fallback write.\n");return 1;}
     if(bos_canvas_size(320,200)!=0)return 1;
     if(bos_argument(primary,sizeof primary)<=0)append(primary,"/Documents/staged.txt");
-    bos_print("C creates an absent path; R explicitly stages replacement of its current version.\n");
+    bos_print("C creates /Documents/created.txt; R stages the current input version.\n");
     bos_print("A accepts RAM; D confirms that content on disk; V verifies every byte.\n");
     bos_print("S explicitly saves the preserved model under a new name after conflict.\n");
     for(;;){

@@ -54,7 +54,7 @@ These are hosted BEX1, hosted BEX2 and owned-window BEX2 versions of the same
 source. They are not added to the installed example catalogue. The default path
 is `/Documents/staged.txt`; an ordinary startup document argument overrides it.
 
-- C stages an unpublished create; R explicitly selects the current version of
+- C stages an unpublished create at `/Documents/created.txt`; R explicitly selects the current version of
   the existing path and stages replacement. Upload yields between chunks.
 - A accepts a complete stage into RAM. The display distinguishes STAGED from
   RAM ACCEPTED and CONTENT DURABLE.
