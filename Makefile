@@ -95,6 +95,9 @@ $(OUT)/staged-document2.bex: examples/c/staged_document.c sdk/baseos.h sdk/baseo
 $(OUT)/staged-document-window.bex: examples/c/staged_document.c sdk/baseos.h sdk/baseos_abi.h tools/build_app.py | $(OUT)
 	$(PYTHON) tools/build_app.py $< $@ --format bex2 --window native-v1 --workspace-bytes 0 --stack-bytes 16384
 
+$(OUT)/staged-reopen.bex: tests/file_transaction_reopen_app.c sdk/baseos.h sdk/baseos_abi.h tools/build_app.py | $(OUT)
+	$(PYTHON) tools/build_app.py $< $@
+
 $(OUT)/sdk_examples.h: $(OUT)/hello-c.bex $(OUT)/notebook.bex $(OUT)/counter.bex $(OUT)/docstats.bex $(OUT)/pointer.bex $(OUT)/pointer-window.bex tools/bin2c.py Makefile
 	$(PYTHON) tools/bin2c.py $(OUT)/hello-c.bex sdk_hello > $@
 	$(PYTHON) tools/bin2c.py $(OUT)/notebook.bex sdk_notebook >> $@

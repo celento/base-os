@@ -78,7 +78,7 @@ def prepare(build,output,window_manifest,workspace_report):
         workspace=json.loads(workspace_report.read_text());manifest['archive_manifests']['workspace']=record(workspace_report)
         name='workspace-array.bex';entry=workspace['prepared_files'][name]
         copy_app(name,workspace_report.parent/name,entry,'unchanged archived hosted BEX2')
-        for name,source in [('stage1.bex','staged-document.bex'),('stage2.bex','staged-document2.bex'),('stagewin.bex','staged-document-window.bex')]:
+        for name,source in [('stage1.bex','staged-document.bex'),('stage2.bex','staged-document2.bex'),('stagewin.bex','staged-document-window.bex'),('reopen.bex','staged-reopen.bex')]:
             entry=record(build/source);copy_app(name,build/source,entry,'new transaction fixture from current clean build')
         old_input=workspace_report.parent/'stats-sample.txt'
         verified_archive(old_input,workspace['prepared_files']['stats-sample.txt'])
