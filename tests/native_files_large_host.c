@@ -2,7 +2,9 @@
 #define main legacy_large_main
 #include "large_volume_host.c"
 #undef main
+#include "native_file_stage_host.h"
 #include "../src/native_files.c"
+#undef kmemcpy
 unsigned large_test_polls;
 int main(void) {
     for (unsigned i = 0; i < sizeof(bytes); ++i) bytes[i] = (char)(i * 17 + i / 4096);

@@ -17,7 +17,8 @@ class NativeFileTests(unittest.TestCase):
             binary = pathlib.Path(directory) / 'native-files'
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra',
                             '-Werror', '-fsanitize=address,undefined', '-I', str(ROOT / 'src'),
-                            str(ROOT / 'tests/native_files_host.c'), '-o', str(binary)], check=True)
+                            str(ROOT / 'tests/native_files_host.c'), str(ROOT / 'src/physmem.c'),
+                            str(ROOT / 'tests/native_file_stage_bootinfo.c'), '-o', str(binary)], check=True)
             for case in (None, 'revision', 'identity', 'handle'):
                 with self.subTest(case=case or 'ordinary'):
                     subprocess.run([str(binary)] + ([case] if case else []),
@@ -30,7 +31,8 @@ class NativeFileTests(unittest.TestCase):
             binary = pathlib.Path(directory) / 'native-files-large'
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra',
                             '-Werror', '-fsanitize=address,undefined', '-I', str(ROOT / 'src'),
-                            str(ROOT / 'tests/native_files_large_host.c'), '-o', str(binary)], check=True)
+                            str(ROOT / 'tests/native_files_large_host.c'), str(ROOT / 'src/physmem.c'),
+                            str(ROOT / 'tests/native_file_stage_bootinfo.c'), '-o', str(binary)], check=True)
             subprocess.run([str(binary)], env=dict(os.environ, ASAN_OPTIONS='detect_leaks=0', UBSAN_OPTIONS='halt_on_error=1'), check=True)
 
 

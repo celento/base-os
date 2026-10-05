@@ -3,7 +3,9 @@
 #define main legacy_fs_main
 #include "fs_host.c"
 #undef main
+#include "native_file_stage_host.h"
 #include "../src/native_files.c"
+#undef kmemcpy
 
 #define OWNER_A (BOS_HANDLE_TYPE_PROCESS | 1u)
 #define OWNER_B (BOS_HANDLE_TYPE_PROCESS | 2u)
