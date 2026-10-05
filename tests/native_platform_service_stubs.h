@@ -64,3 +64,24 @@ int native_file_replace(unsigned owner,unsigned handle,const void *data,unsigned
 int native_file_close(unsigned owner,unsigned handle){
     stub_file_calls++;stub_owner=owner;stub_handle=handle;return stub_result;
 }
+
+/* Transactions are unavailable by default in unrelated dispatcher fixtures. */
+int native_file_transactions_available(void){return 0;}
+void native_file_transactions_tick(void){}
+void native_file_transactions_query(BosFileTransactionInfoV1 *out){(void)out;}
+int native_file_transaction_begin(unsigned owner,unsigned mode,const BosFileTransactionBeginV1 *input,
+                                 const char *path,BosFileTransactionStatusV1 *out){
+    (void)owner;(void)mode;(void)input;(void)path;(void)out;return BOS_E_UNSUPPORTED;
+}
+int native_file_transaction_append(unsigned owner,unsigned handle,const void *data,unsigned length,unsigned offset){
+    (void)owner;(void)handle;(void)data;(void)length;(void)offset;return BOS_E_UNSUPPORTED;
+}
+int native_file_transaction_info(unsigned owner,unsigned handle,BosFileTransactionStatusV1 *out){
+    (void)owner;(void)handle;(void)out;return BOS_E_UNSUPPORTED;
+}
+int native_file_transaction_accept(unsigned owner,unsigned handle,BosFileInfo *out){
+    (void)owner;(void)handle;(void)out;return BOS_E_UNSUPPORTED;
+}
+int native_file_transaction_abort(unsigned owner,unsigned handle){
+    (void)owner;(void)handle;return BOS_E_UNSUPPORTED;
+}
