@@ -78,12 +78,17 @@ def prepare(build,output,window_manifest,workspace_report):
         workspace=json.loads(workspace_report.read_text());manifest['archive_manifests']['workspace']=record(workspace_report)
         name='workspace-array.bex';entry=workspace['prepared_files'][name]
         copy_app(name,workspace_report.parent/name,entry,'unchanged archived hosted BEX2')
-        for name,source in [('stage1.bex','staged-document.bex'),('stage2.bex','staged-document2.bex'),('stagewin.bex','staged-document-window.bex'),('reopen.bex','staged-reopen.bex'),('verify-old.bex','staged-old.bex')]:
+        for name,source in [('stage1.bex','staged-document.bex'),('stage2.bex','staged-document2.bex'),('stagewin.bex','staged-document-window.bex'),('reopen.bex','staged-reopen.bex'),('verify-old.bex','staged-old.bex'),('verify-absent.bex','staged-absent.bex')]:
             entry=record(build/source);copy_app(name,build/source,entry,'new transaction fixture from current clean build')
         old_input=workspace_report.parent/'stats-sample.txt'
         verified_archive(old_input,workspace['prepared_files']['stats-sample.txt'])
         expected=document_bytes();(output/'expected-seed1.txt').write_bytes(expected)
         manifest['expected_content']=record(output/'expected-seed1.txt')
+        manifest['public_verifiers']={'verify-old.bex':dict(seed=0,bytes=20000,default_path='/Documents/staged.txt'),
+            'reopen.bex':dict(seed=1,bytes=262144,default_path='/Documents/staged.txt'),
+            'verify-absent.bex':dict(path='/Documents/created.txt',expected_result='BOS_E_NOT_FOUND')}
+        manifest['example_controls']={'R':'replace current /Documents/staged.txt or existing startup path',
+            'C':'exclusive create /Documents/created.txt','S':'explicit fresh task-qualified Save As'}
         for profile,ram in [('default',64),('large',128)]:
             folder=output/profile;folder.mkdir();image=folder/'data.img'
             require(initialize(image,profile=profile),'Fixture image already exists')
