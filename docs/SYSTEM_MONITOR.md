@@ -162,8 +162,6 @@ its terminal's task; the empty Tasks view; and shell input in the stopped owner.
 It saves screenshots in its printed temporary directory. The struct-size checks
 fail early if the inspected normal-kernel layouts change.
 
-The first integrated production run passed on `c790ffb` using this script. The
-three-tab renderer and Terminal tests above also passed with ASan/UBSan. This is
-normal functional coverage, not a claim of exhaustive process or security
-verification. `tools/task_input_test.py` separately covers the broader native
+These are functional tests, not exhaustive process or security tests.
+`tools/task_input_test.py` separately covers the broader native
 task launcher, keyboard input, Ctrl+C, close, restart and native-exit lifecycle.

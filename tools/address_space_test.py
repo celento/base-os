@@ -43,10 +43,10 @@ def prepare(args,work):
     assert '#define BASEOS_BEX2_ENABLED 1' in (runtime/'src/program.h').read_text(), 'Require clean source-enabled candidate'
     assert any('src/process.c' in line and ' -c ' in line for line in compilation.splitlines()), 'Need process object build provenance'
     identity['runtime_build_log']=dict(path=str(args.build_log),sha256=sha(args.build_log))
-    frozen=json.loads((ROOT/'tests/fixtures/bex1-hour05/manifest.json').read_text())
+    frozen=json.loads((ROOT/'tests/fixtures/bex1-legacy/manifest.json').read_text())
     files={}
     for name,info in frozen['files'].items():
-        source=ROOT/'tests/fixtures/bex1-hour05'/name
+        source=ROOT/'tests/fixtures/bex1-legacy'/name
         assert source.stat().st_size==info['bytes'] and sha(source)==info['sha256']
         files[name]=source.read_bytes()
     for name,pages in (('address-space',256),('address-large',460)):

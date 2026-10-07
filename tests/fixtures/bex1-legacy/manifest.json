@@ -1,7 +1,7 @@
 {
   "source_revision": "a7ea36be6db5ae2cd477dfe36e8e58db48145048",
   "source_build_label": "2026-10-04 13:10 UTC",
-  "provenance": "Copied unmodified prebuilt BEX1 executables from frozen checkpoint/hour-05-20261004 build; never rebuilt with the new SDK.",
+  "provenance": "Unmodified prebuilt BEX1 executables from the original SDK build; never rebuilt with the new SDK.",
   "files": {
     "counter.bex": {
       "bytes": 1490,

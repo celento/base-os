@@ -32,7 +32,7 @@ def sha(path):
 
 
 def freeze(directory):
-    folder = ROOT / 'tests/fixtures/bex1-hour05'
+    folder = ROOT / 'tests/fixtures/bex1-legacy'
     manifest = json.loads((folder / 'manifest.json').read_text())
     files = {}
     for name, expected in manifest['files'].items():

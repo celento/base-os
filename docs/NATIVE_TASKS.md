@@ -3,10 +3,10 @@
 `start /Programs/counter.bex` starts an ordinary BEX1 program without the two-second lifetime limit of `exec`. Open another Terminal and run the same command: each copy maintains its own counter, canvas, input, stack, and data. The desktop continues taking input and servicing its cooperative built-in applications between native slices.
 
 BEX1 remains the default 64 KiB contract. The same hosted desktop route also
-supports the qualified opt-in [BEX2 format](BEX2_FORMAT.md), whose sparse 4 MiB
+supports the opt-in [BEX2 format](BEX2_FORMAT.md), whose sparse 4 MiB
 offset extent contains only launch-declared text/data/workspace/stack regions.
 Synchronous `exec` still accepts BEX1 only. A BEX2 explicitly built with
-`--window native-v1` uses the qualified [owned native window](NATIVE_WINDOWS.md)
+`--window native-v1` uses the [owned native window](NATIVE_WINDOWS.md)
 backend instead of a Terminal. Neither format supplies a heap.
 
 Open `.bex` programs from Files, the ordinary Open dialog, or Ctrl+Space filename
@@ -135,7 +135,7 @@ Key polling is nonblocking and returns one queued byte or zero. A full queue dro
   applications.
 - Published canvases occupy 512,000 bytes of the 512 KiB reservation at
   `0x600000`–`0x680000`, inside the existing E820-validated RAM span.
-- Historical C1 footprint: eight Terminals with 320 scrollback rows, maximum
+- Original footprint: eight Terminals with 320 scrollback rows, maximum
   320×200 canvases and binding generation used 732,160 bytes. Later input fields
   changed that figure; a compile-time assertion still enforces the fixed
   786,432-byte subarena before script scratch.

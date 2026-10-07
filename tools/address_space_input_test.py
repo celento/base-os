@@ -186,7 +186,7 @@ def prepare(args, runtime, modules):
     report = dict(passed=False, status='prepared; no guest started', profiles={},
                   evidence_class='unchanged clean enabled production kernel; ordinary PS/2 desktop',
                   provenance=source_provenance(args, runtime, modules), build_commands=[])
-    frozen_dir = ROOT / 'tests/fixtures/bex1-hour05'
+    frozen_dir = ROOT / 'tests/fixtures/bex1-legacy'
     manifest = json.loads((frozen_dir / 'manifest.json').read_text())
     apps = {}
     for name, info in manifest['files'].items():

@@ -155,7 +155,7 @@ and count pointers must not overlap the source document or each other. The
 functions reject those overlaps; in-place conversion is not supported. Buffers
 must be valid for their supplied lengths and stable during calls.
 
-## Reproduction and verified scope
+## Reproduction and test scope
 
 ```sh
 ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p test_writer_codec.py -v
@@ -175,7 +175,7 @@ The Python tests independently interpret the exported subset to check exact text
 all 64 inline style transitions, alignment, font size, empty paragraphs, escaping,
 and insertion state. If installed, **Pandoc** additionally reads the actual RTF
 files and checks visible text and bold/italic/underline semantics, including all
-64 transitions. Pandoc 3.1.11.1 passed these checks during implementation. Its AST
+64 transitions. Its AST
 normalizes tabs to spaces and omits empty paragraphs, so those features and font
 size/alignment are checked by the explicit token/state reader instead. A missing
 Pandoc reports skipped interoperability tests, not a claimed independent pass.

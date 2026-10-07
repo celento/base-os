@@ -1,9 +1,9 @@
-# Bounded owned physical pages: C2a
+# Bounded owned physical pages
 
 This is a kernel foundation, not an application heap or BEX2 support. The boot
-path initializes page metadata and prints its initial counts. C2b now backs each
+path initializes page metadata and prints its initial counts. Process backing uses it to back each
 desktop process's fixed 64 KiB saved image with sixteen owned frames; see
-[PROCESS_BACKING.md](PROCESS_BACKING.md) for its lifecycle and remaining gates.
+[PROCESS_BACKING.md](PROCESS_BACKING.md) for its lifecycle.
 There is no new syscall, app-visible physical address, page handle, disk format,
 SDK ABI, image size, or change to the compatibility page tables and the separate inactive kernel root.
 
@@ -51,7 +51,7 @@ the four holes below 127 MiB contain 797 pages:
 Fully eligible pages in `[127 MiB, 256 MiB)` are additional candidates. Synthetic
 fully usable PC-style 64/128/256 MiB maps therefore have 797/1,053/33,821 pages;
 firmware reservations may reduce real guest counts. A RAM-size display estimate
-is never used for eligibility. C3a reserves the extra root explicitly at `KERNEL_DIRECTORY_BASE`; the total
+is never used for eligibility. The kernel reserves the extra root explicitly at `KERNEL_DIRECTORY_BASE`; the total
 `PAGING_CAPACITY` is 12 KiB. That removes one former free candidate page.
 
 ## Metadata and boot order
@@ -68,7 +68,7 @@ its actual compiler-sized end is at or below `TASK_PAGE_METADATA_BASE`.
 `tests/test_physmem.py` compiles the actual current `NativeTask` declaration with
 `-m32` and verifies this boundary independently of the host pointer size.
 
-The initial C2a compile on baseline `a9a7a43` measured `NativeTask` at 65,952
+An earlier compile measured `NativeTask` at 65,952
 bytes, eight records at 527,616 bytes, ending at `0x03080D00`. This leaves 62,208
 bytes before metadata. Do not substitute an older hand-calculated size for this
 compiler result; rerun the check after integrating lifecycle/context changes.
@@ -136,16 +136,9 @@ are supervisor identity-reachable and the entire user aperture stays excluded.
 No guest address is accessed to test an absent mapping. The compile-only task
 layout test and late-init source-order test complement the functional core.
 
-Also retain existing boot-info, optional-memory and kernel-layout tests. This
-increment does not claim a guest allocation/release lifecycle, performance gain,
-or larger native application capacity. The C2b client must pass separate
-launch/exit/close/reset count gates and unchanged BEX1 behavior in both
-normal guest profiles before calling process backing integrated.
-
-Initial C2a validation (2026-10-04): all 10 selected allocator/boot-info/layout
-unit tests and the standalone optional-memory fixture passed. The full i386
-floppy image built with the existing verified NASM toolchain and no compiler
-warnings. The existing boot-info sanitizer fixture required the environment's
-normal `ASAN_OPTIONS=detect_leaks=0` setting; the new allocator fixture is an
-ordinary functional host executable. No QEMU session or guest lifecycle test
-was run for this standalone landing.
+Also retain existing boot-info, optional-memory and kernel-layout tests. These
+host tests do not exercise a guest allocation/release lifecycle, performance or
+native application capacity; see [PROCESS_BACKING.md](PROCESS_BACKING.md) for
+the process-backing client. The boot-info sanitizer fixture may require
+`ASAN_OPTIONS=detect_leaks=0`; the allocator fixture is an ordinary functional
+host executable.

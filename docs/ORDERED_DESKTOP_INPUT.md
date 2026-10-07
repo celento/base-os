@@ -1,6 +1,6 @@
 # Ordered desktop input foundation
 
-This is an internal compatibility change. It adds no native event syscall,
+Ordered input is an internal desktop mechanism. It adds no native event syscall,
 subscription, SDK capability, application window or pointer ABI. Existing native
 apps still read byte keys through their current Terminal-owned queue.
 
@@ -32,7 +32,7 @@ several clicks arrive during one long desktop operation.
 ## Cancellation, loss and scene lifetimes
 
 Queue overflow discards the incomplete stream and latches one reset outside the
-ring. Acquisition keeps maintaining the latest state; normal delivery resumes
+ring. Acquisition keeps maintaining the latest state; normal dispatch resumes
 only after the desktop consumes that reset. Reset cancels dragging, resizing,
 file drops, selection and uncommitted Paint shapes without committing a release.
 Held buttons are suppressed until individually released. Every open Terminal
@@ -41,8 +41,8 @@ line and history. Clearing the entire line with Backspace, or explicitly choosin
 a complete history entry, restores execution; returning to the incomplete draft
 restores its guard. Loss cannot silently run a partially entered shell command.
 Other app/document/modal text remains best-effort after lost keyboard samples;
-this increment does not add a generic text transaction/reset protocol or change
-the existing native byte-key ABI. Device loss additionally
+there is no generic text transaction/reset protocol, and the existing native
+byte-key ABI is unchanged. Device loss additionally
 keeps an unknown-button suppression latch across scene transitions until valid
 pointer samples observe releases. Lost modifier bytes reset the physical latches
 rather than retaining an unknowable pressed shortcut modifier.
@@ -74,7 +74,7 @@ that budget fills, subsequent ordinary desktop turns keep consuming the tail in
 KEY callbacks update only input state; loss notices and cancellation run in the
 desktop begin/end hooks, never by recursively invoking another app from a syscall.
 
-## Evidence and limits
+## Tests and limits
 
 `tests/input_ingress_host.c` uses the production decoder and ring with ordinary
 keyboard and mouse sequences: rapid edges, interleaved modifiers, packet completion,
@@ -86,8 +86,7 @@ motion, window drag/resize, Paint completion/cancellation, picker double-clicks,
 focus loss, same-slot replacement, incomplete-packet fencing, overflow suppression,
 saver activation/wake backlog and synchronous ownership.
 
-Those tests establish the internal state and callback contract; they do not
-substitute for ordinary production guest UI checks. App handler/model/render
-regressions remain in the existing host suite. Production guest checks must use
-ordinary supported PS/2 actions and a disposable volume, and record exact build
-hashes. No hosted native pointer endpoint is implemented or advertised here.
+Those tests establish the internal state and callback contract. App
+handler/model/render regressions remain in the existing host suite.
+`python3 tools/ordered_input_test.py build` checks the production guest with
+ordinary PS/2 actions and a disposable volume. No hosted native pointer endpoint is implemented or advertised here.

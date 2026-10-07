@@ -1,7 +1,7 @@
 # Native C application SDK
 
 BaseOS runs freestanding i386 applications built by the host SDK. BEX1 remains
-the default, with an unchanged 65,536-byte process region. The qualified opt-in
+the default, with an unchanged 65,536-byte process region. The opt-in
 [BEX2 format](BEX2_FORMAT.md) uses a sparse 4 MiB offset extent with text, data,
 workspace and stack regions declared and committed at launch; gaps are not
 accessible memory. Both use `int 0x80` for bounded platform services. There is no
@@ -46,7 +46,7 @@ filename with **Ctrl+Space** and press Enter. BEX1 and unflagged BEX2 open a new
 Terminal with their own protected task. A BEX2 built with `--window native-v1`
 opens its own decorated native window without allocating a Terminal. Each
 activation is independent, including another copy of the same executable. See
-[owned native windows](NATIVE_WINDOWS.md) and their [qualification](NATIVE_WINDOWS_QUALIFICATION.md).
+[owned native windows](NATIVE_WINDOWS.md).
 Native programs have a Terminal icon and appear as applications in Files and as
 **Native app** results in the launcher. File names containing spaces and
 case-insensitive `.BEX` extensions work without quoting a Terminal command.
@@ -127,8 +127,7 @@ The shared [platform ABI 1.3](NATIVE_PLATFORM_ABI.md) provides capability/limit
 discovery, process identities, versioned file handles, conditional replacement
 and owned asynchronous IDE completion at calls 18–27, plus memory discovery at
 call 28. Call 29 is the independently negotiated [UI 1.1 gateway](NATIVE_UI.md).
-Call 30 adds [conditional staged file transactions](NATIVE_FILE_TRANSACTIONS.md);
-its [standalone qualification](NATIVE_FILE_TRANSACTIONS_QUALIFICATION.md) is complete.
+Call 30 adds [conditional staged file transactions](NATIVE_FILE_TRANSACTIONS.md).
 Close/Stop remains forced.
 Bound hosted tasks advertise feature bit 6; eligible owned-window tasks instead
 advertise bit 7 and use WINDOW_ADOPT, not HOST_OPEN. Both require trusted input
@@ -247,11 +246,11 @@ copy-only publication to both backends. Terminal compatibility wrappers retain
 its text and command state; owned native windows use the same canvas/publication
 engine without a Terminal. Their fit-centered geometry also drives input mapping.
 
-Historical footprint: the complete-input overflow checkpoint measured 91,516
+Historical footprint: with complete-input overflow handling, the layout measured 91,516
 bytes per Terminal and **732,128 bytes** for eight, leaving 54,304 bytes before
 script scratch. Later binding/input fields changed that measurement. The current
 shared AppStorage remains compile-time bounded by the fixed 786,432-byte
-subarena within the unchanged 1 MiB application arena. The qualified independent-
+subarena within the unchanged 1 MiB application arena. The independent-
 window layout uses 763,808 bytes, with 22,624 spare; this is not extra process RAM. Published frames use
 512,000 bytes in a separately asserted 512 KiB reservation at `0x600000`–`0x680000`,
 in the existing Paint-to-DMA gap. No application-memory or machine-RAM increase
@@ -333,13 +332,9 @@ coordinate limits, byte-color conversion and eight-owner isolation. Production
 dispatch checks exercise optional callback and fallback in task and synchronous
 contexts, preserving invalid-size results and publication boundaries. The real
 Terminal/renderer publication fixture runs with both scalar and bulk fills.
-This is host correctness coverage, not evidence of a guest performance gain.
-Unchanged-binary guest workload comparisons remain necessary before making any
-performance claim. On 2026-10-04, 23 focused host tests passed across rectangle,
-publication, rendering, SDK, arguments, launch, titles, platform/file/sync services,
-System Monitor and BASIC/Terminal features. A normal freestanding i386 build
-also passed without warnings, including the unchanged task/Terminal arena
-bounds. QEMU and matched-workload timing were not run for this isolated change.
+This is host correctness coverage, not a measurement of guest performance.
+Unchanged-binary guest workload comparisons are needed before making any
+performance claim.
 
 The focused host suite checks legacy C example builds, the 34,144-byte C fixture,
 the deterministic text fixture, all eight full-resolution canvases, exact arena
@@ -419,7 +414,7 @@ variant is the same current DocStats C source and argument ABI, with the previou
 per-4-KiB yield/per-64-KiB redraw policy. The production app yields per 64 KiB and
 redraws per 256 KiB; both still perform individual 4-KiB read syscalls.
 
-A 2026-10-04 run measured:
+One measured run:
 
 | Input | Previous scheduling | Batched scheduling |
 | --- | ---: | ---: |
@@ -438,19 +433,13 @@ check verified sample activity (more than one second of samples and peak amplitu
 above 3,000), **not** a full waveform comparison, absence of silent gaps, or physical
 hardware latency. Each stream was intentionally stopped after the scan finished.
 
-The first persistence-only reboot attempt exposed a test-harness ordering error:
-it required SB16 before taking its completed-run branch, although that reboot has
-no audio device. Moving that check after the branch fixed the test. The already
-completed data, metrics, PCM and screenshot were retained; the rebuilt guest then
-passed the persistence-only reboot. No production scan code changed in that fix.
-
 ## Opt-in hosted pointer events
 
 `examples/c/pointer.c` is a regular C client for the pointer service described in
 [NATIVE_UI.md](NATIVE_UI.md). Build it as the default BEX1 or with the existing
 `--format bex2` option. Kernel startup installs `/Programs/pointer.bex` only
 when that name is absent, including on saved disks; an existing file or directory
-is preserved. The qualified hosted-UI runtime supports it; it
+is preserved. The hosted-UI runtime supports it; it
 queries capabilities first and exits normally with an unsupported message on
 older kernels or unavailable contexts.
 

@@ -121,7 +121,7 @@ python3 tools/mp3_test.py build  # additionally needs ffmpeg with libmp3lame
 python3 -m unittest discover -s tests -p test_audio.py
 ```
 
-The QEMU check uses disposable images only and leaves its evidence directory
+The QEMU check uses disposable images only and leaves its log directory
 printed to the console. It records actual emulated SB16 output with QEMU's WAV
 audio backend, checks an 8-bit file imported into the guest filesystem, then
 checks all 88,200 frames of a two-second 16-bit stereo waveform sample-for-sample
@@ -215,7 +215,7 @@ configuration refusal during live playback, preservation of the default buffer,
 continued old-decoder refills while rejecting a real rate/channel-changing MP3
 candidate, pause/resume/volume and the unchanged
 one-frame-per-poll decode bound. These are host-driver checks; real SB16/QEMU
-capture evidence is recorded separately after running the production workload.
+capture is checked by the production QEMU runner below.
 
 ## Large-source production QEMU verification
 
@@ -227,29 +227,23 @@ All commands use normal PS/2 input. Named-symbol memory reads observe source
 ownership and state; no guest calls, guest memory writes, test kernel, fuzzing
 or intentional memory-fault probes are used. Saved user images are never opened.
 
-The October 4 verification used production kernel `19f5028`:
+The runner checks both profiles:
 
-- Default 16 MiB volume plus 128 MiB RAM kept its 2 MiB source at 23–25 MiB,
-  alongside the live low filesystem pool and staging. An ordinary filesystem
-  save succeeded during playback. Every one of 796,032 stereo PCM frames was
-  verified; RMS difference 0.021133 LSB, peak 1, zero reported underruns.
-- The explicitly mounted 64 MiB large volume selected the owned 16 MiB source
-  at 32–48 MiB and high filesystem pool/staging. Its original Harbor-derived
-  192 kb/s MP3 was 4,320,862 bytes. Playback finished all 7,939,584 stereo PCM
-  frames (15,879,168 samples), including the complete encoded tail, in
-  180.035918 seconds. RMS difference was 0.020736 LSB, peak 1; zero underruns.
-- During that complete large capture, Files copied and synchronized an exact
-  2 MiB document. Terminal deleted a preceding 2 MiB padding file and then the
+- On a default 16 MiB volume with 128 MiB RAM, the 2 MiB source stays at
+  23 to 25 MiB alongside the live low filesystem pool and staging. An ordinary
+  filesystem save runs during playback, and every captured stereo PCM frame is
+  compared with a host reference decoder; underruns are reported as failures.
+- On an explicitly mounted 64 MiB large volume, the owned 16 MiB source is at
+  32 to 48 MiB with the high filesystem pool/staging. An original Harbor-derived
+  three-minute 192 kb/s MP3 is captured through EOF, including the complete
+  encoded tail, and compared with the host reference.
+- During the large capture, Files copies and synchronizes an exact 2 MiB
+  document, and Terminal deletes a preceding 2 MiB padding file and then the
   playing MP3 itself, each with compaction and a verified disk save. Playback
-  remained independent of both operations. A protected native counter stayed
-  active through EOF and durably saved increasing values 11, 61 and 116.
+  remains independent of both operations. A protected native counter stays
+  active through EOF and durably saves increasing values.
 
 The production input harness waits for actual focused-window creation and
-completed close before selecting taskbar coordinates. Two initial large
-attempts stopped on harness observation races at those transitions; their
-partial captures are not counted as complete-playback evidence. No audio code
-change was needed for the final complete run. The retained measured results
-are in [LARGE_AUDIO_RESULTS.json](session-2026-10-04/LARGE_AUDIO_RESULTS.json),
-with a [workload screenshot](../screenshots/large-audio-files-native.png).
-This is evidence for a bounded QEMU workload, not arbitrary-media compatibility,
-real-hardware timing, streaming, MP4/H.264 or Internet video support.
+completed close before selecting taskbar coordinates. This covers a bounded
+QEMU workload, not arbitrary-media compatibility, real-hardware timing,
+streaming, MP4/H.264 or Internet video support.

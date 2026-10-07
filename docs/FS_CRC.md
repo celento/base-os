@@ -32,17 +32,18 @@ and saves again; zlib checks both complete 8,387,584-byte serialized payloads
 and their headers. The host decoder also verifies exact file bytes, generations,
 marker and reserved sector. The ordinary capacity suite covers v1/v2/v3/v4
 compatibility, including the old full 64-node volume and expanded 256-node
-volume. All six host tests passed on 2026-10-04; their native C harnesses
-ran with ASan and UBSan enabled.
+volume. The native C harnesses run with ASan and UBSan enabled.
 
 ## Real-QEMU comparison
 
 ```sh
 make -j3 build/boot.bin build/kernel.bin
-python3 tools/fs_crc_benchmark.py build --baseline-ref 3e59abc --runs 3 --keep
+python3 tools/fs_crc_benchmark.py build --baseline-ref <git-ref> --runs 3 --keep
 ```
 
-The runner compiles the baseline and current filesystem sources with identical
+`--baseline-ref` names the git revision whose `src/fs.c` is used as the
+baseline (for example, the last revision with the bitwise CRC). The runner
+compiles the baseline and current filesystem sources with identical
 production flags and links them against the same ordinary build objects. It
 uses QEMU 10.0.13 TCG, 64 MiB RAM, and a primary-master IDE disk with writeback
 caching. Each boot gets new disposable boot and data images; saved `build/*.img`
@@ -59,27 +60,15 @@ modification timestamp so that full output images can be compared byte for
 byte. This alias is absent from production builds. GUI/audio playback is not
 started in this focused storage benchmark.
 
-Measured on 2026-10-04; one PIT tick is 1/70 second:
+In a three-pair comparison, the lookup table reduced median full-save and
+remount ticks by roughly 13% and initial mount by about 2%; host noise and
+emulated I/O affect the result, so this is a measured workload result, not a
+fixed speedup guarantee. One PIT tick is 1/70 second. All output disks were
+byte-identical.
 
-| Operation | Baseline ticks, runs 1–3 | Lookup ticks, runs 1–3 | Median before → after |
-| --- | --- | --- | --- |
-| Initial mount | 231, 226, 206 | 221, 195, 227 | 226 → 221 (2.2% less) |
-| Full save | 219, 226, 194 | 203, 180, 191 | 219 → 191 (12.8% less) |
-| Remount | 200, 242, 211 | 182, 182, 198 | 211 → 182 (13.7% less) |
-
-Median host-observed boot-to-pass time was **10.00 → 9.34 seconds** (6.6% less).
-Individual before/after wall pairs were 10.00/9.34, 10.62/8.68 and 9.43/9.53
-seconds. Host noise and emulated I/O clearly affect the result: the last pair
-had a slower initial mount and whole-run time despite its faster save and
-remount. These are measured workload results, not a fixed speedup guarantee.
-Host phase timestamps are sampled every 10 ms; guest ticks have 14.3 ms
-resolution. All three pairs had faster full saves and remounts.
-
-Every one of the six output disks had the same SHA-256:
-`63934a612f6c23e3e74aa656ba7c8f40ff0b04efc06f555f2a2507dededd5bd3`.
 Both snapshots were independently decoded and CRC-checked; the previous slot,
 boot floppy, data marker and final reserved sector were unchanged. `--keep`
 retains the serial logs, exact images, compiled comparison binaries and
 `results.json`, including compiler/QEMU versions, source hashes, common-object
-hashes, raw tick/wall samples and medians. A failed run retains evidence too.
+hashes, raw tick/wall samples and medians. A failed run retains its files too.
 No fault probes or malformed-volume tests are part of this benchmark.

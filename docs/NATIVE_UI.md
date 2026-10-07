@@ -1,29 +1,24 @@
 # Native pointer service, UI 1.1
 
-The qualified [independent-window increment](NATIVE_WINDOWS.md) adds
+The [independent-window increment](NATIVE_WINDOWS.md) adds
 WINDOW_ADOPT=6, owned kind 2 and capability bits 8/9 while retaining the same
 event engine and wire sizes. Hosted contexts keep HOST_OPEN and hosted
-capabilities; owned contexts use ADOPT and owned capabilities. See the separate
-[native-window qualification](NATIVE_WINDOWS_QUALIFICATION.md). The hosted
-contract and staged evidence below remain compatible and keep their historical
-identities; they do not substitute for the newer owned-window gates.
+capabilities; owned contexts use ADOPT and owned capabilities. The hosted
+contract below remains compatible; owned windows are described separately.
 
-The current qualified hosted-pointer contract provides one kernel-owned endpoint
+The hosted-pointer contract provides one kernel-owned endpoint
 for an existing native Terminal canvas. The general [platform ABI is 1.2](NATIVE_PLATFORM_ABI.md);
 UI **1.1** is negotiated independently through gateway **29**. UI1.0
 hosted clients retain their unchanged operations and records. Hosted-UI feature
 bit **6** is advertised only for bound desktop tasks when trusted production
 input hooks are available. Synchronous `exec` and BASIC do not offer this service.
-See [isolated qualification](NATIVE_UI_QUALIFICATION.md) and its linked integration
-evidence for the tested source and scope; the staged history below is not a
-current instruction to leave the gateway disabled.
 
 Existing calls 0–27, byte-key queues, and forced Stop/host-close remain intact.
 Memory-info retains call 28 and feature bit 4; current-context BEX2 retains bit 5.
 The general ABI query remains 96 bytes. UI targets use a private allocation
 domain (`0x40000000`); applications treat handles as opaque. This service creates
 no windows or surfaces and adds no keyboard-event or graceful-close protocol.
-Independent primary windows are a separate qualified launch contract;
+Independent primary windows are a separate launch contract;
 ADOPT attaches to one already created by that loader transaction.
 
 ## Current client quickstart
@@ -140,7 +135,7 @@ count. A pending reset does not rearm gestures. READ preserves the exact histori
 coordinates and dimensions; INFO reports current target state. An outside hover
 boundary clears POSITION_VALID once rather than becoming a global mouse monitor.
 
-## Historical executed stage-1 checks
+## Event core host checks
 
 - `test_canvas_view.py`: 1,932 deterministic legacy layouts, viewport edges,
   fractional/negative/offscreen coordinates; i386 has no division-runtime import.
@@ -151,18 +146,15 @@ boundary clears POSITION_VALID once rather than becoming a global mouse monitor.
   wheel/UP, reset recovery, authoritative successive scene/input-loss barriers.
 - `test_native_render.py`: original production rendering equivalence and guards
   with the shared geometry helper; published owner selection remains independent.
-- Freestanding kernel image built successfully. This is not guest qualification.
 
 No fuzzing, deliberate memory faults, debugger routes or guest callbacks are
 part of these deterministic host checks.
 
-## Historical stage 2: process boundary and SDK
+## Process boundary and SDK
 
-Gateway 29 is now dispatched only for a bound desktop task when fixed UI hooks
+Gateway 29 is dispatched only for a bound desktop task when fixed UI hooks
 are configured. Synchronous `exec`/BASIC remain unsupported. The ABI feature bit
-is conditional on that same service availability. The ordinary kernel does not
-configure hooks until the production-routing stage, so this stage alone does not
-advertise a usable service.
+is conditional on that same service availability.
 
 The SDK provides `bos_ui_query`, `bos_ui_host_open`, `bos_ui_info`, `bos_ui_read`,
 `bos_ui_wait`, and `bos_ui_release`. The complete declared output span is checked
@@ -178,7 +170,7 @@ present/yield/sleep/exit retain their pre-existing publication behavior. A pendi
 positive native SYNC_WAIT also publishes before suspension under its existing
 contract; it is distinct from UI WAIT.
 
-Process binding checks now reject a stopping owner immediately; Stop/exit revoke
+Process binding checks reject a stopping owner immediately; Stop/exit revoke
 UI eligibility before deferred backing cleanup. The existing owner-release path
 cleans endpoints exactly once after returning to kernel context. No process can
 resume a revoked UI wait as ready, even when an old byte key remains.
@@ -189,13 +181,11 @@ rules, full declared-span rejection before OPEN/READ, major/flag negotiation,
 WAIT 0/1/60000, wrap/tie/timeout/retry, byte-key readiness, independent sync wait,
 no implicit publication, wrong-owner calls and immediate/deferred Stop/exit.
 Existing native-platform, publication-process, process-lifetime and private
-address-space host gates also pass. A freestanding kernel build passes. None of
-these host results substitute for the still-pending ordinary production guest
-routing and unchanged BEX1 compatibility gates.
+address-space host suites cover the surrounding paths.
 
-## Historical stage 3: production routing candidate and C example
+## Production routing and C example
 
-The ordinary desktop now configures trusted hooks when PS/2 initialization
+The ordinary desktop configures trusted hooks when PS/2 initialization
 succeeds. Native pointer input uses the sole ordered ingress. Device polling still
 only acquires records. The front-to-back WM point owner, shell overlays, taskbar,
 chrome, padding and the owner's published canvas decide eligibility. A shell
@@ -216,14 +206,9 @@ suppressed until all held buttons are released. It does not become a gesture in
 another application. A scene-discard/input-loss boundary that authoritatively
 observes all buttons released clears the old suppression baseline.
 
-`examples/c/pointer.c` is embedded by the qualified runtime; its normal example
+`examples/c/pointer.c` is embedded in the runtime; its normal example
 installer creates `/Programs/pointer.bex` when missing and preserves an existing
-name. The explicit `--pointer-example` packaging option adds an archived
-source-built binary, provenance and `Pointer guide.txt` to fresh release disks,
-requiring any already-seeded Pointer to match byte-for-byte. See
-[release instructions](RELEASE.md#optional-fresh-disk-pointer-sdk-example).
-The option preserves the existing runtime/defaults and never opens saved disks.
-It is a regular BEX1 SDK app, also buildable as BEX2. Left/right draw separate ink;
+name. It is a regular BEX1 SDK app, also buildable as BEX2. Left/right draw separate ink;
 a chord previews both. Only ordinary final UP commits the preview. RESET/CANCEL
 aborts it. R toggles 160×100/320×200 with explicit publication; C clears; O
 releases/reopens; P prints normal Terminal diagnostics; Q/Esc exits. A separate
@@ -231,7 +216,7 @@ model/event adapter keeps window-backend details outside drawing logic. It drain
 both sources, presents dirty frames explicitly, then waits with QUEUE|LEGACY_KEY.
 No independent window or keyboard-event service is implied.
 
-Additional executed host gates:
+Additional host checks:
 
 - Real WM adapter + ingress + UI core: exposed-point ownership, focus-before-down,
   outside capture across a peer, overlays, geometry publication, legacy point
@@ -243,17 +228,13 @@ Additional executed host gates:
   positions, unknown event/capability bits, resize publication, reopen and bounded
   waits. Both BEX1 and BEX2 builds pass.
 
-Production guest validation and final full-suite results are recorded separately
-once run; these host checks alone do not qualify the candidate for integration.
+`tools/native_pointer_input_test.py` drives the pointer service in QEMU with
+ordinary PS/2 input on the default and large profiles:
 
-## Historical isolated qualification
-
-The exact runtime at `9e52fad` passed independent source review, all 227
-host tests, 41 ordinary screenshot/offline assertions in each default/large
-profile, both existing production frame-publication profiles, and the legacy
-Files/search launch/save/Stop/exit gate. See [exact qualification evidence](NATIVE_UI_QUALIFICATION.md)
-for binary hashes, observed scope and limitations. This does not imply that the
-parent integration branch or an hourly package already ships the feature.
+```sh
+python3 tools/native_pointer_input_test.py build --profile default --output DIR
+python3 tools/native_pointer_input_test.py build --profile large --output DIR
+```
 
 ## Hosted app-view ownership extraction
 
@@ -308,11 +289,9 @@ New normal-operation tests cover direct view initialization before any Terminal,
 explicit copied output and metadata, preserved command/history/input-loss state,
 NONE-output print/completion, retained-DONE I/O refusal, deferred-close storage
 retention, common poller compatibility and generation persistence. The real
-process+view integration gate checks actual published pixels after deferred
+process+view integration test checks actual published pixels after deferred
 Stop followed by present/yield/sleep/pending positive SYNC_WAIT/explicit exit,
 immediate UI ineligibility,
 APP exit precedence, nonpublishing timer/error/idle Stop and stale output refusal.
 Existing publication, native binding, rectangle, input, launch, resource-lifetime
-and renderer suites remain
-the behavioral regressions. Exact final host/guest qualification is recorded
-separately; this description alone is not guest qualification.
+and renderer suites remain the behavioral regressions.

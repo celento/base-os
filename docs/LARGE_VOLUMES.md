@@ -63,13 +63,6 @@ existing data image against the requested profile without modifying its bytes.
 A profile mismatch is an error, never an instruction to reformat. `make clean`
 retains both data images and all existing backups.
 
-Release archives made with `tools/package_release.py --include-large` contain
-two independent fresh disk pairs. `run-baseos.sh` / `.cmd` selects the default;
-`run-baseos-large.sh` / `.cmd` selects the larger one. They do not share files or
-settings after boot. The manifest records both geometries, and the release check
-boots both profiles separately. Do not overwrite saved disks with those fresh
-examples when updating an existing installation.
-
 ## Geometry and limits
 
 | Property | Default profile | Large profile |
@@ -111,7 +104,7 @@ uncertain commit outcomes protect the disk until remount.
 The default file pool stays at `0x2000000..0x2800000` and default staging at
 `0x2800000..0x3000000`. The selected large pool is
 `0x3F00000..0x5F00000`, with staging at `0x5F00000..0x7F00000`.
-This storage-only change preserves every preexisting kernel, stack, app,
+The large profile preserves every preexisting kernel, stack, app,
 native-task, editor and media arena constant. The large pool and staging each
 reserve 32 MiB. They are runtime addresses,
 not large kernel BSS arrays.
@@ -151,7 +144,7 @@ before `fs_init()` or mount reconfiguration. `fs_init()` always seeds default
 low storage. Mounted-large normal reads/writes/save and marker reads do not
 borrow the old arenas; the marker uses a bounded kernel-stack buffer. Protected
 fallback is conservative, even when migration happened to keep high staging.
-This storage-only change does not raise audio, video, download, editor or native
+The large profile does not raise audio, video, download, editor or native
 program-image limits; each remains independently bounded. A separately
 integrated audio feature may select the vacated 32–48 MiB interval only under
 the active-and-verified profile contract above; its supported formats and
@@ -169,7 +162,7 @@ ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p 'test_fs_cr
 ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p 'test_file_clipboard.py' -v
 ```
 
-The new host suite covers explicit creation, stopped-source v1–v5 conversion,
+The host suite covers explicit creation, stopped-source v1–v5 conversion,
 source/destination/backup preservation, locks, exact maximum-sized files,
 full 64/256-node capacities, alias/copy/delete/resize, atomic rejection and
 metadata reclaim, low-RAM refusal and exact optional E820 queries. Python zlib
@@ -189,38 +182,3 @@ migration/reboot, explicit v4 conversion, and the existing desktop/session
 checks with an ordinary native app streaming a complete 16 MiB file in 4 KiB
 chunks. It retains exact images and serial logs with `--keep`, on failure or in
 compile-only mode. There are no intentional memory/CPU fault probes or fuzzing.
-
-### Verified checkpoint: 2026-10-04
-
-On source revision `46b4f25`, GCC 14.2.0 and QEMU 10.0.13 TCG, all nine ordinary
-large-profile boots passed. Both full snapshots decoded independently with
-256 nodes and exactly **33,543,168 file bytes**, including an exact 16 MiB file.
-The normal native app streamed that complete file in 4,096 four-KiB reads,
-checked every byte and persisted its result. The existing desktop checks and
-saved Editor/Paint/window sessions also survived reboot. System Monitor's
-reported byte counts matched the filesystem's runtime values.
-
-All boot floppies, marker sectors and final reserved sectors stayed byte-exact.
-The full read-only reboot and the 64 MiB protected boot retained the entire
-large data-image hash. Floppy migration preserved names, contents, app flags
-and timestamps, then remounted without writing; explicit v4-to-v5 conversion
-kept the source bytes unchanged and mounted both new snapshots correctly.
-
-Two additional ordinary boots used the existing `data_volume_test.py` mode-2
-fixture with **64 MiB RAM and a default 16 MiB disk**. Its v3-to-v4 migration,
-2 MiB runtime file limit, exact file/timestamp and unchanged read-only restart
-passed. These supplement the large runner rather than replacing default QA.
-
-Twenty-six focused host checks passed: five large-profile tests, four legacy
-node-capacity tests, two independent CRC checks, one clipboard suite, ten
-ordinary existing host-exchange checks, three image/layout-preservation checks
-and the monitor layout/action suite extended to both large-profile capacities.
-C harnesses ran with AddressSanitizer and UBSan. No debugger observers,
-intentional memory/CPU fault probes or fuzzing were used.
-
-The production filesystem object grows from 13,428 to 14,259 text/read-only
-bytes (+831), with writable data/BSS unchanged at 4/1,096 bytes. The marker
-reader's measured production stack frame is 560 bytes; `fs_write` remains
-64 bytes and complete payload validation remains 1,248 bytes. This is a
-storage-only result; separately integrated consumers need their own runtime
-and ownership checks.

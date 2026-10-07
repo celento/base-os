@@ -88,8 +88,6 @@ the disposable disk to verify the restored folder context.
 
 ## Source versions and concurrent edits
 
-![A stale second Editor preserves its draft and asks for a new name](../screenshots/editor-source-conflict.png)
-
 Each of the eight Editors retains its own source baseline: the original byte
 count, FNV-1a and CRC32. Save checks both the file's runtime identity and that
 baseline before changing any bytes. Opening the same file twice, or replacing

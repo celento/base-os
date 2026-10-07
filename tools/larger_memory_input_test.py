@@ -96,7 +96,7 @@ def prepare(args, runtime, modules):
             raise ValueError('This separate optional gate requires --memory-mib 256')
         report['provenance'] = desktop.source_provenance(args, runtime, modules)
         report['gate_sources'] = source_identity()
-        frozen = ROOT / 'tests/fixtures/bex1-hour05'
+        frozen = ROOT / 'tests/fixtures/bex1-legacy'
         manifest = json.loads((frozen / 'manifest.json').read_text())
         counter = frozen / 'counter.bex'
         if desktop.artifact(counter) != manifest['files']['counter.bex']:

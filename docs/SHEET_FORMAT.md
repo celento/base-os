@@ -161,8 +161,8 @@ Python independently reconstructs the complete v2 fixture byte-for-byte with
 functional cases, with no fuzzing or deliberate memory-fault probes.
 
 Freestanding production-flag i386 compilation adds no heap, mutable global
-model, BSS, floating point, or 64-bit arithmetic runtime dependency. Measured
-on 2026-10-04, `sheet_model.o` text is 6,853 bytes and `sheet_codec.o` text is
-3,326 bytes; each has zero data/BSS. The display formatter's own stack frame is
-112 bytes; the largest own model/codec frame remains 192 bytes. These are host
-and object checks, not a claim of completed guest UI/recovery verification.
+model, BSS, floating point, or 64-bit arithmetic runtime dependency.
+`sheet_model.o` and `sheet_codec.o` each have zero data/BSS. The display
+formatter's own stack frame is 112 bytes; the largest own model/codec frame is
+192 bytes. These are host and object checks; guest UI and recovery are tested
+separately.

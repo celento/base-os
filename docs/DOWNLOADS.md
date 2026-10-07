@@ -17,7 +17,7 @@ quoted. `download` returns to the prompt immediately. `downloads` (or
 `downloads status`) reports the latest transfer, byte count, HTTP status, file
 limit, and disk save status. `cancel` or `downloads cancel` stops the transfer.
 These commands are independent of the Terminal window: closing or reopening a
-window does not cancel the job or deliver stale completion text to a new window.
+window does not cancel the job or show stale completion text to a new window.
 Query `downloads` in any Terminal to see its result. Terminal command lines are
 currently limited to 80 characters.
 
@@ -107,7 +107,7 @@ bar. The built-in home/error documents are not saved as fetched page sources.
 - Every network request retains the existing 15-second total deadline. A slow
   server can therefore fail before reaching the 2 MiB file limit. Once the body
   is complete, time waiting for a disk-save lease is not a network timeout.
-- Public DNS/HTTP access is unverified in the development cloud. Tests use only
+- Public DNS/HTTP access is not covered by tests. Tests use only
   a loopback HTTP fixture, through the real QEMU RTL8139/user-network path.
 
 ## Integration
@@ -131,7 +131,7 @@ Waiting uses an internal completion latch rather than a new public enum value:
 `DOWNLOAD_ACTIVE` and `download_active()` continue to include every cancellable
 job and preserve the one-download limit. `http_state == NET_HTTP_DONE` means
 the validated complete response is waiting for storage, with the original
-request ID, HTTP status and byte count frozen in `DownloadStatus`. The latch
+request ID, HTTP status and byte count held in `DownloadStatus`. The latch
 adds four bytes of control state; it allocates no new body or snapshot arena.
 Later ticks and cancellation no longer consult the shared network result for
 that job. Invalid/incomplete/non-2xx responses still fail before the wait.
@@ -177,7 +177,7 @@ snapshot, late destination collision/rename/move/identity changes, exact bytes
 after release, old-snapshot failures, later download-save failure/retry, and
 durable-only status after verified sync and remount. Browser's progress panel
 shows the wait message and keeps its owned Cancel action available. These are
-ordinary host fixtures with ASan/UBSan, not evidence of concurrent guest timing.
+ordinary host fixtures with ASan/UBSan and do not test concurrent guest timing.
 
 The QEMU test creates disposable floppy and 16 MiB data disks. It downloads
 20,037-byte and exact 2 MiB binary fixtures through RTL8139, checks cancellation
@@ -185,7 +185,7 @@ partway through a real response, oversized/incomplete/redirect/error responses,
 existing-file preservation, changed folders, and offline Browser Save/reopen.
 During the throttled 2 MiB response it edits/saves a real Editor document, runs
 and saves a native counter task, plays actual SB16 audio, and redraws the desktop.
-A second QEMU boot and host volume decoding verify exact saved bytes. Evidence
+A second QEMU boot and host volume decoding verify exact saved bytes. Test output
 includes serial logs, packet captures, HTTP request paths, captured audio,
 a framebuffer screenshot, and a SHA-256 digest. No normal persistent image is
 read or modified.
@@ -200,7 +200,7 @@ close/reopen, existing-file rejection, actual Browser Ctrl+S routing, unique
 page names, and reopening the saved page after reboot without an HTTP request.
 QMP memory observations are read-only; no app entry points or private kernel
 functions are invoked. The host independently decodes the saved volume and
-compares every binary and HTML byte. The printed evidence directories contain
+compares every binary and HTML byte. The printed output directories contain
 screenshots, serial logs, the disposable data image, and verification hashes.
 
 

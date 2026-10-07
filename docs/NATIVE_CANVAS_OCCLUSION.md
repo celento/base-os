@@ -26,7 +26,7 @@ The query is internal to the kernel, not a syscall or SDK ABI addition.
 - Containment uses an eight-pixel horizontal/bottom inset and starts below the
   titlebar. These intentionally conservative opaque client bounds exclude rounded
   corner masks and border pixels. Closed, minimized and lower/equal-z covers do
-  not qualify. Multiple partial covers are not combined into a region.
+  not count. Multiple partial covers are not combined into a region.
 - No canvas, or a zero-size draw rectangle, falls back conservatively. Partially
   visible background canvases still trigger full composition. No work is skipped
   inside the native task or frame-publication copy.
@@ -36,7 +36,7 @@ The query is internal to the kernel, not a syscall or SDK ABI addition.
 
 ## Host verification
 
-On 2026-10-04, `test_native_render.py` passed under ASan/UBSan. It checks:
+`test_native_render.py` runs under ASan/UBSan. It checks:
 
 - Pixel-for-pixel equivalence to full composition using the production Terminal
   renderer, window chrome, z-order traversal, rounded corner masks, cursor
@@ -54,22 +54,11 @@ On 2026-10-04, `test_native_render.py` passed under ASan/UBSan. It checks:
   queries, preserved unrelated selection/input, unpublished working geometry,
   published resize, Stop, close/reuse, clear, and synchronous `exec` compatibility.
 
-The complete `test_native*.py` suite passed 20 tests, including unchanged frame
-publication and its process boundaries, old executable fixtures, SDK behavior,
-native platform dispatch/lifetimes, owned sync and large-profile reload checks.
-Supporting checks passed: `test_kernel_layout.py` (5), `test_terminal_move.py`
-(1), `test_video_draw.py` (1), and `test_foundation.py` (14). Native and foundation
-sanitizer runs use `ASAN_OPTIONS=detect_leaks=0` and
-`UBSAN_OPTIONS=halt_on_error=1`. The first foundation invocation reached an
-unsupported LeakSanitizer/ptrace environment error; the ordinary ASan/UBSan rerun
-passed all 14 checks. Leak detection is not claimed.
-Production `make -j4` succeeded: 500,524 initialized kernel bytes and 338,341
-packed bytes, from the `8c96dfc` base plus this change.
+Native and foundation sanitizer runs use `ASAN_OPTIONS=detect_leaks=0` and
+`UBSAN_OPTIONS=halt_on_error=1`; leak detection is therefore not covered.
 
-No QEMU run or timing comparison is claimed here. This establishes host rendering
-equivalence and a narrower redraw decision, not a measured responsiveness or
-storage-speed improvement. Identical application binaries and workloads must be
-compared in the serialized production desktop runner before making such a claim.
+These are host tests; they establish rendering equivalence and a narrower
+redraw decision, not a measured responsiveness or storage-speed improvement.
 
 See [complete-frame publication](NATIVE_CANVAS_PUBLICATION.md) for the unchanged
-native frame visibility contract and prior production verification.
+native frame visibility contract.

@@ -1,10 +1,10 @@
-# Native address-space foundation: C3a
+# Native address-space foundation
 
-The sections below preserve staged implementation boundaries. Current combined
-BEX2 and ordered-input acceptance is recorded in [C3_COMBINED_VERIFICATION.md](C3_COMBINED_VERIFICATION.md);
-this checkpoint includes that qualified later loader.
+This document describes the shared address-space foundation and the private
+BEX2 address spaces built on it. The BEX2 wire format is defined in
+[BEX2_FORMAT.md](BEX2_FORMAT.md).
 
-BEX2 loading is not enabled by this landing. BEX1 files, ABI0–27, 64 KiB
+BEX1 files, ABI0–27, 64 KiB
 contiguous offsets, 48 KiB executable cap, initial ESP65520 and synchronous exec
 remain unchanged. Every syscall buffer now goes through one direction-aware
 span helper. Input text, paths and file replacement bytes require readable user
@@ -51,24 +51,13 @@ frame's supervisor mapping. The production lifecycle fixture spies on hardware
 root/FPU transitions, checks root restoration before release, and retains real
 owned-page allocation, copy, owner-lifetime and finite-capacity behavior.
 
-Host proof does not replace the staged BEX1 guest gates. Keep BEX2 disabled until
-those gates and the later parser, private-table ownership, mixed-format and
-capacity gates pass in the separately assigned normal runner.
+These host checks do not replace guest testing of BEX1 and BEX2 programs.
 
-C3a implementation verification (2026-10-04): 31 selected ordinary host tests
-passed across address_space, physmem, process_lifetime, process_bindings,
-native_platform, native_publication, native_publication_process,
-native_arguments, native_launch, native_titles, native_render, native_rectangle,
-native_files, native_sync and kernel_layout. The i386 kernel ELF and packed image
-built with no warnings; initialized bytes506412, packed342551. NativeTask remains
-508 bytes, table end0x03000FE0. No QEMU was run by this implementation task.
+## Private address spaces
 
-# Gated private address spaces: C3b
-
-The disabled prerequisite03a79e7 keeps the loader off. BASEOS_BEX2_ENABLED is
-an explicit source gate. Enabling the candidate is a separately identified
-commit after C3a compatibility readiness; release support still requires the
-ordinary mixed-format guest gates. The SDK defaults to BEX1, and no seeded app
+`BASEOS_BEX2_ENABLED` in `src/program.h` is an explicit source gate for the
+BEX2 loader and is set to 1. With it set to 0, process creation refuses BEX2
+files as unsupported. The SDK defaults to BEX1, and no seeded app
 is replaced or automatically converted.
 
 A parser-validated BEX2 plan owns one directory, one user page table and exactly
@@ -112,21 +101,4 @@ are adapters. Valid linked apps cover initialized data, multi-page BSS,1MiB and
 stack offsets, readonly-input acceptance, bounded outputs, cross-page reads,
 query prefix/tail rules, mixed BEX1/legacy exec, owner-independent retained bytes,
 ordinary finite capacity rejection and successful zeroed reuse after a close.
-This is host proof, not hardware mapping or guest persistence proof.
-
-C3b disabled prerequisite verification (2026-10-04):45 selected ordinary host
-checks passed, including the real enabled private-space fixture on64/128/256MiB
-synthetic maps. This fixture uses distinct root adapters and tests valid capacity
-rejection/retry without executing guest instructions. The default disabled
-kernel ELF/packed build passed warning-free:509964 initialized bytes,345087
-packed bytes. i386 NativeTask is4704 bytes; eight records end at0x03009300,
-well below0x03090000 metadata. No QEMU was run by the implementation task.
-
-## Enabled verification candidate
-
-This subsequent candidate sets BASEOS_BEX2_ENABLED=1 in tracked source. Its clean
-rebuild reproduces the enabled runtime without hidden compile overrides. C3a's
-separate legacy guest readiness is reported complete; C3b mixed-format/private
-mapping guest gates are still pending at candidate creation. This candidate is
-not a release-support claim. The disabled prerequisite03a79e7 and independently
-usable C3a+hardening commits remain explicit rollback points.
+These host checks do not cover hardware mapping or guest persistence.

@@ -33,7 +33,6 @@ from volume import (FLOPPY_LAYOUT, data_layout, decode, encode_snapshot,
                     load, locked_image, resolve)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_SEED = pathlib.Path('/workspace/shared/snapshot-rep-default-attempt1/seed.img')
 MANIFEST_MAGIC, MANIFEST_LIMIT, ENTRY_BYTES = 0x31434442, 4096, 136
 OUTPUTS = ('/Documents/async.bwr', '/Documents/async.bsh', '/Documents/document.rtf',
            '/Documents/document.pdf', '/Documents/spreadsheet.csv', '/Documents/empty.csv')
@@ -1009,7 +1008,7 @@ if __name__ == '__main__':
     parser.add_argument('--build', type=pathlib.Path, required=True)
     parser.add_argument('--profile', choices=('default', 'large', 'floppy'), default='default')
     parser.add_argument('--work', type=pathlib.Path, required=True)
-    parser.add_argument('--seed', type=pathlib.Path, default=DEFAULT_SEED)
+    parser.add_argument('--seed', type=pathlib.Path, required=True, help='Validated seed image from a prior ordinary boot')
     parser.add_argument('--timeout', type=float, default=180)
     parser.add_argument('--prepare-only', action='store_true', help='Build and validate fixture without launching QEMU')
     run(parser.parse_args())

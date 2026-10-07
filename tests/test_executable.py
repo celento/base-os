@@ -147,7 +147,7 @@ class ExecutableTests(unittest.TestCase):
                                check=True, env=self.env)
 
     def test_default_bex1_matches_all_five_frozen_images(self):
-        directory = ROOT / 'tests/fixtures/bex1-hour05'
+        directory = ROOT / 'tests/fixtures/bex1-legacy'
         manifest = json.loads((directory / 'manifest.json').read_text())
         for name, entry in manifest['files'].items():
             output = self.directory / ('frozen-' + name)

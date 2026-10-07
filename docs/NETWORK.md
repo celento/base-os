@@ -101,8 +101,8 @@ test`; this disables only unsupported LeakSanitizer, retaining ASan and UBSan.
 
 `--public-dns` additionally requests `example.com` through QEMU's DNS proxy.
 That optional check depends on the host's upstream DNS/network policy; a timeout
-is not reported as success. The development cloud currently supplies no DNS
-reply to that optional test. Public HTTP/TLS connectivity is not claimed.
+is not reported as success. A host without upstream DNS supplies no reply to
+that optional test. Public HTTP/TLS connectivity is not claimed.
 
 ## Sources and attribution
 

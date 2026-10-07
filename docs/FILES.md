@@ -95,5 +95,4 @@ contracts separately.
 The normal production PS/2 flow can be checked with
 `python3 tools/files_view_input_test.py build`. It uses disposable disks, keyboard
 and pointer input, screenshots and independently decoded saved bytes, without
-reading or writing guest memory. The [4 October checkpoint](session-2026-10-04/FILES_SORT_FILTER.md)
-records the completed host/guest checks and real 800 × 600/minimum-window captures.
+reading or writing guest memory.
