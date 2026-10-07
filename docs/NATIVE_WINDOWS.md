@@ -1,16 +1,10 @@
-# Independent native primary windows: qualified contract
+# Independent native primary windows
 
-This records the independent-window contract qualified on the held production
-runtime `6d19b75a2caa546be5d86e7e2984a7174fa3265e` on 4 October 2026.
-[Exact qualification](NATIVE_WINDOWS_QUALIFICATION.md) records nineteen passed
-held-runtime guest phases plus one older-kernel refusal phase. The separate
-clean integration `9836220` has equal runtime source and passed 355 host tests
-and a clean build; the held guest results are not relabelled as that new binary.
-This is not a main-integration or release availability claim. The preceding
-[hosted app-view extraction](APP_VIEW_QUALIFICATION.md) remains a distinct,
-earlier qualification.
+This describes the independent-window contract for native BEX2 programs. It
+builds on the earlier hosted app-view extraction, which remains a separate
+route.
 
-The increment gives a GUI-declared BEX2 process one ordinary decorated primary
+The feature gives a GUI-declared BEX2 process one ordinary decorated primary
 window with its own copied title, canvas and bounded Output log. No Terminal is
 created or borrowed. It does not provide arbitrary app-created windows, multiple
 windows per process, detach/reparent, a heap, larger canvases, app-provided
@@ -18,8 +12,8 @@ callbacks, keyboard events, or a graceful-close/save handshake.
 
 ## Coordinated additive allocations
 
-The preceding qualified baseline used general ABI 1.1 and independently negotiated UI
-1.0. The qualified increment uses general ABI **1.2** and UI **1.1**, with no new syscall:
+The earlier hosted baseline used general ABI 1.1 and independently negotiated UI
+1.0. Native windows use general ABI **1.2** and UI **1.1**, with no new syscall:
 
 | Namespace | Allocation |
 |---|---|
@@ -63,7 +57,7 @@ The required flag is never silently downgraded to hosted operation.
 Default Pointer builds remain hosted. `pointer_backend.h` changes only backend
 negotiation, endpoint open/reopen and kind/capability validation for the GUI
 build. Its drawing model, event consumer, cancellation, signed coordinates and
-wait loop are shared. Producer regression tests retain the frozen default BEX1
+wait loop are shared. Producer regression tests retain the existing default BEX1
 and unflagged BEX2 Pointer bytes and the unflagged BEX2 minor-1 requirement.
 The example installer adds `/Programs/pointer-window.bex` only when
 that name is absent, alongside `/Programs/pointer.bex`.
@@ -198,7 +192,7 @@ its ordinary output and explicit publication boundaries until it returns,
 including pending positive SYNC_WAIT. APP exit recorded in that slice retains
 its result and APP reason after deferred Stop, including negative values such
 as −4. Stop itself never publishes, and no additional slice follows the pending
-stop. This preserves the qualified extraction semantics rather than imposing
+stop. This preserves the hosted extraction semantics rather than imposing
 an early output cutoff at UI revocation.
 
 Kernel context is restored before owned backing and file/sync/UI resources are
@@ -229,7 +223,7 @@ reboot. No session wire layout or built-in kind number changes.
 ## Measured i386 storage and stack review
 
 Compile-only probes use the actual 32-bit freestanding definitions, not host
-pointer sizes. The frozen 6d19b75 i386 probe reports:
+pointer sizes. The i386 probe reports:
 
 | Typed allocation | Bytes |
 |---|---:|
@@ -249,7 +243,7 @@ pointer sizes. The frozen 6d19b75 i386 probe reports:
 
 `AppStorage` stays at `APPS_BASE + 0x300000`; published pixels remain at
 `NATIVE_CANVAS_BASE`. The extra log and metadata use **31,520 bytes** of the
-qualified extraction's existing spare container, with **zero additional surface
+hosted extraction's existing spare container, with **zero additional surface
 pages**. The earlier design-only 776,192-byte budget is not this measured layout.
 Eight process records end at `0x03009380`, leaving 552,064 bytes before
 `TASK_PAGE_METADATA_BASE=0x03090000`. Static assertions guard these boundaries.
@@ -282,7 +276,7 @@ per-function frames (bytes include GCC's bounded outgoing-call usage):
 | Existing Terminal `execute` / `term_enter` | 5,888 / 144 |
 | Existing session save / restore | 13,024 / 13,008 |
 
-The exact frozen-source review contains 423 function reports, all static or
+The source review contains 423 function reports, all static or
 dynamic-bounded; none is reported unbounded. The kernel stack reservation is unchanged at 65,536 bytes,
 `[0x1F0000,0x200000)`. The largest individual measured frame leaves 52,512 bytes
 before callees. Existing Terminal scripts permit five nested `execute` frames
@@ -294,16 +288,9 @@ frames. This sum is **not** a whole-program worst-case or runtime stack high-wat
 proof. The separate syscall/interrupt stack also keeps its 65,536-byte reservation
 at `TASK_INTERRUPT_STACK_BASE`; BEX2 user stacks are distinct again.
 
-The final held 6d19b75 ELF ends at `0x1B1A90`, with **255,344 bytes** before
-`STACK_BOTTOM`; the clean 9836220 integration ELF independently has the same end.
-Their artifact hashes differ and are recorded separately in the
-[qualification](NATIVE_WINDOWS_QUALIFICATION.md#exact-source-and-build-identities).
-The linker retains `__kernel_end <= STACK_BOTTOM`. The code/BSS gap is not counted
+The measured kernel ELF ends at `0x1B1A90`, with **255,344 bytes** before
+`STACK_BOTTOM`. The linker retains `__kernel_end <= STACK_BOTTOM`. The code/BSS gap is not counted
 as part of the reserved kernel stack. UI targets occupy 50,912 bytes of a
 54 KiB cap, leaving 4,384 bytes; ordered ingress remains 16,456 bytes.
 
-The budget review itself was compile-only. The separately executed ordinary
-guest qualification and clean host/build results are recorded in
-[NATIVE_WINDOWS_QUALIFICATION.md](NATIVE_WINDOWS_QUALIFICATION.md), including
-unsuccessful observer/provenance attempts and their corrected reruns. No debugger,
-guest-memory inspection, fuzzing or intentional-fault route was used.
+The budget review itself was compile-only.

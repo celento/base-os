@@ -38,7 +38,7 @@ class NativePlatformTests(unittest.TestCase):
                 ASAN_OPTIONS='detect_leaks=0', UBSAN_OPTIONS='halt_on_error=1'))
 
     def test_frozen_old_executable_bytes(self):
-        directory = ROOT / 'tests/fixtures/bex1-hour05'
+        directory = ROOT / 'tests/fixtures/bex1-legacy'
         manifest = json.loads((directory / 'manifest.json').read_text())
         self.assertEqual(manifest['source_revision'], 'a7ea36be6db5ae2cd477dfe36e8e58db48145048')
         for name, entry in manifest['files'].items():

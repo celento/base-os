@@ -93,12 +93,7 @@ must restore/save the cursor around the update. Otherwise use the unchanged
 full-client/full-desktop path. Volume, library refresh and state changes request
 full redraws. Hidden players still need ticks; `audio_poll()` remains independent.
 
-The partial path avoids repainting unrelated windows each video frame. In the
-recorded QEMU runs, combined audio/video polling took at most one 70-Hz PIT tick.
-The 48 kHz A/V capture had at most 77 ms of emulated DMA-clock-to-presented-frame
-lag after actual presentation; a controls run had at most 91 ms. These are
-observations on this host, not real-time guarantees or measurements of physical
-speaker/backend latency.
+The partial path avoids repainting unrelated windows each video frame.
 
 ## Memory and FPU contract
 
@@ -194,19 +189,16 @@ QEMU checks boot disposable real BaseOS images and use the actual IDE driver,
 MPEG decoders, SB16 DMA, compositor and PS/2 keyboard. They compare all 75 guest
 video-frame hashes and every audible PCM sample, verify full tails, x87 state,
 responsive terminal input, pause/resume/stop/replay, and capture real framebuffer
-screenshots. In the 48 kHz run, all 137,592 output frames matched the linear
-44.1 kHz reference with RMS 0.0143 and peak 1 LSB; duration was 3.120000 seconds
-and the original 271 Hz tone remained 271 Hz. The build's persistent disks are
-never opened by these tests.
+screenshots. The 48 kHz run compares every output frame with the linear
+44.1 kHz reference and checks that the original 271 Hz tone keeps its pitch.
+The build's persistent disks are never opened by these tests.
 
 `--native` additionally runs two independent C counter applications and two
 separate live-x87 context probes through the same A/V loop. It checks counter
 progress and separate saved documents, clean x87 task exit, one-terminal close
 isolation, task stop, full audio/video completion and unchanged decoder output.
-On integrated commit `c14d0a8`, the 48 kHz run saved counter values 31 and 21,
-verified every 137,592 output PCM frame and all 75 video frames, and observed
-75 ms maximum DMA-clock-to-presented-frame lag with no audio underrun. The guest
-fixture uses the real scheduler, system calls, filesystem and compositor APIs;
+The 48 kHz run also verifies every output PCM frame and all 75 video frames with
+no audio underrun. The guest fixture uses the real scheduler, system calls, filesystem and compositor APIs;
 production keyboard/compositor routing is checked separately.
 
 ## Production desktop input regression
@@ -218,14 +210,11 @@ writes are injected. It records the kernel/ELF/boot hashes, build identity,
 original fixture metadata, input events, screenshots and a JSON result. It
 never opens the build's persistent boot/data disks.
 
-On production revision `82dd0f1`, the final run passed 14 checks with no audio
-underruns and 19 real framebuffer captures. A valid 1.60 MiB, 15-second MPEG
-started in 3.678 seconds. Coverage includes app/file launch, visible frame/audio
+The test plays a valid 1.60 MiB, 15-second MPEG. Coverage includes app/file launch, visible frame/audio
 progress, pause/resume, maximization, File-menu/launcher/Open-dialog pixel
 preservation, minimized background playback, physical taskbar restore, close
 clearing both transports and callback/frame state, MPEG stop/replay, MP3/WAV
-selection and audio-only close. The build artifacts remained byte-identical
-throughout the run.
+selection and audio-only close.
 
 Two production regressions explain specific assertions:
 
@@ -243,9 +232,8 @@ Two production regressions explain specific assertions:
 
 The test takes raw PPM screendumps and encodes PNG on the host afterward to
 minimize observer-induced emulator stalls. It uses typed QMP PS/2 key events
-with explicit hold times. Earlier short HMP-key/capture attempts are not counted
-as completed production checks. The evidence directory printed by each run
-retains its result even when a test fails.
+with explicit hold times. The output directory printed by each run retains its
+result even when a test fails.
 
 ## Generate and import an original sample
 

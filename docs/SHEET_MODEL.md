@@ -231,7 +231,7 @@ makes no external filesystem changes and imposes no file-ownership policy.
 ## Verification
 
 ```sh
-TMPDIR=/workspace/shared/baseos-test-tmp ASAN_OPTIONS=detect_leaks=0 \
+ASAN_OPTIONS=detect_leaks=0 \
   python3 -m unittest discover -s tests -p 'test_sheet_*.py' -v
 ```
 
@@ -253,11 +253,11 @@ Freestanding i386 objects are compiled with the production flags and
 9.94 KiB of object text and zero mutable data/BSS before final-link alignment.
 Measured own stack frames are at most 192 bytes; bounded expression recursion
 uses roughly 4.5 KiB before platform callbacks in the production `-Os` build.
-QEMU/desktop/file-binding verification belongs to the later integration and is
-not claimed by these isolated host/object checks.
+These isolated host/object checks do not cover QEMU, desktop or file-binding
+behavior.
 
 The included `tests/sheet_performance_host.c` also runs in the sanitizer suite.
-A production-style `-Os` host run on 2026-10-04 measured:
+A production-style `-Os` host run measured:
 
 | Ordinary workload | Host CPU time | Cooperative polls |
 |---|---:|---:|
@@ -269,7 +269,7 @@ These are small host measurements with a no-op device-service stub, not guest
 responsiveness promises. Work-unit batching reduced the range workload from
 80,228 callbacks to 367 while retaining bounded service during reparses and
 long chains. The test asserts a bounded nonzero callback count to guard against
-returning to per-item device I/O. Production integration must measure real
+returning to per-item device I/O. Guest timing depends on the real
 platform callbacks. No evaluation-work cutoff leaves stale results: every valid
 cell reaches a value or explicit error during each complete recalculation.
 

@@ -25,7 +25,7 @@ STALE, CHANGED, BUSY = -1005, -1006, -1004
 
 
 def frozen_apps():
-    folder = ROOT / 'tests/fixtures/bex1-hour05'
+    folder = ROOT / 'tests/fixtures/bex1-legacy'
     manifest = json.loads((folder / 'manifest.json').read_text())
     result = {}
     for name, expected in manifest['files'].items():

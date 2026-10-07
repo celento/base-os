@@ -5,10 +5,7 @@ publishing up to 256 KiB. It is synchronous RAM acceptance, not an implicit disk
 save or a scheduling/latency guarantee. The existing whole-buffer replacement
 limit remains 32 KiB; built-in document models, BEX1/BEX2 formats and disk formats
 are unchanged. General ABI is 1.3; the independently negotiated UI stays 1.1
-and Close/Stop remains forced. The standalone [qualification](NATIVE_FILE_TRANSACTIONS_QUALIFICATION.md)
-covers archived binaries, all ten near-full cases and final-source profile boots.
-Tested source equivalence and metadata-dependent binary identities remain
-separately recorded.
+and Close/Stop remains forced.
 
 Use `bos_file_transaction_query` to negotiate support. It returns UNSUPPORTED on
 old runtimes, legacy synchronous execution and floppy; never truncate or silently
@@ -49,8 +46,8 @@ an IDE-to-floppy transition removes discovery support; APPEND/ACCEPT return
 CHANGED. ABORT succeeds once. Foreign/consumed handles return STALE. No private
 upload holds the global snapshot/image arena or a snapshot lease.
 
-Full registry, record layouts, contextual error precedence and review decisions
-are in [the frozen decisions](proposals/native-file-transactions-2026-10-05/DECISIONS.md).
+Record layouts and the full call contract are in `sdk/baseos_abi.h` and the
+[platform ABI guide](NATIVE_PLATFORM_ABI.md#conditional-staged-publication-call-30).
 
 ## Streaming document example
 
@@ -74,14 +71,12 @@ is `/Documents/staged.txt`; an ordinary startup document argument overrides it.
   if an older accepted revision becomes durable.
 - V coherently rereads and compares every byte of the accepted version.
 - M changes the compact private model; S explicitly aborts any old stage and
-  reuploads that preserved model under a fresh task-qualified Save As name.
+  reuploads that preserved model under a fresh task-specific Save As name.
 - Q explicitly discards any private stage and exits. A forced shell Stop relies
   on normal owner cleanup. This fixture does not claim save-aware Close support.
 
 Run two instances against the same path, stage both, accept one, then accept the
 other to see a real conditional conflict. S is explicit conflict recovery. Output
 logs include STAGED, RAM_ACCEPTED, DURABLE_CONFIRMED and VERIFY_EXACT records for
-ordinary external-input guest observation. PIT ticks are never used to claim
-acceptance elapsed time. Source-equivalent guest evidence and this integration's
-own final-source boots remain separately identified in the integration ledger;
-neither host results nor design documents waive the remaining qualification gates.
+ordinary external-input guest observation. PIT ticks are not used to measure
+acceptance elapsed time.

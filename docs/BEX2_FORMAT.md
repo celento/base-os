@@ -1,10 +1,9 @@
 # BEX2 v1 format and producer
 
-The original producer landing supplied a pure parser/planner and host-tested
-example algorithms without enabling a loader. The later private-space loader
-now passed independent and combined default/large guest gates; see
-[C3b verification](C3B_VERIFICATION.md) and [combined acceptance](C3_COMBINED_VERIFICATION.md).
-BEX1 remains the default producer and unchanged binary contract. Fresh release
+The producer supplies a pure parser/planner and host-tested example
+algorithms. The private-space loader that runs BEX2 programs is described in
+[ADDRESS_SPACES.md](ADDRESS_SPACES.md).
+BEX1 remains the default producer and unchanged binary contract. Fresh disk
 images may explicitly include the two workspace examples; existing saved disks
 and kernel startup seeding are unchanged. This document defines the format, not
 a claim of heap allocation or general dynamic virtual-memory services.
@@ -136,7 +135,7 @@ features preserve any previous output. `--elf-output` is BEX2-only.
 `sdk/baseos_app2.h` supplies linker-workspace accessors without changing
 `baseos.h`, `baseos_abi.h` or existing syscall transfer caps.
 
-## Examples and host evidence
+## Examples and host tests
 
 Both opt-in examples consume their whole declared workspace while yielding.
 They read the startup document (or `/Documents/stats-sample.txt`) through an
@@ -154,7 +153,7 @@ At the tested toolchain, both have 8,192-byte files, one text page, no data page
 256 workspace pages and 16 stack pages: 273 mapped / 275 owned pages each.
 At 3 MiB workspace each instead plans 785 mapped / 787 owned pages. Those are
 layout calculations and host checks, not observed guest capacity. Two such
-3 MiB apps require the separately selected 256 MiB profile gate.
+3 MiB apps require the separately selected 256 MiB profile.
 
 The stable 56,812-byte stats fixture produces these host algorithm results:
 
@@ -167,8 +166,7 @@ The stable 56,812-byte stats fixture produces these host algorithm results:
 Focused commands:
 
 ```sh
-PATH=/workspace/shared/baseos-tools/bin:$PATH \
-TMPDIR=/workspace/shared/baseos-test-tmp ASAN_OPTIONS=detect_leaks=0 \
+ASAN_OPTIONS=detect_leaks=0 \
 python3 -m unittest discover -s tests -p test_executable.py -v
 ```
 
@@ -178,10 +176,9 @@ regions, 16/64/256 KiB stacks, maximum virtual commitment, and ELF-symbol/header
 agreement. They compile and run both real example algorithms against a bounded
 host service model at 1 and 3 MiB, including normal busy creation/replacement retries and a sync wait.
 They rebuild all five BEX1 examples and compare every byte and SHA-256 with the
-frozen `tests/fixtures/bex1-hour05` files. The parser also compiles as freestanding
+reference `tests/fixtures/bex1-legacy` files. The parser also compiles as freestanding
 i386 without undefined runtime helper symbols.
 
 No guest app is executed by these tests. No guest persistence, GUI behavior, mixed-format scheduling or performance
-claim follows from those parser/toolchain tests. The separate C3 integration
-adds the loader, root switching, memory query and owned allocation, gated and
-verified as described in [ADDRESS_SPACES.md](ADDRESS_SPACES.md).
+claim follows from those parser/toolchain tests. The loader, root switching, memory query and owned
+allocation are described in [ADDRESS_SPACES.md](ADDRESS_SPACES.md).

@@ -272,5 +272,5 @@ routing, live counts, and complete capacity rejection with unchanged history.
 
 See [RESPONSIVE_DOCUMENT_SAVES.md](RESPONSIVE_DOCUMENT_SAVES.md) for the ownership,
 revision, recovery and bounded-memory contract and exact verification scope.
-Encoding, fingerprinting and atomic RAM replacement remain synchronous. This
-change does not add Unicode, larger models, new file formats or a preemptive kernel.
+Encoding, fingerprinting and atomic RAM replacement remain synchronous.
+Writer does not add Unicode, larger models, new file formats or a preemptive kernel.

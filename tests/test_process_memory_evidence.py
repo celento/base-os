@@ -10,7 +10,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 class ProcessMemoryEvidenceTests(unittest.TestCase):
     def test_frozen_bex1_files_are_unchanged_and_valid(self):
-        folder=ROOT/'tests/fixtures/bex1-hour05'
+        folder=ROOT/'tests/fixtures/bex1-legacy'
         manifest=json.loads((folder/'manifest.json').read_text())
         self.assertEqual(set(manifest['files']),{'counter.bex','docstats.bex','hello-c.bex','hello.bex','notebook.bex'})
         for name,expected in manifest['files'].items():

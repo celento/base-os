@@ -31,7 +31,7 @@ from volume import data_layout, encode_snapshot, load, resolve
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / 'examples/c/pointer.c'
-FROZEN = ROOT / 'tests/fixtures/bex1-hour05'
+FROZEN = ROOT / 'tests/fixtures/bex1-legacy'
 COLORS = {0: (0, 0, 0), 1: (60, 60, 60), 6: (242, 201, 76),
           7: (63, 163, 91), 8: (42, 167, 200)}
 

@@ -9,9 +9,8 @@ are in `sdk/baseos_abi.h`; the SDK supplies wrappers in `sdk/baseos.h`.
 These calls retain their 32 KiB whole-buffer replacement limit. The separately
 negotiated [ABI 1.3 transactions](NATIVE_FILE_TRANSACTIONS.md) adds
 private chunked upload and conditional RAM acceptance up to 256 KiB for desktop
-IDE tasks, with separate content-durability confirmation. See the
-[qualification record](NATIVE_FILE_TRANSACTIONS_QUALIFICATION.md); old file calls
-and UI 1.1 behavior remain compatible.
+IDE tasks, with separate content-durability confirmation. Old file calls and
+UI 1.1 behavior remain compatible.
 
 ## Contract
 
@@ -89,7 +88,7 @@ File handles draw from a monotonically increasing, nonzero 28-bit serial domain
 with a service tag. Handles are opaque and never recycled, including after
 service reinitialization. Exhaustion returns `CAPACITY` before creating a file
 or publishing output. Closing handles frees records but does not restore the
-serial budget. Owner tokens are independently generation-qualified.
+serial budget. Owner tokens carry an independent generation.
 
 Filesystem node identities and content revisions are nonwrapping 32-bit
 counters across reinitialization/remount within this boot. The final nonzero
@@ -120,7 +119,7 @@ exclusive-create collision. The new service advertises no directory enumeration,
 directory creation, append, seek cursor, deletion, rename, retained snapshots,
 large atomic replacement or general permission model.
 
-## Ordinary functional evidence
+## Tests
 
 Run:
 
@@ -138,7 +137,7 @@ counter boundaries. The host fixtures include existing filesystem scaffolding;
 only the normal entry points described above are run. LeakSanitizer is disabled
 because this environment runs under tracing; ASan/UBSan stay enabled.
 
-These host checks do not establish guest dispatcher, scheduling, durable reboot
-or old-binary compatibility results. Those require the separate integrated SDK,
-owned-sync and guest validation. No fault-injection, memory-bug, fuzz or debugger
+These host checks do not cover guest dispatch, scheduling, durable reboot or
+old-binary compatibility; the SDK, owned-sync and guest tests cover those
+separately. No fault-injection, memory-bug, fuzz or debugger
 socket/pipe probe is included in this suite.

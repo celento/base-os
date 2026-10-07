@@ -131,7 +131,8 @@ The native coordinator adds a third 16-byte result record, making the current
 named i386 FS control state 1,280 bytes (1,292 on the 64-bit host), still below
 the same 1,536-byte assertion. The synchronous mounted-image validator's own frame changes from 1,248 to 1,136
 bytes; its new helper adds a separate bounded frame. Production `fs.o` text grows
-3,604 bytes relative to 064d79b with the measured GCC flags.
+3,604 bytes relative to the filesystem before incremental snapshots, with the
+measured GCC flags.
 
 ## Commit ordering and errors
 

@@ -144,13 +144,10 @@ ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p test_founda
 make -j3 build/kernel.bin
 ```
 
-On 2026-10-04 the focused host test passed with ASan/UBSan; the 14-test foundation
-suite also passed, and the production kernel linked successfully. With GCC
+With GCC
 14.2.0 and the production i386 flags, `ata.o` grows from 1,163 to 2,080 bytes of
 text, and from 8 to 40 bytes of BSS. The request itself is 32 bytes on i386, has
 no allocated buffer, and is guarded by a fixed-size compile-time assertion.
 
-No QEMU result or desktop-latency improvement is claimed by this isolated driver
-check. Integrated filesystem/main-loop validation must establish responsiveness,
-exact flush ordering across snapshot phases, rebooted contents and both supported
-RAM profiles. No saved disk images are needed by the host tests or kernel build.
+These host tests check the isolated driver only; they do not measure QEMU
+behavior or desktop latency. No saved disk images are needed by the host tests or kernel build.

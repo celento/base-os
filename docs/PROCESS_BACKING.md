@@ -1,4 +1,4 @@
-# BEX1 owned-page backing (C2b)
+# BEX1 owned-page backing
 
 Desktop process records now store exactly sixteen private physical frame
 addresses instead of an inline 65,536-byte saved image. This is the first real
@@ -6,7 +6,7 @@ client of the bounded allocator. BEX1, public syscalls 0–27, its 49,152-byte f
 cap, 64 KiB aperture, 16 KiB linker stack reservation, initial ESP 65,520, eight
 process records and Terminal display IDs 1–8 remain unchanged. Legacy synchronous
 exec uses its existing aperture, reports task ID 0 and allocates no saved pages.
-There is no heap, BEX2, page-table switch, larger image or new window interface.
+This backing adds no heap, page-table switch, larger image or new window interface.
 
 ## Creation, copying and release
 
@@ -22,9 +22,8 @@ Allocation failure clears the uncommitted record and leaves the caller's output,
 existing processes and allocator accounting unchanged. The consumed owner serial
 is not reused. The private `PROCESS_CREATE_MEMORY` result produces an explicit
 Terminal backing-memory error without resetting the previous canvas. Binding or
-start failure uses the existing stop/reap rollback path. No runtime or hidden
-compile-time inline fallback exists; the parent commit is the development
-rollback. The entire TASK reservation is retained, including the newly unused
+start failure uses the existing stop/reap rollback path. No runtime or
+compile-time inline fallback exists. The entire TASK reservation is retained, including the newly unused
 control-table slack and the unchanged syscall stack at `0x030E0000`.
 
 Before each desktop slice, sixteen page copies gather 65,536 bytes into the
@@ -62,44 +61,22 @@ reset, stale handles and synchronous exec with retained desktop images.
 
 Existing ordinary task, argument, expanded SDK and native media guest fixtures
 inherit the real `kmain`, including validated RAM/video and late allocator
-initialization. Their added assertions require ready accounting, sixteen frames
+initialization. Their assertions require ready accounting, sixteen frames
 per direct launch and final restoration of the previous free/allocated/kind
 counts before their success markers. They never reinitialize a ready allocator.
-The original frozen BEX1 fixtures remain untouched.
+The original BEX1 fixtures in `tests/fixtures/bex1-legacy` are unchanged.
 
-Focused compilation is not guest evidence. Normal production guest gates remain
-required on 64 MiB/default and 128 MiB/large, including unchanged frozen BEX1
-behavior, input/sleep/x87, published output, close/reset/reuse, shared sync-owner
-cleanup, persistence, counts and latency. The separately assigned verification
-worker owns those runs. No performance improvement or released integration is
-claimed by this source change.
+### Host tests
 
-### Implementation checks (2026-10-04)
+```sh
+PYTHONPATH=tests python3 -m unittest -v test_process_lifetime test_physmem \
+  test_process_bindings test_native_platform test_native_publication \
+  test_native_publication_process test_native_arguments test_native_launch \
+  test_native_titles test_native_render test_native_rectangle test_native_files \
+  test_native_sync test_sysmon test_foundation.NativeTests.test_bootinfo \
+  test_kernel_layout
+```
 
-- The explicitly selected ordinary aggregate passed all 32 tests:
-  `PYTHONPATH=tests python3 -m unittest -v test_process_lifetime test_physmem
-  test_process_bindings test_native_platform test_native_publication
-  test_native_publication_process test_native_arguments test_native_launch
-  test_native_titles test_native_render test_native_rectangle test_native_files
-  test_native_sync test_sysmon test_foundation.NativeTests.test_bootinfo
-  test_kernel_layout`. The lifecycle and existing native C fixtures use
-  ASan/UBSan; the bounded allocator fixture links the same production core.
-- The standalone `optional_memory_host.c` fixture passed with ASan/UBSan.
-  Frozen BEX1 fixture hashes matched their manifest; `sdk/`, those fixture bytes
-  and `src/layout.h` have no change from the parent commit.
-- `make -j2 build/baseos.img` passed without compiler warnings using the existing
-  verified NASM toolchain. This first build was development-dirty at `0c5ccd0`;
-  its kernel measured 505,813 text, 316 data and 107,856 BSS bytes, with
-  `__kernel_end=0x195E90` below `STACK_BOTTOM=0x1F0000`. Its initialized payload
-  was 506,156 bytes and packed payload 342,413 bytes. A final clean build and
-  its exact provenance are recorded separately with the handoff.
-- Five ordinary guest source files (`task_guest`, `native_arguments_guest`,
-  `sdk_expanded_guest`, `task_media_guest`, and `mpeg_av_guest`) compiled with
-  actual previously generated task/x87 and MP3/MPEG fixture headers. MPEG also
-  compiled with native tasks disabled. These were compile-only checks; no QEMU
-  or helper guest execution was performed by this implementation task.
-
-During fixture migration, the publication-only fixture's fabricated live record
-was replaced with real allocated backing before teardown, and the Terminal
-error assertion was corrected to account for its existing trailing generic
-command-error line. The final aggregate above passed after those fixture fixes.
+The lifecycle and existing native C fixtures use ASan/UBSan; the bounded
+allocator fixture links the same production core. The standalone
+`tests/optional_memory_host.c` fixture also runs with ASan/UBSan.

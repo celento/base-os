@@ -130,7 +130,7 @@ the normal saved disk images. It checks independent reference pixels in the
 32-bit guest, decodes all five formats including progressive JPEG and a large
 GIF, replaces a source file after opening it, exercises controls, checks x87
 state, and captures actual JPEG, PNG, transparency and viewer screenshots. It
-prints the evidence directory. This fixture tests the real kernel viewer
+prints its output directory. This fixture tests the real kernel viewer
 client; desktop launch/file-association integration is a separate UI check.
 The `--maximum` pass uses actual 1024 × 768 JPEG and PNG files in the guest.
 

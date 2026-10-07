@@ -35,7 +35,7 @@ def prepare(args,runtime,modules):
     report=dict(passed=False,status='prepared',provenance=desktop.source_provenance(args,runtime,modules),
                 capacity_sources=source_identity(),profiles={},plans={})
     assert CAPACITY_TEXT in (runtime/'src/term.c').read_text(),'Review new production capacity wording'
-    frozen=ROOT/'tests/fixtures/bex1-hour05'
+    frozen=ROOT/'tests/fixtures/bex1-legacy'
     manifest=json.loads((frozen/'manifest.json').read_text());counter=frozen/'counter.bex'
     assert desktop.artifact(counter)==manifest['files']['counter.bex']
     apps={'counter.bex':counter.read_bytes()}

@@ -1,7 +1,7 @@
 """Held-input production Pointer + peer + MP3 + IDE-save gate.
 
 Preparation is host-only. Guest execution requires --run and an explicit
-exclusive-slot acknowledgement. The unchanged hour14 production boot image,
+exclusive-slot acknowledgement. The unchanged pinned production boot image,
 real Pointer-window, and unchanged public-SDK snapshot peer are used together.
 Only PS/2, source-decoded screenshots, normal serial and stopped disks are read.
 This collector has no runtime, SDK, example or guest-algorithm modifications.
@@ -68,7 +68,7 @@ def verify_inputs(manifest):
         verify_records(manifest[group])
     require(manifest['source_revision'] == REVISION, 'Wrong frozen source revision')
     require(manifest['build_info']['revision'] == REVISION and not manifest['build_info']['dirty'],
-            'Build is not the clean hour14 source')
+            'Build is not the clean pinned source')
     verify_executing_source(manifest)
 
 
@@ -93,7 +93,7 @@ def prepare(build, output, build_log):
         manifest['build_directory'] = str(build)
         for name in (*CORE_ARTIFACTS, 'build_info.json', 'pointer-window.bex', 'chime.wav'):
             manifest['build'][name] = file_record(build/name)
-        manifest['build']['hour14-build.log'] = file_record(build_log)
+        manifest['build']['pinned-build.log'] = file_record(build_log)
         manifest['build_info'] = json.loads((build/'build_info.json').read_text())
         manifest['boot_consistency'] = verify_build_directory(build)
         paths = subprocess.check_output(['git', 'ls-files', 'src', 'sdk', 'assets', 'examples', 'tools',

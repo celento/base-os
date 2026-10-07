@@ -12,8 +12,8 @@ Each singleton holds one 52-byte value-only operation record and one bounded
 failed-export descriptor (Writer 72 bytes, Sheet 64). No output, model, history,
 dialog or filesystem pointer survives a call. Existing fixed output arenas are
 reused. Encoding and atomic RAM replacement remain synchronous; only IDE
-snapshot durability is removed from the interaction path. No numeric latency
-claim follows from this source change alone.
+snapshot durability is removed from the interaction path. No specific latency
+is guaranteed.
 
 Native RAM publication updates the binding fingerprint immediately. Its dirty
 state stays set until owned success matches the exact mount incarnation,
@@ -64,8 +64,7 @@ private RAM until a later recovery snapshot is installed and synchronized.
 Shutdown still joins an active boundary, collects model results without executing
 navigation, stages the latest session draft, then performs final blocking sync.
 Failure keeps the desktop and drafts available. Existing recovery wire formats
-are unchanged. Writer's source-only sidecar pairing limitation is separate work;
-this change does not claim to solve it.
+are unchanged. Writer's source-only sidecar pairing limitation is not addressed here.
 
 ## Open/reopen boundary
 
@@ -73,7 +72,7 @@ Successful native Open retains the existing RAM-filesystem semantics: it starts
 clean relative to the current RAM file bytes. If a user explicitly discards or
 closes a model with a RAM-only replacement and reopens that file, the new lifetime
 does not inherit the old model's completion receipt. Its initial clean state is
-not a new per-file durability proof. This milestone does not add filesystem-wide
+not a new per-file durability proof. There is no filesystem-wide
 durable-version tracking across reopen. The strict owned-completion rule applies
 to Save/Save As within their logical document lifetime. Complete RAM files remain
 available and shutdown still refuses a failed final synchronization.
@@ -87,30 +86,14 @@ finite identity/revision boundaries, stale targets and recovery/shutdown orderin
 The existing compatibility suites continue to exercise explicit floppy-style
 synchronous behavior. Native file formats and model limits remain unchanged.
 
-Production i386 compilation is required. Writer's fixed arena grows by 36 bytes
-to 1,999,164; Spreadsheet's grows by 20 bytes to 2,844,936, both within their existing
-reservations. No output-sized allocation is added. Per-function stack reports
-must be distinguished from cumulative call-chain stack usage.
+Writer's fixed arena is 1,999,164 bytes and Spreadsheet's is 2,844,936, both
+within their existing reservations. No output-sized allocation is added.
+Per-function stack reports must be distinguished from cumulative call-chain
+stack usage.
 
-Guest acceptance is separately gated on the final source revision: ordinary
-QEMU serial/QMP/PS2 input, visible private edits and another responsive window
-while the matching durable boundary is pending, exact stopped-disk output checks,
-and reboot checks on default/large IDE plus explicit floppy compatibility.
-Host success alone does not establish guest responsiveness or reboot durability.
-No guest-memory observations, debugger sockets, fuzzing or intentional memory
-faults are part of this acceptance.
-
-## Qualified standalone runtime
-
-The exact clean `c2f67df` runtime passed ordinary default IDE, large IDE and floppy
-compatibility/reboot gates. Both IDE runs prove visible private and peer-window
-input during the same accepted durability boundary, and independently distinguish
-submitted native bytes from recovered newer drafts. The final expanded host suite
-passed 264 tests. See [qualification and selected screenshots](session-2026-10-04/responsive-documents/README.md)
-for exact profile workloads, hashes, measured upper bounds, retained incomplete
-attempts and the requirement to qualify later combined integrations separately.
-
-The later hosted-pointer/save union at `ca930a6` independently passed all 287 host
-tests and the same default/large/floppy document acceptance, plus both Pointer
-and frame-publication profiles. See the [combined qualification](session-2026-10-04/combined-responsive-documents/README.md).
-This does not qualify the separate subsequent native app-view extraction.
+Guest testing uses ordinary QEMU serial/QMP/PS2 input: private edits and another
+window stay responsive while the matching durable boundary is pending, stopped
+disk output is checked exactly, and documents are checked after reboot on
+default/large IDE plus explicit floppy compatibility. On both IDE profiles,
+submitted native bytes are distinguished from recovered newer drafts. Host
+success alone does not establish guest responsiveness or reboot durability.

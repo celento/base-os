@@ -129,14 +129,13 @@ preserving lower-profile arenas.
 coordinator service hooks without weakening the pre-existing step/time/device
 order assertions. Existing `test_fs_sync` covers default and large snapshot
 compatibility, retained old explicit results and the independent blocking slot.
-Leak detection is disabled because the sandbox runs under ptrace; address and
-undefined-behavior checks remain enabled.
+Leak detection is disabled because LeakSanitizer is unsupported when tests run
+under ptrace; address and undefined-behavior checks remain enabled.
 
 These host tests and object builds do not establish actual guest scheduling,
 process-fault cleanup, UI latency or disk persistence across a QEMU reboot.
 Those require separately integrated process/ABI tests and ordinary guest
-workloads. Writer/Spreadsheet native Save/Save As and RTF/PDF/CSV exports now use
-the private [document adapter](RESPONSIVE_DOCUMENT_SAVES.md); their own guest
-acceptance is independently gated. Other built-in GUI save flows and legacy
-native saves still block. This is not general kernel preemption or a claim that
-every save caller has been converted.
+workloads. Writer/Spreadsheet native Save/Save As and RTF/PDF/CSV exports use
+the private [document adapter](RESPONSIVE_DOCUMENT_SAVES.md). Other built-in GUI
+save flows and legacy native saves still block. This is not general kernel
+preemption, and not every save caller uses the asynchronous service.

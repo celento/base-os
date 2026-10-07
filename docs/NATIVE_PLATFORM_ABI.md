@@ -1,24 +1,22 @@
 # Additive native platform ABI 1.3
 
 This service adds `BOS_FEATURE_FILE_TRANSACTIONS` (bit 8) and
-gateway 30 for conditional staged file publication. Its [qualification](NATIVE_FILE_TRANSACTIONS_QUALIFICATION.md) covers both IDE profiles;
+gateway 30 for conditional staged file publication on both IDE profiles;
 the independently negotiated UI remains **1.1**, and window Close/Stop remains
 forced. The existing ABI 1.2 window contract and calls 0–29 remain compatible.
 The public operation and durability contract is specified below and in
 [conditional file transactions](NATIVE_FILE_TRANSACTIONS.md).
 
-The qualified independent-window increment adds current-context feature bit 7
+The independent-window increment adds current-context feature bit 7
 and the separately negotiated UI 1.1 extension. See [native windows](NATIVE_WINDOWS.md)
-for the required BEX2 flag, exact allocations and unchanged wire sizes, and
-[qualification](NATIVE_WINDOWS_QUALIFICATION.md) for held-runtime versus integration
-evidence. The earlier file/durability and ABI1.1 memory contracts below remain
+for the required BEX2 flag, exact allocations and unchanged wire sizes. The earlier file/durability and ABI1.1 memory contracts below remain
 compatible.
 
 This is compatibility-preserving groundwork for independent applications, not
 Win95/98 platform parity. It implements discoverable owner-bound file versions,
 conditional replacement and asynchronous IDE durability completion. ABI1.1 additionally supplies a versioned memory-info query. A separately gated
 BEX2 context can describe committed sparse private memory; BEX1 remains exact.
-The separately qualified hosted-UI increment adds an opt-in pointer endpoint for
+The hosted-UI increment adds an opt-in pointer endpoint for
 an existing native Terminal canvas. It does not add directory enumeration,
 arbitrary/multiple app-created windows, keyboard-event delivery, IPC, user
 networking, threads or kernel preemption. One owned primary window is selected
@@ -38,11 +36,9 @@ numbers, arguments and results**. In particular:
 - Unknown syscall numbers still return -1. Old kernels return -1 for query18.
 - Disk snapshots and application document formats are unchanged.
 
-The committed fixtures in `tests/fixtures/bex1-hour05` are the **original built
-bytes**, not rebuilt examples. Their manifest identifies clean source revision
-`a7ea36be6db5ae2cd477dfe36e8e58db48145048`, the frozen hourly05 build and SHA-256s.
-Hash/header validation alone is not an execution test; guest validation records
-must identify their exact tested kernel separately.
+The committed fixtures in `tests/fixtures/bex1-legacy` are the **original built
+bytes**, not rebuilt examples. Their manifest records each file's size and SHA-256.
+Hash/header validation alone is not an execution test.
 
 ## Discover features and limits
 
@@ -260,12 +256,12 @@ save callbacks or old binaries to asynchronous code automatically.
 `test_native_platform.py` runs ordinary dispatcher, query-prefix, context,
 copy-range, timeout/wrap, file-routing and lifecycle scenarios with production
 functions and deterministic service stubs under ASan/UBSan. It separately checks
-frozen BEX1 fixture hashes/headers and the SDK fallback helper. It executes no
+committed BEX1 fixture hashes/headers and the SDK fallback helper. It executes no
 protected machine instructions, guest faults, fuzzing or malformed executables.
 `test_native_publication_process.py` continues to exercise the exact old frame
 publication rules. Real service correctness and guest/desktop responsiveness
 need their own module and integration tests; these host checks do not substitute
-for those gates.
+for those.
 
 ## Memory discovery (call28)
 
@@ -309,7 +305,7 @@ for a GUI task it is its owned window/view slot. It never becomes an opaque
 window handle or process-record index. Synchronous exec still returns zero.
 `processes_total` and the eight-window/task bounds do not increase.
 
-The qualified BEX2 flag 0x1 requires general ABI minor 2. Bit 7 is advertised
+The BEX2 flag 0x1 requires general ABI minor 2. Bit 7 is advertised
 only for a bound owned-window task with trusted input hooks; it replaces hosted
 bit 6 in that context, not in hosted contexts. QUERY/OPEN negotiation and
 context-specific capability meanings are defined by the

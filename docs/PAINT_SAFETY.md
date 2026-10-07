@@ -2,7 +2,7 @@
 
 Paint saves a new image under `/Pictures`. It does not track an owned saved
 file, so it rejects every existing destination name, including ordinary files,
-applications, directories and a picture saved earlier in the same session.
+applications, directories and a picture saved earlier since boot.
 Choose another name when the dialog says **Name exists. Choose another name.**
 This intentionally replaces the former implicit overwrite behavior.
 
@@ -20,7 +20,7 @@ image take the IDE volume beyond 64 nodes. A full node table reports **Not enoug
 free file slots.**; insufficient bytes report **Not enough space for this
 picture.**
 
-A rejected create removes only a Pictures folder made by that attempt. A
+A rejected create removes only a Pictures folder made by that save. A
 returned write failure removes the new image and, if applicable, that new
 folder. Existing sibling paths, nested directories, file bytes, identities,
 content revisions and metadata remain intact. Rollback is safe because these
@@ -33,8 +33,8 @@ retrying Save rechecks the current name and capacity. Canvas pixels and undo
 history are unaffected by failed saves. The dialog stays open on failure.
 
 A successful Paint Save still stages its bytes in the filesystem's RAM view.
-Normal autosync and System → Shutdown provide disk synchronization. This change
-does not introduce a Paint durability ticket, owned-file binding, overwrite
+Normal autosync and System → Shutdown provide disk synchronization. There is
+no a Paint durability ticket, owned-file binding, overwrite
 confirmation, automatic retry or asynchronous dialog workflow.
 
 ## Unchanged image format
@@ -72,46 +72,26 @@ Coverage includes:
 - Floppy and default IDE successful saves, including rejection of a second save
   to the same name
 
-On 2026-10-04 the focused host test, full kernel build, existing Editor and
-Terminal storage-retry tests, and incremental filesystem host tests passed.
-The recovered Files/Paint busy→release→durable retry fixture from commit
-`67ee928` passed unchanged against these helpers. `tests/ui_guest.c` compiled
-against the changed production kernel; its existing directory-collision
-rejection and new `regression.pbm` save remain compatible.
-
-The normal QEMU gate subsequently passed on the clean production source
-`456c42baae1608fede5d33e767946100cd1902b6`. Run it with:
+The QEMU checks run with:
 
 ```sh
 python3 tools/ui_test.py build
 python3 tools/paint_save_input_test.py build
 ```
 
-The existing ordinary UI fixture reported both `UI-FEATURES-PASS` and
-`SESSION-RESTORE-PASS`. The new production-kernel runner uses only normal PS/2
+The UI fixture `tests/ui_guest.c` reports `UI-FEATURES-PASS` and
+`SESSION-RESTORE-PASS`; its directory-collision rejection and `regression.pbm`
+save cover the same helpers. The production-kernel runner uses only normal PS/2
 keyboard/mouse input, screenshots and System → Shutdown. It verifies the IDE
 volume only after QEMU exits, then repeats the exact file checks after reboot.
 No guest-memory/debugger observer or live-volume reader is used.
 
-Opening and canceling Save left `/Pictures` absent. A blank white image saved
-as `first.pbm`. After an ordinary pencil click changed the canvas, a second save
-to `first.pbm` visibly reported **Name exists. Choose another name.** The same
-retained dialog accepted `second.pbm`. Both exact 16,008-byte BOS1 files and the
-unrelated guard file's complete metadata/data were verified after shutdown and
-reboot. The held default pencil click produces the existing 3×3 mark centered at
-logical (60,48); the expected bytes explicitly include those nine black pixels.
-
-[Machine-readable results and artifact hashes](PAINT_SAVE_UI_RESULTS.json) and
-[serial logs](paint-save-ui/) preserve the gate evidence. Screenshots show
-[opening Save](../screenshots/paint-save/cancel-save-open.png),
-[canceling](../screenshots/paint-save/cancel-save-cancel.png),
-[collision feedback](../screenshots/paint-save/save-duplicate-rejected.png),
-[unique-name retry](../screenshots/paint-save/save-unique-retry-saved.png), and
-[the restored canvas](../screenshots/paint-save/reboot-restored-canvas.png).
-Capacity/returned-write rollback scenarios remain host-level tests.
-
-An exploratory attempt used Fill instead of Pencil and exposed an existing
-partial-fill behavior on a blank canvas. That separate drawing issue was
-reported for follow-up; no fill/renderer code changed in this save-safety work.
-The successful save gate uses Pencil with an independently specified expected
-pixel payload.
+The runner opens and cancels Save and checks that `/Pictures` stays absent,
+saves a blank image as `first.pbm`, changes the canvas with an ordinary pencil
+click, and checks that a second save to `first.pbm` reports **Name exists.
+Choose another name.** The same retained dialog then accepts `second.pbm`. Both
+exact 16,008-byte BOS1 files and an unrelated guard file's complete
+metadata/data are verified after shutdown and reboot. The default pencil click
+produces a 3×3 mark centered at logical (60,48); the expected bytes include
+those nine black pixels. Capacity/returned-write rollback scenarios remain
+host-level tests.

@@ -1,7 +1,5 @@
 # Spreadsheet
 
-![Original budget with live totals](../screenshots/spreadsheet-budget.png)
-
 The bounded Spreadsheet client is implemented in `src/sheet.[ch]`. It uses the
 real formula engine and file codecs described in [SHEET_MODEL.md](SHEET_MODEL.md).
 The desktop integrates its window, green grid icon, launcher, filename dialogs,
@@ -89,8 +87,6 @@ separate undo step. Horizontal scrolling, hit testing, selection, and cell
 clipping use the actual column widths, including partly visible columns.
 Native files with display metadata use [BSH1 version 2](SHEET_FORMAT.md);
 default-metadata files keep the original version-1 encoding.
-
-![Number formats and column widths](../screenshots/spreadsheet-formats.png)
 
 ## Clipboard
 
@@ -184,7 +180,7 @@ length or −1 if unavailable/too large. The weak standalone hooks implement a
 local-only private clipboard using an internal −2 get result; real desktop hooks
 must not use that result.
 
-Recovery snapshots encode a pending cell edit into a temporary candidate **without
+Recovery snapshots encode a pending cell edit into a temporary copy **without
 committing it, disturbing the editor, or changing undo history**. Source bindings
 still refer to the saved baseline, not the current dirty draft. Read-only getters
 and source fingerprint checks do not invalidate snapshot output. Before restore,
@@ -195,8 +191,7 @@ The recovery view stores active/anchor row-major indices, not pixel positions.
 ## Verification
 
 ```sh
-PATH=/workspace/shared/baseos-tools/bin:$PATH \
-TMPDIR=/workspace/shared/baseos-test-tmp ASAN_OPTIONS=detect_leaks=0 \
+ASAN_OPTIONS=detect_leaks=0 \
   python3 -m unittest discover -s tests -p 'test_sheet_*.py' -v
 ```
 
@@ -220,8 +215,7 @@ unchanged. Python independently verifies saved BSH1 records and exported CSV.
 No intentional memory-fault probes, fuzzing or QEMU instances are used here.
 
 A freestanding i386 build with production flags also checks unresolved symbols,
-object BSS and stack usage. Normal production PS/2, pointer and real disk/session
-recovery checks passed on 2026-10-04; see the [integration verification record](session-2026-10-04/SPREADSHEET.md).
+object BSS and stack usage.
 
 ## Desktop recovery and examples
 
@@ -269,10 +263,6 @@ It never modifies guest memory, opens a saved user disk, fuzzes or probes faults
 `python3 tools/sheet_pointer_test.py build` additionally checks real mouse
 click/drag/release routing, wheel and horizontal scrolling, the shipped budget's
 guest totals on a fresh boot floppy, and explicit New/Close Discard.
-
-![Minimum Spreadsheet window](../screenshots/spreadsheet-minimum.png)
-
-![Changed source remains protected](../screenshots/spreadsheet-conflict.png)
 
 ## Responsive persistence protocol
 

@@ -57,12 +57,10 @@ The 119 exact fill/no-op cases cover:
 - One undo record per fill, exact undo/redo, eight-step history rollover,
   new-edit redo truncation and same-color clicks with pending redo
 
-These are host checks of production logic and input helpers. The separate
-ordinary-QEMU confirmation is described below.
-
-On 2026-10-04 the focused command passed under ASan/UBSan, the complete kernel
-built successfully, and the existing `tests/ui_guest.c` fixture compiled against
-the changed source. A six-test ordinary-workflow group also passed:
+These are host checks of production logic and input helpers. The existing
+`tests/ui_guest.c` fixture also compiles against the Fill source. A broader
+ordinary-workflow group covers Paint save, storage busy handling and Editor
+binding alongside Fill:
 
 ```sh
 ASAN_OPTIONS=detect_leaks=0 PYTHONPATH=tests python3 -m unittest \
@@ -70,40 +68,7 @@ ASAN_OPTIONS=detect_leaks=0 PYTHONPATH=tests python3 -m unittest \
   test_editor_binding -v
 ```
 
-The general aggregate suite was stopped rather than used as completion evidence
-because it includes unrelated legacy input-truncation probes.
-
-
-## Separate ordinary-QEMU confirmation
-
-On 2026-10-04 the normal production kernel at commit `ee0aaa9` passed a focused
-Fill workflow in QEMU with disposable boot/data images. The runner reused the
-original observed mouse position: screen `(400,300)`, logical canvas `(60,48)`.
-It launched Paint through the normal app launcher, selected Fill with Tab,
-clicked the blank canvas using normal mouse input, saved through Ctrl+S, used
-Ctrl+Z/Ctrl+Y, and shut down through **System → Shutdown**.
-
-After QEMU exited successfully, the host parsed the saved filesystem snapshot
-and compared the entire 16,008-byte BOS1 file for each step:
-
-- `full.pbm`: exact header and all 16,000 pixels black
-- `undo.pbm`: exact header and all 16,000 pixels white
-- `redo.pbm`: exact header and all 16,000 pixels black
-- `noop-undo.pbm`: same-color Fill followed by Undo restored all-white pixels
-- `noop-redo.pbm`: Redo after that restored all-black pixels
-
-An independent root document stayed byte-for-byte unchanged. The run used only
-keyboard/mouse input and framebuffer screenshots, with no guest-memory reads,
-injected guest test code, debugger, fault cases or fuzzing. Screenshots confirmed
-the selected Fill tool and complete before/after canvas; the exact-pixel claims
-come from the saved files read after normal shutdown. The run exited normally
-with no panic, and the selected durable snapshot had generation 9.
-
-Tested kernel SHA-256:
-`ebb5864b212ad8d9d06d965b30f13646c98f7106a011d94b0d72455c770e950a`.
-
-Every all-black BOS1 output SHA-256:
-`f8451c4288896f308a3abcb7072bca9c4c93a38db85c3a7e576313ff5895e41d`.
-
-Every all-white BOS1 output SHA-256:
-`4444a239a8ab798050e8e0e1b3584e01e90e2a7110806574d48b933fcdb1e71a`.
+The full Fill workflow (launch Paint, select Fill with Tab, click a blank
+canvas, save with Ctrl+S, then Ctrl+Z/Ctrl+Y) was also checked in QEMU with
+ordinary keyboard and mouse input: the saved 16,008-byte BOS1 files matched
+the expected all-black, all-white and same-color no-op results exactly.

@@ -92,7 +92,7 @@ def prepare(args, runtime, modules):
     try:
         report['provenance'] = desktop.source_provenance(args, runtime, modules)
         from build_app import tool
-        frozen = ROOT / 'tests/fixtures/bex1-hour05'
+        frozen = ROOT / 'tests/fixtures/bex1-legacy'
         manifest = json.loads((frozen / 'manifest.json').read_text())
         apps = {}
         for name, expected in manifest['files'].items():
