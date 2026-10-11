@@ -31,7 +31,37 @@ Detailed guides: [Files](docs/FILES.md), [Spreadsheet](docs/SHEET.md), [Writer](
 
 ## Screenshots
 
-These captures come from the running QEMU guest with sample documents and artwork. These gallery views show the base desktop.
+These captures come from the running QEMU guest with sample documents and artwork.
+
+### Writer
+
+Formatted documents with bold, italic and underline, headings, left/center/right alignment and proportional wrapping. Writer saves native `.bwr` files and exports RTF or paginated Letter/A4 PDF.
+
+![Writer editing a formatted document with headings and inline styles](screenshots/gallery/writer.png)
+
+### Spreadsheet
+
+A 128 x 26 grid with formulas, number/currency/percent formats, adjustable column widths and CSV interchange. The sample `Documents/budget.bsh` totals a small monthly budget.
+
+![Spreadsheet showing the sample budget with planned, actual and remaining columns](screenshots/gallery/spreadsheet.png)
+
+### Browser
+
+Read HTTP pages and local HTML files, follow links, save pages for offline reading and download files in the background. The built-in guide opens from `file:///Documents/welcome.html`.
+
+![Browser displaying the local BaseOS guide page](screenshots/gallery/browser.png)
+
+### Media Player and Image Viewer
+
+Media Player plays WAV, MP3 and MPEG-1 video through QEMU's SB16 device with a playlist and volume control. Image Viewer opens JPEG, PNG, BMP, GIF and BaseOS images with fit, zoom and pan.
+
+![Media Player listing a track next to Image Viewer showing a Paint picture](screenshots/gallery/media.png)
+
+### Calendar
+
+Monthly view with a day agenda. Appointments can be all-day or timed, days with entries are marked, and unfinished entries recover after a confirmed disk save or normal shutdown.
+
+![Calendar showing a month view and three appointments for the selected day](screenshots/gallery/calendar.png)
 
 ### Paint
 
@@ -157,7 +187,7 @@ The compositor caches the background during window drags and uploads changed scr
 | `tools/` | Disk tools, font generation, test runners, and screenshot capture |
 | `examples/`, `sdk/` | Native assembly and C examples, application SDK |
 | `assets/` | Fonts, licenses, cursor, and artwork |
-| `screenshots/gallery/` | The six current README screenshots |
+| `screenshots/gallery/` | The README screenshots |
 | `docs/` | Technical reference |
 | `build/` | Generated binaries and persistent disk image, ignored by Git |
 

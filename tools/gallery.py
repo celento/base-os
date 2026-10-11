@@ -1,4 +1,4 @@
-"""Capture six real guest screenshots with sample data on a disposable image.
+"""Capture real guest screenshots with sample data on a disposable image.
 
 Usage: python3 tools/gallery.py build
 The regular kernel and saved disk are untouched. A documentation-only guest
@@ -17,7 +17,8 @@ from update_image import install_kernel
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build").resolve()
 OUTPUT = ROOT / "screenshots" / "gallery"
-NAMES = ["desktop", "paint", "programming", "games", "themes", "search"]
+NAMES = ["desktop", "paint", "programming", "games", "themes", "search",
+         "writer", "spreadsheet", "browser", "media", "calendar"]
 
 
 def tool(name):
@@ -49,6 +50,7 @@ with tempfile.TemporaryDirectory(prefix="baseos-gallery-") as temp:
     guest = subprocess.Popen([
         "qemu-system-i386", "-m", "64M", "-vga", "std", "-drive",
         f"file={work / 'disk.img'},format=raw,index=0,if=floppy", "-display", "none",
+        "-audiodev", "none,id=gallery", "-device", "sb16,audiodev=gallery",
         "-serial", f"file:{log}", "-qmp", "stdio", "-no-reboot"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:

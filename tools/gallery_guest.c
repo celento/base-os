@@ -15,6 +15,10 @@ static void gallery_place(int x,int y,int w,int h) {
     win_clamp(v);
 }
 static void gallery_command(const char *s) { while(*s)term_char(*s++);term_enter(); }
+static void gallery_writer_key(int scancode,int modifiers) { writer_key(scancode,0,modifiers); }
+static void gallery_writer(const char *s) {
+    for(;*s;s++)writer_key(*s=='\n'?KEY_ENTER:0,*s,0);
+}
 static void gallery_show(int n) {
     render_scene();flip_vga();
     /* Refresh the same completed frame after QEMU has consumed dirty VRAM.
@@ -78,5 +82,39 @@ void feature_test(void) {
     win_open(WK_SETTINGS);gallery_place(300,110,0,0);gallery_show(4);
 
     gallery_clear();theme_id=0;theme_apply();launcher_open();gallery_show(5);
+
+    int docs=fs_find_child(fs_root(),"Documents");
+    gallery_clear();open_writer(-1);gallery_place(300,70,860,560);
+    gallery_writer_key(0x02,WRITER_MOD_CTRL);gallery_writer_key(0x12,WRITER_MOD_CTRL);
+    gallery_writer("Harbor Notes\n");
+    gallery_writer_key(0x0b,WRITER_MOD_CTRL);gallery_writer_key(0x26,WRITER_MOD_CTRL);
+    gallery_writer("Writer keeps ");gallery_writer_key(0x30,WRITER_MOD_CTRL);gallery_writer("bold");
+    gallery_writer_key(0x30,WRITER_MOD_CTRL);gallery_writer(", ");gallery_writer_key(0x17,WRITER_MOD_CTRL);
+    gallery_writer("italic");gallery_writer_key(0x17,WRITER_MOD_CTRL);gallery_writer(" and ");
+    gallery_writer_key(0x16,WRITER_MOD_CTRL);gallery_writer("underlined");gallery_writer_key(0x16,WRITER_MOD_CTRL);
+    gallery_writer(" text with proportional wrapping. Save native documents, or export RTF and paginated Letter or A4 PDF.\n");
+    gallery_writer_key(0x02,WRITER_MOD_CTRL);gallery_writer("Before the trip\n");
+    gallery_writer_key(0x0b,WRITER_MOD_CTRL);
+    gallery_writer("Check the tide table, pack the blue lantern, and leave the boat key with Mara at the harbor office. "
+        "The ferry leaves at seven, so plan to be at the dock early.\n");
+    gallery_writer_key(0x13,WRITER_MOD_CTRL);gallery_writer("Written in BaseOS Writer\n");
+    gallery_writer_key(0x26,WRITER_MOD_CTRL);
+    gallery_show(6);
+
+    gallery_clear();open_spreadsheet(fs_find_child(docs,"budget.bsh"));gallery_place(260,70,900,560);gallery_show(7);
+
+    gallery_clear();open_browser(fs_find_child(docs,"welcome.html"));gallery_place(300,70,840,560);gallery_show(8);
+
+    gallery_clear();open_player(-1);gallery_place(250,110,0,0);
+    open_view(fs_find_child(fs_find_child(fs_root(),"Pictures"),"Mountain.bos"));gallery_place(640,90,600,460);
+    gallery_show(9);
+
+    gallery_clear();
+    RtcTime now;rtc_read(&now);
+    cal_agenda_add(now.year,now.month,now.day,9*60,"Ferry to the island");
+    cal_agenda_add(now.year,now.month,now.day,13*60+30,"Lunch with Mara");
+    cal_agenda_add(now.year,now.month,now.day,-1,"Pack the blue lantern");
+    win_open(WK_CAL);gallery_place(330,80,0,0);
+    gallery_show(10);
     platform_log("GALLERY-DONE\n");
 }
