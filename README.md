@@ -115,6 +115,18 @@ make run
 
 `make run` builds `build/baseos.img`, a 2.88 MB boot floppy, and creates `build/baseos-data.img`, a separate 16 MiB IDE data disk, only if it does not already exist. QEMU starts with 64 MiB RAM. Use `make headless` for a serial-console run without a graphical window. The data volume holds up to 8,385,024 file bytes, with 2 MiB per file and up to 256 total file/folder/app nodes. Metadata for nodes beyond 64 slightly reduces the byte allowance; see the technical reference.
 
+### In a web browser
+
+`web/` runs the real BaseOS disk images in the browser with the [v86](https://github.com/copy/v86) WebAssembly x86 emulator. `web/build.sh` builds the kernel and disks from source, then stages a static site in `web/dist`:
+
+```sh
+npm --prefix web ci
+bash web/build.sh
+npm --prefix web run serve   # http://localhost:8080
+```
+
+`vercel.json` points Vercel at the same script, so each deploy rebuilds the OS from the deployed commit. Click the screen to capture the mouse and keyboard; Esc releases the pointer. Files changed in the browser stay in that tab and are lost on reload. Networking is unavailable because v86 does not emulate the RTL8139 adapter.
+
 An [optional large-volume profile](docs/LARGE_VOLUMES.md) uses 128 MiB RAM and
 an explicitly created 64 MiB data disk, with 16 MiB files and about 32 MiB of
 file data. The default build and existing disks stay unchanged; migration is

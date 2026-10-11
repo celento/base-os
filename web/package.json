@@ -1,0 +1,15 @@
+{
+  "name": "baseos-web",
+  "private": true,
+  "description": "Runs BaseOS in the browser with the v86 emulator",
+  "scripts": {
+    "build": "bash build.sh",
+    "serve": "python3 -m http.server --directory dist 8080"
+  },
+  "dependencies": {
+    "v86": "0.5.471"
+  },
+  "optionalDependencies": {
+    "nasm-runtime-linux-x64": "3.2.0"
+  }
+}

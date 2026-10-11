@@ -21,3 +21,8 @@ qemu_log.txt
 # Preserved disk images and Python tooling
 *.img.*.bak
 __pycache__/
+
+# Browser build (web/build.sh)
+web/node_modules/
+web/dist/
+web/.build/

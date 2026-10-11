@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BaseOS</title>
+<meta name="description" content="BaseOS, a hobby operating system written from scratch, running in your browser.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>BaseOS</h1>
+  <span id="status" role="status">Loading…</span>
+  <nav>
+    <button id="restart" type="button" disabled>Restart</button>
+    <button id="fullscreen" type="button" disabled>Full screen</button>
+    <a href="https://github.com/celento/base-os" target="_blank" rel="noopener">Source</a>
+  </nav>
+</header>
+<main>
+  <div id="frame">
+    <div id="screen">
+      <div style="white-space: pre; font: 14px monospace; line-height: 14px"></div>
+      <canvas style="display: none"></canvas>
+    </div>
+    <div id="overlay" hidden>Click to use the mouse. Press Esc to release it.</div>
+  </div>
+  <p class="hint">Click the screen to capture mouse and keyboard; Esc releases the pointer. Files you create live in this tab only and are lost on reload.</p>
+</main>
+<script src="v86/libv86.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
