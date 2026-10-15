@@ -5,12 +5,14 @@
 #include "fs.h"
 #include "layout.h"
 #include "platform.h"
+#include "toolbar.h"
 #include "../sdk/baseos_abi.h"
 
 #define HISTORY 9u
 #define LINE_MAX (WRITER_TEXT_MAX + 1u)
 #define EXPORT_CAPACITY 524288u
-#define TOOL_H 66
+#define FIND_PAD 6
+#define FIND_PITCH (TB_H + 4)
 #define FOOT_H 26
 #define PAGE_PAD 22
 #define UI_HEIGHT 18
@@ -113,6 +115,7 @@ static unsigned paragraph_end(const WriterDoc *d, unsigned at) {
 static int is_start(const WriterDoc *d, unsigned at) { return !at || d->text[at - 1] == '\n'; }
 static unsigned paragraph_at(const WriterDoc *d, unsigned at) { return d->paragraph[paragraph_start(d, at)]; }
 static void reveal(void);
+static int tool_height(int w);
 static void invalidate(void) { state.layout_valid = 0; state.desired_x = -1; state.blink = 1; }
 
 /* Each complete operation records one state. Older states drop as a ring. */
@@ -420,7 +423,7 @@ unsigned writer_word_count(void) {
     }
     return state.words;
 }
-static int search_height(void) { return state.search.open ? (state.search.replacing ? 92 : 62) : 0; }
+static int search_height(void) { return state.search.open ? (state.search.replacing ? FIND_PITCH + TB_H + 2 * FIND_PAD : TB_H + 2 * FIND_PAD) : 0; }
 static unsigned folded(unsigned c) { return !state.search.exact && c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static int search_match(unsigned at) {
     const WriterDoc *d = document(); unsigned n = string_length(state.search.text[0]);
@@ -589,7 +592,7 @@ void writer_new(void) {
 void writer_init(void) {
     if (state.initialized) return;
     state.initialized = 1; state.width = WRITER_W - 2 * PAGE_PAD - 18;
-    state.viewport_height = WRITER_H - TOOL_H - FOOT_H - 16;
+    state.viewport_height = WRITER_H - tool_height(WRITER_W) - FOOT_H - 16;
     writer_new();
 }
 static int extension(const char *name, const char *suffix) {
@@ -1069,11 +1072,45 @@ static void label(Clip c, const char *text, int x, int y, unsigned char color) {
     while (*text) { glyph(c, (unsigned char)*text, x, y, 0, 0, color); x += ui_advance(*text++); if (x >= c.x + c.w) break; }
 }
 
-typedef struct { short x, w; const char *label; } SearchButton;
-static const SearchButton search_buttons[] = {
-    {8, 48, "Prev"}, {60, 48, "Next"}, {112, 36, "Aa"},
-    {152, 62, "Replace"}, {218, 42, "All"}, {264, 52, "Close"}
+/* Text-only toolbar control in the shared toolbar.h states (e.g. "Aa"). */
+static void text_button(int x, int y, int w, int h, const char *text, int look) {
+    unsigned char ink = app_text;
+    if (look == TB_ACTIVE || look == TB_PRIMARY) { draw_round_rect(x, y, w, h, 7, app_accent); ink = app_on_accent; }
+    else if (look == TB_NORMAL) draw_round_rect(x, y, w, h, 7, app_chrome_dk);
+    else if (look == TB_DISABLED) ink = gfx_mix(app_text_dim, app_chrome, 110);
+    draw_string_clip(text, x + (w - ui_string_w(text)) / 2, y + (h - TB_TEXT_H) / 2, ink, x + w - 4);
+}
+/* Toolbar controls paint unclipped, so a control is shown and hit only when
+ * it lies wholly inside the client area (window-relative box). */
+static int box_visible(Clip b, int w, int h) { return b.x >= 0 && b.y >= 0 && b.x + b.w <= w && b.y + b.h <= h; }
+
+/* Find bar: one geometry routine feeds drawing and hit testing. Each row is a
+ * labelled field followed by its buttons; Close sits at the far right. */
+#define FIND_FIELD_X 52
+enum { FIND_PREV, FIND_NEXT, FIND_CASE, FIND_REPLACE, FIND_ALL, FIND_CLOSE, FIND_COUNT };
+static const struct { signed char icon; unsigned char row; const char *label; } find_items[FIND_COUNT] = {
+    {ICON_CHEVRON_UP, 0, 0}, {ICON_CHEVRON_DOWN, 0, 0}, {-1, 0, "Aa"},
+    {ICON_REPLACE, 1, "Replace"}, {ICON_REPLACE, 1, "All"}, {ICON_CLOSE, 0, 0}
 };
+typedef struct { int field_w, divider_x; Clip button[FIND_COUNT]; } FindBar;
+static int find_row_y(int top, unsigned row) { return top + FIND_PAD + (int)row * FIND_PITCH; }
+/* Window-relative geometry for a find bar whose first row starts at top. */
+static void find_layout(int w, int top, FindBar *f) {
+    int replace_w = tool_button_w("Replace"), all_w = tool_button_w("All");
+    int search_w = 3 * TB_ICON_W + 8 + 17 + TB_ICON_W, replace_row = replace_w + 4 + all_w;
+    int bx = w - 8 - (search_w > replace_row ? search_w : replace_row);
+    int y0 = find_row_y(top, 0), y1 = find_row_y(top, 1);
+    f->field_w = bx - 8 - FIND_FIELD_X; if (f->field_w < 0) f->field_w = 0;
+    f->button[FIND_PREV] = (Clip){bx, y0, TB_ICON_W, TB_H};
+    f->button[FIND_NEXT] = (Clip){bx + TB_ICON_W + 4, y0, TB_ICON_W, TB_H};
+    f->button[FIND_CASE] = (Clip){bx + 2 * (TB_ICON_W + 4), y0, TB_ICON_W, TB_H};
+    f->button[FIND_CLOSE] = (Clip){w - 8 - TB_ICON_W, y0, TB_ICON_W, TB_H};
+    f->divider_x = w - 8 - TB_ICON_W - 9;
+    f->button[FIND_REPLACE] = (Clip){bx, y1, replace_w, TB_H};
+    f->button[FIND_ALL] = (Clip){bx + replace_w + 4, y1, all_w, TB_H};
+}
+static int find_item_shown(unsigned i) { return find_items[i].row == 0 || state.search.replacing; }
+static int search_text_w(int field_w) { return field_w > 12 ? field_w - 12 : 0; }
 static int search_offset(unsigned field, int available) {
     int prefix = 0;
     for (unsigned i = 0; i < state.search.caret[field]; i++) prefix += ui_advance(state.search.text[field][i]);
@@ -1083,13 +1120,15 @@ static void draw_search(Clip all) {
     if (!state.search.open) return;
     int top = all.y + all.h - FOOT_H - search_height();
     rect(all, all.x, top, all.w, search_height(), app_chrome);
+    FindBar bar; find_layout(all.w, top - all.y, &bar);
     unsigned rows = state.search.replacing ? 2 : 1;
     for (unsigned f = 0; f < rows; f++) {
-        int y = top + 4 + (int)f * 30;
-        label(all, f ? "With" : "Find", all.x + 8, y + 3, app_text_dim);
-        rect(all, all.x + 52, y, all.w - 60, 25, state.search.focus && (unsigned)state.search.field == f ? app_accent : app_border);
-        rect(all, all.x + 53, y + 1, all.w - 62, 23, app_field);
-        Clip field = {all.x + 57, y + 3, all.w - 70, 19};
+        int y = find_row_y(top, f);
+        label(all, f ? "With" : "Find", all.x + 8, y + (TB_H - UI_HEIGHT) / 2, app_text_dim);
+        if (bar.field_w < 4) continue;
+        rect(all, all.x + FIND_FIELD_X, y, bar.field_w, TB_H, state.search.focus && (unsigned)state.search.field == f ? app_accent : app_border);
+        rect(all, all.x + FIND_FIELD_X + 1, y + 1, bar.field_w - 2, TB_H - 2, app_field);
+        Clip field = {all.x + FIND_FIELD_X + 6, y + (TB_H - 19) / 2, search_text_w(bar.field_w), 19};
         if (field.x < all.x) field.x = all.x;
         if (field.x + field.w > all.x + all.w) field.w = all.x + all.w - field.x;
         if (field.y < all.y) field.y = all.y;
@@ -1111,12 +1150,13 @@ static void draw_search(Clip all) {
             rect(field, caret_x, field.y, 1, field.h, app_text);
         }
     }
-    int y = top + 4 + (int)rows * 30;
-    for (unsigned i = 0; i < sizeof search_buttons / sizeof search_buttons[0]; i++) {
-        if ((i == 3 || i == 4) && !state.search.replacing) continue;
-        const SearchButton *b = &search_buttons[i]; int selected = i == 2 && state.search.exact;
-        rect(all, all.x + b->x, y, b->w, 24, selected ? app_accent : app_chrome_dk);
-        label(all, b->label, all.x + b->x + (b->w - ui_string_w(b->label)) / 2, y + 3, selected ? app_on_accent : app_text);
+    Clip divider = {bar.divider_x, find_row_y(top - all.y, 0), 1, TB_H};
+    if (box_visible(divider, all.w, all.h)) tool_divider(all.x + divider.x, all.y + divider.y, TB_H);
+    for (unsigned i = 0; i < FIND_COUNT; i++) {
+        Clip b = bar.button[i];
+        if (!find_item_shown(i) || !box_visible(b, all.w, all.h)) continue;
+        if (i == FIND_CASE) text_button(all.x + b.x, all.y + b.y, b.w, b.h, find_items[i].label, state.search.exact ? TB_ACTIVE : TB_FLAT);
+        else tool_button(all.x + b.x, all.y + b.y, b.w, b.h, find_items[i].icon, find_items[i].label, i == FIND_CLOSE ? TB_FLAT : TB_NORMAL);
     }
 }
 static int search_click(int x, int y, int w, int h, int mx, int my, int modifiers) {
@@ -1124,11 +1164,13 @@ static int search_click(int x, int y, int w, int h, int mx, int my, int modifier
     int top = y + h - FOOT_H - search_height();
     if (my < top || my >= y + h - FOOT_H) return 0;
     unsigned rows = state.search.replacing ? 2 : 1;
+    FindBar bar; find_layout(w, top - y, &bar);
+    int lx = mx - x, ly = my - y;
     state.group_kind = 0; state.dragging = 0;
     for (unsigned f = 0; f < rows; f++) {
-        int fy = top + 4 + (int)f * 30;
-        if (mx >= x + 52 && mx < x + w - 8 && my >= fy && my < fy + 25) {
-            int local = mx - x - 57 + search_offset(f, w - 70), used = 0;
+        int fy = find_row_y(top, f);
+        if (bar.field_w >= 4 && lx >= FIND_FIELD_X && lx < FIND_FIELD_X + bar.field_w && my >= fy && my < fy + TB_H) {
+            int local = lx - FIND_FIELD_X - 6 + search_offset(f, search_text_w(bar.field_w)), used = 0;
             unsigned pos = 0; const char *text = state.search.text[f];
             while (text[pos]) {
                 int width = ui_advance(text[pos]); if (local < used + (width + 1) / 2) break;
@@ -1139,35 +1181,75 @@ static int search_click(int x, int y, int w, int h, int mx, int my, int modifier
             return WRITER_CHANGED;
         }
     }
-    int by = top + 4 + (int)rows * 30;
-    for (unsigned i = 0; i < sizeof search_buttons / sizeof search_buttons[0]; i++) {
-        if ((i == 3 || i == 4) && !state.search.replacing) continue;
-        const SearchButton *b = &search_buttons[i];
-        if (mx >= x + b->x && mx < x + b->x + b->w && my >= by && my < by + 24) {
-            if (i == 0 || i == 1) search_find(i ? 1 : -1);
-            else if (i == 2) { state.search.exact = !state.search.exact; status(state.search.exact ? "Search is case-sensitive." : "Search ignores ASCII letter case."); }
-            else if (i == 3) search_replace_one(); else if (i == 4) search_replace_all();
+    for (unsigned i = 0; i < FIND_COUNT; i++) {
+        Clip b = bar.button[i];
+        if (!find_item_shown(i) || !box_visible(b, w, h)) continue;
+        if (lx >= b.x && lx < b.x + b.w && ly >= b.y && ly < b.y + b.h) {
+            if (i == FIND_PREV || i == FIND_NEXT) search_find(i == FIND_NEXT ? 1 : -1);
+            else if (i == FIND_CASE) { state.search.exact = !state.search.exact; status(state.search.exact ? "Search is case-sensitive." : "Search ignores ASCII letter case."); }
+            else if (i == FIND_REPLACE) search_replace_one(); else if (i == FIND_ALL) search_replace_all();
             else state.search.open = state.search.focus = 0;
             return WRITER_CHANGED;
         }
     }
     return WRITER_CHANGED;
 }
-typedef struct { short x, y, w; const char *name; unsigned action; } Button;
-/* Both drawing and hit testing consume this same bounded toolbar geometry. */
-static const Button buttons[] = {
-    {8, 5, 28, "B", 1}, {40, 5, 28, "I", 2}, {72, 5, 28, "U", 3},
-    {108, 5, 54, "Body", 4}, {166, 5, 76, "Heading", 5},
-    {252, 5, 54, "Undo", 9}, {310, 5, 54, "Redo", 10},
-    {8, 35, 54, "Left", 6}, {66, 35, 68, "Center", 7}, {138, 35, 60, "Right", 8},
-    {208, 35, 58, "Save", 11}, {270, 35, 42, "RTF", 12}, {316, 35, 42, "PDF", 14}, {366, 35, 46, "Find", 13}
+
+/* Main toolbar. Groups flow left to right with dividers; Find sits at the
+ * right edge. Wide windows use a single row (the page gains the height);
+ * narrower ones wrap history/file groups onto a second row. Both drawing and
+ * hit testing consume this same geometry. */
+enum { ACT_BOLD = 1, ACT_ITALIC, ACT_UNDERLINE, ACT_BODY, ACT_HEADING, ACT_LEFT, ACT_CENTER, ACT_RIGHT,
+       ACT_UNDO, ACT_REDO, ACT_SAVE, ACT_RTF, ACT_FIND, ACT_PDF };
+typedef struct { unsigned char action, group; signed char icon; const char *label; } ToolItem;
+static const ToolItem tool_items[] = {
+    {ACT_BOLD, 0, ICON_BOLD, 0}, {ACT_ITALIC, 0, ICON_ITALIC, 0}, {ACT_UNDERLINE, 0, ICON_UNDERLINE, 0},
+    {ACT_BODY, 1, ICON_BODY, 0}, {ACT_HEADING, 1, ICON_HEADING, 0},
+    {ACT_LEFT, 2, ICON_ALIGN_LEFT, 0}, {ACT_CENTER, 2, ICON_ALIGN_CENTER, 0}, {ACT_RIGHT, 2, ICON_ALIGN_RIGHT, 0},
+    {ACT_UNDO, 3, ICON_UNDO, 0}, {ACT_REDO, 3, ICON_REDO, 0},
+    {ACT_SAVE, 4, ICON_SAVE, 0}, {ACT_RTF, 4, ICON_FILE_TYPE, "RTF"}, {ACT_PDF, 4, ICON_EXPORT, "PDF"},
+    {ACT_FIND, 5, ICON_SEARCH, 0}
 };
+#define TOOL_COUNT (sizeof tool_items / sizeof tool_items[0])
+#define TOOL_WRAP_GROUP 3   /* first group of the second row when wrapped */
+#define TOOL_RIGHT_GROUP 5  /* right-aligned group */
+#define TOOL_NARROW_H 28    /* two rows of 28 keep the original 66px band */
+typedef struct { int height, dividers; Clip item[TOOL_COUNT]; Clip divider[TOOL_RIGHT_GROUP]; } Toolbar;
+/* Returns the right edge of the left-flowing groups. */
+static int toolbar_flow(int w, int wrap, Toolbar *t) {
+    int bh = wrap ? TOOL_NARROW_H : TB_H, ys[2] = {wrap ? 3 : 8, 3 + TOOL_NARROW_H + 4};
+    int row = 0, x = 8, right = 0, group = -1;
+    t->height = wrap ? 66 : TB_H + 16; t->dividers = 0;
+    for (unsigned i = 0; i < TOOL_COUNT; i++) {
+        const ToolItem *it = &tool_items[i]; int bw = tool_button_w(it->label);
+        if (it->group == TOOL_RIGHT_GROUP) { t->item[i] = (Clip){w - 8 - bw, ys[row], bw, bh}; continue; }
+        if (it->group != group && group >= 0) {
+            if (wrap && it->group == TOOL_WRAP_GROUP) { row = 1; x = 8; }
+            else { t->divider[t->dividers++] = (Clip){x + 8, ys[row], 1, bh}; x += 17; }
+        } else if (group >= 0) x += 4;
+        group = it->group;
+        t->item[i] = (Clip){x, ys[row], bw, bh};
+        x += bw; if (x > right) right = x;
+    }
+    return right;
+}
+static void toolbar_layout(int w, Toolbar *t) {
+    if (toolbar_flow(w, 0, t) + 17 + TB_ICON_W + 8 > w) toolbar_flow(w, 1, t);
+}
+static int tool_height(int w) { Toolbar t; toolbar_layout(w, &t); return t.height; }
 static int button_active(unsigned action) {
     unsigned style = snapshot()->typing_style, para = paragraph_at(document(), snapshot()->caret);
     if (action <= 3) return !!(style & (1u << (action - 1)));
     if (action == 4 || action == 5) return !!(para & WRITER_PARAGRAPH_HEADING) == (action == 5);
     if (action >= 6 && action <= 8) return (para & WRITER_ALIGN_MASK) == action - 6;
     return 0;
+}
+/* Toggles read flat until on; Undo/Redo dim when history has nothing to give. */
+static int button_look(unsigned action) {
+    if (action <= ACT_RIGHT) return button_active(action) ? TB_ACTIVE : TB_FLAT;
+    if (action == ACT_UNDO && !state.current) return TB_DISABLED;
+    if (action == ACT_REDO && state.current + 1 >= state.count) return TB_DISABLED;
+    return TB_NORMAL;
 }
 static int button_action(unsigned action) {
     if (action <= 3) return format_inline(1u << (action - 1));
@@ -1181,7 +1263,7 @@ static int button_action(unsigned action) {
 }
 static void geometry(int w, int h) {
     int old_width = state.width, old_height = state.viewport_height;
-    state.viewport_height = h - TOOL_H - FOOT_H - 16 - search_height();
+    state.viewport_height = h - tool_height(w) - FOOT_H - 16 - search_height();
     if (state.viewport_height < 24) state.viewport_height = 24;
     writer_layout(w - 2 * PAGE_PAD - 18);
     if (!state.manual_scroll && (old_width != state.width || old_height != state.viewport_height)) reveal();
@@ -1192,14 +1274,15 @@ void writer_draw(int x, int y, int w, int h) {
     geometry(w, h);
     Clip all = {x, y, w, h};
     rect(all, x, y, w, h, app_body);
-    rect(all, x, y, w, TOOL_H, app_chrome);
-    for (unsigned i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
-        const Button *b = &buttons[i];
-        int active = button_active(b->action);
-        rect(all, x + b->x, y + b->y, b->w, 25, active ? app_accent : app_chrome_dk);
-        label(all, b->name, x + b->x + (b->w - ui_string_w(b->name)) / 2, y + b->y + 3, active ? app_on_accent : app_text);
+    Toolbar bar; toolbar_layout(w, &bar);
+    rect(all, x, y, w, bar.height, app_chrome);
+    for (int i = 0; i < bar.dividers; i++)
+        if (box_visible(bar.divider[i], w, h)) tool_divider(x + bar.divider[i].x, y + bar.divider[i].y, bar.divider[i].h);
+    for (unsigned i = 0; i < TOOL_COUNT; i++) {
+        Clip b = bar.item[i]; const ToolItem *it = &tool_items[i];
+        if (box_visible(b, w, h)) tool_button(x + b.x, y + b.y, b.w, b.h, it->icon, it->label, button_look(it->action));
     }
-    Clip page = {x + 8, y + TOOL_H + 8, w - 24, h - TOOL_H - FOOT_H - 16 - search_height()};
+    Clip page = {x + 8, y + bar.height + 8, w - 24, h - bar.height - FOOT_H - 16 - search_height()};
     rect(all, page.x, page.y, page.w, page.h, app_paper);
     Clip content = {x + PAGE_PAD, page.y, state.width + 4, page.h};
     if (content.x + content.w > page.x + page.w) content.w = page.x + page.w - content.x;
@@ -1258,14 +1341,15 @@ int writer_click(int x, int y, int w, int h, int mx, int my, int modifiers) {
     if (mx < x || mx >= x + w || my < y || my >= y + h) return 0;
     geometry(w, h);
     int searched = search_click(x, y, w, h, mx, my, modifiers); if (searched) return searched;
-    for (unsigned i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
-        const Button *b = &buttons[i];
-        if (mx >= x + b->x && mx < x + b->x + b->w && my >= y + b->y && my < y + b->y + 25) {
+    Toolbar bar; toolbar_layout(w, &bar);
+    for (unsigned i = 0; i < TOOL_COUNT; i++) {
+        Clip b = bar.item[i];
+        if (box_visible(b, w, h) && mx >= x + b.x && mx < x + b.x + b.w && my >= y + b.y && my < y + b.y + b.h) {
             state.search.focus = 0;
-            int result = button_action(b->action); reveal(); return result;
+            int result = button_action(tool_items[i].action); reveal(); return result;
         }
     }
-    int top = y + TOOL_H + 8;
+    int top = y + bar.height + 8;
     if (my < top || my >= y + h - FOOT_H - 8 - search_height()) return 0;
     state.search.focus = 0;
     if (mx >= x + w - 18) {
@@ -1281,7 +1365,7 @@ int writer_click(int x, int y, int w, int h, int mx, int my, int modifiers) {
 int writer_drag(int x, int y, int w, int h, int mx, int my) {
     if (!state.dragging) return 0;
     geometry(w, h);
-    int top = y + TOOL_H + 8, bottom = y + h - FOOT_H - 8 - search_height();
+    int top = y + tool_height(w) + 8, bottom = y + h - FOOT_H - 8 - search_height();
     if (my < top) writer_scroll(-1); else if (my >= bottom) writer_scroll(1);
     move_hit(mx - x - PAGE_PAD, my - top + state.scroll, 1, 0);
     return WRITER_CHANGED;

@@ -7,6 +7,7 @@
 #include "fs.h"
 #include "layout.h"
 #include "net.h"
+#include "toolbar.h"
 
 #ifndef BROWSER_BASE
 #define BROWSER_BASE 0x1610000
@@ -23,7 +24,6 @@
 #define TITLE_MAX 96
 #define STATUS_MAX 160
 #define ROW_H 22
-#define TOOL_H 112
 #define FOOT_H 28
 #define PAD 14
 #define STYLE_BOLD 1
@@ -364,7 +364,8 @@ static void reflow(int width) {
     if(p<B.text_len)B.truncated=1;
     clamp_scroll();
 }
-static void geometry(int w,int h) { B.rows=(h-TOOL_H-FOOT_H-16)/ROW_H;if(B.rows<1)B.rows=1;reflow(w-2*PAD-14);clamp_scroll(); }
+static int tool_height(int w);
+static void geometry(int w,int h) { B.rows=(h-tool_height(w)-FOOT_H-16)/ROW_H;if(B.rows<1)B.rows=1;reflow(w-2*PAD-14);clamp_scroll(); }
 static void save_scroll(void){if(B.history_pos>=0&&B.history_pos<B.history_count)B.history_scroll[B.history_pos]=B.scroll;}
 static void history_add(const char *url) {
     if(B.history_pos>=0&&equal(B.history[B.history_pos],url))return;
@@ -693,16 +694,48 @@ int browser_key(int sc,char ch,int modifiers) {
     return 0;
 }
 
-static const char *const button_labels[]={"Back","Forward","Reload","Stop","Home","Save"};
-static const int button_widths[]={46,64,58,46,50,50};
-static int button_x(int x,int index){int pos=x+8;for(int i=0;i<index;i++)pos+=button_widths[i]+4;return pos;}
-static int button_enabled(int index){return index==0?B.history_pos>0:index==1?B.history_pos+1<B.history_count:index==3?B.loading:index==5?browser_can_save():1;}
-static const int download_button_widths[]={88,58,78,80};
-static int download_button_x(int x,int index){int pos=x+8;for(int i=0;i<index;i++)pos+=download_button_widths[i]+4;return pos;}
-static int download_button_enabled(int index){return index==1?own_download_active():index==2?B.link_count>0:1;}
-static const char *download_button_label(int index){return index==0?"Download":index==1?"Cancel":index==2?(B.pick_link?"Pick: ON":"Pick link"):(B.download_visible?"Page":"Progress");}
-static int address_left(int x){return x+10;}
-static int address_width(int w){return w-64;}
+/* Navigation bar geometry, shared by drawing and hit testing. Wide windows
+ * get one row: navigation | address Go | download tools | Save. Narrow
+ * windows move the address field and Go to a second row. */
+enum{BT_BACK,BT_FORWARD,BT_RELOAD,BT_STOP,BT_HOME,BT_GO,BT_DOWNLOAD,BT_PICK,BT_CANCEL,BT_PROGRESS,BT_SAVE,BT_COUNT};
+static const int tool_icons[BT_COUNT]={ICON_BACK,ICON_FORWARD,ICON_RELOAD,ICON_STOP,ICON_HOME,ICON_GO,ICON_DOWNLOAD,ICON_LINK,ICON_CLOSE,ICON_LIST,ICON_SAVE};
+typedef struct{int x,y,w,h;}ToolRect;
+typedef struct{ToolRect b[BT_COUNT],address;int divider[3],dividers;}ToolLayout;
+#define TOOL_PAD 8
+#define TOOL_GAP 4
+#define TOOL_SPLIT (TOOL_PAD*2+1)
+#define TOOL_ADDRESS_MIN 240
+/* Width of nav (5) + downloads (4) + Save with dividers and padding. */
+static int tool_buttons_w(int bw){return 2*TOOL_PAD+10*bw+7*TOOL_GAP+2*TOOL_SPLIT;}
+static int tool_wide(int w){return w>=tool_buttons_w(TB_ICON_W)+TOOL_SPLIT+TOOL_ADDRESS_MIN+TOOL_GAP+TB_ICON_W;}
+static int tool_height(int w){return tool_wide(w)?TB_H+2*TOOL_PAD:2*TB_H+2*TOOL_PAD+6;}
+static void tool_layout(int x,int y,int w,ToolLayout *L) {
+    int wide=tool_wide(w),bw=wide||w>=tool_buttons_w(TB_ICON_W)?TB_ICON_W:28,row=y+TOOL_PAD,px=x+TOOL_PAD,rx=x+w-TOOL_PAD;
+    L->dividers=0;
+    for(int i=BT_BACK;i<=BT_HOME;i++){L->b[i]=(ToolRect){px,row,bw,TB_H};px+=bw+TOOL_GAP;}
+    px+=TOOL_PAD-TOOL_GAP;L->divider[L->dividers++]=px;px+=1+TOOL_PAD;
+    rx-=bw;L->b[BT_SAVE]=(ToolRect){rx,row,bw,TB_H};
+    rx-=TOOL_PAD+1;L->divider[L->dividers++]=rx;rx-=TOOL_PAD;
+    for(int i=BT_PROGRESS;i>=BT_DOWNLOAD;i--){rx-=bw;L->b[i]=(ToolRect){rx,row,bw,TB_H};rx-=TOOL_GAP;}
+    rx+=TOOL_GAP;
+    if(wide) {
+        rx-=TOOL_PAD+1;L->divider[L->dividers++]=rx;rx-=TOOL_PAD;
+        rx-=bw;L->b[BT_GO]=(ToolRect){rx,row,bw,TB_H};rx-=TOOL_GAP;
+        L->address=(ToolRect){px,row,rx-px,TB_H};
+    } else {
+        row+=TB_H+6;
+        L->b[BT_GO]=(ToolRect){x+w-TOOL_PAD-TB_ICON_W,row,TB_ICON_W,TB_H};
+        L->address=(ToolRect){x+TOOL_PAD,row,w-2*TOOL_PAD-TB_ICON_W-TOOL_GAP,TB_H};
+    }
+}
+static int tool_enabled(int index){return index==BT_BACK?B.history_pos>0:index==BT_FORWARD?B.history_pos+1<B.history_count:index==BT_STOP?B.loading:
+    index==BT_SAVE?browser_can_save():index==BT_CANCEL?own_download_active():index==BT_PICK?B.link_count>0:1;}
+static int tool_state(int index){
+    if(!tool_enabled(index))return TB_DISABLED;
+    if(index==BT_GO)return TB_PRIMARY;
+    if((index==BT_PICK&&B.pick_link)||(index==BT_PROGRESS&&B.download_visible))return TB_ACTIVE;
+    return TB_NORMAL;
+}
 static void fit_address(int w) {
     if(B.address_start>B.cursor)B.address_start=B.cursor;
     int pixels=0;for(int i=B.address_start;i<B.cursor;i++)pixels+=ui_advance(B.address[i]);
@@ -711,20 +744,18 @@ static void fit_address(int w) {
 }
 void browser_draw(int x,int y,int w,int h) {
     browser_init();if(w<BROWSER_MIN_W||h<BROWSER_MIN_H)return;geometry(w,h);
-    uint8_t paper=app_paper,ink=app_text,muted=app_text_dim,border=app_border,link_color=app_accent_dk;
-    draw_rect(x,y,w,h,paper);draw_rect(x,y,w,TOOL_H,app_chrome);draw_hline(x,y+TOOL_H-1,w,border);
-    for(int i=0;i<6;i++){int bx=button_x(x,i),enabled=button_enabled(i);draw_round_rect(bx,y+7,button_widths[i],26,4,enabled?app_chrome_dk:app_chrome);
-        draw_round_frame(bx,y+7,button_widths[i],26,4,border);draw_string(button_labels[i],bx+(button_widths[i]-ui_string_w(button_labels[i]))/2,y+11,enabled?app_text:muted);}
-    for(int i=0;i<4;i++){int bx=download_button_x(x,i),bw=download_button_widths[i],enabled=download_button_enabled(i);const char *label=download_button_label(i);
-        draw_round_rect(bx,y+77,bw,26,4,i==2&&B.pick_link?app_accent:enabled?app_chrome_dk:app_chrome);draw_round_frame(bx,y+77,bw,26,4,border);
-        draw_string(label,bx+(bw-ui_string_w(label))/2,y+81,i==2&&B.pick_link?app_on_accent:enabled?app_text:muted);}
-    int ax=address_left(x),aw=address_width(w);draw_round_rect(ax,y+41,aw,28,4,app_field);draw_round_frame(ax,y+41,aw,28,4,B.focus?app_accent:border);
-    fit_address(aw);int tx=ax+7,limit=ax+aw-8;
-    if(B.focus&&B.selected)draw_rect(tx,y+46,aw-14,18,app_accent);
-    draw_string_clip(B.address+B.address_start,tx,y+46,B.focus&&B.selected?app_on_accent:ink,limit);
-    if(B.focus&&!B.selected){int cursor=tx;for(int i=B.address_start;i<B.cursor;i++)cursor+=ui_advance(B.address[i]);if(cursor<limit)draw_vline(cursor,y+46,18,app_accent);}
-    int go=x+w-46;draw_round_rect(go,y+41,36,28,4,app_accent);draw_string("Go",go+(36-ui_string_w("Go"))/2,y+46,app_on_accent);
-    int cy=y+TOOL_H+8,content_right=x+w-PAD-14;
+    uint8_t paper=app_paper,ink=app_text,border=app_border,link_color=app_accent_dk;
+    int tool_h=tool_height(w);ToolLayout L;tool_layout(x,y,w,&L);
+    draw_rect(x,y,w,h,paper);draw_rect(x,y,w,tool_h,app_chrome);draw_hline(x,y+tool_h-1,w,border);
+    for(int i=0;i<BT_COUNT;i++)tool_button(L.b[i].x,L.b[i].y,L.b[i].w,L.b[i].h,tool_icons[i],0,tool_state(i));
+    for(int i=0;i<L.dividers;i++)tool_divider(L.divider[i],L.b[BT_BACK].y,TB_H);
+    int ax=L.address.x,ay=L.address.y,aw=L.address.w,ty=ay+(TB_H-TB_TEXT_H)/2;
+    draw_round_rect(ax,ay,aw,TB_H,7,app_field);draw_round_frame(ax,ay,aw,TB_H,7,B.focus?app_accent:border);
+    fit_address(aw);int tx=ax+8,limit=ax+aw-8;
+    if(B.focus&&B.selected)draw_rect(tx,ty,aw-16,TB_TEXT_H,app_accent);
+    draw_string_clip(B.address+B.address_start,tx,ty,B.focus&&B.selected?app_on_accent:ink,limit);
+    if(B.focus&&!B.selected){int cursor=tx;for(int i=B.address_start;i<B.cursor;i++)cursor+=ui_advance(B.address[i]);if(cursor<limit)draw_vline(cursor,ty,TB_TEXT_H,app_accent);}
+    int cy=y+tool_h+8,content_right=x+w-PAD-14;
     if(B.download_visible){
         download_summary();download_reflow(w-2*PAD-14);
         for(int row=0;row<B.rows;row++){int index=B.download_scroll+row;if(index>=B.download_line_count)break;BrowserLine line=B.download_lines[index];int px=x+PAD;
@@ -750,24 +781,29 @@ void browser_draw(int x,int y,int w,int h) {
 }
 int browser_click(int x,int y,int w,int h,int mx,int my) {
     browser_init();if(w<BROWSER_MIN_W||h<BROWSER_MIN_H)return 0;geometry(w,h);
-    for(int i=0;i<6;i++)if(hit(mx,my,button_x(x,i),y+7,button_widths[i],26)) {
-        if(!button_enabled(i))return 0;
-        return i==0?history_step(-1):i==1?history_step(1):i==2?reload():i==3?stop():i==4?open_internal("about:home",1):save_page();
+    ToolLayout L;tool_layout(x,y,w,&L);
+    for(int i=0;i<BT_COUNT;i++)if(hit(mx,my,L.b[i].x,L.b[i].y,L.b[i].w,L.b[i].h)) {
+        if(!tool_enabled(i))return 0;
+        switch(i){
+        case BT_BACK:return history_step(-1);
+        case BT_FORWARD:return history_step(1);
+        case BT_RELOAD:return reload();
+        case BT_STOP:return stop();
+        case BT_HOME:return open_internal("about:home",1);
+        case BT_SAVE:return save_page();
+        case BT_GO:return open_internal(B.address,1);
+        case BT_DOWNLOAD:return start_download();
+        case BT_CANCEL:return cancel_download();
+        case BT_PICK:B.pick_link=!B.pick_link;B.download_visible=0;B.focus=0;set_status(B.pick_link?"Click a link to select it, then Download | Escape exits picking":"Link picking off | Click a link to open it");return 1;
+        default:B.download_visible=!B.download_visible;B.pick_link=0;B.focus=0;download_summary();return 1;
+        }
     }
-    for(int i=0;i<4;i++)if(hit(mx,my,download_button_x(x,i),y+77,download_button_widths[i],26)) {
-        if(!download_button_enabled(i))return 0;
-        if(i==0)return start_download();
-        if(i==1)return cancel_download();
-        if(i==2){B.pick_link=!B.pick_link;B.download_visible=0;B.focus=0;set_status(B.pick_link?"Click a link to select it, then Download | Escape exits picking":"Link picking off | Click a link to open it");return 1;}
-        B.download_visible=!B.download_visible;B.pick_link=0;B.focus=0;download_summary();return 1;
-    }
-    if(hit(mx,my,x+w-46,y+41,36,28))return open_internal(B.address,1);
-    if(hit(mx,my,address_left(x),y+41,address_width(w),28)) {
-        B.focus=1;B.selected=0;fit_address(address_width(w));int px=address_left(x)+7;B.cursor=B.address_start;
+    if(hit(mx,my,L.address.x,L.address.y,L.address.w,L.address.h)) {
+        B.focus=1;B.selected=0;fit_address(L.address.w);int px=L.address.x+8;B.cursor=B.address_start;
         while(B.address[B.cursor]&&px+ui_advance(B.address[B.cursor])/2<mx)px+=ui_advance(B.address[B.cursor++]);
         return 1;
     }
-    int cy=y+TOOL_H+8;
+    int cy=y+tool_height(w)+8;
     if(B.download_visible){download_reflow(w-2*PAD-14);if(hit(mx,my,x+w-15,cy,15,B.rows*ROW_H)&&B.download_line_count>B.rows){B.download_scroll=(my-cy)*B.download_line_count/(B.rows*ROW_H);download_reflow(w-2*PAD-14);return 1;}return 0;}
     if(hit(mx,my,x+w-15,cy,15,B.rows*ROW_H)&&B.line_count>B.rows) {
         int old=B.scroll;B.scroll=(my-cy)*B.line_count/(B.rows*ROW_H);clamp_scroll();B.focus=0;return old!=B.scroll;

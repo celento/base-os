@@ -1,6 +1,7 @@
 #include "app.h"
 #include "sysmon.h"
 #include "program.h"
+#include "toolbar.h"
 
 static char cpu_vendor[13];
 static char cpu_brand[49];
@@ -50,7 +51,7 @@ static const char *brand_trim(void) {
 /* Every control and text call is bounded by the supplied client rectangle. */
 typedef struct { int x,y,w,h; } MonitorRect;
 typedef struct {
-    MonitorRect client, tabs[3];
+    MonitorRect client, tabs[3], segment;
     int x, w, heading_y, rows_y, footer_y;
 } MonitorLayout;
 #define TASK_ROW_H 42
@@ -68,8 +69,10 @@ static MonitorLayout layout(int bx,int by,int bw,int bh){
     l.client=(MonitorRect){bx,by,bw,bh};
     int margin=bw>=64?16:0;
     l.x=bx+margin;l.w=bw-2*margin;
-    int gap=l.w>=24?6:0,tabw=(l.w-2*gap)/3;
-    for(int i=0;i<3;i++)l.tabs[i]=(MonitorRect){l.x+i*(tabw+gap),by+12,tabw,28};
+    /* Segmented control: three contiguous segments fill one rounded track. */
+    int tabw=l.w/3;
+    l.segment=(MonitorRect){l.x,by+10,l.w,30};
+    for(int i=0;i<3;i++)l.tabs[i]=(MonitorRect){l.x+i*tabw,by+10,i==2?l.w-2*tabw:tabw,30};
     l.heading_y=by+48;l.rows_y=by+74;l.footer_y=by+bh-24;
     return l;
 }
@@ -90,14 +93,22 @@ static void text(const MonitorLayout *l,const char *s,int x,int y,int w,int bold
     if(bold)draw_string_bold_clip(s,x,y,color,x+w-UI_FONT_W);
     else draw_string_clip(s,x,y,color,x+w-UI_FONT_W);
 }
-static void button(const MonitorLayout *l,MonitorRect r,const char *label,int active){
+static void segments(const MonitorLayout *l,const char *const labels[3],int active){
+    if(!inside(l->client,l->segment))return;
+    MonitorRect t=l->segment;
+    draw_round_rect(t.x,t.y,t.w,t.h,8,app_chrome);
+    for(int i=0;i<3;i++){
+        MonitorRect r=l->tabs[i];
+        if(i==active&&r.w>4)draw_round_rect(r.x+2,r.y+2,r.w-4,r.h-4,6,app_accent);
+        else if(i>0&&i-1!=active&&r.h>12)draw_vline(r.x,r.y+8,r.h-16,app_chrome_dk);
+        int tw=i==active?uib_string_w(labels[i]):ui_string_w(labels[i]),tx=r.x+(r.w-tw)/2;
+        if(tx<r.x+3)tx=r.x+3;
+        text(l,labels[i],tx,r.y+(r.h-UI_FONT_H)/2,r.x+r.w-tx,i==active,i==active?app_on_accent:app_text_dim);
+    }
+}
+static void button(const MonitorLayout *l,MonitorRect r,int icon,const char *label){
     if(!inside(l->client,r))return;
-    draw_round_rect(r.x,r.y,r.w,r.h,5,active?app_accent:app_border);
-    if(!active&&r.w>2&&r.h>2)draw_round_rect(r.x+1,r.y+1,r.w-2,r.h-2,4,app_chrome);
-    int tw=ui_string_w(label),tx=r.x+(r.w-tw)/2;
-    if(tx<r.x+3)tx=r.x+3;
-    /* Centered labels have ample horizontal padding at supported sizes. */
-    text(l,label,tx,r.y+(r.h-UI_FONT_H)/2,r.x+r.w-tx,0,active?app_on_accent:app_text);
+    tool_button(r.x,r.y,r.w,r.h,icon,label,TB_NORMAL);
 }
 static void row(const MonitorLayout *l,int y,const char *label,const char *value){
     int labelw=smaller(144,l->w/3),gap=12;
@@ -160,13 +171,13 @@ static void system_draw(const MonitorLayout *l,const SysInfo *si){
     text(l,"CPU utilization is not measured.",l->x,l->footer_y,l->w,0,app_text_dim);
 }
 static MonitorRect task_button(const MonitorLayout *l,int i,int stop){
-    int sw=ui_string_w("Stop task")+32,showw=ui_string_w("Show window")+32,gap=6;
+    int sw=tool_button_w("Stop task"),showw=tool_button_w("Show window"),gap=6;
     int right=l->x+l->w;
     return (MonitorRect){stop?right-sw:right-sw-gap-showw,l->rows_y+i*TASK_ROW_H,
         stop?sw:showw,22};
 }
 static MonitorRect window_button(const MonitorLayout *l,int i){
-    int width=ui_string_w("Close")+32;
+    int width=tool_button_w("Close");
     return (MonitorRect){l->x+l->w-width,l->rows_y+i*WINDOW_ROW_H+4,width,24};
 }
 static int row_visible(const MonitorLayout *l,int i,int height){
@@ -183,7 +194,7 @@ static void windows_draw(const MonitorLayout *l,const SysInfo *si){
         int statusx=close.x-110;
         text(l,si->win_name[i],l->x+6,y+7,statusx-l->x-12,0,app_text);
         text(l,si->win_min[i]?"Minimized":"Open",statusx,y+7,104,0,app_text_dim);
-        button(l,close,"Close",0);
+        button(l,close,ICON_CLOSE,"Close");
         draw_hline(l->x,y+WINDOW_ROW_H-1,l->w,app_chrome_dk);
         drawn_window_instances[drawn_win_n]=si->win_instance[i];
         drawn_windows[drawn_win_n++]=si->win_id[i];
@@ -205,7 +216,7 @@ static void tasks_draw(const MonitorLayout *l,const SysInfo *si){
         append(title,task->name);
         if(task->document[0]){append(title," - ");append(title,task->document);}
         text(l,title,l->x+6,y+2,show.x-l->x-12,1,app_text);
-        button(l,show,"Show window",0);button(l,stop,"Stop task",0);
+        button(l,show,ICON_EYE,"Show window");button(l,stop,ICON_STOP_SQUARE,"Stop task");
         char detail[96]="Window ",t[24];
         fmt_uint(t,(unsigned)task->owner+1);append(detail,t);
         append(detail,task->state==PROCESS_TASK_SLEEPING?"   Sleeping":"   Running");
@@ -231,7 +242,7 @@ void sysmon_draw(int bx,int by,int bw,int bh,const SysInfo *si){
     MonitorLayout l=layout(bx,by,bw,bh);
     draw_rect(bx,by,bw,bh,app_body);
     static const char *const tabs[]={"System","Windows","Tasks"};
-    for(int i=0;i<3;i++)button(&l,l.tabs[i],tabs[i],current_tab==i);
+    segments(&l,tabs,current_tab);
     if(current_tab==SYSMON_TAB_WINDOWS)windows_draw(&l,si);
     else if(current_tab==SYSMON_TAB_TASKS)tasks_draw(&l,si);
     else system_draw(&l,si);

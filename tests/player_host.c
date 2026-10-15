@@ -61,6 +61,12 @@ void video_draw(int x,int y,int w,int h){draw_rect(x,y,w,h,COLOR_BLACK);}
 void fmt_uint(char *s,unsigned n){sprintf(s,"%u",n);}
 void fmt_pad2(char *s,int n){sprintf(s,"%02d",n);}
 #include "../src/player.c"
+/* Click the centre of a transport control in the current audio/video layout. */
+static int click_transport(int w,int h,int index){
+    int viewport_h,buttons_y,library_y;video_geometry(h,&viewport_h,&buttons_y,&library_y);
+    PlayerRect r[PB_COUNT];int divider;transport_layout(25,30+(video_mode?buttons_y:170),w,r,&divider);
+    return player_click(25,30,w,h,r[index].x+r[index].w/2,r[index].y+r[index].h/2);
+}
 enum { TEST_W=1024, TEST_H=768, OUTSIDE=253 };
 static uint8_t back[TEST_W*TEST_H],linear[TEST_W*TEST_H*4];
 static uint8_t before[sizeof back],reference[sizeof back];
@@ -196,7 +202,22 @@ static void test_progress_pixels(void){
     assert(!memcmp(back,before,sizeof back));
     app_chrome=COLOR_LTGRAY;app_chrome_dk=app_text_dim=COLOR_GRAY;
 }
+static void test_transport_layout(void){
+    /* Controls stay inside the client area and never overlap, including the
+     * video volume group (and its speaker icon) at the narrowest width. */
+    int widths[]={420,600,640,900};
+    for(unsigned k=0;k<sizeof widths/sizeof widths[0];k++){
+        int w=widths[k];PlayerRect r[PB_COUNT];int divider;transport_layout(25,200,w,r,&divider);
+        for(int i=0;i<PB_COUNT;i++){
+            assert(r[i].x>=25+16&&r[i].x+r[i].w<=25+w-16);
+            for(int j=0;j<i;j++)if(w>=600||(i<PB_VOL_DOWN&&j<PB_VOL_DOWN))assert(r[i].x+r[i].w<=r[j].x||r[j].x+r[j].w<=r[i].x);
+        }
+        assert(r[PB_STOP].x+r[PB_STOP].w<divider&&divider<r[PB_CLEAR].x);
+        if(w>=600)assert(r[PB_CLEAR].x+r[PB_CLEAR].w+8<=r[PB_VOL_DOWN].x-4-ICON_SIZE);
+    }
+}
 int main(void){
+    test_transport_layout();
     gfx_init(back,linear,TEST_W,TEST_H,32,TEST_W*4);
     assert(!player_tick());
     valid[0]=valid[1]=1;strcpy(names[0],"/");strcpy(names[1],"trash");
@@ -212,7 +233,7 @@ int main(void){
     assert(player_key(0,'+'));assert(fake.volume==75);
     assert(player_click(25,30,420,390,25+96,30+224));assert(fake.volume==0);
     assert(player_click(25,30,420,390,25+420-80,30+224));assert(fake.volume==100);
-    assert(player_click(25,30,420,390,25+140,30+185));assert(fake.state==AUDIO_STOPPED);
+    assert(click_transport(420,390,PB_STOP));assert(fake.state==AUDIO_STOPPED);
     assert(player_tick());assert(!player_tick());now+=TIMER_HZ;assert(player_tick());
     fake.error=MEDIA_NO_DEVICE;assert(player_tick()&&message[0]);
     assert(player_click(25,30,420,390,25+220,30+185));assert(!message[0]);
@@ -222,12 +243,12 @@ int main(void){
     fake_video.audio_enabled=1;fake_video.audio_sample_rate=44100;fake_video.audio_channels=2;
     draw_at(640,584);draw_at(420,390);
     unsigned volume_before=fake.volume;
-    assert(player_click(25,30,640,584,25+640-306,30+414));assert(fake.volume==volume_before-5);
-    assert(player_click(25,30,640,584,25+640-202,30+414));assert(fake.volume==volume_before);
+    assert(click_transport(640,584,PB_VOL_DOWN));assert(fake.volume==volume_before-5);
+    assert(click_transport(640,584,PB_VOL_UP));assert(fake.volume==volume_before);
     assert(player_key(KEY_SPACE,0));assert(fake_video.state==VIDEO_PAUSED);
     assert(player_key(KEY_SPACE,0));assert(fake_video.state==VIDEO_PLAYING);
     fake_video.displayed_frames=18;assert(player_tick());draw_at(640,584);
-    assert(player_click(25,30,640,584,25+130,30+414));assert(fake_video.state==VIDEO_STOPPED);
+    assert(click_transport(640,584,PB_STOP));assert(fake_video.state==VIDEO_STOPPED);
     assert(player_key(KEY_ENTER,0));assert(fake_video.state==VIDEO_LOADING);
     player_close();assert(fake_video.state==VIDEO_STOPPED&&fake.state==AUDIO_STOPPED);
     assert(player_open_file(3)==0);assert(!video_mode&&fake_video.state==VIDEO_STOPPED);

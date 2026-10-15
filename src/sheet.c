@@ -5,6 +5,7 @@
 #include "fs.h"
 #include "layout.h"
 #include "platform.h"
+#include "toolbar.h"
 #include "../sdk/baseos_abi.h"
 
 #ifndef SHEET_BASE
@@ -14,7 +15,6 @@
 #define SHEET_CAPACITY 0x2E0000
 #endif
 #define HISTORY 5u
-#define TOOL_H 68
 #define FORMULA_H 34
 #define HEADER_H 24
 #define FOOT_H 28
@@ -22,6 +22,10 @@
 #define ROW_H 24
 #define ROW_W 42
 #define OUTPUT_CAPACITY SHEET_CSV_MAX_SIZE
+/* Toolbar band height for the current client width (one row when wide, two
+ * when narrow); geometry() refreshes it before any layout or hit test. */
+static int tool_h = 68;
+static int tool_height(int w);
 
 typedef struct { SheetDoc doc; unsigned caret, anchor; DocumentRevision revision; } Snapshot;
 typedef struct {
@@ -146,9 +150,9 @@ static void scroll_column(int direction) {
 }
 static int column_left(unsigned col) { return ROW_W + (int)column_start(col) - (int)state.scroll_x; }
 static void geometry(int w, int h) {
-    state.width = w; state.height = h;
-    state.visible_rows = (unsigned)max_u(1u, h > TOOL_H + FORMULA_H + HEADER_H + FOOT_H + SCROLL_H ?
-        (unsigned)(h - TOOL_H - FORMULA_H - HEADER_H - FOOT_H - SCROLL_H) / ROW_H : 1u);
+    state.width = w; state.height = h; tool_h = tool_height(w);
+    state.visible_rows = (unsigned)max_u(1u, h > tool_h + FORMULA_H + HEADER_H + FOOT_H + SCROLL_H ?
+        (unsigned)(h - tool_h - FORMULA_H - HEADER_H - FOOT_H - SCROLL_H) / ROW_H : 1u);
     state.visible_rows = min_u(state.visible_rows, SHEET_ROWS);
     horizontal_scroll(state.scroll_x);
     state.first_row = min_u(state.first_row, SHEET_ROWS - state.visible_rows);
@@ -939,13 +943,55 @@ static void number_text(unsigned n, char *out) {
     while (used) out[i++] = reverse[--used];
     out[i] = 0;
 }
-typedef struct { int x, w; const char *text; } Button;
-static const Button buttons[] = {
-    {8, 48, "Save"}, {60, 62, "Save As"}, {126, 42, "CSV"}, {172, 46, "Undo"}, {222, 46, "Redo"}, {272, 38, "Edit"}, {314, 34, "Go"}
+/* Toolbar: one geometry routine feeds drawing and hit testing. Groups flow
+ * left to right with dividers; a wide client fits one 30px row, a narrow one
+ * wraps the format/width groups onto a second 28px row (the original band). */
+enum { TOOL_SAVE, TOOL_SAVE_AS, TOOL_CSV, TOOL_UNDO, TOOL_REDO, TOOL_EDIT, TOOL_GO,
+       TOOL_GENERAL, TOOL_FIXED2, TOOL_CURRENCY, TOOL_PERCENT, TOOL_NARROWER, TOOL_WIDER, TOOL_COUNT };
+static const struct { signed char icon; unsigned char group; const char *label; } tool_items[TOOL_COUNT] = {
+    {ICON_SAVE, 0, 0}, {ICON_SAVE_AS, 0, 0}, {ICON_SHEET, 0, "CSV"},
+    {ICON_UNDO, 1, 0}, {ICON_REDO, 1, 0}, {ICON_EDIT, 2, 0}, {ICON_JUMP, 2, 0},
+    {-1, 3, "General"}, {ICON_HASH, 3, 0}, {ICON_DOLLAR, 3, 0}, {ICON_PERCENT, 3, 0},
+    {ICON_MINUS, 4, 0}, {ICON_PLUS, 4, 0}
 };
-static const Button format_buttons[] = {
-    {8, 60, "General"}, {72, 48, "0.00"}, {124, 48, "$0.00"}, {176, 32, "%"}, {255, 24, "-"}, {323, 24, "+"}
-};
+#define TOOL_WRAP_GROUP 3
+#define TOOL_NARROW_H 28
+#define WIDTH_VALUE_W 36
+typedef struct { int height, dividers; Clip item[TOOL_COUNT], divider[4], caption, value; } Toolbar;
+static int tool_item_w(unsigned i) {
+    return tool_items[i].icon < 0 ? ui_string_w(tool_items[i].label) + 20 : tool_button_w(tool_items[i].label);
+}
+/* Returns the right edge of the laid-out controls. */
+static int toolbar_flow(int wrap, Toolbar *t) {
+    int bh = wrap ? TOOL_NARROW_H : TB_H, ys[2] = {wrap ? 4 : 8, 4 + TOOL_NARROW_H + 4};
+    int row = 0, x = 8, right = 0, group = -1;
+    t->height = wrap ? 68 : TB_H + 16; t->dividers = 0;
+    for (unsigned i = 0; i < TOOL_COUNT; i++) {
+        int g = tool_items[i].group;
+        if (g != group && group >= 0) {
+            if (wrap && g == TOOL_WRAP_GROUP) { row = 1; x = 8; }
+            else { t->divider[t->dividers++] = (Clip){x + 8, ys[row], 1, bh}; x += 17; }
+        } else if (group >= 0) x += 4;
+        group = g;
+        if (i == TOOL_NARROWER) { t->caption = (Clip){x, ys[row], ui_string_w("Width"), bh}; x += t->caption.w + 8; }
+        if (i == TOOL_WIDER) { t->value = (Clip){x - 4, ys[row], WIDTH_VALUE_W, bh}; x += WIDTH_VALUE_W - 4; }
+        t->item[i] = (Clip){x, ys[row], tool_item_w(i), bh};
+        x += t->item[i].w; if (x > right) right = x;
+    }
+    return right;
+}
+static void toolbar_layout(int w, Toolbar *t) { if (toolbar_flow(0, t) + 8 > w) toolbar_flow(1, t); }
+static int tool_height(int w) { Toolbar t; toolbar_layout(w, &t); return t.height; }
+/* Controls paint unclipped, so each is shown and hit only when wholly inside
+ * the client (window-relative box). */
+static int box_visible(Clip b, int w, int h) { return b.x >= 0 && b.y >= 0 && b.x + b.w <= w && b.y + b.h <= h; }
+static void text_button(int x, int y, int w, int h, const char *text, int look) {
+    unsigned char ink = app_text;
+    if (look == TB_ACTIVE || look == TB_PRIMARY) { draw_round_rect(x, y, w, h, 7, app_accent); ink = app_on_accent; }
+    else if (look == TB_NORMAL) draw_round_rect(x, y, w, h, 7, app_chrome_dk);
+    else if (look == TB_DISABLED) ink = gfx_mix(app_text_dim, app_chrome, 110);
+    draw_string_clip(text, x + (w - ui_string_w(text)) / 2, y + (h - TB_TEXT_H) / 2, ink, x + w - 4);
+}
 static int editor_offset(int width) {
     int before = text_width(state.edit, state.edit_caret);
     return before >= width ? before - width + 8 : 0;
@@ -966,7 +1012,7 @@ static void editor_draw(Clip all, Clip box) {
 }
 int spreadsheet_cell_position(unsigned row, unsigned col, int *x, int *y, int *w, int *h) {
     if (!state.initialized || row < state.first_row || col < state.first_col || row >= SHEET_ROWS || col >= SHEET_COLS) return 0;
-    int left = column_left(col), top = TOOL_H + FORMULA_H + HEADER_H + (int)(row - state.first_row) * ROW_H;
+    int left = column_left(col), top = tool_h + FORMULA_H + HEADER_H + (int)(row - state.first_row) * ROW_H;
     int right = left + (int)column_width(col), bottom = top + ROW_H;
     if (left < ROW_W) left = ROW_W;
     if (right > state.width - SCROLL_H) right = state.width - SCROLL_H;
@@ -978,8 +1024,16 @@ int spreadsheet_cell_position(unsigned row, unsigned col, int *x, int *y, int *w
     if (h) *h = bottom - top;
     return 1;
 }
+/* Chevron centred in a SCROLL_H square. The glyph's ink lies inside its
+ * central 12px, so the 18px icon cell never paints outside the square; the
+ * square itself is drawn only when wholly inside the client. */
+static void scroll_arrow(Clip all, int icon, int x, int y) {
+    Clip box = intersect(all, (Clip){x, y, SCROLL_H, SCROLL_H});
+    if (box.w != SCROLL_H || box.h != SCROLL_H) return;
+    icon_draw(icon, x + (SCROLL_H - ICON_SIZE) / 2, y + (SCROLL_H - ICON_SIZE) / 2, app_text_dim);
+}
 static void draw_scrollbars(Clip all) {
-    int top = all.y + TOOL_H + FORMULA_H + HEADER_H, bottom = all.y + all.h - FOOT_H - SCROLL_H;
+    int top = all.y + tool_h + FORMULA_H + HEADER_H, bottom = all.y + all.h - FOOT_H - SCROLL_H;
     int right = all.x + all.w - SCROLL_H;
     unsigned char track = app_field, thumb = gfx_gray(0x63); /* shell track/thumb inks */
     rect(all, right, top, SCROLL_H, bottom - top, track);
@@ -989,14 +1043,14 @@ static void draw_scrollbars(Clip all) {
         int size = (int)(state.visible_rows * (unsigned)vh / SHEET_ROWS); if (size < 14) size = 14; if (size > vh) size = vh;
         int pos = state.visible_rows < SHEET_ROWS ? (int)(state.first_row * (unsigned)(vh - size) / (SHEET_ROWS - state.visible_rows)) : 0;
         rect(all, right + 2, top + SCROLL_H + pos, SCROLL_H - 4, size, thumb);
-        label(all, "^", right + 3, top - 1, app_text_dim); label(all, "v", right + 3, bottom - SCROLL_H - 2, app_text_dim);
+        scroll_arrow(all, ICON_CHEVRON_UP, right, top); scroll_arrow(all, ICON_CHEVRON_DOWN, right, bottom - SCROLL_H);
     }
     if (hw > 0) {
         unsigned total = column_start(SHEET_COLS), maximum = max_scroll_x();
         int size = (int)(min_u(grid_width(), total) * (unsigned)hw / total); if (size < 14) size = 14; if (size > hw) size = hw;
         int pos = maximum ? (int)(state.scroll_x * (unsigned)(hw - size) / maximum) : 0;
         rect(all, all.x + ROW_W + SCROLL_H + pos, bottom + 2, size, SCROLL_H - 4, thumb);
-        label(all, "<", all.x + ROW_W + 3, bottom - 2, app_text_dim); label(all, ">", right - SCROLL_H + 3, bottom - 2, app_text_dim);
+        scroll_arrow(all, ICON_CHEVRON_LEFT, all.x + ROW_W, bottom); scroll_arrow(all, ICON_CHEVRON_RIGHT, right - SCROLL_H, bottom);
     }
 }
 void spreadsheet_draw(int x, int y, int w, int h) {
@@ -1008,47 +1062,51 @@ void spreadsheet_draw(int x, int y, int w, int h) {
     Clip all = {x, y, w, h}; unsigned char panel = app_chrome, line = app_chrome_dk, edge = app_border;
     /* Grid lines vanish on the selection fill, so selected cells/headers use the border ink. */
     unsigned char picked = app_chrome_dk, error_ink = gfx_rgb(255, 120, 120);
-    rect(all, x, y, w, h, app_paper); rect(all, x, y, w, TOOL_H + FORMULA_H, panel);
-    for (unsigned i = 0; i < sizeof buttons / sizeof buttons[0]; i++) {
-        const Button *b = &buttons[i];
-        rect(all, x + b->x, y + 5, b->w, 24, app_chrome_dk);
-        frame(all, x + b->x, y + 5, b->w, 24, edge);
-        label(all, b->text, x + b->x + (b->w - ui_string_w(b->text)) / 2, y + 8, app_text);
-    }
-    if (w >= 480) label(all, "Spreadsheet", x + 366, y + 8, app_text_dim);
+    rect(all, x, y, w, h, app_paper); rect(all, x, y, w, tool_h + FORMULA_H, panel);
     unsigned r0, c0, r1, c1; selection(&r0, &c0, &r1, &c1);
     int uniform_format = document()->formats[r0 * SHEET_COLS + c0];
     for (unsigned r = r0; r <= r1 && uniform_format >= 0; r++)
         for (unsigned c = c0; c <= c1; c++)
             if (document()->formats[r * SHEET_COLS + c] != uniform_format) { uniform_format = -1; break; }
-    for (unsigned i = 0; i < sizeof format_buttons / sizeof format_buttons[0]; i++) {
-        const Button *b = &format_buttons[i];
-        int selected = i < 4 && (int)i == uniform_format;
-        rect(all, x + b->x, y + 39, b->w, 24, selected ? app_accent : app_chrome_dk);
-        frame(all, x + b->x, y + 39, b->w, 24, selected ? app_accent : edge);
-        label(all, b->text, x + b->x + (b->w - ui_string_w(b->text)) / 2, y + 42, selected ? app_on_accent : app_text);
+    unsigned width = column_width(c0), narrowest = width, widest = width;
+    for (unsigned c = c0 + 1; c <= c1; c++) { narrowest = min_u(narrowest, column_width(c)); widest = max_u(widest, column_width(c)); }
+    Toolbar bar; toolbar_layout(w, &bar);
+    for (int i = 0; i < bar.dividers; i++)
+        if (box_visible(bar.divider[i], w, h)) tool_divider(x + bar.divider[i].x, y + bar.divider[i].y, bar.divider[i].h);
+    for (unsigned i = 0; i < TOOL_COUNT; i++) {
+        Clip b = bar.item[i]; if (!box_visible(b, w, h)) continue;
+        /* Formats are a toggle group (flat until current); the rest are actions.
+         * Undo/Redo also cancel an open edit, so they stay live while editing. */
+        int look = TB_NORMAL;
+        if (i >= TOOL_GENERAL && i <= TOOL_PERCENT) look = (int)(i - TOOL_GENERAL) == uniform_format ? TB_ACTIVE : TB_FLAT;
+        else if ((i == TOOL_UNDO && !state.mode && !state.current) ||
+                 (i == TOOL_REDO && !state.mode && state.current + 1 >= state.count) ||
+                 (i == TOOL_NARROWER && widest <= SHEET_COLUMN_WIDTH_MIN) ||
+                 (i == TOOL_WIDER && narrowest >= SHEET_COLUMN_WIDTH_MAX)) look = TB_DISABLED;
+        if (tool_items[i].icon < 0) text_button(x + b.x, y + b.y, b.w, b.h, tool_items[i].label, look);
+        else tool_button(x + b.x, y + b.y, b.w, b.h, tool_items[i].icon, tool_items[i].label, look);
     }
-    label(all, "Width", x + 214, y + 42, app_text_dim);
-    unsigned width = column_width(c0); int mixed = 0;
-    for (unsigned c = c0 + 1; c <= c1; c++) if (column_width(c) != width) mixed = 1;
     char width_text[11]; number_text(width, width_text);
-    label(intersect(all, (Clip){x + 283, y + 42, 36, 18}), mixed ? "..." : width_text, x + 283, y + 42, app_text);
-    if (w >= 610) label(all, "Ctrl+1..4 format; Ctrl+0 resets width", x + 366, y + 42, app_text_dim);
+    const char *shown = narrowest != widest ? "..." : width_text;
+    int text_y = y + bar.value.y + (bar.value.h - TB_TEXT_H) / 2;
+    label(intersect(all, (Clip){x + bar.caption.x, y + bar.caption.y, bar.caption.w, bar.caption.h}), "Width", x + bar.caption.x, text_y, app_text_dim);
+    label(intersect(all, (Clip){x + bar.value.x, y + bar.value.y, bar.value.w, bar.value.h}), shown,
+          x + bar.value.x + (bar.value.w - ui_string_w(shown)) / 2, text_y, app_text);
     char address[5]; sheet_label(snapshot()->caret / SHEET_COLS, snapshot()->caret % SHEET_COLS, address, sizeof address);
-    rect(all, x + 8, y + TOOL_H + 3, 70, 27, state.mode == 2 ? app_accent : edge);
-    rect(all, x + 9, y + TOOL_H + 4, 68, 25, app_field);
-    Clip address_box = {x + 14, y + TOOL_H + 7, 58, 18};
+    rect(all, x + 8, y + tool_h + 3, 70, 27, state.mode == 2 ? app_accent : edge);
+    rect(all, x + 9, y + tool_h + 4, 68, 25, app_field);
+    Clip address_box = {x + 14, y + tool_h + 7, 58, 18};
     if (state.mode == 2) editor_draw(all, address_box);
     else label(intersect(all, address_box), address, address_box.x, address_box.y, app_text);
     const SheetCell *active = &document()->cells[snapshot()->caret];
-    label(all, active->kind == SHEET_TEXT ? "txt" : "fx", x + 85, y + TOOL_H + 7, app_text_dim);
-    rect(all, x + 111, y + TOOL_H + 3, w - 119, 27, state.mode == 1 ? app_accent : edge);
-    rect(all, x + 112, y + TOOL_H + 4, w - 121, 25, app_field);
-    Clip source = {x + 117, y + TOOL_H + 7, w - 131, 18};
+    label(all, active->kind == SHEET_TEXT ? "txt" : "fx", x + 85, y + tool_h + 7, app_text_dim);
+    rect(all, x + 111, y + tool_h + 3, w - 119, 27, state.mode == 1 ? app_accent : edge);
+    rect(all, x + 112, y + tool_h + 4, w - 121, 25, app_field);
+    Clip source = {x + 117, y + tool_h + 7, w - 131, 18};
     if (state.mode == 1) editor_draw(all, source);
     else label_n(intersect(all, source), active->text, active->length, source.x, source.y, app_text);
-    int grid_y = y + TOOL_H + FORMULA_H + HEADER_H, bottom = y + h - FOOT_H - SCROLL_H, right = x + w - SCROLL_H;
-    Clip grid = intersect(all, (Clip){x, y + TOOL_H + FORMULA_H, w - SCROLL_H, bottom - y - TOOL_H - FORMULA_H});
+    int grid_y = y + tool_h + FORMULA_H + HEADER_H, bottom = y + h - FOOT_H - SCROLL_H, right = x + w - SCROLL_H;
+    Clip grid = intersect(all, (Clip){x, y + tool_h + FORMULA_H, w - SCROLL_H, bottom - y - tool_h - FORMULA_H});
     rect(grid, x, grid.y, ROW_W, HEADER_H, panel);
     for (unsigned c = state.first_col; c < SHEET_COLS; c++) {
         int cx = x + column_left(c), cw = (int)column_width(c); if (cx >= right) break;
@@ -1108,9 +1166,9 @@ void spreadsheet_draw(int x, int y, int w, int h) {
 static unsigned hit_cell(int w, int h, int mx, int my) {
     int right = w - SCROLL_H, bottom = h - FOOT_H - SCROLL_H;
     int px = clamp(mx, ROW_W, right > ROW_W ? right - 1 : ROW_W);
-    int py = clamp(my, TOOL_H + FORMULA_H + HEADER_H, bottom > TOOL_H + FORMULA_H + HEADER_H ? bottom - 1 : TOOL_H + FORMULA_H + HEADER_H);
+    int py = clamp(my, tool_h + FORMULA_H + HEADER_H, bottom > tool_h + FORMULA_H + HEADER_H ? bottom - 1 : tool_h + FORMULA_H + HEADER_H);
     unsigned col = column_at(state.scroll_x + (unsigned)(px - ROW_W));
-    unsigned row = min_u(state.first_row + (unsigned)(py - TOOL_H - FORMULA_H - HEADER_H) / ROW_H, SHEET_ROWS - 1);
+    unsigned row = min_u(state.first_row + (unsigned)(py - tool_h - FORMULA_H - HEADER_H) / ROW_H, SHEET_ROWS - 1);
     return row * SHEET_COLS + col;
 }
 static void editor_hit(int mx, int left, int width, int extend) {
@@ -1124,7 +1182,7 @@ static void editor_hit(int mx, int left, int width, int extend) {
 }
 static void scrollbar_hit(int w, int h, int mx, int my, int vertical) {
     if (vertical) {
-        int start = TOOL_H + FORMULA_H + HEADER_H, end = h - FOOT_H - SCROLL_H;
+        int start = tool_h + FORMULA_H + HEADER_H, end = h - FOOT_H - SCROLL_H;
         if (my < start + SCROLL_H) spreadsheet_scroll(-1);
         else if (my >= end - SCROLL_H) spreadsheet_scroll(1);
         else {
@@ -1151,23 +1209,21 @@ int spreadsheet_click(int x, int y, int w, int h, int mx, int my, int modifiers)
     if (!state.initialized) spreadsheet_init();
     if (w <= 0 || h <= 0 || mx < x || my < y || mx >= x + w || my >= y + h) return 0;
     geometry(w, h); mx -= x; my -= y; state.dragging = 0;
-    if (my >= 5 && my < 29) {
-        for (unsigned i = 0; i < sizeof buttons / sizeof buttons[0]; i++) if (mx >= buttons[i].x && mx < buttons[i].x + buttons[i].w) {
-            if (i == 0) return SPREADSHEET_REQUEST_SAVE;
-            if (i == 1) return SPREADSHEET_REQUEST_SAVE_AS;
-            if (i == 2) return SPREADSHEET_REQUEST_EXPORT;
-            if (i == 3 || i == 4) return undo(i == 4);
-            if (i == 5) { if (commit_edit()) start_edit(0); }
-            else open_address();
-            return SPREADSHEET_CHANGED;
-        }
+    Toolbar bar; toolbar_layout(w, &bar);
+    for (unsigned i = 0; i < TOOL_COUNT; i++) {
+        Clip b = bar.item[i];
+        if (!box_visible(b, w, h) || mx < b.x || mx >= b.x + b.w || my < b.y || my >= b.y + b.h) continue;
+        if (i == TOOL_SAVE) return SPREADSHEET_REQUEST_SAVE;
+        if (i == TOOL_SAVE_AS) return SPREADSHEET_REQUEST_SAVE_AS;
+        if (i == TOOL_CSV) return SPREADSHEET_REQUEST_EXPORT;
+        if (i == TOOL_UNDO || i == TOOL_REDO) return undo(i == TOOL_REDO);
+        if (i >= TOOL_GENERAL && i <= TOOL_PERCENT) return format_selection((SheetFormat)(i - TOOL_GENERAL));
+        if (i == TOOL_NARROWER || i == TOOL_WIDER) return resize_columns(i == TOOL_NARROWER ? -16 : 16);
+        if (i == TOOL_EDIT) { if (commit_edit()) start_edit(0); }
+        else open_address();
+        return SPREADSHEET_CHANGED;
     }
-    if (my >= 39 && my < 63) {
-        for (unsigned i = 0; i < sizeof format_buttons / sizeof format_buttons[0]; i++)
-            if (mx >= format_buttons[i].x && mx < format_buttons[i].x + format_buttons[i].w)
-                return i < 4 ? format_selection((SheetFormat)i) : resize_columns(i == 4 ? -16 : 16);
-    }
-    if (my >= TOOL_H + 3 && my < TOOL_H + FORMULA_H - 4) {
+    if (my >= tool_h + 3 && my < tool_h + FORMULA_H - 4) {
         if (mx >= 8 && mx < 78) { open_address(); return SPREADSHEET_CHANGED; }
         if (mx >= 111 && mx < w - 8) {
             if (state.mode != 1) start_edit(0);
@@ -1175,14 +1231,14 @@ int spreadsheet_click(int x, int y, int w, int h, int mx, int my, int modifiers)
             state.dragging = 1; state.drag_kind = 4; return SPREADSHEET_CHANGED;
         }
     }
-    int top = TOOL_H + FORMULA_H + HEADER_H, bottom = h - FOOT_H - SCROLL_H, right = w - SCROLL_H;
+    int top = tool_h + FORMULA_H + HEADER_H, bottom = h - FOOT_H - SCROLL_H, right = w - SCROLL_H;
     if (mx >= right && my >= top && my < bottom) {
         scrollbar_hit(w, h, mx, my, 1); state.dragging = 1; state.drag_kind = 2; return SPREADSHEET_CHANGED;
     }
     if (my >= bottom && my < bottom + SCROLL_H && mx >= ROW_W && mx < right) {
         scrollbar_hit(w, h, mx, my, 0); state.dragging = 1; state.drag_kind = 3; return SPREADSHEET_CHANGED;
     }
-    if (my < TOOL_H + FORMULA_H || my >= bottom || mx >= right) return 0;
+    if (my < tool_h + FORMULA_H || my >= bottom || mx >= right) return 0;
     if (!commit_edit()) return SPREADSHEET_CHANGED;
     if (state.mode == 2) state.mode = 0;
     unsigned at = hit_cell(w, h, mx, my); int extend = modifiers & SPREADSHEET_MOD_SHIFT;
@@ -1209,7 +1265,7 @@ int spreadsheet_drag(int x, int y, int w, int h, int mx, int my) {
     if (state.drag_kind == 4) { editor_hit(mx, 117, w - 131, 1); return SPREADSHEET_CHANGED; }
     if (state.drag_kind == 2 || state.drag_kind == 3) { scrollbar_hit(w, h, mx, my, state.drag_kind == 2); return SPREADSHEET_CHANGED; }
     if (state.drag_kind != 6) {
-        if (my < TOOL_H + FORMULA_H + HEADER_H) spreadsheet_scroll(-1);
+        if (my < tool_h + FORMULA_H + HEADER_H) spreadsheet_scroll(-1);
         else if (my >= h - FOOT_H - SCROLL_H) spreadsheet_scroll(1);
     }
     if (state.drag_kind != 5) {

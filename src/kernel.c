@@ -33,6 +33,7 @@
 #include "sdk_examples.h"
 #include "persist.h"
 #include "app.h"
+#include "toolbar.h"
 #include "font.h"
 #include "clock.h"
 #include "calendar.h"
@@ -693,7 +694,7 @@ typedef struct {
 
 enum {
     ICON_FILES = 0,
-    ICON_EDIT,
+    ICON_APP_EDIT,
     ICON_CALC,
     ICON_PAINT,
     ICON_VIEW,
@@ -707,13 +708,13 @@ enum {
     ICON_2048,
     ICON_BREAKOUT,
     ICON_SYSMON,
-    ICON_SETTINGS,
+    ICON_APP_SETTINGS,
     ICON_BROWSER,
     ICON_PLAYER,
     ICON_WRITER,
     ICON_SPREADSHEET,
-    ICON_TRASH,
-    ICON_COUNT
+    ICON_APP_TRASH,
+    ICON_APP_COUNT
 };
 #define ICON_DISK ICON_FILES
 
@@ -766,7 +767,7 @@ static const char icon_2048_16[];
 static const char icon_brick16[];
 static const char icon_mon16[];
 
-static DeskIcon icons[ICON_COUNT];
+static DeskIcon icons[ICON_APP_COUNT];
 
 static void icon_set(int id, const char *label, const char *art, uint32_t color) {
     icons[id].label = label;
@@ -776,7 +777,7 @@ static void icon_set(int id, const char *label, const char *art, uint32_t color)
 
 static void icons_init(void) {
     icon_set(ICON_FILES, "Files", icon_folder16, 0x3B82F6);
-    icon_set(ICON_EDIT, "Editor", icon_edit16, 0x6B7A90);
+    icon_set(ICON_APP_EDIT, "Editor", icon_edit16, 0x6B7A90);
     icon_set(ICON_CALC, "Calculator", icon_calc16, 0xF59E0B);
     icon_set(ICON_PAINT, "Paint", icon_paint16, 0xEC4899);
     icon_set(ICON_VIEW, "Viewer", icon_view16, 0x8B5CF6);
@@ -790,12 +791,12 @@ static void icons_init(void) {
     icon_set(ICON_2048, "2048", icon_2048_16, 0xEDC22E);
     icon_set(ICON_BREAKOUT, "Breakout", icon_brick16, 0xA855F7);
     icon_set(ICON_SYSMON, "Monitor", icon_mon16, 0x10B981);
-    icon_set(ICON_SETTINGS, "Settings", icon_gear16, 0x7C8494);
+    icon_set(ICON_APP_SETTINGS, "Settings", icon_gear16, 0x7C8494);
     icon_set(ICON_BROWSER, "Browser", icon_browser16, 0x2476C9);
     icon_set(ICON_PLAYER, "Media Player", icon_player16, 0xDC587A);
     icon_set(ICON_WRITER, "Writer", icon_writer16, 0x557DD1);
     icon_set(ICON_SPREADSHEET, "Spreadsheet", icon_sheet16, 0x228653);
-    icon_set(ICON_TRASH, "Trash", icon_trash, 0x9CA3AF);
+    icon_set(ICON_APP_TRASH, "Trash", icon_trash, 0x9CA3AF);
 
     int col_w = 96;
     int row_h = 86;
@@ -803,12 +804,12 @@ static void icons_init(void) {
     int y0 = MENUBAR_H + 16;
     int rows = (TASKBAR_Y - y0 - 12) / row_h;
     if (rows < 1) rows = 1;
-    for (int i = 0; i < ICON_TRASH; i++) {
+    for (int i = 0; i < ICON_APP_TRASH; i++) {
         icons[i].x = x0 + (i / rows) * col_w;
         icons[i].y = y0 + (i % rows) * row_h;
     }
-    icons[ICON_TRASH].x = fb_w - 26 - TILE_S;
-    icons[ICON_TRASH].y = TASKBAR_Y - 12 - TILE_S - CHAR_H - 8;
+    icons[ICON_APP_TRASH].x = fb_w - 26 - TILE_S;
+    icons[ICON_APP_TRASH].y = TASKBAR_Y - 12 - TILE_S - CHAR_H - 8;
 }
 
 static void icon_label_pos(int id, int *lx, int *ly, int *lw) {
@@ -844,7 +845,7 @@ static void draw_app_symbol(int id,int x,int y,uint8_t ink) {
         symbol_box(x+2,y+8,28,21,3,ink);
         draw_round_rect(x+3,y+4,12,6,2,ink);
         break;
-    case ICON_EDIT:
+    case ICON_APP_EDIT:
         symbol_box(x+6,y+2,21,28,3,ink);
         for(int j=0;j<3;j++)draw_rect(x+11,y+10+j*6,j==2?8:11,2,ink);
         break;
@@ -895,7 +896,7 @@ static void draw_app_symbol(int id,int x,int y,uint8_t ink) {
             symbol_line(x,y,3,6+j*9,5,8+j*9,ink);symbol_line(x,y,5,8+j*9,9,3+j*9,ink);
             draw_rect(x+14,y+6+j*9,14,2,ink);
         }break;
-    case ICON_SETTINGS:
+    case ICON_APP_SETTINGS:
         symbol_box(x+7,y+7,18,18,9,ink);symbol_box(x+13,y+13,6,6,3,ink);
         for(int j=0;j<2;j++){
             draw_rect(x+14,y+2+j*24,4,5,ink);draw_rect(x+2+j*24,y+14,5,4,ink);
@@ -920,7 +921,7 @@ static void draw_app_symbol(int id,int x,int y,uint8_t ink) {
     case ICON_BREAKOUT:
         for(int j=0;j<2;j++)for(int i=0;i<3;i++)draw_round_rect(x+2+i*10,y+3+j*7,8,4,1,ink);
         draw_round_rect(x+18,y+18,4,4,2,ink);draw_round_rect(x+7,y+27,18,3,1,ink);break;
-    case ICON_TRASH:
+    case ICON_APP_TRASH:
         symbol_box(x+7,y+9,18,21,3,ink);draw_rect(x+4,y+6,24,2,ink);
         draw_rect(x+12,y+2,8,2,ink);draw_rect(x+12,y+14,2,10,ink);draw_rect(x+19,y+14,2,10,ink);break;
     default: symbol_box(x+5,y+4,22,24,4,ink);break;
@@ -932,7 +933,7 @@ static void draw_app_tile(int x, int y, int id, uint32_t color, int size) {
 }
 
 static void draw_desktop_icons(int selected) {
-    for (int i = 0; i < ICON_COUNT; i++) {
+    for (int i = 0; i < ICON_APP_COUNT; i++) {
         int sel = (i == selected);
         int lx, ly, lw;
         icon_label_pos(i, &lx, &ly, &lw);
@@ -2450,6 +2451,16 @@ static void edit_search_key(void){
     }
     q->position[f]=pos;q->message[0]=0;dirty=1;
 }
+/* Find bar buttons: next, previous, [replace, replace all], match case, close. */
+static int edit_search_buttons(int wx,int ww,int replace,int *xs,int *ws){
+    int n=0,x=wx+12;
+    xs[n]=x;ws[n++]=32;x+=36;
+    xs[n]=x;ws[n++]=32;x+=44;
+    if(replace){xs[n]=x;ws[n]=tool_button_w("Replace");x+=ws[n++]+4;xs[n]=x;ws[n]=tool_button_w("All");x+=ws[n++]+8;}
+    xs[n]=x;ws[n++]=40;
+    xs[n]=wx+ww-44;ws[n++]=32;
+    return n;
+}
 static void draw_edit_search(int wx,int wy,int ww,int wh){
     if(!edit_search.open)return;
     EditorSearch *q=&edit_search;
@@ -2466,10 +2477,13 @@ static void draw_edit_search(int wx,int wy,int ww,int wh){
             int x=wx+72+ui_string_w(prefix);if(x<wx+ww-22)draw_rect(x,fy+4,1,18,ui_text);}
     }
     int by=y+(q->replace_mode?70:38);
-    draw_button(wx+12,by,56,24,"Next");draw_button(wx+74,by,56,24,"Prev");
-    if(q->replace_mode){draw_button(wx+136,by,74,24,"Replace");draw_button(wx+216,by,44,24,"All");}
-    draw_button_styled(wx+(q->replace_mode?266:136),by,34,24,"Aa",q->exact);
-    draw_button(wx+ww-46,by,32,24,"X");
+    int xs[6],ws[6],n=edit_search_buttons(wx,ww,q->replace_mode,xs,ws);
+    static const int icon[6]={ICON_CHEVRON_DOWN,ICON_CHEVRON_UP,ICON_REPLACE,ICON_REPLACE,-1,ICON_STOP};
+    static const char *label[6]={0,0,"Replace","All","Aa",0};
+    for(int i=0;i<n;i++){
+        int b=q->replace_mode||i<2?i:i+2;
+        tool_button(xs[i],by,ws[i],26,icon[b],label[b],b==4?(q->exact?TB_ACTIVE:TB_NORMAL):b==5?TB_FLAT:TB_NORMAL);
+    }
 }
 static int edit_search_click(int wx,int wy,int ww,int wh){
     if(!edit_search.open)return 0;
@@ -2479,12 +2493,14 @@ static int edit_search_click(int wx,int wy,int ww,int wh){
     for(int f=0;f<(q->replace_mode?2:1);f++)if(hit(mouse_x,mouse_y,wx+66,y+6+f*32,ww-82,26)){
         q->field=f;q->position[f]=kstrlen(q->text[f]);q->selected[f]=1;dirty=1;return 1;}
     int by=y+(q->replace_mode?70:38);
-    if(hit(mouse_x,mouse_y,wx+12,by,56,24))edit_find_next(1);
-    else if(hit(mouse_x,mouse_y,wx+74,by,56,24))edit_find_next(-1);
-    else if(q->replace_mode&&hit(mouse_x,mouse_y,wx+136,by,74,24))edit_replace_one();
-    else if(q->replace_mode&&hit(mouse_x,mouse_y,wx+216,by,44,24))edit_replace_everywhere();
-    else if(hit(mouse_x,mouse_y,wx+(q->replace_mode?266:136),by,34,24))q->exact=!q->exact;
-    else if(hit(mouse_x,mouse_y,wx+ww-46,by,32,24))q->open=q->focus=0;
+    int xs[6],ws[6],n=edit_search_buttons(wx,ww,q->replace_mode,xs,ws),pressed=-1;
+    for(int i=0;i<n;i++)if(hit(mouse_x,mouse_y,xs[i],by,ws[i],26)){pressed=q->replace_mode||i<2?i:i+2;break;}
+    if(pressed==0)edit_find_next(1);
+    else if(pressed==1)edit_find_next(-1);
+    else if(pressed==2)edit_replace_one();
+    else if(pressed==3)edit_replace_everywhere();
+    else if(pressed==4)q->exact=!q->exact;
+    else if(pressed==5)q->open=q->focus=0;
     dirty=1;return 1;
 }
 
@@ -4096,8 +4112,8 @@ static void draw_native_window(int slot,int inactive){
     draw_rect(w->x+1,top,w->w-2,w->h-TITLE_H-2,INK(1));
     draw_rect(w->x+1,top,w->w-2,NATIVE_TOOLBAR_H,ui_chrome_dk);
     int output=app_view_output_visible(slot);
-    draw_round_rect(w->x+8,top+3,72,NATIVE_TOOLBAR_H-6,4,output?ui_accent:ui_chrome);
-    draw_string(app_view_output_dropped(slot)?"Output*":"Output",w->x+16,top+7,output?ui_on_accent:ui_text);
+    tool_button(w->x+8,top+3,100,NATIVE_TOOLBAR_H-6,ICON_LIST,app_view_output_dropped(slot)?"Output*":"Output",
+                output?TB_ACTIVE:TB_FLAT);
     AppViewResult result;
     int ended=app_view_result(slot,&result);
     const char *status=ended?
@@ -4237,7 +4253,7 @@ static void draw_todo(int wx, int wy, int ww, int wh, int inactive) {
 
     int fx, fy, fw, fh;
     todo_field_box(wx, wy, ww, wh, &fx, &fy, &fw, &fh);
-    draw_button(wx+ww-76, fy, 64, fh, "Save");
+    tool_button(wx+ww-76, fy, 64, fh, ICON_SAVE, 0, TB_NORMAL);
     draw_string_clip(todo_status(), wx+12, ruley+37, ui_text_dim, wx+ww-12);
     int active = todo_field_active();
     draw_round_rect(fx, fy, fw, fh, 5, active ? ui_accent : ui_border);
@@ -5289,15 +5305,15 @@ static const char *files_sort_name[FILE_VIEW_SORT_COUNT]={"Name","Type","Size","
 
 /* Files layout: Places sidebar on the left, toolbar (back/forward/up, path,
  * Filter) across the top of the content, column headers, list, and a footer. */
-#define FILES_TOOL_H 46
-#define FILES_FOOT_H 28
+#define FILES_TOOL_H 42
+#define FILES_FOOT_H 24
 #define FILES_PLACES 6
 static int files_side_w(int ww) {return ww>=520?164:0;}
 static int files_list_x(int wx,int ww) {return wx+files_side_w(ww)+8;}
 static int files_list_w(int ww) {return ww-files_side_w(ww)-28;}
-static int files_header_y(int wy) {return wy+TITLE_H+FILES_TOOL_H+4;}
-static int files_filter_y(int wy) {return files_header_y(wy)+32;}
-static int files_list_y(int wy) {return files_filter_y(wy)+(fm_filter_open?36:0);}
+static int files_header_y(int wy) {return wy+TITLE_H+FILES_TOOL_H+3;}
+static int files_filter_y(int wy) {return files_header_y(wy)+30;}
+static int files_list_y(int wy) {return files_filter_y(wy)+(fm_filter_open?34:0);}
 static int files_list_bottom(int wy,int wh) {return wy+wh-FILES_FOOT_H-2;}
 static int files_rows(int wy,int wh) {return (files_list_bottom(wy,wh)-files_list_y(wy))/ROW_H;}
 static const char *files_place_name[FILES_PLACES]={"Home","Documents","Pictures","Media","Programs","Trash"};
@@ -5314,7 +5330,7 @@ static int files_nav_x(int wx,int ww,int i) {return wx+files_side_w(ww)+10+i*36;
 static int files_crumbs(int wx,int ww,int *xs,int *ws,int *ids) {
     int chain[16],n=0,id=fm_cwd;
     while(id>=0&&n<16){chain[n++]=id;if(id==fs_root())break;id=fs_parent(id);}
-    int left=files_nav_x(wx,ww,3)+6,right=wx+ww-96,count=0,x=left;
+    int left=files_nav_x(wx,ww,3)+6,right=wx+ww-56,count=0,x=left;
     int first=n-1,total=0;
     for(int k=n-1;k>=0;k--)total+=ui_string_w(chain[k]==fs_root()?"Home":fs_name(chain[k]))+22;
     while(first>0&&total>right-left){total-=ui_string_w(chain[first]==fs_root()?"Home":fs_name(chain[first]))+22;first--;}
@@ -5362,22 +5378,9 @@ static int files_detail_width(int width) {
     return width>420?110:0;
 }
 
-static void draw_files_nav_icon(int kind,int x,int y,uint8_t ink) {
-    int cx=x+15,cy=y+14;
-    for(int t=0;t<2;t++){
-        if(kind==0){draw_line(cx+2+t,cy-5,cx-3+t,cy,ink);draw_line(cx-3+t,cy,cx+2+t,cy+5,ink);}
-        else if(kind==1){draw_line(cx-2+t,cy-5,cx+3+t,cy,ink);draw_line(cx+3+t,cy,cx-2+t,cy+5,ink);}
-        else {draw_line(cx-5,cy+2+t,cx,cy-3+t,ink);draw_line(cx,cy-3+t,cx+5,cy+2+t,ink);}
-    }
-}
 static void draw_files_place_icon(int i,int x,int y,uint8_t ink,uint8_t bg) {
-    if(i==0){
-        draw_line(x,y+6,x+6,y,ink);draw_line(x+6,y,x+12,y+6,ink);
-        draw_frame(x+2,y+6,9,7,ink);draw_rect(x+5,y+9,3,4,ink);
-    }else if(i==5){
-        draw_rect(x+1,y+1,11,2,ink);draw_rect(x+4,y,5,1,ink);
-        draw_frame(x+2,y+4,9,9,ink);draw_vline(x+5,y+6,5,ink);draw_vline(x+8,y+6,5,ink);
-    }else draw_mini_folder(x,y+1,ink,bg);
+    (void)bg;
+    icon_draw(i==0?ICON_HOME:i==5?ICON_TRASH:ICON_FOLDER,x-3,y-3,ink);
 }
 static void draw_files_controls(int wx,int wy,int ww,int inactive) {
     int x=files_list_x(wx,ww),y=files_header_y(wy);
@@ -5389,11 +5392,11 @@ static void draw_files_controls(int wx,int wy,int ww,int inactive) {
             for(int n=0;n<4;n++)draw_hline(ax-n,ay+(fm_view.descending?3-n:n),2*n+1,ui_text);}
         x+=width+3;
     }
-    draw_hline(files_list_x(wx,ww),y+29,files_list_w(ww),ui_chrome_dk);
+    draw_hline(files_list_x(wx,ww),y+27,files_list_w(ww),ui_chrome_dk);
     int end=wx+ww-12;
     if(!fm_filter_open)return;
     y=files_filter_y(wy);
-    int field_x=files_list_x(wx,ww),field_w=end-field_x-120;
+    int field_x=files_list_x(wx,ww),field_w=end-field_x-76;
     draw_round_rect(field_x,y,field_w,28,4,ui_field);
     draw_round_frame(field_x,y,field_w,28,4,fm_filter_focus&&!inactive?ui_accent:ui_chrome_dk);
     int text_x=field_x+7,limit=field_x+field_w-7;
@@ -5407,8 +5410,8 @@ static void draw_files_controls(int wx,int wy,int ww,int inactive) {
         int caret=text_x+ui_string_w(text);
         if(caret<limit)draw_rect(caret,y+5,1,CHAR_H,ui_text);
     }
-    draw_button(end-114,y,54,28,"Clear");
-    draw_button(end-56,y,56,28,"Close");
+    tool_button(end-68,y,32,28,ICON_CLEAR,0,TB_FLAT);
+    tool_button(end-32,y,32,28,ICON_CLOSE,0,TB_FLAT);
 }
 
 static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
@@ -5453,22 +5456,21 @@ static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
     int tx=wx+side+1,tw=ww-side-2;
     draw_rect(tx,top,tw,FILES_TOOL_H-1,inactive?ui_chrome:ui_title);
     draw_hline(tx,top+FILES_TOOL_H-1,tw,INK(1));
+    static const int nav_icon[3]={ICON_BACK,ICON_FORWARD,ICON_UP};
     for(int i=0;i<3;i++){
         int enabled=i==0?fm_history_target(-1)>=0:i==1?fm_history_target(1)>=0:fm_has_parent();
-        int bx=files_nav_x(wx,ww,i),by=top+8;
-        draw_round_rect(bx,by,30,28,7,enabled?INK(7):INK(5));
-        draw_files_nav_icon(i,bx,by,enabled?ui_text:INK(11));
+        tool_button(files_nav_x(wx,ww,i),top+7,30,28,nav_icon[i],0,enabled?TB_FLAT:TB_DISABLED);
     }
     int xs[16],widths[16],ids[16],n=files_crumbs(wx,ww,xs,widths,ids);
     for(int k=0;k<n;k++){
         int last=k==n-1;
-        if(last)draw_round_rect(xs[k]-2,top+9,widths[k]+4,26,6,INK(7));
+        if(last)draw_round_rect(xs[k]-2,top+8,widths[k]+4,26,6,INK(7));
         draw_string_clip(ids[k]==fs_root()?"Home":fs_name(ids[k]),xs[k]+3,top+(FILES_TOOL_H-CHAR_H)/2-1,
                          last?ui_text:ui_text_dim,xs[k]+widths[k]);
         if(!last){int cx=xs[k]+widths[k]+4,cy=top+FILES_TOOL_H/2-1;
             draw_line(cx,cy-3,cx+3,cy,INK(13));draw_line(cx+3,cy,cx,cy+3,INK(13));}
     }
-    draw_button_styled(wx+ww-82,top+8,70,28,"Filter",fm_filter_open);
+    tool_button(wx+ww-44,top+7,32,28,ICON_FILTER,0,fm_filter_open?TB_ACTIVE:TB_FLAT);
     draw_files_controls(wx,wy,ww,inactive);
     /* List */
     int lx=files_list_x(wx,ww),lw=files_list_w(ww);
@@ -6197,13 +6199,13 @@ static void handle_files_click(int wx, int wy, int ww, int wh) {
         return;
     }
     if(mouse_y<top+FILES_TOOL_H){
-        for(int i=0;i<3;i++)if(hit(mouse_x,mouse_y,files_nav_x(wx,ww,i),top+8,30,28)){
+        for(int i=0;i<3;i++)if(hit(mouse_x,mouse_y,files_nav_x(wx,ww,i),top+7,30,28)){
             if(i==2){fm_rename_cancel();fm_go_up();}else fm_history_step(i==0?-1:1);
             return;
         }
         int xs[16],widths[16],ids[16],n=files_crumbs(wx,ww,xs,widths,ids);
-        for(int k=0;k<n-1;k++)if(hit(mouse_x,mouse_y,xs[k]-2,top+9,widths[k]+4,26)){fm_navigate(ids[k]);return;}
-        if(hit(mouse_x,mouse_y,wx+ww-82,top+8,70,28)){fm_filter_show();return;}
+        for(int k=0;k<n-1;k++)if(hit(mouse_x,mouse_y,xs[k]-2,top+8,widths[k]+4,26)){fm_navigate(ids[k]);return;}
+        if(hit(mouse_x,mouse_y,wx+ww-44,top+7,32,28)){fm_filter_show();return;}
         return;
     }
     if(mouse_y>=wy+wh-FILES_FOOT_H)return;
@@ -6214,9 +6216,9 @@ static void handle_files_click(int wx, int wy, int ww, int wh) {
     }
     if(fm_filter_open){
         y=files_filter_y(wy);
-        if(hit(mouse_x,mouse_y,end-114,y,54,28)){fm_filter_clear(0);return;}
-        if(hit(mouse_x,mouse_y,end-56,y,56,28)){fm_filter_clear(1);return;}
-        if(hit(mouse_x,mouse_y,files_list_x(wx,ww),y,end-files_list_x(wx,ww)-120,28)){
+        if(hit(mouse_x,mouse_y,end-68,y,32,28)){fm_filter_clear(0);return;}
+        if(hit(mouse_x,mouse_y,end-32,y,32,28)){fm_filter_clear(1);return;}
+        if(hit(mouse_x,mouse_y,files_list_x(wx,ww),y,end-files_list_x(wx,ww)-76,28)){
             fm_rename_cancel();fm_filter_focus=1;fm_filter_select_all=fm_view.filter[0]!=0;dirty=1;return;
         }
     }
@@ -6296,7 +6298,7 @@ static void files_drop(void) {
         return;
     if (id == trash_id)
         return;
-    if (!icon_hit(ICON_TRASH, mouse_x, mouse_y))
+    if (!icon_hit(ICON_APP_TRASH, mouse_x, mouse_y))
         return;
     if (trash_id < 0)
         return;
@@ -6406,7 +6408,7 @@ static void handle_open_dlg_click(void) {
 static void icon_open(int id) {
     switch (id) {
     case ICON_FILES: open_files(fs_root()); break;
-    case ICON_EDIT: open_edit(); break;
+    case ICON_APP_EDIT: open_edit(); break;
     case ICON_CALC: open_calc(); break;
     case ICON_PAINT: open_paint(); break;
     case ICON_VIEW: start_open_dialog(1); break;
@@ -6414,7 +6416,7 @@ static void icon_open(int id) {
     case ICON_WORDLE: open_wordle(); break;
     case ICON_TERM: open_term(); break;
     case ICON_TODO: open_todo(); break;
-    case ICON_SETTINGS: win_open(WK_SETTINGS); break;
+    case ICON_APP_SETTINGS: win_open(WK_SETTINGS); break;
     case ICON_CLOCK: win_open(WK_CLOCK); break;
     case ICON_CAL: cal_reset(); win_open(WK_CAL); break;
     case ICON_MINES: win_open(WK_MINES); break;
@@ -6425,7 +6427,7 @@ static void icon_open(int id) {
     case ICON_PLAYER: open_player(-1); break;
     case ICON_WRITER: open_writer(-1); break;
     case ICON_SPREADSHEET: open_spreadsheet(-1); break;
-    case ICON_TRASH: open_files(trash_id >= 0 ? trash_id : fs_root()); break;
+    case ICON_APP_TRASH: open_files(trash_id >= 0 ? trash_id : fs_root()); break;
     default: break;
     }
     dirty = 1;
@@ -6572,7 +6574,7 @@ static int str_has(const char *hay, const char *needle) {
 static void launcher_refresh(void) {
     launch_n = 0;
     launch_buf[launch_len] = 0;
-    for (int i = 0; i < ICON_TRASH && launch_n < 24; i++) {
+    for (int i = 0; i < ICON_APP_TRASH && launch_n < 24; i++) {
         if (str_has(icons[i].label, launch_buf)) {
             kstrcpy(launch_items[launch_n].name, icons[i].label);
             launch_items[launch_n].identity = 0;
@@ -7216,7 +7218,7 @@ static void handle_click(void) {
             return;
         }
         if (w->kind == WK_NATIVE){
-            if(hit(mouse_x,mouse_y,w->x+8,w->y+TITLE_H+4,72,NATIVE_TOOLBAR_H-6))native_output_toggle(i);
+            if(hit(mouse_x,mouse_y,w->x+8,w->y+TITLE_H+4,100,NATIVE_TOOLBAR_H-6))native_output_toggle(i);
         }else if (w->kind == WK_FILES)
             handle_files_click(w->x, w->y, w->w, w->h);
         else if (w->kind == WK_EDIT)
@@ -7280,7 +7282,7 @@ static void handle_click(void) {
     }
 
     int hit_icon = -1;
-    for (int i = 0; i < ICON_COUNT; i++) {
+    for (int i = 0; i < ICON_APP_COUNT; i++) {
         if (icon_hit(i, mouse_x, mouse_y))
             hit_icon = i;
     }
@@ -7478,8 +7480,8 @@ static void handle_key(void) {
     int fk = front_kind();
     if (fk == WK_NONE) {
         if (key_sc==KEY_TAB || key_sc==KEY_RIGHT || key_sc==KEY_DOWN)
-            icon_sel=(icon_sel+1)%ICON_COUNT;
-        else if(key_sc==KEY_LEFT || key_sc==KEY_UP)icon_sel=(icon_sel+ICON_COUNT-1)%ICON_COUNT;
+            icon_sel=(icon_sel+1)%ICON_APP_COUNT;
+        else if(key_sc==KEY_LEFT || key_sc==KEY_UP)icon_sel=(icon_sel+ICON_APP_COUNT-1)%ICON_APP_COUNT;
         else if(key_sc==KEY_ENTER && icon_sel>=0)icon_open(icon_sel);
         dirty=1;return;
     }
@@ -7976,7 +7978,7 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
                      "Keys 1-4 select a mode. Enter keeps it; Escape reverts.",
                      wx + 24, ry + 66, ui_text_dim, wx + ww - 20);
     draw_string_bold("Appearance", wx + 24, wy + TITLE_H + 16, ui_text);
-    draw_button(wx + ww - 156, wy + TITLE_H + 8, 132, 26, "Retry saving (R)");
+    tool_button(wx + ww - 156, wy + TITLE_H + 8, 132, 28, ICON_REFRESH, "Retry saving", TB_NORMAL);
     draw_string_clip(preference_message(PREF_THEME), wx + 24, wy + TITLE_H + 244, ui_text_dim, wx + ww - 20);
     draw_hline(wx + 24, wy + TITLE_H + 38, ww - 48, ui_chrome_dk);
     for (int i = 0; i < THEME_N; i++) {
@@ -8416,8 +8418,8 @@ static void install_examples(void){
 
 static void render_scene(void) {
                 int isel = icon_sel;
-                if (fm_drag_active && icon_hit(ICON_TRASH, mouse_x, mouse_y))
-                    isel = ICON_TRASH;
+                if (fm_drag_active && icon_hit(ICON_APP_TRASH, mouse_x, mouse_y))
+                    isel = ICON_APP_TRASH;
                 draw_desktop();
                 draw_desktop_icons(isel);
                 draw_ui();

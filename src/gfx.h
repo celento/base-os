@@ -92,6 +92,9 @@ void draw_string_shadow(const char *str, int x, int y, uint8_t color, uint8_t sh
 
 int hit(int px, int py, int x, int y, int w, int h);
 
+/* Draw an ICON_* glyph from icons.h (ICON_SIZE square) in ink, antialiased. */
+void icon_draw(int id, int x, int y, uint8_t ink);
+
 void flip_rect(int x0, int y0, int rw, int rh);
 void flip_vga(void);
 void gfx_present(void);

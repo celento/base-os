@@ -29,14 +29,26 @@ class FileViewKernelTests(unittest.TestCase):
             first = source.index('static const int files_sort_width')
             last = source.index(';', first) + 1
             operations += source[first:last] + '\n'
+            # Sidebar/toolbar layout and per-window history are whole blocks.
+            first = source.index('/* Files layout: Places sidebar')
+            last = source.index('static void files_scroll(', first)
+            layout = source[first:last]
+            first = source.index('/* Back/forward history for each Files window.')
+            last = source.index('static void fm_open_selected(', first)
+            history = source[first:last]
             for name in ('files_storage_busy', 'fm_set_cwd', 'fm_cwd_valid', 'fm_checked_cwd', 'fm_has_parent',
                          'fm_vis_count', 'fm_row_id', 'fm_refresh', 'fm_rename_cancel',
                          'fm_filter_show', 'fm_filter_clear', 'fm_sort_by', 'fm_filter_key',
                          'fm_select_id', 'fm_new_file', 'fm_rename_begin', 'fm_rename_commit',
                          'do_duplicate', 'files_clipboard_action', 'do_new_folder', 'fm_go_up',
-                         'fm_open_selected', 'files_filter_y', 'files_list_y', 'files_rows',
-                         'files_scroll', 'input_gesture_ticks', 'double_click', 'handle_files_click', 'files_drop'):
+                         'files_scroll', 'input_gesture_ticks', 'double_click'):
                 operations += function(source, name).replace('input_routing ? input_sample_ticks : frame_count', 'frame_count')
+                if name == 'fm_rename_commit':
+                    operations += history
+                if name == 'fm_select_id':
+                    operations += layout
+            for name in ('fm_open_selected', 'handle_files_click', 'files_drop'):
+                operations += function(source, name)
             (directory / 'files_kernel_ops.inc').write_text(operations)
             executable = directory / 'files-kernel-host'
             compiler = shutil.which('clang') or shutil.which('cc')

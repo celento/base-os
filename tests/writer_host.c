@@ -485,11 +485,11 @@ static void test_search(void) {
     check_text("dogs dogs\ndogs\nend x"); assert(writer_document()->style[19] == prior.style[15]);
     /* Case sensitivity is a real control, shared by drawing and hit testing. */
     load_fixture("Cat cat CAT"); search_fields("cat", "dog"); writer_draw(0,0,420,260);
-    assert(writer_click(0,0,420,260,120,210,0) & WRITER_CHANGED);
+    assert(writer_click(0,0,420,260,338,179,0) & WRITER_CHANGED);
     key(0x1c, WRITER_MOD_CTRL | WRITER_MOD_SHIFT); key(0x01, 0); check_text("Cat dog CAT");
     /* Exact case control is persistent; switch back for subsequent checks. */
     key(0x23, WRITER_MOD_CTRL); writer_draw(0,0,420,260);
-    assert(writer_click(0,0,420,260,120,210,0) & WRITER_CHANGED); key(0x01, 0);
+    assert(writer_click(0,0,420,260,338,179,0) & WRITER_CHANGED); key(0x01, 0);
     /* Empty replacement keeps empty paragraphs and their heading/alignment. */
     load_fixture("cat\ncat\n"); select_range(4,7); key(0x02,WRITER_MOD_CTRL); key(0x13,WRITER_MOD_CTRL);
     search_fields("cat", ""); key(0x1c, WRITER_MOD_CTRL | WRITER_MOD_SHIFT); key(0x01, 0);
@@ -590,12 +590,16 @@ static void test_drawing(const char *path) {
     assert(!writer_drag(30,20,720,520,200,180));
     for (int width = WRITER_MIN_W; width <= WRITER_W; width += WRITER_W - WRITER_MIN_W) {
         assert(ui_string_w("Tab: focus   Arrows/Space: paper   Esc: cancel") <= 376);
-        assert(ui_string_w("RTF") + 8 <= 42 && ui_string_w("PDF") + 8 <= 42);
-        assert(writer_click(30,20,width,260,30+270,20+35,0) == WRITER_REQUEST_EXPORT);
-        assert(writer_click(30,20,width,260,30+311,20+59,0) == WRITER_REQUEST_EXPORT);
-        assert(writer_click(30,20,width,260,30+316,20+35,0) == WRITER_REQUEST_PDF);
-        assert(writer_click(30,20,width,260,30+357,20+59,0) == WRITER_REQUEST_PDF);
-        assert(writer_click(30,20,width,260,30+314,20+40,0) == 0);
+        /* Wide windows use one 30px toolbar row; the minimum width wraps the
+         * history/file groups onto a second 28px row. RTF and PDF are icon +
+         * label buttons separated by a 4px gap that hits nothing. */
+        int wide = width == WRITER_W, top = wide ? 8 : 35, bottom = top + (wide ? 30 : 28) - 1;
+        int rtf = wide ? 456 : 129, pdf = rtf + 75;
+        assert(writer_click(30,20,width,260,30+rtf,20+top,0) == WRITER_REQUEST_EXPORT);
+        assert(writer_click(30,20,width,260,30+rtf+70,20+bottom,0) == WRITER_REQUEST_EXPORT);
+        assert(writer_click(30,20,width,260,30+pdf,20+top,0) == WRITER_REQUEST_PDF);
+        assert(writer_click(30,20,width,260,30+pdf+70,20+bottom,0) == WRITER_REQUEST_PDF);
+        assert(writer_click(30,20,width,260,30+rtf+73,20+top+5,0) == 0);
     }
     assert(writer_key(0x19, 0, WRITER_MOD_CTRL | WRITER_MOD_SHIFT) == WRITER_REQUEST_PDF);
     assert(writer_key(0x19, 0, WRITER_MOD_CTRL) == 0);

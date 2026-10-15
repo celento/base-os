@@ -10,9 +10,10 @@
 #define INFO_H 28
 #define ROW_H 28
 #define SB 16
-#define ICON_TRASH 1
+#define ICON_APP_TRASH 1
 #include "files_kernel_types.inc"
 static WindowState states[MAX_WIN],*window_state=states;
+int ui_string_w(const char *s){int n=0;while(s[n])n++;return n*8;}
 static int context_slot,dirty,trash_id=-1,prefs_id=-1;
 static int fm_renaming,fm_rename_id=-1,fm_rename_len;
 static unsigned fm_rename_identity;
@@ -138,15 +139,15 @@ static void paste_sort_and_scroll(void) {
     assert(fm_first==fm_vis_count()-4);filter_text("item 01");files_scroll(4);
     assert(fm_first==0&&fm_count==1&&fm_selected==-1);
     fm_filter_clear(1);fm_first=1000;fm_manual_scroll=1;files_scroll(1000);assert(fm_first==0);
-    assert(files_rows(50,200)==3);fm_filter_show();assert(files_rows(50,200)==1);
-    assert(files_list_y(50)==178);fm_filter_clear(1);
+    assert(files_rows(50,200)==2);fm_filter_show();assert(files_rows(50,200)==1);
+    assert(files_list_y(50)==191);fm_filter_clear(1);
     /* Actual click hit-testing shares the same compact geometry. */
-    mouse_x=8+60+3+5;mouse_y=TITLE_H+INFO_H+8;
+    mouse_x=8+60+3+5;mouse_y=files_header_y(0)+8;
     handle_files_click(0,0,360,200);assert(fm_view.sort==FILE_VIEW_TYPE);
-    mouse_x=360-SB-8-31;handle_files_click(0,0,360,200);assert(fm_filter_open);
-    filter_text("note");mouse_x=360-SB-8-90;mouse_y=files_filter_y(0)+12;
+    mouse_x=360-30;mouse_y=TITLE_H+1+7+10;handle_files_click(0,0,360,200);assert(fm_filter_open);
+    filter_text("note");mouse_x=360-12-68+10;mouse_y=files_filter_y(0)+12;
     handle_files_click(0,0,360,200);assert(!fm_view.filter[0]&&fm_filter_open);
-    mouse_x=360-SB-8-28;handle_files_click(0,0,360,200);assert(!fm_filter_open);
+    mouse_x=360-12-32+10;handle_files_click(0,0,360,200);assert(!fm_filter_open);
 }
 int main(void) {
     selection_and_filter();stale_selections_and_rename();paste_sort_and_scroll();

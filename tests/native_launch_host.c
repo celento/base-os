@@ -4,8 +4,8 @@
 #include "file_view.h"
 #define MAX_WIN 8
 #define EDIT_BUF_SIZE 65536
-#define ICON_TRASH 2
-static const struct {const char *label;} icons[ICON_TRASH]={{"Terminal"},{"Files"}};
+#define ICON_APP_TRASH 2
+static const struct {const char *label;} icons[ICON_APP_TRASH]={{"Terminal"},{"Files"}};
 enum { WK_NONE=-1, WK_TERM, WK_EDIT, WK_CLOCK, WK_CAL, WK_MINES, WK_2048,
        WK_BREAKOUT, WK_SYSMON, WK_HELLO, WK_PROPERTIES, WK_WRITER, WK_SPREADSHEET,
        WK_VIEW, WK_BROWSER, WK_PLAYER, WK_NATIVE };
@@ -45,9 +45,12 @@ static int win_open(int kind){
     for(int i=0;i<MAX_WIN;i++)if(!wins[i].open){
         wins[i].open=1;wins[i].kind=kind;wins[i].seq++;
         context_slot=i;term_select(i);if(kind==WK_TERM)term_reset();return i;
-    }return -1;
+    }
+    return -1;
 }
 static void fm_set_cwd(int id){fm_cwd=id;}
+static void fm_refresh(void);
+static void fm_navigate(int id){fm_set_cwd(id);fm_selected=0;fm_refresh();dirty=1;}
 static int fm_cwd_valid(void){return fs_is_dir(fm_cwd);}
 static void fm_checked_cwd(void){if(!fs_is_dir(fm_cwd))fm_cwd=fs_root();}
 static int fm_has_parent(void){return fs_parent(fm_cwd)>=0;}

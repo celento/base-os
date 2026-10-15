@@ -4,6 +4,7 @@
 #include "app.h"
 #include "fs.h"
 #include "platform.h"
+#include "toolbar.h"
 
 #define PLAYER_ROW 28
 static int files[FS_MAX_NODES], file_count, selected, first_visible, visible_rows = 4;
@@ -163,12 +164,60 @@ static const char *state_string(int state) {
     default: return "Ready";
     }
 }
-static void button(int x, int y, int w, const char *label, int primary) {
-    draw_round_rect(x, y, w, 32, 6, primary ? app_accent : app_chrome);
-    if (!primary) draw_round_frame(x, y, w, 32, 6, app_border);
-    int text_x = x + (w - ui_string_w(label)) / 2;
-    draw_string(label, text_x, y + 7, primary ? app_on_accent : app_text);
+/* Transport bar geometry, shared by drawing and hit testing. row_y is the top
+ * of the 32 px control row; the round primary Play/Pause button overhangs it
+ * by 3 px above and below. Volume -/+ are laid out only for video. */
+enum { PB_PLAY, PB_STOP, PB_CLEAR, PB_REFRESH, PB_VOL_DOWN, PB_VOL_UP, PB_COUNT };
+typedef struct { int x, y, w, h; } PlayerRect;
+#define PLAY_D 38
+#define VOL_TEXT_W 44
+static void transport_layout(int x, int row_y, int w, PlayerRect r[PB_COUNT], int *divider) {
+    int by = row_y + 1;
+    r[PB_PLAY] = (PlayerRect){x+16, row_y-3, PLAY_D, PLAY_D};
+    r[PB_STOP] = (PlayerRect){x+16+PLAY_D+8, by, TB_ICON_W, TB_H};
+    *divider = r[PB_STOP].x + TB_ICON_W + 8;
+    r[PB_CLEAR] = (PlayerRect){*divider+9, by, tool_button_w("Clear error"), TB_H};
+    r[PB_REFRESH] = (PlayerRect){x+w-16-TB_ICON_W, by, TB_ICON_W, TB_H};
+    r[PB_VOL_UP] = (PlayerRect){r[PB_REFRESH].x-17-TB_ICON_W, by, TB_ICON_W, TB_H};
+    r[PB_VOL_DOWN] = (PlayerRect){r[PB_VOL_UP].x-4-VOL_TEXT_W-4-TB_ICON_W, by, TB_ICON_W, TB_H};
 }
+static void play_button(PlayerRect r, int playing, int enabled) {
+    draw_round_rect(r.x, r.y, r.w, r.h, r.w/2, enabled ? app_accent : app_chrome_dk);
+    uint8_t ink = enabled ? app_on_accent : app_text_dim;
+    /* The play triangle sits 1 px right of centre so it looks optically centred. */
+    icon_draw(playing ? ICON_PAUSE : ICON_PLAY, r.x+(r.w-ICON_SIZE)/2+(playing?0:1), r.y+(r.h-ICON_SIZE)/2, ink);
+}
+static void draw_transport(int x, int row_y, int w, int playing, int play_enabled, int error, int volume) {
+    PlayerRect r[PB_COUNT]; int divider;
+    transport_layout(x, row_y, w, r, &divider);
+    play_button(r[PB_PLAY], playing, play_enabled);
+    tool_button(r[PB_STOP].x, r[PB_STOP].y, r[PB_STOP].w, r[PB_STOP].h, ICON_STOP_SQUARE, 0, TB_NORMAL);
+    tool_divider(divider, r[PB_STOP].y, TB_H);
+    tool_button(r[PB_CLEAR].x, r[PB_CLEAR].y, r[PB_CLEAR].w, r[PB_CLEAR].h, ICON_CLEAR, "Clear error", error ? TB_NORMAL : TB_DISABLED);
+    tool_button(r[PB_REFRESH].x, r[PB_REFRESH].y, r[PB_REFRESH].w, r[PB_REFRESH].h, ICON_REFRESH, 0, TB_NORMAL);
+    if (volume >= 0) {
+        char text[8];
+        icon_draw(ICON_VOLUME, r[PB_VOL_DOWN].x-4-ICON_SIZE, r[PB_VOL_DOWN].y+(TB_H-ICON_SIZE)/2, app_text_dim);
+        tool_button(r[PB_VOL_DOWN].x, r[PB_VOL_DOWN].y, TB_ICON_W, TB_H, ICON_MINUS, 0, TB_NORMAL);
+        fmt_uint(text, (unsigned)volume); append(text, "%", sizeof text);
+        int text_x = r[PB_VOL_DOWN].x + TB_ICON_W + 4;
+        draw_string(text, text_x + (VOL_TEXT_W-ui_string_w(text))/2, r[PB_VOL_DOWN].y+(TB_H-TB_TEXT_H)/2, app_text);
+        tool_button(r[PB_VOL_UP].x, r[PB_VOL_UP].y, TB_ICON_W, TB_H, ICON_PLUS, 0, TB_NORMAL);
+        tool_divider(r[PB_REFRESH].x-9, r[PB_REFRESH].y, TB_H);
+    }
+}
+/* Library scroll arrows beside the "Media files" heading. */
+static void scroll_layout(int x, int heading_y, int w, PlayerRect *up, PlayerRect *down) {
+    *up = (PlayerRect){x+w-76, heading_y-4, 28, 24};
+    *down = (PlayerRect){x+w-46, heading_y-4, 28, 24};
+}
+static void draw_scroll_arrows(int x, int heading_y, int w) {
+    PlayerRect up, down; scroll_layout(x, heading_y, w, &up, &down);
+    /* The arrows move the selection, exactly like the Up/Down keys. */
+    tool_button(up.x, up.y, up.w, up.h, ICON_CHEVRON_UP, 0, selected > 0 ? TB_FLAT : TB_DISABLED);
+    tool_button(down.x, down.y, down.w, down.h, ICON_CHEVRON_DOWN, 0, selected+1 < file_count ? TB_FLAT : TB_DISABLED);
+}
+static int hit_rect(int mx, int my, PlayerRect r) { return hit(mx, my, r.x, r.y, r.w, r.h); }
 static void video_geometry(int h, int *viewport_height, int *buttons_y, int *library_y) {
     *viewport_height = h - 294;
     if (*viewport_height < 68) *viewport_height = 68;
@@ -233,18 +282,8 @@ static void draw_video(int x, int y, int w, int h) {
     draw_string_clip(text,x+16,y+62,app_text_dim,x+w-16);
     video_draw(x+16,y+86,w-32,viewport_h-10);
     draw_video_progress(x,y,w,viewport_h);
-    const char *play=status->state==VIDEO_PLAYING || status->state==VIDEO_LOADING?"Pause":"Play";
-    button(x+16,y+buttons_y,96,play,1);
-    button(x+120,y+buttons_y,76,"Stop",0);
-    button(x+204,y+buttons_y,96,"Clear error",0);
-    button(x+w-96,y+buttons_y,80,"Refresh",0);
-    if (status->audio_enabled && w>=600) {
-        button(x+w-316,y+buttons_y,28,"-",0);
-        copy_text(text,"Vol ",sizeof text);fmt_uint(number,audio_status()->volume);
-        append(text,number,sizeof text);append(text,"%",sizeof text);
-        draw_string(text,x+w-280,y+buttons_y+7,app_text_dim);
-        button(x+w-212,y+buttons_y,28,"+",0);
-    }
+    draw_transport(x,y+buttons_y,w,status->state==VIDEO_PLAYING || status->state==VIDEO_LOADING,1,
+        status->error || message[0],status->audio_enabled && w>=600 ? (int)audio_status()->volume : -1);
     const char *hint=message[0]?message:status->audio_enabled?
         "Space: play/pause   Enter: open   +/-: volume   S: stop":
         status->audio_error==MEDIA_UNSUPPORTED?"Unsupported MPEG audio; playing video only.":
@@ -253,11 +292,11 @@ static void draw_video(int x, int y, int w, int h) {
     copy_text(text,"Media files (",sizeof text);fmt_uint(number,(unsigned)file_count);
     append(text,number,sizeof text);append(text,")",sizeof text);
     draw_string_bold(text,x+16,y+library_y,app_text);
-    draw_string("^",x+w-66,y+library_y,app_text_dim);draw_string("v",x+w-36,y+library_y,app_text_dim);
     int list_y=library_y+24,list_h=h-list_y-30;
     visible_rows=list_h/PLAYER_ROW;
     if (visible_rows<1) visible_rows=1;
     keep_selection_visible();
+    draw_scroll_arrows(x,y+library_y,w);
     draw_round_frame(x+16,y+list_y,w-32,list_h,6,app_chrome_dk);
     if (!file_count) draw_string_clip("Import a WAV, MP3 or MPEG-1 file.",x+26,y+list_y+5,app_text_dim,x+w-26);
     else for (int row=0;row<visible_rows && first_visible+row<file_count;++row) {
@@ -292,12 +331,10 @@ void player_draw(int x, int y, int w, int h) {
     } else copy_text(text, "Your music, played directly by BaseOS.", sizeof text);
     draw_string_clip(text, x+30, y+84, app_text_dim, x+w-30);
     player_draw_audio_progress(x,y,w,h);
-    const char *play = status->state==AUDIO_PLAYING ? "Pause" : status->state==AUDIO_LOADING ? "Loading" : "Play";
-    button(x+16, y+170, 96, play, 1);
-    button(x+120, y+170, 76, "Stop", 0);
-    button(x+204, y+170, 96, "Clear error", 0);
-    button(x+w-96, y+170, 80, "Refresh", 0);
-    draw_string("Volume", x+16, y+216, app_text_dim);
+    draw_transport(x, y+170, w, status->state==AUDIO_PLAYING || status->state==AUDIO_LOADING,
+        status->state!=AUDIO_LOADING, status->error || message[0], -1);
+    icon_draw(ICON_VOLUME, x+16, y+216, app_text_dim);
+    draw_string("Volume", x+16+ICON_SIZE+4, y+216, app_text_dim);
     int volume_width = w-176;
     draw_round_rect(x+96, y+222, volume_width, 6, 3, app_chrome_dk);
     int volume_pixels = (int)(status->volume*(unsigned)volume_width/100);
@@ -310,11 +347,11 @@ void player_draw(int x, int y, int w, int h) {
     copy_text(text, "Media files (", sizeof text); fmt_uint(number, (unsigned)file_count);
     append(text, number, sizeof text); append(text, ")", sizeof text);
     draw_string_bold(text, x+16, y+272, app_text);
-    draw_string("^", x+w-66, y+272, app_text_dim); draw_string("v", x+w-36, y+272, app_text_dim);
     int list_y = y+298, list_h = h-334;
     visible_rows = list_h/PLAYER_ROW;
     if (visible_rows < 1) visible_rows = 1;
     keep_selection_visible();
+    draw_scroll_arrows(x, y+272, w);
     draw_round_frame(x+16, list_y, w-32, list_h, 6, app_chrome_dk);
     if (!file_count) {
         draw_string_clip("Import a WAV, MP3 or MPEG-1 video to begin.", x+26, list_y+10, app_text_dim, x+w-26);
@@ -343,16 +380,19 @@ int player_click(int x, int y, int w, int h, int mx, int my) {
     if (video_mode) {
         int viewport_h,buttons_y,library_y;
         video_geometry(h,&viewport_h,&buttons_y,&library_y);
-        if (hit(mx,my,x+16,y+buttons_y,96,32)) return play_pause();
-        if (hit(mx,my,x+120,y+buttons_y,76,32)) { video_stop(); return 1; }
-        if (hit(mx,my,x+204,y+buttons_y,96,32)) { redraw_pending=1;message[0]=0;video_clear_error();return 1; }
-        if (hit(mx,my,x+w-96,y+buttons_y,80,32)) { player_refresh();return 1; }
+        PlayerRect r[PB_COUNT], up, down; int divider;
+        transport_layout(x,y+buttons_y,w,r,&divider);
+        if (hit_rect(mx,my,r[PB_PLAY])) return play_pause();
+        if (hit_rect(mx,my,r[PB_STOP])) { video_stop(); return 1; }
+        if (hit_rect(mx,my,r[PB_CLEAR])) { redraw_pending=1;message[0]=0;video_clear_error();return 1; }
+        if (hit_rect(mx,my,r[PB_REFRESH])) { player_refresh();return 1; }
         if (video_status()->audio_enabled && w>=600) {
-            if (hit(mx,my,x+w-316,y+buttons_y,28,32)) return player_key(0,'-');
-            if (hit(mx,my,x+w-212,y+buttons_y,28,32)) return player_key(0,'+');
+            if (hit_rect(mx,my,r[PB_VOL_DOWN])) return player_key(0,'-');
+            if (hit_rect(mx,my,r[PB_VOL_UP])) return player_key(0,'+');
         }
-        if (hit(mx,my,x+w-76,y+library_y-4,28,24)) return player_key(KEY_UP,0);
-        if (hit(mx,my,x+w-46,y+library_y-4,28,24)) return player_key(KEY_DOWN,0);
+        scroll_layout(x,y+library_y,w,&up,&down);
+        if (hit_rect(mx,my,up)) return player_key(KEY_UP,0);
+        if (hit_rect(mx,my,down)) return player_key(KEY_DOWN,0);
         int list_y=library_y+24;
         if (hit(mx,my,x+16,y+list_y,w-32,h-list_y-30)) {
             int row=(my-(y+list_y))/PLAYER_ROW;
@@ -360,16 +400,19 @@ int player_click(int x, int y, int w, int h, int mx, int my) {
         }
         return 0;
     }
-    if (hit(mx,my,x+16,y+170,96,32)) return play_pause();
-    if (hit(mx,my,x+120,y+170,76,32)) { audio_stop(); return 1; }
-    if (hit(mx,my,x+204,y+170,96,32)) { redraw_pending=1;message[0]=0; audio_clear_error(); return 1; }
-    if (hit(mx,my,x+w-96,y+170,80,32)) { player_refresh(); return 1; }
+    PlayerRect r[PB_COUNT], up, down; int divider;
+    transport_layout(x, y+170, w, r, &divider);
+    if (hit_rect(mx,my,r[PB_PLAY])) return play_pause();
+    if (hit_rect(mx,my,r[PB_STOP])) { audio_stop(); return 1; }
+    if (hit_rect(mx,my,r[PB_CLEAR])) { redraw_pending=1;message[0]=0; audio_clear_error(); return 1; }
+    if (hit_rect(mx,my,r[PB_REFRESH])) { player_refresh(); return 1; }
     if (hit(mx,my,x+91,y+210,w-166,30)) {
         int volume = (mx-(x+96))*100/(w-176);
         audio_set_volume((unsigned)(volume<0 ? 0 : volume>100 ? 100 : volume)); return 1;
     }
-    if (hit(mx,my,x+w-76,y+268,28,24)) return player_key(KEY_UP,0);
-    if (hit(mx,my,x+w-46,y+268,28,24)) return player_key(KEY_DOWN,0);
+    scroll_layout(x, y+272, w, &up, &down);
+    if (hit_rect(mx,my,up)) return player_key(KEY_UP,0);
+    if (hit_rect(mx,my,down)) return player_key(KEY_DOWN,0);
     if (hit(mx,my,x+16,y+298,w-32,h-334)) {
         int row = (my-(y+298))/PLAYER_ROW;
         if (row<visible_rows && first_visible+row<file_count) {

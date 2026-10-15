@@ -60,6 +60,13 @@ int main(int argc, char **argv) {
     assert(viewer.scale == 10);
     assert(!viewer.pan_x && !viewer.pan_y);
     assert(image_viewer_click(30, 20, 360, 200, 50, 35) && viewer.fit);
+    /* Toolbar buttons hit exactly where they are drawn: 1:1, zoom in/out, Fit. */
+    assert(image_viewer_click(30, 20, 360, 200, tool_x(30, VB_ACTUAL) + 16, 20 + TOOL_Y + 15) && viewer.scale == 100 && !viewer.fit);
+    assert(image_viewer_click(30, 20, 360, 200, tool_x(30, VB_ZOOM_IN) + 16, 20 + TOOL_Y + 15) && viewer.scale == 125);
+    assert(image_viewer_click(30, 20, 360, 200, tool_x(30, VB_ZOOM_OUT) + 16, 20 + TOOL_Y + 15) && viewer.scale == 100);
+    assert(!image_viewer_click(30, 20, 360, 200, tool_x(30, VB_ZOOM_OUT) - 4, 20 + TOOL_Y + 15));
+    assert(image_viewer_click(30, 20, 360, 200, tool_x(30, VB_FIT) + 16, 20 + TOOL_Y + 15) && viewer.fit);
+    assert(tool_end(30) <= 30 + 360 - PAD);
     image_viewer_draw(-12, -10, 360, 200);
     image_viewer_draw(730, 540, 360, 200);
     /* The retained image cannot use the palette ramps that a theme replaces. */

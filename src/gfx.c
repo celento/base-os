@@ -1,4 +1,6 @@
 #include "gfx.h"
+#define ICONS_DEFINE_DATA
+#include "icons.h"
 #include "font.h"
 #include "layout.h"
 #include "fs.h"
@@ -774,5 +776,21 @@ void gfx_present(void) {
             if(!changed&&run>=0){flip_rect(run,y,x-run,1);run=-1;}
         }
         if(run>=0)flip_rect(run,y,fb_w-run,1);
+    }
+}
+
+/* Toolbar icons: ICON_SIZE square, 16 coverage levels blended over the surface. */
+void icon_draw(int id, int x, int y, uint8_t ink) {
+    if (id < 0 || id >= ICON_COUNT) return;
+    const uint8_t *bits = icon_bits[id];
+    for (int row = 0; row < ICON_SIZE; row++) {
+        for (int col = 0; col < ICON_SIZE; col++) {
+            int i = row * ICON_SIZE + col;
+            int level = (i & 1) ? bits[i >> 1] & 15 : bits[i >> 1] >> 4;
+            if (!level) continue;
+            int px = x + col, py = y + row;
+            if (px < 0 || py < 0 || px >= fb_w || py >= fb_h) continue;
+            put_pixel(px, py, level == 15 ? ink : gfx_mix(get_pixel(px, py), ink, level * 256 / 15));
+        }
     }
 }

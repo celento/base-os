@@ -3,6 +3,7 @@
 #include "image_viewer.h"
 #include "layout.h"
 #include "platform.h"
+#include "toolbar.h"
 
 /* The integration commit adds these to the shared E820-checked memory map. */
 #ifndef IMAGE_BASE
@@ -179,12 +180,27 @@ static void geometry(int w, int h) {
     set_status();
 }
 
-static void button(int x, int y, int w, const char *label, int selected, int enabled) {
-    uint8_t background = selected ? app_accent : app_chrome;
-    uint8_t text = !enabled ? app_text_dim : selected ? app_on_accent : app_text;
-    draw_round_rect(x, y, w, 28, 6, background);
-    draw_round_frame(x, y, w, 28, 6, selected ? app_accent : app_chrome_dk);
-    draw_string(label, x + (w - ui_string_w(label)) / 2, y + 5, text);
+/* Toolbar geometry, shared by drawing and hit testing: Fit and 1:1 form a
+ * labelled toggle group (their icons alone look alike), then a divider, then
+ * zoom out, the zoom percentage, zoom in. */
+enum { VB_FIT, VB_ACTUAL, VB_ZOOM_OUT, VB_ZOOM_IN, VB_COUNT };
+#define TOOL_Y 5
+#define ZOOM_TEXT_W 52
+static const char *const tool_labels[VB_COUNT] = { "Fit", "1:1", 0, 0 };
+static int tool_w(int index) { return tool_button_w(tool_labels[index]); }
+static int tool_divider_x(int x) { return x + PAD + tool_w(VB_FIT) + 4 + tool_w(VB_ACTUAL) + 8; }
+static int tool_x(int x, int index) {
+    switch (index) {
+    case VB_FIT: return x + PAD;
+    case VB_ACTUAL: return x + PAD + tool_w(VB_FIT) + 4;
+    case VB_ZOOM_OUT: return tool_divider_x(x) + 9;
+    default: return tool_divider_x(x) + 9 + TB_ICON_W + 4 + ZOOM_TEXT_W + 4;
+    }
+}
+static int tool_end(int x) { return tool_x(x, VB_ZOOM_IN) + TB_ICON_W; }
+static int tool_hit(int x, int y, int mx, int my) {
+    for (int i = 0; i < VB_COUNT; i++) if (hit(mx, my, tool_x(x, i), y + TOOL_Y, tool_w(i), TB_H)) return i;
+    return -1;
 }
 
 static void message_lines(const char *text, int x, int y, int width, int height) {
@@ -211,15 +227,21 @@ void image_viewer_draw(int x, int y, int w, int h) {
     geometry(w, h);
     uint8_t well = app_field;
     draw_rect(x, y, w, h, app_chrome);
-    button(x + 10, y + 6, 44, "Fit", viewer.fit && viewer.loaded, viewer.loaded);
-    button(x + 60, y + 6, 44, "1:1", !viewer.fit && viewer.scale == 100 && viewer.loaded, viewer.loaded);
-    button(x + 110, y + 6, 30, "-", 0, viewer.loaded);
+    int loaded = viewer.loaded, ty = y + TOOL_Y;
+    tool_button(tool_x(x, VB_FIT), ty, tool_w(VB_FIT), TB_H, ICON_FIT, tool_labels[VB_FIT],
+                !loaded ? TB_DISABLED : viewer.fit ? TB_ACTIVE : TB_FLAT);
+    tool_button(tool_x(x, VB_ACTUAL), ty, tool_w(VB_ACTUAL), TB_H, ICON_ACTUAL, tool_labels[VB_ACTUAL],
+                !loaded ? TB_DISABLED : !viewer.fit && viewer.scale == 100 ? TB_ACTIVE : TB_FLAT);
+    tool_divider(tool_divider_x(x), ty, TB_H);
+    tool_button(tool_x(x, VB_ZOOM_OUT), ty, TB_ICON_W, TB_H, ICON_ZOOM_OUT, 0, loaded ? TB_NORMAL : TB_DISABLED);
     char percent[16] = "";
-    if (viewer.loaded) { append_number(percent, sizeof percent, viewer.scale); append(percent, sizeof percent, "%"); }
+    if (loaded) { append_number(percent, sizeof percent, viewer.scale); append(percent, sizeof percent, "%"); }
     else copy(percent, sizeof percent, "--");
-    draw_string(percent, x + 146 + (58 - ui_string_w(percent)) / 2, y + 11, app_text_dim);
-    button(x + 210, y + 6, 30, "+", 0, viewer.loaded);
-    if (w >= 500) draw_string_clip("IMAGE VIEWER", x + 260, y + 11, app_text_dim, x + w - PAD);
+    int text_x = tool_x(x, VB_ZOOM_OUT) + TB_ICON_W + 4;
+    draw_string(percent, text_x + (ZOOM_TEXT_W - ui_string_w(percent)) / 2, ty + (TB_H - TB_TEXT_H) / 2,
+                loaded ? app_text : app_text_dim);
+    tool_button(tool_x(x, VB_ZOOM_IN), ty, TB_ICON_W, TB_H, ICON_ZOOM_IN, 0, loaded ? TB_NORMAL : TB_DISABLED);
+    if (w >= 500) draw_string_clip("IMAGE VIEWER", tool_end(x) + 20, ty + (TB_H - TB_TEXT_H) / 2, app_text_dim, x + w - PAD);
     int vx = x + PAD, vy = y + TOOL_H;
     int vw = viewer.viewport_w, vh = viewer.viewport_h;
     draw_rect(vx, vy, vw, vh, well);
@@ -308,11 +330,13 @@ int image_viewer_key(int sc, char ch) {
 }
 int image_viewer_click(int x, int y, int w, int h, int mx, int my) {
     geometry(w, h);
-    if (hit(mx, my, x + 10, y + 6, 44, 28)) return set_zoom(viewer.scale, 1);
-    if (hit(mx, my, x + 60, y + 6, 44, 28)) return set_zoom(100, 0);
-    if (hit(mx, my, x + 110, y + 6, 30, 28)) return step_zoom(-1);
-    if (hit(mx, my, x + 210, y + 6, 30, 28)) return step_zoom(1);
-    return 0;
+    switch (tool_hit(x, y, mx, my)) {
+    case VB_FIT: return set_zoom(viewer.scale, 1);
+    case VB_ACTUAL: return set_zoom(100, 0);
+    case VB_ZOOM_OUT: return step_zoom(-1);
+    case VB_ZOOM_IN: return step_zoom(1);
+    default: return 0;
+    }
 }
 int image_viewer_scroll(int lines) { return pan(0, clamp(lines, -32, 32) * 36); }
 void image_viewer_close(void) {

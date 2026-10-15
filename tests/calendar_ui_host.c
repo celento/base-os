@@ -176,7 +176,18 @@ int main(int argc, char **argv) {
     key(KEY_LEFT); key(KEY_BACKSPACE); key(KEY_DELETE);
     render(argc > 1 ? argv[1] : 0);
     cal_draw(90, 76, CAL_W, CAL_H - 1); /* actual default-window client height */
-    assert(get_pixel(90 + CAL_W - 88, 76 + 455) != COLOR_WHITE); /* Retry outline drawn, not fallback */
+    CalRect r[CB_COUNT]; cal_layout(90, 76, CAL_W, r);
+    assert(get_pixel(r[CB_RETRY].x + 8, r[CB_RETRY].y + r[CB_RETRY].h / 2) != COLOR_WHITE); /* Retry fill drawn, not fallback */
+    /* Icon buttons stay inside the client area and never overlap. */
+    for (int i = 0; i < CB_COUNT; ++i) {
+        assert(r[i].x >= 90 + 16 && r[i].x + r[i].w <= 90 + CAL_W - 16 && r[i].y + r[i].h <= 76 + CAL_H - 1);
+        for (int j = 0; j < i; ++j)
+            assert(r[i].x + r[i].w <= r[j].x || r[j].x + r[j].w <= r[i].x || r[i].y + r[i].h <= r[j].y || r[j].y + r[j].h <= r[i].y);
+    }
+    cal_layout(40, 40, CAL_W, r);
+    int month = view_month;
+    assert(cal_click(40, 40, CAL_W, r[CB_NEXT_MONTH].x + 16, r[CB_NEXT_MONTH].y + 15) && view_month == month % 12 + 1);
+    assert(cal_click(40, 40, CAL_W, r[CB_PREV_MONTH].x + 16, r[CB_PREV_MONTH].y + 15) && view_month == month);
     cal_draw(0, 0, 320, 200); cal_draw(-20, -10, CAL_W, CAL_H);
     printf("Calendar rendering: real font/raster drawing, caret, long fields and small-window fallback passed.\n");
     puts("All Calendar UI functional checks passed."); return 0;
