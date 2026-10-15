@@ -19,6 +19,7 @@ void fmt_uint(char *s,unsigned n){sprintf(s,"%u",n);}
 void fmt_pad2(char *s,int n){s[0]='0'+n/10%10;s[1]='0'+n%10;s[2]=0;}
 uint8_t app_accent=COLOR_BLUE,app_accent_dk=COLOR_NAVY,app_text=COLOR_DKGRAY;
 uint8_t app_text_dim=COLOR_GRAY,app_chrome=COLOR_WHITE,app_chrome_dk=COLOR_LTGRAY;
+uint8_t app_body=COLOR_WHITE,app_field=COLOR_WHITE,app_paper=COLOR_WHITE,app_border=COLOR_LTGRAY,app_on_accent=COLOR_WHITE;
 static uint8_t back[1280*800],linear[sizeof back*4];
 static int bx,by,bw,bh,show_labels,stop_labels,close_labels;
 static void bounds(int x,int y,int w,int h){

@@ -151,8 +151,8 @@ void bo_tick(void) {
 void bo_draw(int bx, int by) {
     if (!started)
         bo_new();
-    draw_rect(bx, by, BO_W, BO_H, gfx_rgb(0x14, 0x18, 0x22));
-    static const uint32_t rowc[BO_ROWS] = { 0xE0663A, 0xF2A33A, 0xF2C94C, 0x3FA35B, 0x2AA7C8, 0x9448BE };
+    draw_rect(bx, by, BO_W, BO_H, app_field);
+    static const uint32_t rowc[BO_ROWS] = { 0xFF4040, 0xFF8000, 0xFFC000, 0x40C040, 0x00C0FF, 0xC040FF };
     int gx = bx + (BO_W - BO_COLS * (BRICK_W + 4)) / 2;
     for (int r = 0; r < BO_ROWS; r++) {
         uint8_t c = gfx_rgb((rowc[r] >> 16) & 255, (rowc[r] >> 8) & 255, rowc[r] & 255);
@@ -171,9 +171,9 @@ void bo_draw(int bx, int by) {
     draw_round_rect(bx + (ball_x >> 4), by + (ball_y >> 4), BALL, BALL, BALL / 2, COLOR_WHITE);
 
     char buf[16];
-    draw_string("Score", bx + 12, by + 8, gfx_gray(0x90));
+    draw_string("Score", bx + 12, by + 8, app_text_dim);
     fmt_uint(buf, (unsigned)score);
-    draw_string_bold(buf, bx + 12 + ui_string_w("Score") + 6, by + 8, COLOR_WHITE);
+    draw_string_bold(buf, bx + 12 + ui_string_w("Score") + 6, by + 8, app_text);
     for (int i = 0; i < lives; i++)
         draw_round_rect(bx + BO_W - 16 - i * 14, by + 12, 8, 8, 4, gfx_rgb(0xF0, 0x50, 0x48));
 
@@ -183,7 +183,8 @@ void bo_draw(int bx, int by) {
     else if (state == 3) msg = "You cleared it. Space to play again";
     if (msg) {
         int tw = ui_string_w(msg);
-        draw_round_rect(bx + (BO_W - tw) / 2 - 12, by + BO_H / 2 + 10, tw + 24, 30, 6, gfx_gray(0x30));
-        draw_string(msg, bx + (BO_W - tw) / 2, by + BO_H / 2 + 10 + (30 - UI_FONT_H) / 2, COLOR_WHITE);
+        draw_round_rect(bx + (BO_W - tw) / 2 - 12, by + BO_H / 2 + 10, tw + 24, 30, 6, app_border);
+        draw_round_rect(bx + (BO_W - tw) / 2 - 11, by + BO_H / 2 + 11, tw + 22, 28, 5, app_chrome);
+        draw_string(msg, bx + (BO_W - tw) / 2, by + BO_H / 2 + 10 + (30 - UI_FONT_H) / 2, app_text);
     }
 }

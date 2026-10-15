@@ -35,5 +35,12 @@ extern uint8_t app_text;
 extern uint8_t app_text_dim;
 extern uint8_t app_chrome;
 extern uint8_t app_chrome_dk;
+/* Dark UI surfaces shared by every app: window body, input fields, document
+ * paper, borders, and the ink used on accent-filled controls. */
+extern uint8_t app_body;
+extern uint8_t app_field;
+extern uint8_t app_paper;
+extern uint8_t app_border;
+extern uint8_t app_on_accent;
 
 #endif

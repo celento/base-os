@@ -4,6 +4,18 @@ Files keeps each window's folder, sort order, name filter, selection and scroll
 position independent. It supports the 360 × 200 minimum window and the 800 × 600
 desktop mode without requiring a wide, four-column table.
 
+## Navigation
+
+Windows at least 520 pixels wide show a **Places** sidebar with Home (the root
+folder), Documents, Pictures, Media, Programs and Trash, plus a storage meter for
+the current volume. Narrower windows hide the sidebar and keep the full list.
+
+The toolbar has **Back**, **Forward** and **Up** buttons and a path bar. Each
+window keeps its own history of the last 12 folders it visited; Back and Forward
+skip folders that have since been deleted or replaced. Click any earlier segment
+of the path to jump to that folder. Opening a folder, clicking a place, Up and the
+`..` row all add to the history.
+
 ## Sort controls
 
 Click **Name**, **Type**, **Size** or **Modified** above the list. Clicking the

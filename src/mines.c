@@ -77,17 +77,17 @@ static void face_rect(int bx, int by, int *x, int *y) {
 void mines_draw(int bx, int by) {
     if (!started)
         mines_new(1);
-    draw_rect(bx, by, MINES_W, MINES_H, app_chrome);
+    draw_rect(bx, by, MINES_W, MINES_H, app_body);
     static const uint8_t numrgb[9][3] = {
-        {0, 0, 0}, {0x2F, 0x72, 0xD2}, {0x2E, 0x94, 0x56}, {0xD8, 0x3A, 0x3A},
-        {0x24, 0x40, 0x7A}, {0x7A, 0x30, 0x48}, {0x21, 0x96, 0xA8}, {0x20, 0x20, 0x20}, {0x80, 0x80, 0x80}
+        {0, 0, 0}, {0x40, 0x80, 0xFF}, {0x40, 0xC0, 0x40}, {0xFF, 0x40, 0x40},
+        {0x80, 0x80, 0xFF}, {0xFF, 0x80, 0x00}, {0x00, 0xC0, 0xC0}, {0xFF, 0x80, 0xFF}, {0xC0, 0xC0, 0xC0}
     };
 
     char buf[8];
     int left = NMINES - flags;
     if (left < 0) left = 0;
     fmt_uint(buf, (unsigned)left);
-    draw_round_rect(bx + MINES_PAD, by + 8, 56, 28, 5, gfx_gray(0x20));
+    draw_round_rect(bx + MINES_PAD, by + 8, 56, 28, 5, app_field);
     draw_string_bold(buf, bx + MINES_PAD + (56 - uib_string_w(buf)) / 2, by + 8 + (28 - UI_FONT_H) / 2,
                      gfx_rgb(0xF0, 0x50, 0x48));
 
@@ -110,6 +110,7 @@ void mines_draw(int bx, int by) {
 
     int gx, gy;
     grid_origin(bx, by, &gx, &gy);
+    draw_rect(gx, gy, MINES_COLS * MINES_CELL, MINES_ROWS * MINES_CELL, app_field);
     for (int r = 0; r < MINES_ROWS; r++) {
         for (int c = 0; c < MINES_COLS; c++) {
             int x = gx + c * MINES_CELL;
@@ -117,7 +118,7 @@ void mines_draw(int bx, int by) {
             int show = open_[r][c] || (state == 1 && mine[r][c]);
             if (show) {
                 if (mine[r][c]) {
-                    uint8_t mc = open_[r][c] ? gfx_rgb(0xE8, 0x40, 0x38) : gfx_gray(0x20);
+                    uint8_t mc = open_[r][c] ? gfx_rgb(0xE8, 0x40, 0x38) : app_text_dim;
                     draw_round_rect(x + 8, y + 8, MINES_CELL - 16, MINES_CELL - 16, (MINES_CELL - 16) / 2, mc);
                 } else {
                     int n = count(r, c);
@@ -128,10 +129,11 @@ void mines_draw(int bx, int by) {
                     }
                 }
             } else {
-                draw_round_rect(x + 1, y + 1, MINES_CELL - 2, MINES_CELL - 2, 4, app_chrome_dk);
-                draw_round_rect(x + 2, y + 2, MINES_CELL - 4, MINES_CELL - 4, 3, app_chrome);
+                draw_round_rect(x + 1, y + 1, MINES_CELL - 2, MINES_CELL - 2, 4, app_border);
+                draw_round_rect(x + 2, y + 2, MINES_CELL - 4, MINES_CELL - 4, 3, app_chrome_dk);
+                draw_hline(x + 5, y + 2, MINES_CELL - 10, gfx_gray(0x58));
                 if (flag_[r][c]) {
-                    draw_rect(x + 13, y + 7, 2, 16, gfx_gray(0x30));
+                    draw_rect(x + 13, y + 7, 2, 16, app_text);
                     for (int i = 0; i < 7; i++)
                         draw_hline(x + 15, y + 7 + i, 9 - i, gfx_rgb(0xE0, 0x40, 0x40));
                 }

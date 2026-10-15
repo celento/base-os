@@ -711,19 +711,19 @@ static void fit_address(int w) {
 }
 void browser_draw(int x,int y,int w,int h) {
     browser_init();if(w<BROWSER_MIN_W||h<BROWSER_MIN_H)return;geometry(w,h);
-    uint8_t paper=COLOR_WHITE,ink=gfx_gray(35),muted=gfx_gray(112),border=gfx_gray(218),link_color=gfx_rgb(35,92,172);
+    uint8_t paper=app_paper,ink=app_text,muted=app_text_dim,border=app_border,link_color=app_accent_dk;
     draw_rect(x,y,w,h,paper);draw_rect(x,y,w,TOOL_H,app_chrome);draw_hline(x,y+TOOL_H-1,w,border);
-    for(int i=0;i<6;i++){int bx=button_x(x,i),enabled=button_enabled(i);draw_round_rect(bx,y+7,button_widths[i],26,4,enabled?paper:app_chrome);
+    for(int i=0;i<6;i++){int bx=button_x(x,i),enabled=button_enabled(i);draw_round_rect(bx,y+7,button_widths[i],26,4,enabled?app_chrome_dk:app_chrome);
         draw_round_frame(bx,y+7,button_widths[i],26,4,border);draw_string(button_labels[i],bx+(button_widths[i]-ui_string_w(button_labels[i]))/2,y+11,enabled?app_text:muted);}
     for(int i=0;i<4;i++){int bx=download_button_x(x,i),bw=download_button_widths[i],enabled=download_button_enabled(i);const char *label=download_button_label(i);
-        draw_round_rect(bx,y+77,bw,26,4,i==2&&B.pick_link?app_accent:enabled?paper:app_chrome);draw_round_frame(bx,y+77,bw,26,4,border);
-        draw_string(label,bx+(bw-ui_string_w(label))/2,y+81,i==2&&B.pick_link?COLOR_WHITE:enabled?app_text:muted);}
-    int ax=address_left(x),aw=address_width(w);draw_round_rect(ax,y+41,aw,28,4,paper);draw_round_frame(ax,y+41,aw,28,4,B.focus?app_accent:border);
+        draw_round_rect(bx,y+77,bw,26,4,i==2&&B.pick_link?app_accent:enabled?app_chrome_dk:app_chrome);draw_round_frame(bx,y+77,bw,26,4,border);
+        draw_string(label,bx+(bw-ui_string_w(label))/2,y+81,i==2&&B.pick_link?app_on_accent:enabled?app_text:muted);}
+    int ax=address_left(x),aw=address_width(w);draw_round_rect(ax,y+41,aw,28,4,app_field);draw_round_frame(ax,y+41,aw,28,4,B.focus?app_accent:border);
     fit_address(aw);int tx=ax+7,limit=ax+aw-8;
-    if(B.focus&&B.selected)draw_rect(tx,y+46,aw-14,18,gfx_rgb(205,226,251));
-    draw_string_clip(B.address+B.address_start,tx,y+46,ink,limit);
+    if(B.focus&&B.selected)draw_rect(tx,y+46,aw-14,18,app_accent);
+    draw_string_clip(B.address+B.address_start,tx,y+46,B.focus&&B.selected?app_on_accent:ink,limit);
     if(B.focus&&!B.selected){int cursor=tx;for(int i=B.address_start;i<B.cursor;i++)cursor+=ui_advance(B.address[i]);if(cursor<limit)draw_vline(cursor,y+46,18,app_accent);}
-    int go=x+w-46;draw_round_rect(go,y+41,36,28,4,app_accent);draw_string("Go",go+(36-ui_string_w("Go"))/2,y+46,COLOR_WHITE);
+    int go=x+w-46;draw_round_rect(go,y+41,36,28,4,app_accent);draw_string("Go",go+(36-ui_string_w("Go"))/2,y+46,app_on_accent);
     int cy=y+TOOL_H+8,content_right=x+w-PAD-14;
     if(B.download_visible){
         download_summary();download_reflow(w-2*PAD-14);
@@ -735,7 +735,7 @@ void browser_draw(int x,int y,int w,int h) {
         for(unsigned p=line.start;p<end;p++) {
             int step=advance(p);if(px+step>content_right)break;
             unsigned char style=B.style[p],link=B.link[p];uint8_t color=link?link_color:ink;
-            if(link&&link==B.focused_link)draw_rect(px,py,step,UI_FONT_H+1,gfx_rgb(225,237,255));
+            if(link&&link==B.focused_link)draw_rect(px,py,step,UI_FONT_H+1,app_chrome_dk);
             if(style&STYLE_PRE)draw_edit_char(B.text[p],px,py,color);
             else if(style&STYLE_BOLD){char c[2]={B.text[p],0};draw_string_bold(c,px,py,color);}
             else draw_char(B.text[p],px,py,color);
@@ -744,8 +744,8 @@ void browser_draw(int x,int y,int w,int h) {
         }
     }
     int line_count=B.download_visible?B.download_line_count:B.line_count,scroll=B.download_visible?B.download_scroll:B.scroll;
-    if(line_count>B.rows){int sy=cy,sh=B.rows*ROW_H;draw_round_rect(x+w-10,sy,4,sh,2,gfx_gray(237));int thumb=sh*B.rows/line_count;if(thumb<16)thumb=16;if(thumb>sh)thumb=sh;
-        int ty=sy+(sh-thumb)*scroll/(line_count-B.rows);draw_round_rect(x+w-10,ty,4,thumb,2,gfx_gray(170));}
+    if(line_count>B.rows){int sy=cy,sh=B.rows*ROW_H;draw_round_rect(x+w-10,sy,4,sh,2,app_chrome);int thumb=sh*B.rows/line_count;if(thumb<16)thumb=16;if(thumb>sh)thumb=sh;
+        int ty=sy+(sh-thumb)*scroll/(line_count-B.rows);draw_round_rect(x+w-10,ty,4,thumb,2,app_border);}
     int fy=y+h-FOOT_H;draw_rect(x,fy,w,FOOT_H,app_chrome);draw_hline(x,fy,w,border);draw_string_clip(B.status,x+10,fy+5,app_text_dim,x+w-10);
 }
 int browser_click(int x,int y,int w,int h,int mx,int my) {

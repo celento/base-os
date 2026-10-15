@@ -1,6 +1,7 @@
 /* Bounded rich-text Writer. All persistent working storage lives in its arena. */
 #include "writer.h"
 #include "gfx.h"
+#include "app.h"
 #include "fs.h"
 #include "layout.h"
 #include "platform.h"
@@ -1081,13 +1082,13 @@ static int search_offset(unsigned field, int available) {
 static void draw_search(Clip all) {
     if (!state.search.open) return;
     int top = all.y + all.h - FOOT_H - search_height();
-    rect(all, all.x, top, all.w, search_height(), gfx_rgb(237, 241, 247));
+    rect(all, all.x, top, all.w, search_height(), app_chrome);
     unsigned rows = state.search.replacing ? 2 : 1;
     for (unsigned f = 0; f < rows; f++) {
         int y = top + 4 + (int)f * 30;
-        label(all, f ? "With" : "Find", all.x + 8, y + 3, COLOR_DKGRAY);
-        rect(all, all.x + 52, y, all.w - 60, 25, state.search.focus && (unsigned)state.search.field == f ? COLOR_BLUE : COLOR_GRAY);
-        rect(all, all.x + 53, y + 1, all.w - 62, 23, COLOR_WHITE);
+        label(all, f ? "With" : "Find", all.x + 8, y + 3, app_text_dim);
+        rect(all, all.x + 52, y, all.w - 60, 25, state.search.focus && (unsigned)state.search.field == f ? app_accent : app_border);
+        rect(all, all.x + 53, y + 1, all.w - 62, 23, app_field);
         Clip field = {all.x + 57, y + 3, all.w - 70, 19};
         if (field.x < all.x) field.x = all.x;
         if (field.x + field.w > all.x + all.w) field.w = all.x + all.w - field.x;
@@ -1100,22 +1101,22 @@ static void draw_search(Clip all) {
         for (unsigned i = 0; text[i]; i++) {
             int selected = state.search.focus && (unsigned)state.search.field == f && i >= lo && i < hi;
             int width = ui_advance(text[i]);
-            if (selected) rect(field, x, field.y, width, field.h, COLOR_BLUE);
-            glyph(field, (unsigned char)text[i], x, field.y, 0, 0, selected ? COLOR_WHITE : COLOR_DKGRAY);
+            if (selected) rect(field, x, field.y, width, field.h, app_accent);
+            glyph(field, (unsigned char)text[i], x, field.y, 0, 0, selected ? app_on_accent : app_text);
             x += width;
         }
         if (state.search.focus && (unsigned)state.search.field == f && lo == hi && state.blink) {
             int caret_x = field.x - search_offset(f, field.w);
             for (unsigned i = 0; i < b; i++) caret_x += ui_advance(text[i]);
-            rect(field, caret_x, field.y, 1, field.h, COLOR_BLACK);
+            rect(field, caret_x, field.y, 1, field.h, app_text);
         }
     }
     int y = top + 4 + (int)rows * 30;
     for (unsigned i = 0; i < sizeof search_buttons / sizeof search_buttons[0]; i++) {
         if ((i == 3 || i == 4) && !state.search.replacing) continue;
         const SearchButton *b = &search_buttons[i]; int selected = i == 2 && state.search.exact;
-        rect(all, all.x + b->x, y, b->w, 24, selected ? COLOR_BLUE : COLOR_WHITE);
-        label(all, b->label, all.x + b->x + (b->w - ui_string_w(b->label)) / 2, y + 3, selected ? COLOR_WHITE : COLOR_DKGRAY);
+        rect(all, all.x + b->x, y, b->w, 24, selected ? app_accent : app_chrome_dk);
+        label(all, b->label, all.x + b->x + (b->w - ui_string_w(b->label)) / 2, y + 3, selected ? app_on_accent : app_text);
     }
 }
 static int search_click(int x, int y, int w, int h, int mx, int my, int modifiers) {
@@ -1190,16 +1191,16 @@ void writer_draw(int x, int y, int w, int h) {
     if (w <= 0 || h <= 0) return;
     geometry(w, h);
     Clip all = {x, y, w, h};
-    rect(all, x, y, w, h, COLOR_LTGRAY);
-    rect(all, x, y, w, TOOL_H, gfx_rgb(237, 241, 247));
+    rect(all, x, y, w, h, app_body);
+    rect(all, x, y, w, TOOL_H, app_chrome);
     for (unsigned i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
         const Button *b = &buttons[i];
         int active = button_active(b->action);
-        rect(all, x + b->x, y + b->y, b->w, 25, active ? COLOR_BLUE : COLOR_WHITE);
-        label(all, b->name, x + b->x + (b->w - ui_string_w(b->name)) / 2, y + b->y + 3, active ? COLOR_WHITE : COLOR_DKGRAY);
+        rect(all, x + b->x, y + b->y, b->w, 25, active ? app_accent : app_chrome_dk);
+        label(all, b->name, x + b->x + (b->w - ui_string_w(b->name)) / 2, y + b->y + 3, active ? app_on_accent : app_text);
     }
     Clip page = {x + 8, y + TOOL_H + 8, w - 24, h - TOOL_H - FOOT_H - 16 - search_height()};
-    rect(all, page.x, page.y, page.w, page.h, COLOR_WHITE);
+    rect(all, page.x, page.y, page.w, page.h, app_paper);
     Clip content = {x + PAGE_PAD, page.y, state.width + 4, page.h};
     if (content.x + content.w > page.x + page.w) content.w = page.x + page.w - content.x;
     const WriterDoc *d = document(); unsigned lo = selection_low(), hi = selection_high();
@@ -1213,29 +1214,31 @@ void writer_draw(int x, int y, int w, int h) {
         for (unsigned p = line->start; p < line->end; p++) {
             int a = advance(d->text[p], d->style[p], line->paragraph, used);
             int selected = p >= lo && p < hi;
-            if (selected) rect(content, base + used, py, a, line->height, COLOR_BLUE);
-            glyph(content, d->text[p], base + used, py + 2, d->style[p], line->paragraph, selected ? COLOR_WHITE : COLOR_DKGRAY);
+            if (selected) rect(content, base + used, py, a, line->height, app_accent);
+            glyph(content, d->text[p], base + used, py + 2, d->style[p], line->paragraph, selected ? app_on_accent : app_text);
             if (d->style[p] & WRITER_STYLE_UNDERLINE)
-                rect(content, base + used, py + scale_value(UI_HEIGHT, line->paragraph), a, 1, selected ? COLOR_WHITE : COLOR_DKGRAY);
+                rect(content, base + used, py + scale_value(UI_HEIGHT, line->paragraph), a, 1, selected ? app_on_accent : app_text);
             used += a;
         }
         if (line->end < d->length && d->text[line->end] == '\n' && line->end >= lo && line->end < hi)
-            rect(content, base + used, py, 5, line->height, COLOR_BLUE);
+            rect(content, base + used, py, 5, line->height, app_accent);
     }
     if (state.blink && lo == hi && !(state.search.open && state.search.focus)) {
         int cx, cy, height; writer_position(snapshot()->caret, &cx, &cy, &height);
-        rect(content, content.x + cx, content.y + cy - state.scroll + 2, 1, height - 4, COLOR_BLACK);
+        /* Accent-tinted insertion point: bright on the dark page and distinct
+         * from glyph stems, matching the selection hue. */
+        rect(content, content.x + cx, content.y + cy - state.scroll + 2, 1, height - 4, app_accent_dk);
     }
     int track_x = x + w - 12, track_y = page.y;
-    rect(all, track_x, track_y, 5, page.h, COLOR_LTGRAY);
+    rect(all, track_x, track_y, 5, page.h, app_field);
     if (state.content_height > page.h && page.h > 0) {
         int thumb = page.h * page.h / state.content_height; if (thumb < 16) thumb = 16;
         if (thumb > page.h) thumb = page.h;
         int top = state.scroll * (page.h - thumb) / (state.content_height - page.h);
-        rect(all, track_x, track_y + top, 5, thumb, COLOR_GRAY);
+        rect(all, track_x, track_y + top, 5, thumb, gfx_gray(0x63)); /* shell thumb ink */
     }
     draw_search(all);
-    rect(all, x, y + h - FOOT_H, w, FOOT_H, gfx_rgb(237, 241, 247));
+    rect(all, x, y + h - FOOT_H, w, FOOT_H, app_chrome);
     char foot[112]; const char *prefix = state.save.pending ? (state.save.kind == DOCUMENT_SAVE_NATIVE ? "Saving | " : "Exporting | ") : writer_dirty() ? "Unsaved | " : "Saved | ";
     text_copy(foot, sizeof(foot), prefix);
     unsigned offset = 0; while (foot[offset]) offset++;
@@ -1247,8 +1250,8 @@ void writer_draw(int x, int y, int w, int h) {
     used = string_length(counts); text_copy(counts + used, sizeof(counts) - used, " bytes");
     int stats_w = ui_string_w(counts);
     Clip foot_clip = {x + 8, y + h - FOOT_H, w - stats_w - 28, FOOT_H};
-    label(foot_clip, foot, x + 8, y + h - FOOT_H + 4, COLOR_DKGRAY);
-    label(all, counts, x + w - stats_w - 8, y + h - FOOT_H + 4, COLOR_DKGRAY);
+    label(foot_clip, foot, x + 8, y + h - FOOT_H + 4, app_text_dim);
+    label(all, counts, x + w - stats_w - 8, y + h - FOOT_H + 4, app_text_dim);
 }
 int writer_click(int x, int y, int w, int h, int mx, int my, int modifiers) {
     if (!state.initialized) writer_init();

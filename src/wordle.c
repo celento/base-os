@@ -3,7 +3,7 @@
 
 #include "app.h"
 
-#define WL_BLACK  0
+#define WL_INK  app_text
 #define WL_GRAY   2
 #define WL_YELLOW 6
 #define WL_GREEN  7
@@ -209,18 +209,18 @@ static void draw_glyph(char ch, int x, int y, int w, int h, unsigned char color)
 static void draw_key_enter(int x, int y) {
     int cx = x + KEY_S / 2;
     int cy = y + KEY_S / 2;
-    draw_rect(cx + 5, cy - 7, 3, 12, WL_BLACK);
-    draw_rect(cx - 3, cy + 2, 11, 3, WL_BLACK);
+    draw_rect(cx + 5, cy - 7, 3, 12, WL_INK);
+    draw_rect(cx - 3, cy + 2, 11, 3, WL_INK);
     for (int k = 0; k < 6; k++)
-        draw_rect(cx - 6 + k, cy + 3 - k, 1, 2 * k + 1, WL_BLACK);
+        draw_rect(cx - 6 + k, cy + 3 - k, 1, 2 * k + 1, WL_INK);
 }
 
 static void draw_key_bksp(int x, int y) {
     int cx = x + KEY_S / 2;
     int cy = y + KEY_S / 2;
     for (int k = 0; k < 6; k++)
-        draw_rect(cx - 7 + k, cy - k, 1, 2 * k + 1, WL_BLACK);
-    draw_rect(cx - 1, cy - 1, 8, 3, WL_BLACK);
+        draw_rect(cx - 7 + k, cy - k, 1, 2 * k + 1, WL_INK);
+    draw_rect(cx - 1, cy - 1, 8, 3, WL_INK);
 }
 
 void wordle_draw(int bx, int by) {
@@ -231,17 +231,18 @@ void wordle_draw(int bx, int by) {
         for (int c = 0; c < WL_COLS; c++) {
             int x = gx + c * (CELL + CGAP);
             int y = gy + r * (CELL + CGAP);
-            unsigned char fill = WL_WHITE;
-            unsigned char ink = gfx_gray(0x20);
-            unsigned char edge = grid[r][c] ? gfx_gray(0x70) : gfx_gray(0xC4);
+            unsigned char fill = app_field;
+            unsigned char ink = app_text;
+            unsigned char edge = grid[r][c] ? app_text_dim : app_border;
+            /* Exact cube colors keep the meaning identical in every theme. */
             if (mark[r][c] == MK_EXACT)
-                fill = gfx_rgb(0x4C, 0xA8, 0x60);
+                fill = gfx_rgb(0x40, 0xC0, 0x80);
             else if (mark[r][c] == MK_PRESENT)
-                fill = gfx_rgb(0xD8, 0xB0, 0x40);
+                fill = gfx_rgb(0xFF, 0xC0, 0x40);
             else if (mark[r][c] == MK_MISS)
-                fill = gfx_gray(0x78);
+                fill = gfx_gray(0x50);
             if (mark[r][c] != MK_NONE) {
-                ink = WL_WHITE;
+                ink = mark[r][c] == MK_MISS ? WL_WHITE : gfx_gray(0x10);
                 edge = fill;
             }
             draw_round_rect(x, y, CELL, CELL, 5, edge);
@@ -253,7 +254,7 @@ void wordle_draw(int bx, int by) {
 
     if (caption[0]) {
         int tw = ui_string_w(caption);
-        draw_string(caption, bx + (WORDLE_W - tw) / 2, by + CAP_Y, gfx_gray(0x40));
+        draw_string(caption, bx + (WORDLE_W - tw) / 2, by + CAP_Y, app_text_dim);
     }
 
     for (int r = 0; r < 3; r++) {
@@ -261,15 +262,15 @@ void wordle_draw(int bx, int by) {
         for (int c = 0; c < n; c++) {
             int x, y;
             key_rect(bx, by, r, c, &x, &y);
-            draw_round_rect(x, y, KEY_S, KEY_S, 4, app_chrome_dk);
-            draw_round_rect(x + 1, y + 1, KEY_S - 2, KEY_S - 2, 3, app_chrome);
+            draw_round_rect(x, y, KEY_S, KEY_S, 4, app_border);
+            draw_round_rect(x + 1, y + 1, KEY_S - 2, KEY_S - 2, 3, app_chrome_dk);
             char k = kb_rows[r][c];
             if (k == '\n')
                 draw_key_enter(x, y);
             else if (k == '\b')
                 draw_key_bksp(x, y);
             else
-                draw_glyph(k, x, y, KEY_S, KEY_S, gfx_gray(0x20));
+                draw_glyph(k, x, y, KEY_S, KEY_S, app_text);
         }
     }
 }

@@ -13,6 +13,7 @@ static unsigned char host_presented[FB_CAPACITY];
 #include "../src/image_viewer.c"
 
 uint8_t app_accent, app_accent_dk, app_text, app_text_dim, app_chrome, app_chrome_dk;
+uint8_t app_body, app_field, app_paper, app_border, app_on_accent;
 void kmemset(void *to, int byte, int count) { memset(to, byte, (size_t)count); }
 void kmemcpy(void *to, const void *from, int count) { memmove(to, from, (size_t)count); }
 void fmt_uint(char *out, unsigned number) { sprintf(out, "%u", number); }

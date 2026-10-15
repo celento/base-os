@@ -18,6 +18,7 @@ static uint8_t test_mirror[0x100000];
 
 uint8_t app_accent=COLOR_BLUE,app_accent_dk=COLOR_NAVY,app_text=COLOR_BLACK;
 uint8_t app_text_dim=COLOR_GRAY,app_chrome=COLOR_LTGRAY,app_chrome_dk=COLOR_GRAY;
+uint8_t app_body=COLOR_WHITE,app_field=COLOR_WHITE,app_paper=COLOR_WHITE,app_border=COLOR_GRAY,app_on_accent=COLOR_WHITE;
 static NetHttpResult result;
 static int busy,starts_count,cancels,serial;
 static char started_url[NET_URL_MAX];

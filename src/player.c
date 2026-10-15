@@ -165,9 +165,9 @@ static const char *state_string(int state) {
 }
 static void button(int x, int y, int w, const char *label, int primary) {
     draw_round_rect(x, y, w, 32, 6, primary ? app_accent : app_chrome);
-    if (!primary) draw_round_frame(x, y, w, 32, 6, app_chrome_dk);
+    if (!primary) draw_round_frame(x, y, w, 32, 6, app_border);
     int text_x = x + (w - ui_string_w(label)) / 2;
-    draw_string(label, text_x, y + 7, primary ? COLOR_WHITE : app_text);
+    draw_string(label, text_x, y + 7, primary ? app_on_accent : app_text);
 }
 static void video_geometry(int h, int *viewport_height, int *buttons_y, int *library_y) {
     *viewport_height = h - 294;
@@ -200,7 +200,7 @@ static void draw_video_progress(int x,int y,int w,int viewport_h) {
     unsigned progress=duration?(position/scale)*(unsigned)bar_width/(duration/scale):0;
     if (progress>(unsigned)bar_width) progress=(unsigned)bar_width;
     if (progress) draw_rect(x+16,y+bar_y,(int)progress,6,app_accent);
-    draw_rect(x+16,y+bar_y+12,w-32,18,COLOR_WHITE);
+    draw_rect(x+16,y+bar_y+12,w-32,18,app_body);
     time_string(text,position);draw_string(text,x+16,y+bar_y+12,app_text_dim);
     time_string(text,duration);draw_string(text,x+w-16-ui_string_w(text),y+bar_y+12,app_text_dim);
 }
@@ -249,7 +249,7 @@ static void draw_video(int x, int y, int w, int h) {
         "Space: play/pause   Enter: open   +/-: volume   S: stop":
         status->audio_error==MEDIA_UNSUPPORTED?"Unsupported MPEG audio; playing video only.":
         "Space: play/pause   Enter: open   S: stop";
-    draw_string_clip(hint,x+16,y+buttons_y+38,message[0]?gfx_rgb(176,47,42):app_text_dim,x+w-16);
+    draw_string_clip(hint,x+16,y+buttons_y+38,message[0]?gfx_rgb(240,98,88):app_text_dim,x+w-16);
     copy_text(text,"Media files (",sizeof text);fmt_uint(number,(unsigned)file_count);
     append(text,number,sizeof text);append(text,")",sizeof text);
     draw_string_bold(text,x+16,y+library_y,app_text);
@@ -262,7 +262,7 @@ static void draw_video(int x, int y, int w, int h) {
     if (!file_count) draw_string_clip("Import a WAV, MP3 or MPEG-1 file.",x+26,y+list_y+5,app_text_dim,x+w-26);
     else for (int row=0;row<visible_rows && first_visible+row<file_count;++row) {
         int index=first_visible+row,id=files[index],row_y=y+list_y+row*PLAYER_ROW;
-        if (index==selected) draw_rect(x+18,row_y+1,w-36,PLAYER_ROW-1,gfx_lighter(app_accent,85));
+        if (index==selected) draw_rect(x+18,row_y+1,w-36,PLAYER_ROW-1,app_chrome_dk);
         draw_string_clip(fs_name(id),x+26,row_y+5,app_text,x+w-86);
         draw_string(is_video(id)?"MPEG":extension(fs_name(id),".mp3")?"MP3":"WAV",x+w-72,row_y+5,app_text_dim);
     }
@@ -271,7 +271,7 @@ static void draw_video(int x, int y, int w, int h) {
 }
 void player_draw(int x, int y, int w, int h) {
     player_init();
-    draw_rect(x, y, w, h, COLOR_WHITE);
+    draw_rect(x, y, w, h, app_body);
     if (w < 420 || h < 362) {
         draw_string_clip("Enlarge Media Player to show its controls.", x+8, y+12, app_text, x+w-8); return;
     }
@@ -306,7 +306,7 @@ void player_draw(int x, int y, int w, int h) {
     fmt_uint(text, status->volume); append(text, "%", sizeof text);
     draw_string(text, x+w-64, y+216, app_text);
     const char *hint = message[0] ? message : "Space: play/pause   Enter: open   +/-: volume";
-    draw_string_clip(hint, x+16, y+244, message[0] ? gfx_rgb(176,47,42) : app_text_dim, x+w-16);
+    draw_string_clip(hint, x+16, y+244, message[0] ? gfx_rgb(240,98,88) : app_text_dim, x+w-16);
     copy_text(text, "Media files (", sizeof text); fmt_uint(number, (unsigned)file_count);
     append(text, number, sizeof text); append(text, ")", sizeof text);
     draw_string_bold(text, x+16, y+272, app_text);
@@ -320,7 +320,7 @@ void player_draw(int x, int y, int w, int h) {
         draw_string_clip("Import a WAV, MP3 or MPEG-1 video to begin.", x+26, list_y+10, app_text_dim, x+w-26);
     } else for (int row = 0; row < visible_rows && first_visible+row < file_count; ++row) {
         int index = first_visible+row, id = files[index], row_y = list_y+row*PLAYER_ROW;
-        if (index == selected) draw_rect(x+18, row_y+1, w-44, PLAYER_ROW-1, gfx_lighter(app_accent, 85));
+        if (index == selected) draw_rect(x+18, row_y+1, w-44, PLAYER_ROW-1, app_chrome_dk);
         int current = id == source_id && fs_identity(id) == source_identity;
         draw_round_rect(x+27, row_y+10, 6, 6, 3, current ? app_accent : app_chrome_dk);
         draw_string_clip(fs_name(id), x+43, row_y+5, app_text, x+w-100);

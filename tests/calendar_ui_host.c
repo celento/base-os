@@ -22,6 +22,8 @@ static int writes, syncs;
 uint8_t app_accent = COLOR_BLUE, app_accent_dk = COLOR_NAVY;
 uint8_t app_text = COLOR_BLACK, app_text_dim = PAL_GRAY + 16;
 uint8_t app_chrome = PAL_GRAY + 28, app_chrome_dk = PAL_GRAY + 20;
+uint8_t app_body = COLOR_WHITE, app_field = COLOR_WHITE, app_paper = COLOR_WHITE;
+uint8_t app_border = PAL_GRAY + 20, app_on_accent = COLOR_WHITE;
 
 void kmemset(void *d, int v, int n) { memset(d, v, (size_t)n); }
 void kmemcpy(void *d, const void *s, int n) { memcpy(d, s, (size_t)n); }

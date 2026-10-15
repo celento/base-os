@@ -56,6 +56,7 @@ uint32_t video_duration_ms(void){return fake_video.total_frames*40;}
 const char *video_error_string(int error){(void)error;return "Video unavailable";}
 const char *media_error_string(int error){(void)error;return "Audio unavailable";}
 uint8_t app_accent=9,app_accent_dk=13,app_text=0,app_text_dim=2,app_chrome=3,app_chrome_dk=2;
+uint8_t app_body=COLOR_WHITE,app_field=COLOR_WHITE,app_paper=COLOR_WHITE,app_border=2,app_on_accent=COLOR_WHITE;
 void video_draw(int x,int y,int w,int h){draw_rect(x,y,w,h,COLOR_BLACK);}
 void fmt_uint(char *s,unsigned n){sprintf(s,"%u",n);}
 void fmt_pad2(char *s,int n){sprintf(s,"%02d",n);}

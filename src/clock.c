@@ -29,13 +29,13 @@ static void hand(int cx, int cy, int step, int len, int thick, uint8_t col) {
 void clock_draw(int bx, int by, int bw, int bh) {
     RtcTime t;
     rtc_read(&t);
-    draw_rect(bx, by, bw, bh, app_chrome);
+    draw_rect(bx, by, bw, bh, app_body);
 
     int r = 120;
     int cx = bx + bw / 2;
     int cy = by + 24 + r;
-    draw_round_rect(cx - r - 2, cy - r - 2, 2 * r + 4, 2 * r + 4, r + 2, gfx_gray(0x70));
-    draw_round_rect(cx - r, cy - r, 2 * r, 2 * r, r, COLOR_WHITE);
+    draw_round_rect(cx - r - 2, cy - r - 2, 2 * r + 4, 2 * r + 4, r + 2, app_border);
+    draw_round_rect(cx - r, cy - r, 2 * r, 2 * r, r, app_paper);
     for (int i = 0; i < 60; i++) {
         int len = (i % 5 == 0) ? 12 : 5;
         int x0 = cx + csin(i) * (r - 8) / 1000;
@@ -43,16 +43,16 @@ void clock_draw(int bx, int by, int bw, int bh) {
         int x1 = cx + csin(i) * (r - 8 - len) / 1000;
         int y1 = cy - ccos(i) * (r - 8 - len) / 1000;
         if (i % 5 == 0)
-            thick_line(x1, y1, x0, y0, gfx_gray(0x30));
+            thick_line(x1, y1, x0, y0, app_text);
         else
-            draw_line(x1, y1, x0, y0, gfx_gray(0xA0));
+            draw_line(x1, y1, x0, y0, app_text_dim);
     }
     int hstep = (t.hour % 12) * 5 + t.min / 12;
-    hand(cx, cy, hstep, r - 52, 1, gfx_gray(0x20));
-    hand(cx, cy, t.min, r - 30, 1, gfx_gray(0x20));
-    hand(cx, cy, t.sec, r - 22, 0, gfx_rgb(0xE0, 0x40, 0x40));
-    draw_round_rect(cx - 5, cy - 5, 10, 10, 5, gfx_rgb(0xE0, 0x40, 0x40));
-    draw_round_rect(cx - 2, cy - 2, 4, 4, 2, COLOR_WHITE);
+    hand(cx, cy, hstep, r - 52, 1, app_text);
+    hand(cx, cy, t.min, r - 30, 1, app_text);
+    hand(cx, cy, t.sec, r - 22, 0, app_accent);
+    draw_round_rect(cx - 5, cy - 5, 10, 10, 5, app_accent);
+    draw_round_rect(cx - 2, cy - 2, 4, 4, 2, app_on_accent);
 
     char buf[16];
     fmt_pad2(buf, t.hour);

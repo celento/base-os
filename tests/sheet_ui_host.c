@@ -13,6 +13,13 @@ static unsigned char presented[FB_CAPACITY];
 #define PRESENT_BASE ((uintptr_t)presented)
 #define GFX_HOST_TEST
 #include "../src/gfx.c"
+#include "app.h"
+/* Theme tokens normally owned by kernel.c's theme_apply. The fixture keeps the
+ * classic light mapping so pixel assertions stay literal and distinct. */
+uint8_t app_accent = COLOR_BLUE, app_accent_dk = COLOR_BLACK, app_on_accent = COLOR_WHITE;
+uint8_t app_text = COLOR_DKGRAY, app_text_dim = COLOR_GRAY;
+uint8_t app_chrome = COLOR_LTGRAY, app_chrome_dk = COLOR_LTGRAY, app_border = COLOR_GRAY;
+uint8_t app_body = COLOR_LTGRAY, app_field = COLOR_WHITE, app_paper = COLOR_WHITE;
 
 #define FILE_COUNT 40
 static unsigned polls, ticks, clipboard_generation, clipboard_length;

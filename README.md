@@ -2,7 +2,7 @@
 
 A small hobby operating system written from scratch in C and x86 assembly. It boots directly into a graphical desktop with persistent files, document editing, HTTP browsing, media playback, and small protected native applications.
 
-BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased bitmap fonts. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
+BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased bitmap fonts. Its dark "Nightfall" look puts tinted ink-colored windows and frosted menu and task bars over a generated night landscape; each of the eight themes has its own sky, ridges and accent color. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
 
 ![Files and Editor running side by side in BaseOS](screenshots/gallery/desktop.png)
 
@@ -32,6 +32,12 @@ Detailed guides: [Files](docs/FILES.md), [Spreadsheet](docs/SHEET.md), [Writer](
 ## Screenshots
 
 These captures come from the running QEMU guest with sample documents and artwork.
+
+### Files
+
+A sidebar of places (Home, Documents, Pictures, Media, Programs, Trash) with a storage meter, back, forward and up buttons, a clickable path, sortable columns, a name filter and color-coded file types.
+
+![Files showing the Documents folder with the places sidebar and path bar](screenshots/gallery/files.png)
 
 ### Writer
 
@@ -83,9 +89,9 @@ Wordle and 2048 running together. Snake, Mines, and Breakout are available from 
 
 ### Themes and utilities
 
-Eight saved color themes, a screen saver, and everyday utilities. Clock reads the machine's real-time clock; System Monitor reports the OS's resource and window information.
+Eight landscape themes (Nightfall, Aurora, Lagoon, Glacier, Orchid, Bloom, Moss and Graphite), a screen saver, and everyday utilities. Clock reads the machine's real-time clock; System Monitor reports the OS's resource and window information.
 
-![Appearance settings and the analog clock using the Ocean theme](screenshots/gallery/themes.png)
+![Appearance settings and the analog clock using the Aurora theme](screenshots/gallery/themes.png)
 
 ### App and file search
 

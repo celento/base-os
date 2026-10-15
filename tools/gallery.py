@@ -18,7 +18,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build").resolve()
 OUTPUT = ROOT / "screenshots" / "gallery"
 NAMES = ["desktop", "paint", "programming", "games", "themes", "search",
-         "writer", "spreadsheet", "browser", "media", "calendar"]
+         "writer", "spreadsheet", "browser", "media", "calendar", "files"]
 
 
 def tool(name):

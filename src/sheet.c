@@ -1,6 +1,7 @@
 /* Bounded desktop Spreadsheet. Large storage belongs to its reserved arena. */
 #include "sheet.h"
 #include "gfx.h"
+#include "app.h"
 #include "fs.h"
 #include "layout.h"
 #include "platform.h"
@@ -955,12 +956,12 @@ static void editor_draw(Clip all, Clip box) {
     int x = box.x - editor_offset(box.w);
     for (unsigned i = 0; i < state.edit_length; i++) {
         int selected = i >= lo && i < hi, width = ui_advance(visible_char(state.edit[i]));
-        if (selected) rect(box, x, box.y, width, box.h, COLOR_BLUE);
-        glyph(box, state.edit[i], x, box.y, selected ? COLOR_WHITE : COLOR_DKGRAY); x += width;
+        if (selected) rect(box, x, box.y, width, box.h, app_accent);
+        glyph(box, state.edit[i], x, box.y, selected ? app_on_accent : app_text); x += width;
     }
     if (state.blink && lo == hi) {
         x = box.x - editor_offset(box.w) + text_width(state.edit, state.edit_caret);
-        rect(box, x, box.y, 1, box.h, COLOR_BLACK);
+        rect(box, x, box.y, 1, box.h, app_text);
     }
 }
 int spreadsheet_cell_position(unsigned row, unsigned col, int *x, int *y, int *w, int *h) {
@@ -980,7 +981,7 @@ int spreadsheet_cell_position(unsigned row, unsigned col, int *x, int *y, int *w
 static void draw_scrollbars(Clip all) {
     int top = all.y + TOOL_H + FORMULA_H + HEADER_H, bottom = all.y + all.h - FOOT_H - SCROLL_H;
     int right = all.x + all.w - SCROLL_H;
-    unsigned char track = gfx_rgb(230, 234, 240), thumb = gfx_rgb(153, 168, 187);
+    unsigned char track = app_field, thumb = gfx_gray(0x63); /* shell track/thumb inks */
     rect(all, right, top, SCROLL_H, bottom - top, track);
     rect(all, all.x + ROW_W, bottom, right - all.x - ROW_W, SCROLL_H, track);
     int vh = bottom - top - 2 * SCROLL_H, hw = right - all.x - ROW_W - 2 * SCROLL_H;
@@ -988,14 +989,14 @@ static void draw_scrollbars(Clip all) {
         int size = (int)(state.visible_rows * (unsigned)vh / SHEET_ROWS); if (size < 14) size = 14; if (size > vh) size = vh;
         int pos = state.visible_rows < SHEET_ROWS ? (int)(state.first_row * (unsigned)(vh - size) / (SHEET_ROWS - state.visible_rows)) : 0;
         rect(all, right + 2, top + SCROLL_H + pos, SCROLL_H - 4, size, thumb);
-        label(all, "^", right + 3, top - 1, COLOR_DKGRAY); label(all, "v", right + 3, bottom - SCROLL_H - 2, COLOR_DKGRAY);
+        label(all, "^", right + 3, top - 1, app_text_dim); label(all, "v", right + 3, bottom - SCROLL_H - 2, app_text_dim);
     }
     if (hw > 0) {
         unsigned total = column_start(SHEET_COLS), maximum = max_scroll_x();
         int size = (int)(min_u(grid_width(), total) * (unsigned)hw / total); if (size < 14) size = 14; if (size > hw) size = hw;
         int pos = maximum ? (int)(state.scroll_x * (unsigned)(hw - size) / maximum) : 0;
         rect(all, all.x + ROW_W + SCROLL_H + pos, bottom + 2, size, SCROLL_H - 4, thumb);
-        label(all, "<", all.x + ROW_W + 3, bottom - 2, COLOR_DKGRAY); label(all, ">", right - SCROLL_H + 3, bottom - 2, COLOR_DKGRAY);
+        label(all, "<", all.x + ROW_W + 3, bottom - 2, app_text_dim); label(all, ">", right - SCROLL_H + 3, bottom - 2, app_text_dim);
     }
 }
 void spreadsheet_draw(int x, int y, int w, int h) {
@@ -1004,15 +1005,17 @@ void spreadsheet_draw(int x, int y, int w, int h) {
     int resized = state.width != w || state.height != h;
     geometry(w, h);
     if (resized) reveal();
-    Clip all = {x, y, w, h}; unsigned char panel = gfx_rgb(237, 241, 247), line = gfx_rgb(215, 222, 231);
-    rect(all, x, y, w, h, COLOR_WHITE); rect(all, x, y, w, TOOL_H + FORMULA_H, panel);
+    Clip all = {x, y, w, h}; unsigned char panel = app_chrome, line = app_chrome_dk, edge = app_border;
+    /* Grid lines vanish on the selection fill, so selected cells/headers use the border ink. */
+    unsigned char picked = app_chrome_dk, error_ink = gfx_rgb(255, 120, 120);
+    rect(all, x, y, w, h, app_paper); rect(all, x, y, w, TOOL_H + FORMULA_H, panel);
     for (unsigned i = 0; i < sizeof buttons / sizeof buttons[0]; i++) {
         const Button *b = &buttons[i];
-        rect(all, x + b->x, y + 5, b->w, 24, COLOR_WHITE);
-        frame(all, x + b->x, y + 5, b->w, 24, line);
-        label(all, b->text, x + b->x + (b->w - ui_string_w(b->text)) / 2, y + 8, COLOR_DKGRAY);
+        rect(all, x + b->x, y + 5, b->w, 24, app_chrome_dk);
+        frame(all, x + b->x, y + 5, b->w, 24, edge);
+        label(all, b->text, x + b->x + (b->w - ui_string_w(b->text)) / 2, y + 8, app_text);
     }
-    if (w >= 480) label(all, "Spreadsheet", x + 366, y + 8, COLOR_DKGRAY);
+    if (w >= 480) label(all, "Spreadsheet", x + 366, y + 8, app_text_dim);
     unsigned r0, c0, r1, c1; selection(&r0, &c0, &r1, &c1);
     int uniform_format = document()->formats[r0 * SHEET_COLS + c0];
     for (unsigned r = r0; r <= r1 && uniform_format >= 0; r++)
@@ -1021,51 +1024,53 @@ void spreadsheet_draw(int x, int y, int w, int h) {
     for (unsigned i = 0; i < sizeof format_buttons / sizeof format_buttons[0]; i++) {
         const Button *b = &format_buttons[i];
         int selected = i < 4 && (int)i == uniform_format;
-        rect(all, x + b->x, y + 39, b->w, 24, selected ? gfx_rgb(211, 225, 246) : COLOR_WHITE);
-        frame(all, x + b->x, y + 39, b->w, 24, selected ? COLOR_BLUE : line);
-        label(all, b->text, x + b->x + (b->w - ui_string_w(b->text)) / 2, y + 42, COLOR_DKGRAY);
+        rect(all, x + b->x, y + 39, b->w, 24, selected ? app_accent : app_chrome_dk);
+        frame(all, x + b->x, y + 39, b->w, 24, selected ? app_accent : edge);
+        label(all, b->text, x + b->x + (b->w - ui_string_w(b->text)) / 2, y + 42, selected ? app_on_accent : app_text);
     }
-    label(all, "Width", x + 214, y + 42, COLOR_DKGRAY);
+    label(all, "Width", x + 214, y + 42, app_text_dim);
     unsigned width = column_width(c0); int mixed = 0;
     for (unsigned c = c0 + 1; c <= c1; c++) if (column_width(c) != width) mixed = 1;
     char width_text[11]; number_text(width, width_text);
-    label(intersect(all, (Clip){x + 283, y + 42, 36, 18}), mixed ? "..." : width_text, x + 283, y + 42, COLOR_DKGRAY);
-    if (w >= 610) label(all, "Ctrl+1..4 format; Ctrl+0 resets width", x + 366, y + 42, COLOR_DKGRAY);
+    label(intersect(all, (Clip){x + 283, y + 42, 36, 18}), mixed ? "..." : width_text, x + 283, y + 42, app_text);
+    if (w >= 610) label(all, "Ctrl+1..4 format; Ctrl+0 resets width", x + 366, y + 42, app_text_dim);
     char address[5]; sheet_label(snapshot()->caret / SHEET_COLS, snapshot()->caret % SHEET_COLS, address, sizeof address);
-    rect(all, x + 8, y + TOOL_H + 3, 70, 27, state.mode == 2 ? COLOR_BLUE : line);
-    rect(all, x + 9, y + TOOL_H + 4, 68, 25, COLOR_WHITE);
+    rect(all, x + 8, y + TOOL_H + 3, 70, 27, state.mode == 2 ? app_accent : edge);
+    rect(all, x + 9, y + TOOL_H + 4, 68, 25, app_field);
     Clip address_box = {x + 14, y + TOOL_H + 7, 58, 18};
     if (state.mode == 2) editor_draw(all, address_box);
-    else label(intersect(all, address_box), address, address_box.x, address_box.y, COLOR_DKGRAY);
+    else label(intersect(all, address_box), address, address_box.x, address_box.y, app_text);
     const SheetCell *active = &document()->cells[snapshot()->caret];
-    label(all, active->kind == SHEET_TEXT ? "txt" : "fx", x + 85, y + TOOL_H + 7, COLOR_DKGRAY);
-    rect(all, x + 111, y + TOOL_H + 3, w - 119, 27, state.mode == 1 ? COLOR_BLUE : line);
-    rect(all, x + 112, y + TOOL_H + 4, w - 121, 25, COLOR_WHITE);
+    label(all, active->kind == SHEET_TEXT ? "txt" : "fx", x + 85, y + TOOL_H + 7, app_text_dim);
+    rect(all, x + 111, y + TOOL_H + 3, w - 119, 27, state.mode == 1 ? app_accent : edge);
+    rect(all, x + 112, y + TOOL_H + 4, w - 121, 25, app_field);
     Clip source = {x + 117, y + TOOL_H + 7, w - 131, 18};
     if (state.mode == 1) editor_draw(all, source);
-    else label_n(intersect(all, source), active->text, active->length, source.x, source.y, COLOR_DKGRAY);
+    else label_n(intersect(all, source), active->text, active->length, source.x, source.y, app_text);
     int grid_y = y + TOOL_H + FORMULA_H + HEADER_H, bottom = y + h - FOOT_H - SCROLL_H, right = x + w - SCROLL_H;
     Clip grid = intersect(all, (Clip){x, y + TOOL_H + FORMULA_H, w - SCROLL_H, bottom - y - TOOL_H - FORMULA_H});
     rect(grid, x, grid.y, ROW_W, HEADER_H, panel);
     for (unsigned c = state.first_col; c < SHEET_COLS; c++) {
         int cx = x + column_left(c), cw = (int)column_width(c); if (cx >= right) break;
         Clip head = intersect(intersect(grid, (Clip){x + ROW_W, grid.y, right - x - ROW_W, grid.h}), (Clip){cx, grid_y - HEADER_H, cw, HEADER_H});
-        rect(head, cx, grid_y - HEADER_H, cw, HEADER_H, c >= c0 && c <= c1 ? gfx_rgb(211, 225, 246) : panel);
-        char name[2] = {(char)('A' + c), 0}; label(head, name, cx + (cw - ui_advance(name[0])) / 2, grid_y - HEADER_H + 3, COLOR_DKGRAY);
-        frame(head, cx, grid_y - HEADER_H, cw, HEADER_H, line);
+        int in_range = c >= c0 && c <= c1;
+        rect(head, cx, grid_y - HEADER_H, cw, HEADER_H, in_range ? picked : panel);
+        char name[2] = {(char)('A' + c), 0}; label(head, name, cx + (cw - ui_advance(name[0])) / 2, grid_y - HEADER_H + 3, in_range ? app_text : app_text_dim);
+        frame(head, cx, grid_y - HEADER_H, cw, HEADER_H, in_range ? edge : line);
     }
     for (unsigned r = state.first_row; r < SHEET_ROWS; r++) {
         int ry = grid_y + (int)(r - state.first_row) * ROW_H; if (ry >= bottom) break;
         Clip head = intersect(grid, (Clip){x, ry, ROW_W, ROW_H});
-        rect(head, x, ry, ROW_W, ROW_H, r >= r0 && r <= r1 ? gfx_rgb(211, 225, 246) : panel);
-        char number[11]; number_text(r + 1, number); label(head, number, x + ROW_W - ui_string_w(number) - 6, ry + 3, COLOR_DKGRAY);
-        frame(head, x, ry, ROW_W, ROW_H, line);
+        int in_rows = r >= r0 && r <= r1;
+        rect(head, x, ry, ROW_W, ROW_H, in_rows ? picked : panel);
+        char number[11]; number_text(r + 1, number); label(head, number, x + ROW_W - ui_string_w(number) - 6, ry + 3, in_rows ? app_text : app_text_dim);
+        frame(head, x, ry, ROW_W, ROW_H, in_rows ? edge : line);
         for (unsigned c = state.first_col; c < SHEET_COLS; c++) {
             int cx = x + column_left(c), cw = (int)column_width(c); if (cx >= right) break;
             Clip cell = intersect(intersect(grid, (Clip){x + ROW_W, grid.y, right - x - ROW_W, grid.h}), (Clip){cx, ry, cw, ROW_H});
             int selected = r >= r0 && r <= r1 && c >= c0 && c <= c1;
-            rect(cell, cx, ry, cw, ROW_H, selected ? gfx_rgb(229, 239, 253) : COLOR_WHITE);
-            frame(cell, cx, ry, cw, ROW_H, line);
+            rect(cell, cx, ry, cw, ROW_H, selected ? picked : app_paper);
+            frame(cell, cx, ry, cw, ROW_H, selected ? edge : line);
             const SheetCell *v = sheet_cell(document(), r, c); char value[SHEET_TEXT_MAX + 1u]; unsigned length;
             if (!sheet_format_display(document(), r, c, value, sizeof value, &length)) {
                 int tx = cx + 5, width = text_width(value, length);
@@ -1081,10 +1086,10 @@ void spreadsheet_draw(int x, int y, int w, int h) {
                         width = text_width(value, length); tx = content.x + content.w - width - 2;
                     }
                 }
-                label_n(content, value, length, tx, ry + 3, v->error ? COLOR_RED : COLOR_DKGRAY);
+                label_n(content, value, length, tx, ry + 3, v->error ? error_ink : app_text);
             }
             if (r * SHEET_COLS + c == snapshot()->caret) {
-                frame(cell, cx, ry, cw, ROW_H, COLOR_BLUE); frame(cell, cx + 1, ry + 1, cw - 2, ROW_H - 2, COLOR_BLUE);
+                frame(cell, cx, ry, cw, ROW_H, app_accent); frame(cell, cx + 1, ry + 1, cw - 2, ROW_H - 2, app_accent);
             }
         }
     }
@@ -1093,11 +1098,11 @@ void spreadsheet_draw(int x, int y, int w, int h) {
     char range[11]; sheet_label(r0, c0, range, 5);
     if (r0 != r1 || c0 != c1) { unsigned len = text_length(range); range[len++] = ':'; sheet_label(r1, c1, range + len, sizeof range - len); }
     Clip foot = intersect(all, (Clip){x + 8, y + h - FOOT_H + 5, w - 16, 18});
-    label(foot, range, foot.x, foot.y, COLOR_BLUE);
+    label(foot, range, foot.x, foot.y, app_accent_dk);
     int sx = foot.x + ui_string_w(range) + 14;
     const char *message = state.save.pending ?
         (state.save.kind == DOCUMENT_SAVE_NATIVE ? "Saving sheet to disk..." : "Exporting CSV to disk...") : state.status;
-    label(foot, message, sx, foot.y, COLOR_DKGRAY);
+    label(foot, message, sx, foot.y, app_text_dim);
 }
 
 static unsigned hit_cell(int w, int h, int mx, int my) {

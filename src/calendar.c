@@ -167,9 +167,9 @@ static void accept_confirmation(void) {
     confirm = CONFIRM_NONE;
 }
 static void button(int x, int y, int w, const char *s, int active) {
-    draw_round_rect(x, y, w, 26, 5, active ? app_accent : app_chrome_dk);
-    if (!active) draw_round_rect(x + 1, y + 1, w - 2, 24, 4, COLOR_WHITE);
-    draw_string(s, x + (w - ui_string_w(s)) / 2, y + 4, active ? COLOR_WHITE : app_text);
+    draw_round_rect(x, y, w, 26, 5, active ? app_accent : app_border);
+    if (!active) draw_round_rect(x + 1, y + 1, w - 2, 24, 4, app_chrome);
+    draw_string(s, x + (w - ui_string_w(s)) / 2, y + 4, active ? app_on_accent : app_text);
 }
 static void draw_nav(int x, int y, int dir) {
     button(x, y, 28, "", 0);
@@ -181,8 +181,8 @@ static void draw_nav(int x, int y, int dir) {
 }
 static void draw_field(int x, int y, int w, const char *s, int field, int active) {
     int focused = active && entry_focus && cal_agenda_draft()->field == field && !confirm;
-    draw_round_rect(x, y, w, 28, 4, focused ? app_accent : app_chrome_dk);
-    draw_round_rect(x + 1, y + 1, w - 2, 26, 3, COLOR_WHITE);
+    draw_round_rect(x, y, w, 28, 4, focused ? app_accent : app_border);
+    draw_round_rect(x + 1, y + 1, w - 2, 26, 3, app_field);
     int n = length(s), cursor = caret;
     if (cursor < 0) cursor = 0;
     if (cursor > n) cursor = n;
@@ -193,13 +193,13 @@ static void draw_field(int x, int y, int w, const char *s, int field, int active
     }
     if (focused && select_all) draw_rect(x + 4, y + 4, w - 8, 20, app_accent);
     draw_string_clip(s + start, x + 6, y + 5,
-                     focused && select_all ? COLOR_WHITE : active ? app_text : app_text_dim, x + w - 5);
+                     focused && select_all ? app_on_accent : active ? app_text : app_text_dim, x + w - 5);
     if (focused && !select_all) draw_vline(x + 6 + width, y + 5, 18, app_text);
 }
 void cal_draw(int bx, int by, int bw, int bh) {
     ensure_open();
     RtcTime t; rtc_read(&t);
-    draw_rect(bx, by, bw, bh, COLOR_WHITE);
+    draw_rect(bx, by, bw, bh, app_body);
     if (bw < CAL_W || bh < CAL_H - 1) {
         draw_string_clip("Enlarge Calendar to see appointments.", bx + 12, by + 12, app_text, bx + bw - 8);
         return;
@@ -228,12 +228,13 @@ void cal_draw(int bx, int by, int bw, int bh) {
         int index = first + d - 1, col = index % 7;
         int x = gx + col * cw, y = by + GRID_Y + index / 7 * GRID_H;
         int is_today = view_year == t.year && view_month == t.month && d == t.day;
-        if (d == view_day) draw_round_frame(x + 2, y + 1, cw - 4, GRID_H - 2, 6, app_accent);
-        if (is_today) draw_round_rect(x + (cw - 22) / 2, y + 2, 22, 22, 11, app_accent);
+        int chosen = d == view_day;
+        if (chosen) draw_round_rect(x + 2, y + 1, cw - 4, GRID_H - 2, 6, app_accent);
+        if (is_today) draw_round_frame(x + (cw - 22) / 2, y + 2, 22, 22, 11, chosen ? app_on_accent : app_accent);
         char s[4]; fmt_uint(s, (unsigned)d);
         draw_string(s, x + (cw - ui_string_w(s)) / 2, y + 5,
-                    is_today ? COLOR_WHITE : (col == 0 || col == 6) ? app_text_dim : app_text);
-        if (marked & (1u << (d - 1))) draw_round_rect(x + cw / 2 - 2, y + 24, 4, 3, 1, app_accent);
+                    chosen ? app_on_accent : is_today ? app_accent_dk : (col == 0 || col == 6) ? app_text_dim : app_text);
+        if (marked & (1u << (d - 1))) draw_round_rect(x + cw / 2 - 2, y + 24, 4, 3, 1, chosen ? app_on_accent : app_accent);
     }
     button(bx + 16, by + 258, 66, "Today", 0);
     draw_string("Dots mark appointments", bx + 94, by + 262, app_text_dim);
@@ -248,7 +249,7 @@ void cal_draw(int bx, int by, int bw, int bh) {
         const CalAppointment *a = day_get(first_row + row);
         if (!a) break;
         int y = by + 70 + row * ROW_H, chosen = a->id == selected;
-        if (chosen) draw_round_rect(right - 3, y, rw + 6, ROW_H - 1, 4, app_chrome);
+        if (chosen) draw_round_rect(right - 3, y, rw + 6, ROW_H - 1, 4, app_chrome_dk);
         char time[6]; time_text(time, a->minute);
         draw_string(a->minute < 0 ? "All-day" : time, right + 3, y + 2, app_text_dim);
         draw_string_clip(a->title, right + 63, y + 2, app_text, right + rw - 4);

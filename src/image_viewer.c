@@ -181,7 +181,7 @@ static void geometry(int w, int h) {
 
 static void button(int x, int y, int w, const char *label, int selected, int enabled) {
     uint8_t background = selected ? app_accent : app_chrome;
-    uint8_t text = !enabled ? app_text_dim : selected ? COLOR_WHITE : app_text;
+    uint8_t text = !enabled ? app_text_dim : selected ? app_on_accent : app_text;
     draw_round_rect(x, y, w, 28, 6, background);
     draw_round_frame(x, y, w, 28, 6, selected ? app_accent : app_chrome_dk);
     draw_string(label, x + (w - ui_string_w(label)) / 2, y + 5, text);
@@ -199,7 +199,7 @@ static void message_lines(const char *text, int x, int y, int width, int height)
         if (text[used] && split) used = split;
         if (!used) break;
         line[used] = 0;
-        draw_string(line, x, y, gfx_gray(200));
+        draw_string(line, x, y, app_text_dim);
         text += used;
         while (*text == ' ') text++;
         y += 22; height -= 22;
@@ -209,7 +209,7 @@ static void message_lines(const char *text, int x, int y, int width, int height)
 void image_viewer_draw(int x, int y, int w, int h) {
     if (w < 1 || h < 1) return;
     geometry(w, h);
-    uint8_t well = gfx_gray(30);
+    uint8_t well = app_field;
     draw_rect(x, y, w, h, app_chrome);
     button(x + 10, y + 6, 44, "Fit", viewer.fit && viewer.loaded, viewer.loaded);
     button(x + 60, y + 6, 44, "1:1", !viewer.fit && viewer.scale == 100 && viewer.loaded, viewer.loaded);
@@ -247,7 +247,7 @@ void image_viewer_draw(int x, int y, int w, int h) {
         }
     } else {
         const char *heading = viewer.title[0] ? "Image could not be opened" : "Open an image from Files";
-        draw_string_clip(heading, vx + 16, vy + 22, COLOR_WHITE, vx + vw - 12);
+        draw_string_clip(heading, vx + 16, vy + 22, app_text, vx + vw - 12);
         message_lines(viewer.status[0] ? viewer.status : "JPEG, PNG, BMP, GIF and BaseOS Paint",
                       vx + 16, vy + 48, vw - 32, vh - 56);
     }

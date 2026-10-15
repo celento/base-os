@@ -38,8 +38,8 @@ static void gallery_show(int n) {
 }
 void feature_test(void) {
     gallery_clear();
-    open_files(fs_root());gallery_place(285,85,530,475);
-    open_edit();gallery_place(690,185,550,435);
+    open_files(fs_root());gallery_place(250,70,640,500);
+    open_edit();gallery_place(700,190,540,430);
     const char *note="Welcome to BaseOS\n\nA small operating system, built from scratch.\n\nMake yourself at home:\n\n  Open apps with Ctrl + Space\n  Snap windows with Alt + Left or Right\n  Save a document with Ctrl + S\n  Explore commands with help and man\n\nFiles and editor drafts survive a reboot.\n";
     while(*note)edit_insert(*note++);
     edit_write_named("Welcome.txt");
@@ -77,7 +77,7 @@ void feature_test(void) {
     for(int j=0;j<3;j++){for(int i=0;i<5;i++)wordle_key(WORDLE_ACT_NONE,guesses[j][i]);wordle_key(WORDLE_ACT_ENTER,0);}
     gallery_show(3);
 
-    gallery_clear();theme_id=5;theme_apply();
+    gallery_clear();theme_id=1;theme_apply();
     win_open(WK_CLOCK);gallery_place(890,150,0,0);
     win_open(WK_SETTINGS);gallery_place(300,110,0,0);gallery_show(4);
 
@@ -116,5 +116,8 @@ void feature_test(void) {
     cal_agenda_add(now.year,now.month,now.day,-1,"Pack the blue lantern");
     win_open(WK_CAL);gallery_place(330,80,0,0);
     gallery_show(10);
+    gallery_clear();open_files(fs_root());fm_navigate(docs);gallery_place(240,70,820,540);
+    fm_select_id(fs_find_child(docs,"budget.bsh"));
+    gallery_show(11);
     platform_log("GALLERY-DONE\n");
 }

@@ -89,22 +89,26 @@
 
 #define EDIT_BUF_SIZE  65536
 
+/* Each theme is a dusk landscape: a three-stop sky, ridge silhouettes and one
+ * vivid accent. Window chrome is always dark; only these colors change. */
 typedef struct {
     const char *name;
-    uint32_t desk_top;
-    uint32_t desk_bot;
+    uint32_t sky_top;
+    uint32_t sky_mid;
+    uint32_t horizon;
+    uint32_t ridge;
     uint32_t accent;
 } Theme;
 
 static const Theme themes[THEME_N] = {
-    {"Aqua",     0x4A7194, 0x14243A, 0x306AC4},
-    {"Graphite", 0x667080, 0x242A36, 0x536278},
-    {"Forest",   0x567E71, 0x172F2B, 0x28785C},
-    {"Sunset",   0xA37366, 0x3B283B, 0xB95336},
-    {"Plum",     0x7D739C, 0x2D2544, 0x7956B2},
-    {"Ocean",    0x48858C, 0x18343E, 0x237987},
-    {"Sand",     0x938572, 0x39342E, 0x91652B},
-    {"Rose",     0x9C7389, 0x382536, 0xB5456C},
+    {"Nightfall", 0x070A1E, 0x211F55, 0x5C70CE, 0x0B0E26, 0x8FA8FF},
+    {"Aurora",    0x041318, 0x0E3B3E, 0x6FD8A8, 0x061B1E, 0x4FE0B0},
+    {"Lagoon",    0x041419, 0x0D3C46, 0x4FB6B0, 0x061C22, 0x3FD6D0},
+    {"Glacier",   0x0A1220, 0x24405E, 0xA9D6EE, 0x0E1826, 0x9BE4FF},
+    {"Orchid",    0x120A24, 0x3D1F5C, 0xD781C9, 0x1A1030, 0xD49BFF},
+    {"Bloom",     0x160A14, 0x4A1838, 0xF07AA0, 0x200D1C, 0xFF7EB3},
+    {"Moss",      0x070F0A, 0x1A3322, 0x9CC77A, 0x0A150D, 0xB6E36B},
+    {"Graphite",  0x0C0E12, 0x262B35, 0x8C97AA, 0x13161C, 0xB8C4D9},
 };
 
 static int theme_id = 0;
@@ -123,6 +127,10 @@ static uint8_t ui_text;
 static uint8_t ui_text_dim;
 static uint8_t ui_track;
 static uint8_t ui_body;
+static uint8_t ui_field;
+static uint8_t ui_paper;
+static uint8_t ui_title;
+static uint8_t ui_on_accent;
 static int desk_cache_theme = -1;
 uint8_t app_accent;
 uint8_t app_accent_dk;
@@ -130,6 +138,11 @@ uint8_t app_text;
 uint8_t app_text_dim;
 uint8_t app_chrome;
 uint8_t app_chrome_dk;
+uint8_t app_body;
+uint8_t app_field;
+uint8_t app_paper;
+uint8_t app_border;
+uint8_t app_on_accent;
 static int display_pending = 0, display_previous = -1;
 static uint32_t display_deadline;
 static const char *display_message = "";
@@ -172,24 +185,44 @@ static uint8_t idx24(uint32_t c) {
     return gfx_rgb((c >> 16) & 255, (c >> 8) & 255, c & 255);
 }
 
+/* Neutrals are a 32-step ink ramp tinted toward the night sky. INK(0) is the
+ * deepest shade and INK(31) the brightest text. */
+#define INK(i) ((uint8_t)(PAL_GRAY + (i)))
+
 static void theme_apply(void) {
     const Theme *t = &themes[theme_id];
     ui_accent_rgb = t->accent;
     ui_accent_rgb_lt = rgb_lighten(t->accent, 45);
-    ui_accent_rgb_dk = rgb_darken(t->accent, 52);
-    gfx_set_ramp(PAL_DESK, PAL_DESK_N, t->desk_top, t->desk_bot);
+    ui_accent_rgb_dk = rgb_darken(t->accent, 62);
+    /* Wallpaper ramp: 0..39 sky (top, mid, horizon), 40..63 three ridge layers. */
+    gfx_set_ramp(PAL_DESK, 20, t->sky_top, t->sky_mid);
+    gfx_set_ramp(PAL_DESK + 19, 21, t->sky_mid, t->horizon);
+    for (int layer = 0; layer < 3; layer++) {
+        static const int haze[3] = {58, 34, 12};
+        uint32_t base = rgb_lerp(t->ridge, t->horizon, haze[layer], 100);
+        gfx_set_ramp(PAL_DESK + 40 + layer * 8, 8, rgb_lighten(base, 10), base);
+    }
+    gfx_set_ramp(PAL_GRAY, 17, 0x0B0A14, 0x6E6B86);
+    gfx_set_ramp(PAL_GRAY + 16, 16, 0x6E6B86, 0xF6F4FB);
     gfx_set_ramp(PAL_ACCENT, 9, ui_accent_rgb_lt, ui_accent_rgb);
     gfx_set_ramp(PAL_ACCENT + 8, 8, ui_accent_rgb, ui_accent_rgb_dk);
     gfx_pal_commit();
     ui_accent = PAL_ACCENT + 8;
-    ui_accent_dk = PAL_ACCENT + 14;
-    ui_border = gfx_gray(0xB8);
-    ui_chrome = gfx_gray(0xF4);
-    ui_chrome_dk = gfx_gray(0xDE);
-    ui_text = gfx_gray(0x20);
-    ui_text_dim = gfx_gray(0x70);
-    ui_track = gfx_gray(0xF4);
-    ui_body = COLOR_WHITE;
+    ui_accent_dk = PAL_ACCENT + 3; /* lighter step reads better on dark chrome */
+    ui_track = INK(2);
+    ui_field = INK(2);
+    ui_paper = INK(2);
+    ui_body = INK(3);
+    ui_chrome = INK(4);
+    ui_title = INK(5);
+    ui_chrome_dk = INK(7);
+    ui_border = INK(9);
+    ui_text_dim = INK(19);
+    ui_text = INK(29);
+    {
+        int r = (t->accent >> 16) & 255, g = (t->accent >> 8) & 255, b = t->accent & 255;
+        ui_on_accent = (r * 299 + g * 587 + b * 114) / 1000 > 140 ? INK(1) : COLOR_WHITE;
+    }
     desk_cache_theme = -1;
     app_accent = ui_accent;
     app_accent_dk = ui_accent_dk;
@@ -197,6 +230,11 @@ static void theme_apply(void) {
     app_text_dim = ui_text_dim;
     app_chrome = ui_chrome;
     app_chrome_dk = ui_chrome_dk;
+    app_body = ui_body;
+    app_field = ui_field;
+    app_paper = ui_paper;
+    app_border = ui_border;
+    app_on_accent = ui_on_accent;
 }
 
 void drain_8042(void);
@@ -287,12 +325,12 @@ static void min_box_pos(int wx, int wy, int *cx, int *cy) {
 }
 
 static void draw_min_box(int x, int y, int active) {
-    draw_round_rect(x, y, CLOSE_S, CLOSE_S, 5, gfx_gray(0xE8));
+    draw_round_rect(x, y, CLOSE_S, CLOSE_S, CLOSE_S / 2, INK(7));
     draw_rect(x + 5, y + 9, 8, 2, active ? ui_text : ui_text_dim);
 }
 
 static void draw_close_box(int x, int y, int active) {
-    draw_round_rect(x, y, CLOSE_S, CLOSE_S, 5, gfx_gray(0xE8));
+    draw_round_rect(x, y, CLOSE_S, CLOSE_S, CLOSE_S / 2, INK(7));
     uint8_t ink = active ? ui_text : ui_text_dim;
     draw_line(x + 6, y + 6, x + 11, y + 11, ink);
     draw_line(x + 6, y + 7, x + 10, y + 11, ink);
@@ -316,11 +354,11 @@ static void draw_sb_arrow(int x, int y, int dir, uint8_t col) {
 }
 
 static void draw_thumb(int x, int y, int w, int h) {
-    draw_round_rect(x + 1, y + 1, w - 2, h - 2, 3, gfx_gray(0xB0));
+    draw_round_rect(x + 1, y + 1, w - 2, h - 2, 3, INK(12));
 }
 
 static void draw_scrollbars(int x, int y, int w, int h, int top) {
-    uint8_t arrow = gfx_rgb(0x60, 0x64, 0x70);
+    uint8_t arrow = ui_text_dim;
     int vx = x + w - 1 - SB;
     int vy = y + top + 1;
     int vh = h - top - SB - 2;
@@ -353,10 +391,10 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
     int r = 7;
 
     draw_shadow(x, y, w, h);
-    draw_round_rect(x - 1, y - 1, w + 2, h + 2, r + 1, ui_border);
+    draw_round_rect(x - 1, y - 1, w + 2, h + 2, r + 1, inactive ? ui_border : gfx_mix(ui_border, ui_accent, 90));
     draw_round_rect(x, y, w, h, r, ui_body);
-    draw_round_top(x, y, w, TITLE_H, r, inactive ? ui_chrome : COLOR_WHITE);
-    draw_hline(x, y + TITLE_H, w, ui_chrome_dk);
+    draw_round_top(x, y, w, TITLE_H, r, inactive ? ui_chrome : ui_title);
+    draw_hline(x, y + TITLE_H, w, inactive ? ui_chrome_dk : INK(1));
 
     if (!noclose) {
         int cx, cy;
@@ -364,8 +402,8 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
         draw_close_box(cx, cy, !inactive);
         min_box_pos(x, y, &cx, &cy);
         draw_min_box(cx, cy, !inactive);
-        draw_round_rect(cx + CLOSE_S + 6, cy, CLOSE_S, CLOSE_S, 7,
-                        gfx_gray(0xE8));
+        draw_round_rect(cx + CLOSE_S + 6, cy, CLOSE_S, CLOSE_S, CLOSE_S / 2,
+                        INK(7));
         draw_frame(cx + CLOSE_S + 11, cy + 5, 8, 8, inactive ? ui_text_dim : ui_text);
     }
 
@@ -380,10 +418,8 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
         int xmax = x + w - 12;
         if (inactive)
             draw_string_bold_clip(title, tx, title_y, ui_text_dim, xmax);
-        else {
+        else
             draw_string_bold_clip(title, tx, title_y, ui_text, xmax);
-            draw_round_rect(tx - 10, title_y + CHAR_H / 2 - 2, 4, 4, 2, ui_accent);
-        }
     }
 
     int top = TITLE_H;
@@ -400,13 +436,13 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
 }
 
 static void draw_button_styled(int x, int y, int w, int h, const char *label, int primary) {
-    draw_round_rect(x, y, w, h, 6, primary ? ui_accent : ui_chrome_dk);
+    draw_round_rect(x, y, w, h, 6, primary ? ui_accent : ui_border);
     if (!primary)
-        draw_round_rect(x + 1, y + 1, w - 2, h - 2, 5, COLOR_WHITE);
+        draw_round_rect(x + 1, y + 1, w - 2, h - 2, 5, INK(6));
     int tw = ui_string_w(label);
     int tx = x + (w - tw) / 2;
     int ty = y + (h - CHAR_H) / 2;
-    draw_string_clip(label, tx, ty, primary ? COLOR_WHITE : ui_text, x + w - 4);
+    draw_string_clip(label, tx, ty, primary ? ui_on_accent : ui_text, x + w - 4);
 }
 
 void draw_button(int x, int y, int w, int h, const char *label) {
@@ -909,7 +945,7 @@ static void draw_desktop_icons(int selected) {
             if (lx - 10 < x0)
                 x0 = lx - 10;
             draw_round_rect(x0, y0, x1 - x0, ly + CHAR_H + 6 - y0, 8, gfx_mix(get_pixel(x0, y0), COLOR_WHITE, 60));
-            draw_round_frame(x0, y0, x1 - x0, ly + CHAR_H + 6 - y0, 8, idx24(rgb_lighten(themes[theme_id].desk_top, 55)));
+            draw_round_frame(x0, y0, x1 - x0, ly + CHAR_H + 6 - y0, 8, ui_accent);
         }
         draw_app_tile(icons[i].x, icons[i].y, i, icons[i].color, TILE_S);
         draw_string(icons[i].label, lx, ly, COLOR_WHITE);
@@ -917,22 +953,74 @@ static void draw_desktop_icons(int selected) {
 }
 
 /* The wallpaper is generated only when the theme changes, then copied from RAM.
- * Broad curved bands use the dedicated 64-color ramp, without per-frame blending. */
+ * It is a dusk landscape: sky ramp, a banded low sun with a glow, sparse stars
+ * and three hazy ridges from integer value noise. */
+static unsigned wall_hash(unsigned x, unsigned seed) {
+    unsigned h = x * 0x9E3779B1u ^ seed * 0x85EBCA77u;
+    h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12;
+    return h;
+}
+static int wall_noise(int x, int period, unsigned seed) {
+    int i = x / period, f = (x % period) * 256 / period;
+    int a = (int)(wall_hash((unsigned)i, seed) & 1023), b = (int)(wall_hash((unsigned)i + 1, seed) & 1023);
+    int smooth = f * f * (768 - 2 * f) / 65536;
+    return a + (b - a) * smooth / 256;
+}
+static const uint8_t wall_bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
 static void desktop_render(void) {
+    int horizon = fb_h * 64 / 100;
+    int sun_r = fb_h * 15 / 100, sun_x = fb_w * 69 / 100, sun_y = horizon - sun_r / 4;
+    int glow2 = sun_r * sun_r * 9, sun2 = sun_r * sun_r;
+    static const int base_pct[3] = {58, 69, 81}, amp_pct[3] = {9, 10, 9}, period[3] = {173, 109, 151};
     for (int x = 0; x < fb_w; x++) {
-        int nx = x * 1024 / fb_w;
-        int curve = 190 + (nx - 600) * (nx - 600) / 1400;
+        int ridge[3];
+        for (int k = 0; k < 3; k++) {
+            int n = wall_noise(x + k * 997, period[k] * fb_w / 1280 + 8, 11u + (unsigned)k) * 2 / 3 +
+                    wall_noise(x + k * 331, period[k] * fb_w / 3840 + 4, 41u + (unsigned)k) / 3;
+            ridge[k] = fb_h * base_pct[k] / 100 - fb_h * amp_pct[k] / 100 * n / 1023;
+        }
         for (int y = 0; y < fb_h; y++) {
-            int ny = y * 1024 / fb_h;
-            int d = ny - curve;
-            int band = d < 0 ? -d : d;
-            int light = band < 260 ? (260 - band) / 12 : 0;
-            int tone = 23 + ny * 27 / 1024 - light;
-            if (tone < 0) tone = 0;
-            if (tone >= PAL_DESK_N) tone = PAL_DESK_N - 1;
-            fb[y * fb_w + x] = PAL_DESK + tone;
+            uint8_t c;
+            int layer = -1;
+            for (int k = 2; k >= 0; k--) if (y >= ridge[k]) { layer = k; break; }
+            if (layer >= 0) {
+                int depth16 = (y - ridge[layer]) * 7 * 16 / (fb_h / 5 + 1);
+                int depth = depth16 >> 4;
+                if (depth < 7 && (depth16 & 15) > wall_bayer[y & 3][x & 3]) depth++;
+                if (depth > 7) depth = 7;
+                c = (uint8_t)(PAL_DESK + 40 + layer * 8 + depth);
+            } else {
+                int dx = x - sun_x, dy = y - sun_y, d2 = dx * dx + dy * dy;
+                int tone16 = y * 39 * 16 / (horizon > 0 ? horizon : 1);
+                if (d2 < glow2) tone16 += (glow2 - d2) / (glow2 / 224 + 1);
+                int tone = tone16 >> 4;
+                if ((tone16 & 15) > wall_bayer[y & 3][x & 3]) tone++;
+                if (tone > 39) tone = 39;
+                c = (uint8_t)(PAL_DESK + tone);
+                int band = sun_r / 7 + 1, below = dy + sun_r / 6;
+                int gap = below > 0 ? below * 5 / sun_r + 1 : 0;
+                if (d2 < sun2 && !(below > 0 && below % band < gap)) {
+                    int shade = d2 * 9 / (sun2 + 1);
+                    c = (uint8_t)(PAL_ACCENT + (shade > 8 ? 8 : shade));
+                } else if (y < horizon * 7 / 10 && d2 > glow2 / 3) {
+                    unsigned h = wall_hash((unsigned)(y * 4099 + x), 7u);
+                    if ((h & 1023) == 0) c = (h >> 10) & 3 ? INK(20 + (int)((h >> 12) & 7)) : COLOR_WHITE;
+                }
+            }
+            if (y < MENUBAR_H || y >= TASKBAR_Y) c = gfx_darker(c, 42);
+            fb[y * fb_w + x] = c;
         }
     }
+}
+
+/* Menu bar and taskbar sit on a darkened copy of the wallpaper (frosted glass).
+ * Copying from the cache keeps repeated partial redraws idempotent. */
+static void desk_band(int y, int h) {
+    if (desk_cache_theme != theme_id || y < 0 || h <= 0 || y + h > fb_h) {
+        draw_rect(0, y, fb_w, h, INK(2));
+        return;
+    }
+    kmemcpy(fb + y * fb_w, (uint8_t *)DESK_CACHE + y * fb_w, (unsigned)(h * fb_w));
 }
 
 void draw_desktop(void) {
@@ -992,6 +1080,10 @@ static void handle_calc_click(int wx, int wy, int ww, int wh);
 static void fm_go_up(void);
 static int fm_row_id(int row);
 static void fm_rename_cancel(void);
+static void fm_history_reset(void);
+static void fm_history_step(int dir);
+static int fm_history_target(int dir);
+static void fm_navigate(int id);
 static void theme_load(void);
 static void draw_about(int wx, int wy, int ww, int wh, int fl);
 static void draw_settings(int wx, int wy, int ww, int wh, int fl);
@@ -1056,15 +1148,15 @@ static uint32_t frame_count = 0;
 
 static void draw_menubar(int open_menu, int menu_sel) {
     (void)menu_sel;
-    draw_rect(0, 0, fb_w, MENUBAR_H, ui_chrome);
-    draw_hline(0, MENUBAR_H - 1, fb_w, ui_chrome_dk);
+    desk_band(0, MENUBAR_H);
+    draw_hline(0, MENUBAR_H - 1, fb_w, INK(6));
 
     int label_y = (MENUBAR_H - CHAR_H) / 2;
     for (int i = 0; i < MENU_N; i++) {
         int inv = (open_menu == i);
         if (inv) {
             draw_round_rect(bar_x[i], 3, bar_w[i], MENUBAR_H - 7, 5, ui_accent);
-            draw_string(bar_name[i], bar_x[i] + 10, label_y, COLOR_WHITE);
+            draw_string(bar_name[i], bar_x[i] + 10, label_y, ui_on_accent);
         } else {
             if (i == 0)
                 draw_string_bold(bar_name[i], bar_x[i] + 10, label_y, ui_accent_dk);
@@ -1113,7 +1205,7 @@ static void draw_pulldown(int open_menu, int menu_sel) {
     menu_geom(open_menu, &x, &y, &w, &h);
     draw_shadow(x, y, w, h);
     draw_round_rect(x, y, w, h, 6, ui_border);
-    draw_round_rect(x + 1, y + 1, w - 2, h - 2, 5, COLOR_WHITE);
+    draw_round_rect(x + 1, y + 1, w - 2, h - 2, 5, INK(4));
 
     int iy = y + 4;
     for (int i = 0; i < menu_count[open_menu]; i++) {
@@ -1128,7 +1220,7 @@ static void draw_pulldown(int open_menu, int menu_sel) {
         if (inv)
             draw_round_rect(x + 4, iy, w - 8, MENU_ROW, 4, ui_accent);
         int ty = iy + (MENU_ROW - CHAR_H) / 2;
-        uint8_t fg = inv ? COLOR_WHITE : (enabled ? ui_text : ui_text_dim);
+        uint8_t fg = inv ? ui_on_accent : (enabled ? ui_text : ui_text_dim);
         draw_string(it, x + 14, ty, fg);
         iy += MENU_ROW;
     }
@@ -1435,6 +1527,8 @@ typedef struct {
     int files_total;
     FileViewOptions files_view;
     int filter_open, filter_focus, filter_select_all;
+    int hist[12], hist_n, hist_pos;
+    unsigned hist_identity[12];
     uint32_t last_click_frame;
     int last_click_item;
     Document doc, undo[8];
@@ -2364,10 +2458,10 @@ static void draw_edit_search(int wx,int wy,int ww,int wh){
     for(int f=0;f<(q->replace_mode?2:1);f++){
         int fy=y+6+f*32;draw_string(f?"With":"Find",wx+12,fy+5,ui_text);
         draw_round_rect(wx+66,fy,ww-82,26,4,q->focus&&q->field==f?ui_accent:ui_border);
-        draw_round_rect(wx+67,fy+1,ww-84,24,3,COLOR_WHITE);
+        draw_round_rect(wx+67,fy+1,ww-84,24,3,ui_field);
         int selected=q->focus&&q->field==f&&q->selected[f];
         if(selected)draw_rect(wx+72,fy+4,ww-96,18,ui_accent);
-        draw_string_clip(q->text[f],wx+72,fy+5,selected?COLOR_WHITE:ui_text,wx+ww-22);
+        draw_string_clip(q->text[f],wx+72,fy+5,selected?ui_on_accent:ui_text,wx+ww-22);
         if(q->focus&&q->field==f&&!selected){char prefix[64];kmemcpy(prefix,q->text[f],q->position[f]);prefix[q->position[f]]=0;
             int x=wx+72+ui_string_w(prefix);if(x<wx+ww-22)draw_rect(x,fy+4,1,18,ui_text);}
     }
@@ -2577,6 +2671,7 @@ static void edit_close_choose(int choice) {
 static void open_files(int cwd) {
     if (win_open(WK_FILES) < 0) return;
     fm_set_cwd(cwd);
+    fm_history_reset();
     fm_selected = 0;
     fm_refresh();
     dirty = 1;
@@ -2859,7 +2954,7 @@ static void draw_calc(int wx, int wy, int ww, int wh, int inactive) {
     int dw = CALC_W - 2 * CALC_MARGIN;
     int dh = CALC_DISP_H + 10;
     draw_round_rect(dx, dy, dw, dh, 6, ui_chrome_dk);
-    draw_round_rect(dx + 1, dy + 1, dw - 2, dh - 2, 5, COLOR_WHITE);
+    draw_round_rect(dx + 1, dy + 1, dw - 2, dh - 2, 5, INK(1));
 
     const char *s = calc_entry;
     int tw = logo_string_w(s);
@@ -3243,37 +3338,38 @@ static void paint_well2_cell(int wx, int wy, int wh, int i, int *x, int *y) {
     *y = wy + wh - 48;
 }
 
+static uint8_t doodle_ink;
 static void draw_tool_doodle(int kind, int x, int y) {
     int x0 = x + 6, y0 = y + 6, x1 = x + 21, y1 = y + 21;
     int cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
     if (kind == PT_PENCIL) {
         for (int i = 0; i <= 14; i++) {
-            put_pixel(x0 + i, y1 - i, COLOR_BLACK);
-            put_pixel(x0 + i, y1 - i - 1, COLOR_BLACK);
+            put_pixel(x0 + i, y1 - i, doodle_ink);
+            put_pixel(x0 + i, y1 - i - 1, doodle_ink);
         }
-        draw_rect(x1 - 2, y0, 3, 3, COLOR_BLACK);
+        draw_rect(x1 - 2, y0, 3, 3, doodle_ink);
     } else if (kind == PT_FILL) {
-        uint8_t ink = COLOR_BLACK;
+        uint8_t ink = doodle_ink;
         draw_round_rect(cx - 5, cy - 3, 11, 9, 2, ink);
-        draw_round_rect(cx - 4, cy - 2, 9, 6, 1, gfx_gray(0xE0));
+        draw_round_rect(cx - 4, cy - 2, 9, 6, 1, INK(5));
         draw_line(cx - 4, cy - 3, cx + 1, cy - 8, ink);
         draw_rect(cx + 4, cy - 8, 2, 6, ink);
         draw_round_rect(cx + 3, cy + 4, 3, 5, 1, paint_color);
         put_pixel(cx + 4, cy + 9, paint_color);
     } else if (kind == PT_LINE) {
         for (int i = 0; i <= 14; i++)
-            put_pixel(x0 + i, y1 - i, COLOR_BLACK);
+            put_pixel(x0 + i, y1 - i, doodle_ink);
     } else if (kind == PT_RECT) {
-        draw_rect(x0, y0 + 2, x1 - x0, y1 - y0 - 4, COLOR_WHITE);
-        draw_rect(x0, y0 + 2, x1 - x0, 1, COLOR_BLACK);
-        draw_rect(x0, y1 - 3, x1 - x0, 1, COLOR_BLACK);
-        draw_rect(x0, y0 + 2, 1, y1 - y0 - 4, COLOR_BLACK);
-        draw_rect(x1 - 1, y0 + 2, 1, y1 - y0 - 4, COLOR_BLACK);
+        draw_rect(x0, y0 + 2, x1 - x0, y1 - y0 - 4, INK(4));
+        draw_rect(x0, y0 + 2, x1 - x0, 1, doodle_ink);
+        draw_rect(x0, y1 - 3, x1 - x0, 1, doodle_ink);
+        draw_rect(x0, y0 + 2, 1, y1 - y0 - 4, doodle_ink);
+        draw_rect(x1 - 1, y0 + 2, 1, y1 - y0 - 4, doodle_ink);
     } else if (kind == PT_ELLIPSE) {
         plot_dest = 1;
         plot_ox = 0;
         plot_oy = 0;
-        plot_col = COLOR_BLACK;
+        plot_col = doodle_ink;
         /* draw oval into screen pixels at 1x via plot_lg scaled; use tiny ellipse */
         int ecx = cx, ecy = cy;
         int a = 7, b = 5;
@@ -3283,11 +3379,11 @@ static void draw_tool_doodle(int kind, int x, int y) {
                 int ring = a * a * b * b;
                 int inner = (a - 1) * (a - 1) * (b - 1) * (b - 1);
                 if (inside <= ring && inside >= inner)
-                    put_pixel(ecx + xx, ecy + yy, COLOR_BLACK);
+                    put_pixel(ecx + xx, ecy + yy, doodle_ink);
             }
         }
     } else if (kind == PT_TEXT) {
-        draw_char('A', cx - 4, cy - 8, COLOR_BLACK);
+        draw_char('A', cx - 4, cy - 8, doodle_ink);
     } else if (kind == PT_ERASER) {
         draw_round_rect(cx - 6, cy - 2, 12, 8, 2, gfx_rgb(0xF0, 0x90, 0xA8));
         draw_round_rect(cx - 6, cy - 2, 7, 8, 2, gfx_rgb(0xB8, 0x50, 0x70));
@@ -3311,9 +3407,10 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
             draw_round_rect(tx, ty, PAINT_CELL, PAINT_CELL, 6, ui_accent_dk);
             draw_round_rect(tx + 1, ty + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, PAL_ACCENT + 2);
         } else {
-            draw_round_rect(tx, ty, PAINT_CELL, PAINT_CELL, 6, gfx_gray(0xB0));
-            draw_round_rect(tx + 1, ty + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, COLOR_WHITE);
+            draw_round_rect(tx, ty, PAINT_CELL, PAINT_CELL, 6, INK(10));
+            draw_round_rect(tx + 1, ty + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, INK(6));
         }
+        doodle_ink = i == paint_tool ? INK(1) : ui_text;
         draw_tool_doodle(i, tx, ty);
     }
 
@@ -3329,28 +3426,28 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
                 draw_round_rect(bx, by, PAINT_CELL, PAINT_CELL, 6, ui_accent_dk);
                 draw_round_rect(bx + 1, by + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, PAL_ACCENT + 2);
             } else {
-                draw_round_rect(bx, by, PAINT_CELL, PAINT_CELL, 6, gfx_gray(0xB0));
-                draw_round_rect(bx + 1, by + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, COLOR_WHITE);
+                draw_round_rect(bx, by, PAINT_CELL, PAINT_CELL, 6, INK(10));
+                draw_round_rect(bx + 1, by + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, INK(6));
             }
             int rad = i + 1;
-            uint8_t dotc = on ? COLOR_WHITE : ui_text;
+            uint8_t dotc = on ? INK(1) : ui_text;
             draw_round_rect(bx + PAINT_CELL / 2 - rad, by + PAINT_CELL / 2 - rad,
                             rad * 2, rad * 2, rad, dotc);
         }
         int cx, cy;
         paint_chip_cell(wx, wy, ww, &cx, &cy);
-        draw_round_rect(cx - 2, cy - 2, 44, 28, 7, gfx_gray(0x50));
-        draw_round_rect(cx - 1, cy - 1, 42, 26, 6, COLOR_WHITE);
+        draw_round_rect(cx - 2, cy - 2, 44, 28, 7, INK(12));
+        draw_round_rect(cx - 1, cy - 1, 42, 26, 6, INK(2));
         draw_round_rect(cx + 2, cy + 2, 36, 20, 4, paint_color);
     }
 
     /* canvas pane + 1px black inset */
     int px, py, pw, ph, cx, cy;
     paint_canvas_geom(wx, wy, ww, wh, &px, &py, &pw, &ph, &cx, &cy);
-    draw_rect(px, py, pw, 1, COLOR_BLACK);
-    draw_rect(px, py + ph - 1, pw, 1, COLOR_BLACK);
-    draw_rect(px, py, 1, ph, COLOR_BLACK);
-    draw_rect(px + pw - 1, py, 1, ph, COLOR_BLACK);
+    draw_rect(px, py, pw, 1, INK(9));
+    draw_rect(px, py + ph - 1, pw, 1, INK(9));
+    draw_rect(px, py, 1, ph, INK(9));
+    draw_rect(px + pw - 1, py, 1, ph, INK(9));
 
     for (int ly = 0; ly < PAINT_H; ly++) {
         for (int lx = 0; lx < PAINT_W; lx++) {
@@ -3390,7 +3487,7 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
             c = paint_well2[i - PAINT_NWELL];
         }
         int cur = (paint_color == c);
-        draw_round_rect(sx, sy, 22, 18, 4, cur ? ui_text : gfx_gray(0xA0));
+        draw_round_rect(sx, sy, 22, 18, 4, cur ? ui_text : INK(10));
         draw_round_rect(sx + 1, sy + 1, 20, 16, 3, c);
         if (cur) {
             uint8_t mk = gfx_luma(c) < 128 ? COLOR_WHITE : ui_text;
@@ -3996,11 +4093,11 @@ static void draw_native_window(int slot,int inactive){
     Win *w=&wins[slot];char title[APP_VIEW_TITLE_LEN];
     gui_draw_window(w->x,w->y,w->w,w->h,win_display_title(slot,title),0,inactive?WIN_INACTIVE:0);
     int top=w->y+TITLE_H+1;
-    draw_rect(w->x+1,top,w->w-2,w->h-TITLE_H-2,gfx_gray(0x20));
+    draw_rect(w->x+1,top,w->w-2,w->h-TITLE_H-2,INK(1));
     draw_rect(w->x+1,top,w->w-2,NATIVE_TOOLBAR_H,ui_chrome_dk);
     int output=app_view_output_visible(slot);
     draw_round_rect(w->x+8,top+3,72,NATIVE_TOOLBAR_H-6,4,output?ui_accent:ui_chrome);
-    draw_string(app_view_output_dropped(slot)?"Output*":"Output",w->x+16,top+7,output?COLOR_WHITE:ui_text);
+    draw_string(app_view_output_dropped(slot)?"Output*":"Output",w->x+16,top+7,output?ui_on_accent:ui_text);
     AppViewResult result;
     int ended=app_view_result(slot,&result);
     const char *status=ended?
@@ -4035,7 +4132,7 @@ static void draw_native_window(int slot,int inactive){
 static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
     char title[TERM_TASK_TITLE_LEN];
     gui_draw_window(wx, wy, ww, wh, win_display_title(context_slot, title), 0, inactive ? WIN_INACTIVE : 0);
-    draw_rect(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1, gfx_gray(0x20));
+    draw_rect(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1, INK(1));
 
     int ax = wx + 1 + TERM_PAD;
     int canvas_height=draw_term_canvas(wx,wy,ww,wh);
@@ -4087,14 +4184,14 @@ static void draw_todo_mark(int x, int y, int done) {
     int s = TODO_CIRCLE + 4;
     if (done) {
         draw_round_rect(x - 2, y - 2, s, s, s / 2, ui_accent);
-        uint8_t w = COLOR_WHITE;
+        uint8_t w = ui_on_accent;
         draw_line(x + 2, y + 6, x + 5, y + 9, w);
         draw_line(x + 3, y + 6, x + 6, y + 9, w);
         draw_line(x + 5, y + 9, x + 11, y + 3, w);
         draw_line(x + 6, y + 9, x + 12, y + 3, w);
     } else {
-        draw_round_rect(x - 2, y - 2, s, s, s / 2, gfx_gray(0xA8));
-        draw_round_rect(x - 1, y - 1, s - 2, s - 2, s / 2 - 1, COLOR_WHITE);
+        draw_round_rect(x - 2, y - 2, s, s, s / 2, INK(12));
+        draw_round_rect(x - 1, y - 1, s - 2, s - 2, s / 2 - 1, ui_field);
     }
 }
 
@@ -4116,7 +4213,7 @@ static int todo_rows_fit(int wh) {
 
 static void draw_todo(int wx, int wy, int ww, int wh, int inactive) {
     gui_draw_window(wx, wy, ww, wh, "Todo", 0, inactive ? WIN_INACTIVE : 0);
-    draw_rect(wx + 1, wy + TITLE_H + 1, ww - 2, wh - TITLE_H - 2, COLOR_WHITE);
+    draw_rect(wx + 1, wy + TITLE_H + 1, ww - 2, wh - TITLE_H - 2, ui_body);
 
     int rows = todo_rows_fit(wh);
     int n = todo_count();
@@ -4143,8 +4240,8 @@ static void draw_todo(int wx, int wy, int ww, int wh, int inactive) {
     draw_button(wx+ww-76, fy, 64, fh, "Save");
     draw_string_clip(todo_status(), wx+12, ruley+37, ui_text_dim, wx+ww-12);
     int active = todo_field_active();
-    draw_round_rect(fx, fy, fw, fh, 5, active ? ui_accent : gfx_gray(0xA8));
-    draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 4, COLOR_WHITE);
+    draw_round_rect(fx, fy, fw, fh, 5, active ? ui_accent : ui_border);
+    draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 4, ui_field);
 
     const char *txt = todo_field();
     int ty = fy + (fh - CHAR_H) / 2;
@@ -4589,6 +4686,53 @@ static int double_click(int item, int *last_item, uint32_t *last_frame) {
     return is_dbl;
 }
 
+/* Back/forward history for each Files window. Entries are folder
+ * incarnations; deleted or replaced folders are skipped when stepping. */
+static void fm_history_reset(void) {
+    WindowState *ws = &window_state[context_slot];
+    ws->hist_n = 1; ws->hist_pos = 0;
+    ws->hist[0] = fm_cwd; ws->hist_identity[0] = fs_identity(fm_cwd);
+}
+static void fm_history_sync(void) {
+    WindowState *ws = &window_state[context_slot];
+    if (ws->hist_n <= 0 || ws->hist_n > 12 || ws->hist_pos < 0 || ws->hist_pos >= ws->hist_n) { fm_history_reset(); return; }
+    if (ws->hist[ws->hist_pos] == fm_cwd && ws->hist_identity[ws->hist_pos] == fs_identity(fm_cwd)) return;
+    ws->hist_n = ws->hist_pos + 1;
+    if (ws->hist_n == 12) {
+        for (int i = 1; i < 12; i++) { ws->hist[i - 1] = ws->hist[i]; ws->hist_identity[i - 1] = ws->hist_identity[i]; }
+        ws->hist_n = 11;
+    }
+    ws->hist[ws->hist_n] = fm_cwd; ws->hist_identity[ws->hist_n] = fs_identity(fm_cwd);
+    ws->hist_pos = ws->hist_n++;
+}
+static int fm_history_target(int dir) {
+    WindowState *ws = &window_state[context_slot];
+    for (int p = ws->hist_pos + dir; p >= 0 && p < ws->hist_n; p += dir)
+        if (fs_is_dir(ws->hist[p]) && fs_identity(ws->hist[p]) == ws->hist_identity[p]) return p;
+    return -1;
+}
+static void fm_history_step(int dir) {
+    fm_history_sync();
+    int p = fm_history_target(dir);
+    if (p < 0) return;
+    fm_rename_cancel();
+    window_state[context_slot].hist_pos = p;
+    fm_set_cwd(window_state[context_slot].hist[p]);
+    fm_selected = 0;
+    fm_refresh();
+    dirty = 1;
+}
+static void fm_navigate(int id) {
+    if (!fs_is_dir(id)) return;
+    fm_history_sync();
+    fm_rename_cancel();
+    fm_set_cwd(id);
+    fm_history_sync();
+    fm_selected = 0;
+    fm_refresh();
+    dirty = 1;
+}
+
 static void fm_open_selected(void) {
     int vis = fm_vis_count();
     if (vis <= 0 || fm_selected < 0 || fm_selected >= vis)
@@ -4602,10 +4746,7 @@ static void fm_open_selected(void) {
     int index=fm_selected-(fm_has_parent()?1:0);
     if(fs_identity(id)!=fm_ids_identity[index]){fm_refresh();dirty=1;return;}
     if (fs_is_dir(id)) {
-        fm_set_cwd(id);
-        fm_selected = 0;
-        fm_refresh();
-        dirty = 1;
+        fm_navigate(id);
     } else {
         open_fs_file(id);
     }
@@ -4614,12 +4755,8 @@ static void fm_open_selected(void) {
 static void fm_go_up(void) {
     if(!fm_cwd_valid()){fm_refresh();dirty=1;return;}
     int p = fs_parent(fm_cwd);
-    if (p >= 0) {
-        fm_set_cwd(p);
-        fm_selected = 0;
-        fm_refresh();
-        dirty = 1;
-    }
+    if (p >= 0)
+        fm_navigate(p);
 }
 
 static void fm_select_id(int id);
@@ -5010,19 +5147,48 @@ static void draw_mini_wordle(int x, int y, uint8_t fg, uint8_t bg) {
         }
 }
 
+static int file_extension(const char *name,const char *suffix);
+/* Filled, color-coded file icons for unselected rows. */
+static uint8_t file_kind_color(const char *name) {
+    static const struct { const char *ext; uint32_t rgb; } kinds[] = {
+        {".bsh",0x4CC38A},{".csv",0x4CC38A},{".bwr",0x5B8CFF},{".rtf",0x5B8CFF},{".pdf",0xF0647A},
+        {".html",0x3FC9D6},{".htm",0x3FC9D6},{".bos",0xB48CFF},{".png",0xB48CFF},{".jpg",0xB48CFF},
+        {".jpeg",0xB48CFF},{".bmp",0xB48CFF},{".gif",0xB48CFF},{".pbm",0xB48CFF},{".wav",0xE8C547},
+        {".mp3",0xE8C547},{".mpg",0xE8C547},{".mpeg",0xE8C547},{".bex",0x52D1E8},{".sh",0x52D1E8},{".bas",0x52D1E8},
+    };
+    for (unsigned i = 0; i < sizeof kinds / sizeof kinds[0]; i++)
+        if (file_extension(name, kinds[i].ext)) return idx24(kinds[i].rgb);
+    return INK(20);
+}
+static void draw_file_glyph(int x, int y, const char *name, int is_dir) {
+    if (is_dir) {
+        draw_round_rect(x, y + 1, 7, 4, 1, ui_accent_dk);
+        draw_round_rect(x, y + 3, 15, 10, 2, ui_accent);
+        draw_hline(x + 1, y + 4, 13, ui_accent_dk);
+        return;
+    }
+    uint8_t c = file_kind_color(name);
+    draw_round_rect(x + 1, y, 11, 14, 2, c);
+    draw_rect(x + 8, y, 4, 4, INK(3));
+    draw_line(x + 8, y, x + 11, y + 3, c);
+    draw_hline(x + 3, y + 7, 6, INK(3));
+    draw_hline(x + 3, y + 10, 6, INK(3));
+}
 static void draw_file_row_named(int x, int y, int w, const char *name,
                                int is_dir, int is_app, int sel, int dim, int cut,
                                const char *detail, int detail_width) {
-    uint8_t fg = dim ? ui_text_dim : (sel ? COLOR_WHITE : ui_text);
-    uint8_t bg = sel ? ui_accent : COLOR_WHITE;
+    uint8_t fg = dim ? ui_text_dim : (sel ? ui_on_accent : ui_text);
+    uint8_t bg = sel ? ui_accent : ui_body;
     if (dim) {
         sel = 0;
-        bg = COLOR_WHITE;
+        bg = ui_body;
     }
     if (sel)
         draw_round_rect(x + 2, y, w - 4, ROW_H - 2, 5, ui_accent);
     int icon_y = y + (ROW_H - 12) / 2;
-    if (is_dir)
+    if (!sel && !dim && !is_app && kstrcmp(name, "..") != 0)
+        draw_file_glyph(x + 5, icon_y - 1, name, is_dir);
+    else if (is_dir)
         draw_mini_folder(x + 6, icon_y, fg, bg);
     else if (is_app == 2)
         draw_mini_paint(x + 6, icon_y, fg, bg);
@@ -5044,14 +5210,14 @@ static void draw_file_row_named(int x, int y, int w, const char *name,
     int end=x+w-12;
     if(detail&&detail_width){
         if(cut)detail="Cut";
-        draw_string_clip(detail,x+w-detail_width,ty,sel?COLOR_WHITE:ui_text_dim,x+w-10);
+        draw_string_clip(detail,x+w-detail_width,ty,sel?ui_on_accent:ui_text_dim,x+w-10);
         end=x+w-detail_width-12;
     }else if(w>420){
         const char *kind=cut?"Cut":is_dir?"Folder":(is_app?"Application":"Document");
-        draw_string(kind,x+w-110,ty,sel?COLOR_WHITE:ui_text_dim);
+        draw_string(kind,x+w-110,ty,sel?ui_on_accent:ui_text_dim);
         end=x+w-130;
     }else if(cut){
-        draw_string("Cut",x+w-38,ty,sel?COLOR_WHITE:ui_text_dim);
+        draw_string("Cut",x+w-38,ty,sel?ui_on_accent:ui_text_dim);
         end=x+w-46;
     }
     draw_string_clip(name, x + 28, ty, fg, end);
@@ -5098,19 +5264,19 @@ static void draw_file_row_detail(int x, int y, int w, int id, int sel, int dim,
         fw = end - fx;
     if (fw < 24)
         fw = 24;
-    /* White field, black type, 1px inset. */
-    draw_rect(fx, fy, fw, fh, COLOR_WHITE);
-    draw_rect(fx, fy, fw, 1, COLOR_BLACK);
-    draw_rect(fx, fy + fh - 1, fw, 1, COLOR_BLACK);
-    draw_rect(fx, fy, 1, fh, COLOR_BLACK);
-    draw_rect(fx + fw - 1, fy, 1, fh, COLOR_BLACK);
+    /* Field with accent outline. */
+    draw_rect(fx, fy, fw, fh, ui_field);
+    draw_rect(fx, fy, fw, 1, ui_accent);
+    draw_rect(fx, fy + fh - 1, fw, 1, ui_accent);
+    draw_rect(fx, fy, 1, fh, ui_accent);
+    draw_rect(fx + fw - 1, fy, 1, fh, ui_accent);
     int ty = fy + (fh - CHAR_H) / 2;
-    draw_string_clip(fm_rename_buf, fx + 4, ty, COLOR_BLACK, fx + fw - 4);
+    draw_string_clip(fm_rename_buf, fx + 4, ty, ui_text, fx + fw - 4);
     {
         int cw = ui_string_w(fm_rename_buf);
         int cx = fx + 4 + cw;
         if (cx < fx + fw - 3 && (frame_count / 35) % 2 == 0)
-            draw_rect(cx, ty, 1, CHAR_H, COLOR_BLACK);
+            draw_rect(cx, ty, 1, CHAR_H, ui_text);
     }
 }
 
@@ -5121,9 +5287,47 @@ static void draw_file_row(int x, int y, int w, int id, int sel, int dim) {
 static const int files_sort_width[FILE_VIEW_SORT_COUNT]={60,58,52,82};
 static const char *files_sort_name[FILE_VIEW_SORT_COUNT]={"Name","Type","Size","Modified"};
 
-static int files_filter_y(int wy) {return wy+TITLE_H+INFO_H+34;}
-static int files_list_y(int wy) {return files_filter_y(wy)+(fm_filter_open?34:0);}
-static int files_rows(int wy,int wh) {return (wy+wh-4-SB-files_list_y(wy))/ROW_H;}
+/* Files layout: Places sidebar on the left, toolbar (back/forward/up, path,
+ * Filter) across the top of the content, column headers, list, and a footer. */
+#define FILES_TOOL_H 46
+#define FILES_FOOT_H 28
+#define FILES_PLACES 6
+static int files_side_w(int ww) {return ww>=520?164:0;}
+static int files_list_x(int wx,int ww) {return wx+files_side_w(ww)+8;}
+static int files_list_w(int ww) {return ww-files_side_w(ww)-28;}
+static int files_header_y(int wy) {return wy+TITLE_H+FILES_TOOL_H+4;}
+static int files_filter_y(int wy) {return files_header_y(wy)+32;}
+static int files_list_y(int wy) {return files_filter_y(wy)+(fm_filter_open?36:0);}
+static int files_list_bottom(int wy,int wh) {return wy+wh-FILES_FOOT_H-2;}
+static int files_rows(int wy,int wh) {return (files_list_bottom(wy,wh)-files_list_y(wy))/ROW_H;}
+static const char *files_place_name[FILES_PLACES]={"Home","Documents","Pictures","Media","Programs","Trash"};
+static int files_place_id(int i) {
+    if(i==0)return fs_root();
+    if(i==5)return fs_is_dir(trash_id)?trash_id:-1;
+    int id=fs_find_child(fs_root(),files_place_name[i]);
+    return fs_is_dir(id)?id:-1;
+}
+static int files_place_y(int wy,int i) {return wy+TITLE_H+40+i*32;}
+static int files_nav_x(int wx,int ww,int i) {return wx+files_side_w(ww)+10+i*36;}
+/* Breadcrumb segments from the root (shown as "Home") to the current folder;
+ * leading segments are dropped when the path does not fit. */
+static int files_crumbs(int wx,int ww,int *xs,int *ws,int *ids) {
+    int chain[16],n=0,id=fm_cwd;
+    while(id>=0&&n<16){chain[n++]=id;if(id==fs_root())break;id=fs_parent(id);}
+    int left=files_nav_x(wx,ww,3)+6,right=wx+ww-96,count=0,x=left;
+    int first=n-1,total=0;
+    for(int k=n-1;k>=0;k--)total+=ui_string_w(chain[k]==fs_root()?"Home":fs_name(chain[k]))+22;
+    while(first>0&&total>right-left){total-=ui_string_w(chain[first]==fs_root()?"Home":fs_name(chain[first]))+22;first--;}
+    for(int k=first;k>=0&&count<16;k--){
+        const char *name=chain[k]==fs_root()?"Home":fs_name(chain[k]);
+        int w=ui_string_w(name)+10;
+        if(x+w>right)w=right-x;
+        if(w<=10)break;
+        xs[count]=x;ws[count]=w;ids[count]=chain[k];count++;
+        x+=w+12;
+    }
+    return count;
+}
 
 static void files_scroll(int rows){
     if(rows<1)rows=1;
@@ -5158,8 +5362,25 @@ static int files_detail_width(int width) {
     return width>420?110:0;
 }
 
+static void draw_files_nav_icon(int kind,int x,int y,uint8_t ink) {
+    int cx=x+15,cy=y+14;
+    for(int t=0;t<2;t++){
+        if(kind==0){draw_line(cx+2+t,cy-5,cx-3+t,cy,ink);draw_line(cx-3+t,cy,cx+2+t,cy+5,ink);}
+        else if(kind==1){draw_line(cx-2+t,cy-5,cx+3+t,cy,ink);draw_line(cx+3+t,cy,cx-2+t,cy+5,ink);}
+        else {draw_line(cx-5,cy+2+t,cx,cy-3+t,ink);draw_line(cx,cy-3+t,cx+5,cy+2+t,ink);}
+    }
+}
+static void draw_files_place_icon(int i,int x,int y,uint8_t ink,uint8_t bg) {
+    if(i==0){
+        draw_line(x,y+6,x+6,y,ink);draw_line(x+6,y,x+12,y+6,ink);
+        draw_frame(x+2,y+6,9,7,ink);draw_rect(x+5,y+9,3,4,ink);
+    }else if(i==5){
+        draw_rect(x+1,y+1,11,2,ink);draw_rect(x+4,y,5,1,ink);
+        draw_frame(x+2,y+4,9,9,ink);draw_vline(x+5,y+6,5,ink);draw_vline(x+8,y+6,5,ink);
+    }else draw_mini_folder(x,y+1,ink,bg);
+}
 static void draw_files_controls(int wx,int wy,int ww,int inactive) {
-    int x=wx+8,y=wy+TITLE_H+INFO_H+3;
+    int x=files_list_x(wx,ww),y=files_header_y(wy);
     for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++){
         int width=files_sort_width[sort],active=fm_view.sort==sort;
         if(active)draw_round_rect(x,y,width,26,5,ui_chrome);
@@ -5168,12 +5389,12 @@ static void draw_files_controls(int wx,int wy,int ww,int inactive) {
             for(int n=0;n<4;n++)draw_hline(ax-n,ay+(fm_view.descending?3-n:n),2*n+1,ui_text);}
         x+=width+3;
     }
-    int end=wx+ww-SB-8;
-    draw_button_styled(end-62,y,62,26,"Filter",fm_filter_open);
+    draw_hline(files_list_x(wx,ww),y+29,files_list_w(ww),ui_chrome_dk);
+    int end=wx+ww-12;
     if(!fm_filter_open)return;
     y=files_filter_y(wy);
-    int field_x=wx+8,field_w=end-field_x-120;
-    draw_round_rect(field_x,y,field_w,28,4,COLOR_WHITE);
+    int field_x=files_list_x(wx,ww),field_w=end-field_x-120;
+    draw_round_rect(field_x,y,field_w,28,4,ui_field);
     draw_round_frame(field_x,y,field_w,28,4,fm_filter_focus&&!inactive?ui_accent:ui_chrome_dk);
     int text_x=field_x+7,limit=field_x+field_w-7;
     const char *text=fm_view.filter;
@@ -5181,7 +5402,7 @@ static void draw_files_controls(int wx,int wy,int ww,int inactive) {
     if(fm_filter_select_all&&fm_filter_focus&&!inactive&&text[0])
         draw_rect(text_x,y+4,ui_string_w(text),CHAR_H,ui_accent);
     draw_string_clip(text[0]?text:"Name contains...",text_x,y+5,
-        text[0]?(fm_filter_select_all&&fm_filter_focus&&!inactive?COLOR_WHITE:ui_text):ui_text_dim,limit);
+        text[0]?(fm_filter_select_all&&fm_filter_focus&&!inactive?ui_on_accent:ui_text):ui_text_dim,limit);
     if(fm_filter_focus&&!inactive&&!fm_filter_select_all&&(frame_count/35)%2==0){
         int caret=text_x+ui_string_w(text);
         if(caret<limit)draw_rect(caret,y+5,1,CHAR_H,ui_text);
@@ -5193,18 +5414,71 @@ static void draw_files_controls(int wx,int wy,int ww,int inactive) {
 static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
     char title[24];
     char info[FS_PATH_LEN];
+    fm_history_sync();
     files_title(title, 24);
     files_info(info, FS_PATH_LEN);
-    gui_draw_window(wx, wy, ww, wh, title, info,
-                    WIN_INFO | WIN_SCROLL | (inactive ? WIN_INACTIVE : 0));
+    for(int i=0;info[i];i++)if(info[i]=='|'){info[i>0?i-1:0]=0;break;}
+    gui_draw_window(wx, wy, ww, wh, title, 0, inactive ? WIN_INACTIVE : 0);
+    int side=files_side_w(ww),top=wy+TITLE_H+1;
+    /* Sidebar: places and storage */
+    if(side){
+        draw_rect(wx+1,top,side-1,wh-TITLE_H-2,INK(2));
+        draw_vline(wx+side,top,wh-TITLE_H-2,INK(5));
+        draw_string("PLACES",wx+16,wy+TITLE_H+14,ui_text_dim);
+        for(int i=0;i<FILES_PLACES;i++){
+            int id=files_place_id(i),py=files_place_y(wy,i);
+            if(id<0)continue;
+            int here=id==fm_cwd;
+            if(here)draw_round_rect(wx+8,py,side-16,28,7,INK(6));
+            if(here)draw_round_rect(wx+8,py+7,3,14,1,ui_accent);
+            draw_files_place_icon(i,wx+20,py+7,here?ui_accent:ui_text_dim,here?INK(6):INK(2));
+            draw_string_clip(files_place_name[i],wx+42,py+(28-CHAR_H)/2,here?ui_text:INK(24),wx+side-10);
+        }
+        unsigned cap=fs_capacity(),used=fs_used_bytes();
+        int sy=wy+wh-62;
+        if(cap&&sy>files_place_y(wy,FILES_PLACES)+8){
+            char line[40];fmt_uint(line,used/1024);kstrcpy(line+kstrlen(line)," KB of ");
+            fmt_uint(line+kstrlen(line),cap/1024);kstrcpy(line+kstrlen(line)," KB");
+            draw_string("STORAGE",wx+16,sy,ui_text_dim);
+            draw_round_rect(wx+16,sy+22,side-32,6,3,INK(6));
+            unsigned cap_kb=cap/1024?cap/1024:1;
+            int fill=(int)((used/1024)*(unsigned)(side-32)/cap_kb);
+            if(fill<6&&used)fill=6;
+            if(fill>side-32)fill=side-32;
+            if(fill)draw_round_rect(wx+16,sy+22,fill,6,3,ui_accent);
+            draw_string_clip(line,wx+16,sy+34,ui_text_dim,wx+side-8);
+        }
+    }
+    /* Toolbar: back, forward, up, breadcrumbs, filter */
+    int tx=wx+side+1,tw=ww-side-2;
+    draw_rect(tx,top,tw,FILES_TOOL_H-1,inactive?ui_chrome:ui_title);
+    draw_hline(tx,top+FILES_TOOL_H-1,tw,INK(1));
+    for(int i=0;i<3;i++){
+        int enabled=i==0?fm_history_target(-1)>=0:i==1?fm_history_target(1)>=0:fm_has_parent();
+        int bx=files_nav_x(wx,ww,i),by=top+8;
+        draw_round_rect(bx,by,30,28,7,enabled?INK(7):INK(5));
+        draw_files_nav_icon(i,bx,by,enabled?ui_text:INK(11));
+    }
+    int xs[16],widths[16],ids[16],n=files_crumbs(wx,ww,xs,widths,ids);
+    for(int k=0;k<n;k++){
+        int last=k==n-1;
+        if(last)draw_round_rect(xs[k]-2,top+9,widths[k]+4,26,6,INK(7));
+        draw_string_clip(ids[k]==fs_root()?"Home":fs_name(ids[k]),xs[k]+3,top+(FILES_TOOL_H-CHAR_H)/2-1,
+                         last?ui_text:ui_text_dim,xs[k]+widths[k]);
+        if(!last){int cx=xs[k]+widths[k]+4,cy=top+FILES_TOOL_H/2-1;
+            draw_line(cx,cy-3,cx+3,cy,INK(13));draw_line(cx+3,cy,cx,cy+3,INK(13));}
+    }
+    draw_button_styled(wx+ww-82,top+8,70,28,"Filter",fm_filter_open);
     draw_files_controls(wx,wy,ww,inactive);
+    /* List */
+    int lx=files_list_x(wx,ww),lw=files_list_w(ww);
     int list_y=files_list_y(wy),rows=files_rows(wy,wh);
-    int lw=ww-16-SB,vis=fm_vis_count(),up=fm_has_parent()?1:0;
+    int vis=fm_vis_count(),up=fm_has_parent()?1:0;
     files_scroll(rows);
     for(int i=fm_first;i<vis&&i<fm_first+rows;i++){
         int iy=list_y+(i-fm_first)*ROW_H;
         if(up&&i==0)
-            draw_file_row_named(wx+8,iy,lw,"..",1,0,i==fm_selected,0,0,0,0);
+            draw_file_row_named(lx,iy,lw,"..",1,0,i==fm_selected,0,0,0,0);
         else {
             int id=fm_ids[i-up],detail_width=files_detail_width(lw);
             char detail[32];
@@ -5213,14 +5487,26 @@ static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
                 if(fs_is_dir(id)||fs_is_app(id))kstrcpy(detail,file_view_type(id));
                 else {fmt_uint(detail,(unsigned)fs_size(id));kstrcpy(detail+kstrlen(detail)," B");}
             }else kstrcpy(detail,file_view_type(id));
-            draw_file_row_detail(wx+8,iy,lw,id,i==fm_selected,0,detail,detail_width);
+            draw_file_row_detail(lx,iy,lw,id,i==fm_selected,0,detail,detail_width);
         }
     }
     if(!fm_count){
         int y=list_y+up*ROW_H+4;
-        if(y+CHAR_H<=wy+wh-SB-4)
-            draw_string_clip(fm_view.filter[0]?"No matching names":"This folder is empty",wx+20,y,ui_text_dim,wx+ww-SB-10);
+        if(y+CHAR_H<=files_list_bottom(wy,wh))
+            draw_string_clip(fm_view.filter[0]?"No matching names":"This folder is empty",lx+12,y,ui_text_dim,lx+lw);
     }
+    if(vis>rows&&rows>0){
+        int track=rows*ROW_H,sx=wx+ww-11;
+        int th=track*rows/vis;if(th<24)th=24;
+        int ty=list_y+(track-th)*fm_first/(vis-rows>0?vis-rows:1);
+        draw_round_rect(sx,list_y,5,track,2,INK(3));
+        draw_round_rect(sx,ty,5,th,2,INK(11));
+    }
+    /* Footer */
+    int fy=wy+wh-FILES_FOOT_H;
+    draw_rect(tx,fy,tw,FILES_FOOT_H-1,ui_chrome);
+    draw_hline(tx,fy,tw,INK(5));
+    draw_string_clip(info,tx+12,fy+(FILES_FOOT_H-CHAR_H)/2,ui_text_dim,wx+ww-12);
 }
 
 static void draw_rename_overlay(void) {
@@ -5233,30 +5519,30 @@ static void draw_rename_overlay(void) {
     if (fm_selected < 0 || fm_selected >= vis)
         return;
     iy = files_list_y(wy) + (fm_selected-fm_first) * ROW_H;
-    fx = wx + 8 + 26;
+    fx = files_list_x(wx, ww) + 26;
     fy = iy - 1;
     fh = ROW_H - 2;
     tw = ui_string_w(fm_rename_buf) + 16;
     if (tw < 96)
         tw = 96;
     fw = tw;
-    int detail=files_detail_width(ww-16-SB);
-    int end=wx+ww-8-SB-(detail?detail+12:4);
+    int detail=files_detail_width(files_list_w(ww));
+    int end=files_list_x(wx,ww)+files_list_w(ww)-(detail?detail+12:4);
     if (fx + fw > end)
         fw = end - fx;
     if (fw < 24)
         fw = 24;
-    draw_rect(fx, fy, fw, fh, COLOR_WHITE);
-    draw_rect(fx, fy, fw, 1, COLOR_BLACK);
-    draw_rect(fx, fy + fh - 1, fw, 1, COLOR_BLACK);
-    draw_rect(fx, fy, 1, fh, COLOR_BLACK);
-    draw_rect(fx + fw - 1, fy, 1, fh, COLOR_BLACK);
+    draw_rect(fx, fy, fw, fh, ui_field);
+    draw_rect(fx, fy, fw, 1, ui_accent);
+    draw_rect(fx, fy + fh - 1, fw, 1, ui_accent);
+    draw_rect(fx, fy, 1, fh, ui_accent);
+    draw_rect(fx + fw - 1, fy, 1, fh, ui_accent);
     ty = fy + (fh - CHAR_H) / 2;
-    draw_string_clip(fm_rename_buf, fx + 4, ty, COLOR_BLACK, fx + fw - 4);
+    draw_string_clip(fm_rename_buf, fx + 4, ty, ui_text, fx + fw - 4);
     {
         int cx = fx + 4 + ui_string_w(fm_rename_buf);
         if (cx < fx + fw - 3)
-            draw_rect(cx, ty, 1, CHAR_H, COLOR_BLACK);
+            draw_rect(cx, ty, 1, CHAR_H, ui_text);
     }
 }
 
@@ -5294,7 +5580,7 @@ static void draw_open_dialog(void) {
     int rows = (lb - ly) / ROW_H;
     int lw = pw - 16;
     if (pick_count == 0) {
-        draw_string("(empty)", px + 16, ly, COLOR_BLACK);
+        draw_string("(empty)", px + 16, ly, ui_text_dim);
         return;
     }
     if(pick_selected<pick_first)pick_first=pick_selected;
@@ -5376,7 +5662,7 @@ static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
             int cx = ax + c * EDIT_CHAR_W;
             int cy = ay + vis_row * EDIT_LINE_H;
             if ((frame_count / 35) % 2 == 0)
-                draw_rect(cx, cy, 1, EDIT_FONT_H, COLOR_BLACK);
+                draw_rect(cx, cy, 2, EDIT_FONT_H, ui_accent);
         }
         if (ei == edit_len)
             break;
@@ -5389,7 +5675,7 @@ static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
         if (vis_row >= 0 && vis_row < rows)
             draw_edit_char(edit_buf[ei], ax + c * EDIT_CHAR_W,
                            ay + vis_row * EDIT_LINE_H,
-                           selected ? COLOR_WHITE : COLOR_BLACK);
+                           selected ? ui_on_accent : ui_text);
         c++;
         if (c >= cols) {
             r++;
@@ -5800,13 +6086,13 @@ static int taskbar_hover_at(void) {
 static void draw_taskbar(void) {
     taskbar_layout();
     int y = TASKBAR_Y;
-    draw_rect(0,y,fb_w,TASKBAR_H,ui_chrome);
-    draw_hline(0,y,fb_w,ui_chrome_dk);
+    desk_band(y,TASKBAR_H);
+    draw_hline(0,y,fb_w,INK(6));
     int front = win_front();
     int ty = y + (TASKBAR_H - CHAR_H) / 2;
     int iy = y + (TASKBAR_H - 16) / 2;
-    draw_round_rect(8,y+6,90,TASKBAR_H-12,7,launcher_on?ui_accent:(taskbar_hover==-1?ui_chrome_dk:COLOR_WHITE));
-    uint8_t appink=launcher_on?COLOR_WHITE:ui_text;
+    draw_round_rect(8,y+6,90,TASKBAR_H-12,(TASKBAR_H-12)/2,launcher_on?ui_accent:(taskbar_hover==-1?INK(8):INK(5)));
+    uint8_t appink=launcher_on?ui_on_accent:ui_text;
     for(int j=0;j<2;j++)for(int i=0;i<2;i++)draw_round_rect(19+i*7,y+16+j*7,5,5,1,appink);
     draw_string("Apps",41,ty,appink);
     for (int t = 0; t < tb_n; t++) {
@@ -5814,12 +6100,12 @@ static void draw_taskbar(void) {
         char native_title[TERM_TASK_TITLE_LEN];
         const char *title = win_display_title(i, native_title);
         int active = (i == front);
-        uint8_t ink = active ? ui_accent_dk : (wins[i].min ? ui_text_dim : ui_text);
-        if(!active&&taskbar_hover==i)draw_round_rect(tb_x[t],y+6,tb_w[t],TASKBAR_H-12,7,ui_chrome_dk);
-        if(active)draw_round_rect(tb_x[t],y+6,tb_w[t],TASKBAR_H-12,7,COLOR_WHITE);
+        uint8_t ink = active ? ui_text : (wins[i].min ? ui_text_dim : INK(24));
+        if(!active&&taskbar_hover==i)draw_round_rect(tb_x[t],y+6,tb_w[t],TASKBAR_H-12,(TASKBAR_H-12)/2,INK(6));
+        if(active)draw_round_rect(tb_x[t],y+6,tb_w[t],TASKBAR_H-12,(TASKBAR_H-12)/2,INK(7));
         draw_tb_icon(wins[i].kind,tb_x[t]+8,iy,ink);
         draw_string_clip(title,tb_x[t]+30,ty,ink,tb_x[t]+tb_w[t]-6);
-        if(!wins[i].min)draw_round_rect(tb_x[t]+tb_w[t]/2-7,y+TASKBAR_H-5,14,2,1,active?ui_accent:ui_chrome_dk);
+        if(!wins[i].min)draw_round_rect(tb_x[t]+tb_w[t]/2-(active?9:3),y+TASKBAR_H-5,active?18:6,3,1,active?ui_accent:INK(14));
     }
     if(tb_n==0)draw_string("Ctrl + Space to search",112,ty,ui_text_dim);
 }
@@ -5861,9 +6147,9 @@ static int min_hit(int wx, int wy) {
     return hit(mouse_x, mouse_y, cx-3, cy-3, CLOSE_S+6, CLOSE_S+6);
 }
 
-static int fm_name_hit(int wx, int iy, int id) {
+static int fm_name_hit(int wx, int ww, int iy, int id) {
     /* Label side of the row: past the 12px icon, not the icon itself. */
-    int nx = wx + 8 + 20;
+    int nx = files_list_x(wx, ww) + 20;
     int ny = iy;
     int nh = ROW_H;
     int nw;
@@ -5897,35 +6183,53 @@ static int click_on_rename_field(void) {
     if (row < 0)
         return 0;
     iy = files_list_y(wy) + (row-fm_first) * ROW_H;
-    return fm_name_hit(wx, iy, fm_rename_id);
+    return fm_name_hit(wx, ww, iy, fm_rename_id);
 }
 
 static void handle_files_click(int wx, int wy, int ww, int wh) {
-    int x=wx+8,y=wy+TITLE_H+INFO_H+3,end=wx+ww-SB-8;
+    int side=files_side_w(ww),top=wy+TITLE_H+1;
+    fm_history_sync();
+    if(side&&mouse_x<wx+side){
+        for(int i=0;i<FILES_PLACES;i++){
+            int id=files_place_id(i);
+            if(id>=0&&hit(mouse_x,mouse_y,wx+8,files_place_y(wy,i),side-16,28)){fm_navigate(id);return;}
+        }
+        return;
+    }
+    if(mouse_y<top+FILES_TOOL_H){
+        for(int i=0;i<3;i++)if(hit(mouse_x,mouse_y,files_nav_x(wx,ww,i),top+8,30,28)){
+            if(i==2){fm_rename_cancel();fm_go_up();}else fm_history_step(i==0?-1:1);
+            return;
+        }
+        int xs[16],widths[16],ids[16],n=files_crumbs(wx,ww,xs,widths,ids);
+        for(int k=0;k<n-1;k++)if(hit(mouse_x,mouse_y,xs[k]-2,top+9,widths[k]+4,26)){fm_navigate(ids[k]);return;}
+        if(hit(mouse_x,mouse_y,wx+ww-82,top+8,70,28)){fm_filter_show();return;}
+        return;
+    }
+    if(mouse_y>=wy+wh-FILES_FOOT_H)return;
+    int x=files_list_x(wx,ww),y=files_header_y(wy),end=wx+ww-12;
     for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++){
         if(hit(mouse_x,mouse_y,x,y,files_sort_width[sort],26)){fm_sort_by(sort);return;}
         x+=files_sort_width[sort]+3;
     }
-    if(hit(mouse_x,mouse_y,end-62,y,62,26)){fm_filter_show();return;}
     if(fm_filter_open){
         y=files_filter_y(wy);
         if(hit(mouse_x,mouse_y,end-114,y,54,28)){fm_filter_clear(0);return;}
         if(hit(mouse_x,mouse_y,end-56,y,56,28)){fm_filter_clear(1);return;}
-        if(hit(mouse_x,mouse_y,wx+8,y,end-wx-128,28)){
+        if(hit(mouse_x,mouse_y,files_list_x(wx,ww),y,end-files_list_x(wx,ww)-120,28)){
             fm_rename_cancel();fm_filter_focus=1;fm_filter_select_all=fm_view.filter[0]!=0;dirty=1;return;
         }
     }
     fm_filter_focus=fm_filter_select_all=0;
     int list_y = files_list_y(wy);
-    int list_b = wy + wh - 4 - SB;
-    int rows = (list_b - list_y) / ROW_H;
-    int lw = ww - 16 - SB;
+    int rows = files_rows(wy, wh);
+    int lw = files_list_w(ww);
     int vis = fm_vis_count();
     int up = fm_has_parent() ? 1 : 0;
     files_scroll(rows);
     for (int i = fm_first; i < vis && i < fm_first+rows; i++) {
         int iy = list_y + (i-fm_first) * ROW_H;
-        if (hit(mouse_x, mouse_y, wx + 8, iy, lw, ROW_H)) {
+        if (hit(mouse_x, mouse_y, files_list_x(wx, ww), iy, lw, ROW_H)) {
             int id = fm_row_id(i);
             if(id < -1){fm_refresh();dirty=1;return;}
             int already = (i == fm_selected);
@@ -5953,7 +6257,7 @@ static void handle_files_click(int wx, int wy, int ww, int wh) {
             }
             /* Name of an already-selected row: rename-in-place.
              * Hit anywhere on the label side (past the icon). */
-            if (already && id >= 0 && mouse_x >= wx + 8 + 20) {
+            if (already && id >= 0 && mouse_x >= files_list_x(wx, ww) + 20) {
                 fm_selected = i;
                 fm_dragging = 0;
                 fm_drag_active = 0;
@@ -6025,10 +6329,10 @@ static void draw_drag_ghost(void) {
     if (y + h > fb_h - 2) y = mouse_y - h - 6;
     if (x < 2) x = 2;
     if (y < MENUBAR_H) y = MENUBAR_H;
-    draw_rect(x, y, w, 1, COLOR_BLACK);
-    draw_rect(x, y + h - 1, w, 1, COLOR_BLACK);
-    draw_rect(x, y, 1, h, COLOR_BLACK);
-    draw_rect(x + w - 1, y, 1, h, COLOR_BLACK);
+    draw_rect(x, y, w, 1, ui_accent);
+    draw_rect(x, y + h - 1, w, 1, ui_accent);
+    draw_rect(x, y, 1, h, ui_accent);
+    draw_rect(x + w - 1, y, 1, h, ui_accent);
 }
 
 static int edit_index_at(int wx, int wy, int ww, int wh, int mx, int my) {
@@ -6366,10 +6670,10 @@ static void draw_launcher(void) {
     shade_rect(0, MENUBAR_H, fb_w, TASKBAR_Y - MENUBAR_H, 1);
     draw_shadow(x, y, w, h);
     draw_round_rect(x - 1, y - 1, w + 2, h + 2, 11, ui_border);
-    draw_round_rect(x, y, w, h, 10, COLOR_WHITE);
+    draw_round_rect(x, y, w, h, 10, INK(3));
     int fx = x + 16, fy = y + 14, fw = w - 32, fh = 36;
     draw_round_rect(fx, fy, fw, fh, 8, ui_accent);
-    draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 7, gfx_gray(0xF6));
+    draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 7, INK(1));
     int r = 7;
     draw_round_frame(fx + 12, fy + 9, 2 * r, 2 * r, r, ui_text_dim);
     draw_round_frame(fx + 13, fy + 10, 2 * r - 2, 2 * r - 2, r - 1, ui_text_dim);
@@ -6391,7 +6695,7 @@ static void draw_launcher(void) {
         int ry = ly + i * 30;
         int sel = (i == launch_sel);
         if (sel)
-            draw_round_rect(fx, ry, fw, 28, 6, ui_chrome);
+            draw_round_rect(fx, ry, fw, 28, 6, INK(6));
         if(sel)draw_round_rect(fx,ry+7,3,14,1,ui_accent);
         uint8_t ink = ui_text;
         if (launch_items[i].icon >= 0) {
@@ -6402,8 +6706,8 @@ static void draw_launcher(void) {
             draw_string("Application", fx + fw - 12 - ui_string_w("Application"), ry + 5, ui_text_dim);
         } else {
             int native=file_extension(launch_items[i].name,".bex");
-            if(native)draw_mini_term(fx + 12, ry + 8, ink, sel ? ui_chrome : COLOR_WHITE);
-            else draw_mini_doc(fx + 12, ry + 8, ink, sel ? ui_chrome : COLOR_WHITE);
+            if(native)draw_mini_term(fx + 12, ry + 8, ink, sel ? INK(6) : INK(3));
+            else draw_mini_doc(fx + 12, ry + 8, ink, sel ? INK(6) : INK(3));
             draw_string_clip(launch_items[i].name, fx + 38, ry + 5, ink, fx + fw - 120);
             const char *kind=native?"Native app":"File";
             draw_string(kind, fx + fw - 12 - ui_string_w(kind), ry + 5, ui_text_dim);
@@ -6622,7 +6926,7 @@ static void draw_edit_close(void) {
     shade_rect(0, 0, fb_w, fb_h, 1);
     draw_shadow(x, y, 460, 184);
     draw_round_rect(x - 1, y - 1, 462, 186, 11, ui_border);
-    draw_round_rect(x, y, 460, 184, 10, COLOR_WHITE);
+    draw_round_rect(x, y, 460, 184, 10, INK(4));
     draw_string_bold(document_pending_owner ? "Saving changes..." : document_action == DOCUMENT_CLOSE ? "Save changes before closing?"
         : "Save changes before replacing?", x + 22, y + 20, ui_text);
     const Document *doc = &window_state[edit_close_owner].doc;
@@ -6690,7 +6994,7 @@ static void draw_namedlg(void) {
     shade_rect(0, MENUBAR_H, fb_w, TASKBAR_Y - MENUBAR_H, 1);
     draw_shadow(x, y, w, h);
     draw_round_rect(x - 1, y - 1, w + 2, h + 2, 11, ui_border);
-    draw_round_rect(x, y, w, h, 10, COLOR_WHITE);
+    draw_round_rect(x, y, w, h, 10, INK(4));
     int pdf = name_target == 6;
     draw_string_bold(pdf ? "Export PDF pages" : name_target == 5 ? "Export values (CSV)" :
                      name_target == 4 ? "Save spreadsheet as" :
@@ -6709,7 +7013,7 @@ static void draw_namedlg(void) {
     else draw_string_clip(message, x + 22, y + 20 + CHAR_H + 6, ui_text_dim, x + w - 22);
     int fx = x + 22, fy = y + (pdf ? 108 : 64), fw = w - 44, fh = 34;
     draw_round_rect(fx, fy, fw, fh, 7, !pdf || !name_focus ? ui_accent : ui_border);
-    draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 6, gfx_gray(0xF7));
+    draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 6, ui_field);
     name_buf[name_len] = 0;
     draw_string(name_buf, fx + 12, fy + (fh - CHAR_H) / 2, ui_text);
     int cx2 = fx + 12 + ui_string_w(name_buf);
@@ -7650,14 +7954,14 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
         int bx, by;
         settings_saver_box(wx, wy, wh, &bx, &by);
         draw_hline(wx + 24, by - 14, ww - 48, ui_chrome_dk);
-        draw_round_rect(bx, by, 18, 18, 4, saver_enabled ? ui_accent : gfx_gray(0xA0));
+        draw_round_rect(bx, by, 18, 18, 4, saver_enabled ? ui_accent : INK(12));
         if (saver_enabled) {
-            draw_line(bx + 4, by + 9, bx + 8, by + 13, COLOR_WHITE);
-            draw_line(bx + 5, by + 9, bx + 9, by + 13, COLOR_WHITE);
-            draw_line(bx + 8, by + 13, bx + 14, by + 5, COLOR_WHITE);
-            draw_line(bx + 9, by + 13, bx + 15, by + 5, COLOR_WHITE);
+            draw_line(bx + 4, by + 9, bx + 8, by + 13, ui_on_accent);
+            draw_line(bx + 5, by + 9, bx + 9, by + 13, ui_on_accent);
+            draw_line(bx + 8, by + 13, bx + 14, by + 5, ui_on_accent);
+            draw_line(bx + 9, by + 13, bx + 15, by + 5, ui_on_accent);
         } else {
-            draw_round_rect(bx + 1, by + 1, 16, 16, 3, COLOR_WHITE);
+            draw_round_rect(bx + 1, by + 1, 16, 16, 3, ui_field);
         }
         draw_string("Start the screen saver after 90 seconds idle", bx + 28, by, ui_text);
         draw_string_clip(preference_message(PREF_SAVER), bx + 28, by + 21, ui_text_dim, wx + ww - 20);
@@ -7680,35 +7984,25 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
         settings_swatch_pos(wx, wy, i, &sx, &sy);
         const Theme *t = &themes[i];
         int cur = (i == theme_id);
-        if (cur) {
+        if (cur)
             draw_round_rect(sx - 4, sy - 4, SW_W + 8, SW_H + 8, 9, ui_accent);
-            draw_round_rect(sx - 2, sy - 2, SW_W + 4, SW_H + 4, 7, COLOR_WHITE);
+        draw_round_rect(sx - 1, sy - 1, SW_W + 2, SW_H + 2, 7, cur ? INK(1) : ui_border);
+        /* Miniature of the theme's landscape: sky, sun, one ridge, one window. */
+        for (int row = 0; row < SW_H; row++) {
+            int k = row * 2 * 39 / (SW_H * 2 - 1);
+            uint32_t c = k < 20 ? rgb_lerp(t->sky_top, t->sky_mid, k, 19) : rgb_lerp(t->sky_mid, t->horizon, k - 19, 20);
+            int inset = row < 5 ? 5 - row : row > SW_H - 6 ? row - (SW_H - 6) : 0;
+            draw_hline(sx + inset, sy + row, SW_W - 2 * inset, idx24(c));
         }
-        draw_round_rect(sx, sy, SW_W, SW_H, 6, ui_border);
-        if (i == theme_id) {
-            draw_ramp_round(sx + 1, sy + 1, SW_W - 2, SW_H - 2, 5, 1, PAL_DESK, PAL_DESK_N, 0, RAMP_END(PAL_DESK_N));
-        } else {
-            int bands = 6;
-            int bh = (SW_H - 2 + bands - 1) / bands;
-            for (int b = 0; b < bands; b++) {
-                uint32_t c = rgb_lerp(t->desk_top, t->desk_bot, b, bands - 1);
-                int by = sy + 1 + b * bh;
-                int h2 = bh;
-                if (by + h2 > sy + SW_H - 1)
-                    h2 = sy + SW_H - 1 - by;
-                if (b == 0)
-                    draw_round_top(sx + 1, by, SW_W - 2, h2 + 6, 5, idx24(c));
-                else if (b == bands - 1)
-                    draw_round_rect(sx + 1, by - 6, SW_W - 2, h2 + 6, 5, idx24(c));
-                else
-                    draw_rect(sx + 1, by, SW_W - 2, h2, idx24(c));
-            }
+        draw_round_rect(sx + SW_W * 64 / 100, sy + SW_H * 34 / 100, 16, 16, 8, idx24(t->accent));
+        for (int col = 5; col < SW_W - 5; col++) {
+            int top = SW_H * 52 / 100 + wall_noise(col * 6 + i * 211, 37, 5u) * (SW_H / 4) / 1023;
+            draw_vline(sx + col, sy + top, SW_H - 5 - top, idx24(t->ridge));
         }
-        draw_round_rect(sx + 10, sy + 12, SW_W - 20, 30, 3, COLOR_WHITE);
-        draw_round_rect(sx + 15, sy + 16, 4, 4, 2, idx24(t->accent));
-        draw_round_rect(sx + 10, sy + 26, SW_W - 20, 18, 3, COLOR_WHITE);
-        draw_hline(sx + 14, sy + 32, SW_W - 28, ui_chrome_dk);
-        draw_hline(sx + 14, sy + 37, SW_W - 36, ui_chrome_dk);
+        draw_round_rect(sx + 9, sy + 9, SW_W * 45 / 100, 22, 3, INK(4));
+        draw_round_rect(sx + 13, sy + 13, 4, 4, 2, idx24(t->accent));
+        draw_hline(sx + 21, sy + 15, SW_W * 45 / 100 - 18, INK(14));
+        draw_hline(sx + 13, sy + 23, SW_W * 45 / 100 - 10, INK(10));
         int nw = ui_string_w(t->name);
         int nx = sx + (SW_W - nw) / 2;
         draw_string(t->name, nx, sy + SW_H + 12, cur ? ui_accent_dk : ui_text);
@@ -7771,22 +8065,22 @@ static void draw_logo(int x, int y, int size) {
 }
 
 static void boot_splash(void) {
-    draw_ramp(0, 0, fb_w, fb_h, PAL_DESK, PAL_DESK_N, 0, RAMP_END(PAL_DESK_N));
+    draw_desktop();
     int size = 128;
     int lx = (fb_w - size) / 2;
     int ly = fb_h / 2 - size + 10;
     draw_logo(lx, ly, size);
     int ty = ly + size + 30;
     int lw = logo_string_w("BaseOS");
-    draw_logo_string("BaseOS", (fb_w - lw) / 2 + 1, ty + 1, PAL_DESK + PAL_DESK_N - 1);
+    draw_logo_string("BaseOS", (fb_w - lw) / 2 + 1, ty + 1, INK(0));
     draw_logo_string("BaseOS", (fb_w - lw) / 2, ty, COLOR_WHITE);
     int sy = ty + LOGO_FONT_H + 8;
     const char *sub = "a tiny operating system";
-    draw_string(sub, (fb_w - ui_string_w(sub)) / 2, sy, PAL_DESK + 8);
+    draw_string(sub, (fb_w - ui_string_w(sub)) / 2, sy, INK(24));
     int bw = 200;
     int bx = (fb_w - bw) / 2;
     int by = sy + CHAR_H + 36;
-    uint8_t track = PAL_DESK + PAL_DESK_N - 8;
+    uint8_t track = INK(5);
     draw_round_rect(bx, by, bw, 6, 3, track);
     flip_vga();
     kprint_debug("SPLASH\n");
@@ -7816,7 +8110,7 @@ static void boot_splash(void) {
         if (prog - shown >= 8) {
             shown = prog;
             draw_round_rect(bx, by, bw, 6, 3, track);
-            draw_round_rect(bx, by, prog, 6, 3, COLOR_WHITE);
+            draw_round_rect(bx, by, prog, 6, 3, ui_accent);
             flip_rect(bx, by, bw, 6);
         }
         if ((frame_count - start) >= 150)
@@ -8142,7 +8436,7 @@ static void draw_display_confirmation(void) {
     if (!display_pending) return;
     int x = (fb_w - 420) / 2, y = (fb_h - 150) / 2;
     shade_rect(0, 0, fb_w, fb_h, 1);
-    draw_round_rect(x, y, 420, 150, 10, COLOR_WHITE);
+    draw_round_rect(x, y, 420, 150, 10, INK(4));
     draw_round_frame(x, y, 420, 150, 10, ui_border);
     draw_string_bold("Keep this display resolution?", x + 24, y + 20, ui_text);
     char seconds[16], message[80];
