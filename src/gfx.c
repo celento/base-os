@@ -537,15 +537,31 @@ void shade_rect(int x, int y, int w, int h, int level) {
 }
 
 /* Flat chrome: do not darken the desktop around windows or popups. */
-/* A soft halo below and beside a window: the frame paints over the inside. */
+/* A soft drop shadow: rings outside a rounded rectangle shifted 3px down,
+ * fading out over seven pixels. Only the margin around the box is touched,
+ * since the window paints its own interior. */
 void draw_shadow(int x,int y,int w,int h) {
-    for (int ring = 5; ring >= 1; ring--) {
-        int level = ring <= 2 ? 1 : 0;
-        shade_rect(x - ring + 1, y + h, w + 2 * ring - 2, 1, level);
-        shade_rect(x - ring + 1, y - ring + 2, w + 2 * ring - 2, 1, level);
-        shade_rect(x - ring, y - ring + 3, 1, h + 2 * ring - 3, level);
-        shade_rect(x + w + ring - 1, y - ring + 3, 1, h + 2 * ring - 3, level);
-        y++;
+    static const uint8_t fade[7] = {64, 44, 30, 20, 12, 7, 3};
+    const int S = 7, R = 10;
+    int sy = y + 3;
+    uint8_t ink = (uint8_t)(PAL_GRAY + PAL_GRAY_N - 1);
+    if (w < 2 * R || h < 2 * R) return;
+    for (int py = sy - S; py < sy + h + S; py++) {
+        if (py < 0 || py >= fb_h) continue;
+        int band = py >= sy + R && py < sy + h - R;
+        for (int px = x - S; px < x + w + S; px++) {
+            if (band && px == x) px = x + w;
+            if (px < 0 || px >= fb_w) continue;
+            int cx = px < x + R ? x + R : px > x + w - 1 - R ? x + w - 1 - R : px;
+            int cy = py < sy + R ? sy + R : py > sy + h - 1 - R ? sy + h - 1 - R : py;
+            int dx = px - cx, dy = py - cy, d2 = dx * dx + dy * dy;
+            if (d2 <= R * R) continue;
+            int k = 0;
+            while (k < S && (R + k + 1) * (R + k + 1) < d2) k++;
+            if (k >= S) continue;
+            uint8_t *d = &fb[py * fb_w + px];
+            *d = gfx_mix(*d, ink, fade[k]);
+        }
     }
 }
 

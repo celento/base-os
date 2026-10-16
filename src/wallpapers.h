@@ -9,7 +9,7 @@
 typedef struct { const char *name; const char *credit; const uint8_t *jpeg; unsigned bytes; uint32_t colors[WALLPAPER_COLORS]; } Wallpaper;
 
 #ifdef WALLPAPERS_DEFINE_DATA
-static const uint8_t wall_aqua[4750] = {
+static const uint8_t wall_blue[4750] = {
     255,216,255,224,0,16,74,70,73,70,0,1,1,0,0,1,0,1,0,0,255,219,0,67,0,9,6,7,8,7,6,9,
     8,7,8,10,10,9,11,13,22,15,13,12,12,13,27,20,21,16,22,32,29,34,34,32,29,31,31,36,40,52,44,36,
     38,49,39,31,31,45,61,45,49,53,55,58,58,58,35,43,63,68,63,56,67,52,57,58,55,255,219,0,67,1,10,10,
@@ -1883,7 +1883,7 @@ static const uint8_t wall_clouds[18982] = {
     142,202,40,131,255,217,
 };
 static const Wallpaper wallpapers[WALLPAPER_N] = {
-    {"Aqua", "Drawn by tools/gen_aqua_wallpaper.py", wall_aqua, 4750, {0x0C388D, 0x13469E, 0x1B54B1, 0x2E5DB5, 0x2466C9, 0x336BC7, 0x2D77E3, 0x3282F4, 0x368AFD, 0x3C90FE, 0x499DF9, 0x499EFF, 0x56A5EC, 0x53A7FB, 0x5EACEA, 0x69B7ED}},
+    {"Blue", "Drawn by tools/gen_blue_wallpaper.py", wall_blue, 4750, {0x0C388D, 0x13469E, 0x1B54B1, 0x2E5DB5, 0x2466C9, 0x336BC7, 0x2D77E3, 0x3282F4, 0x368AFD, 0x3C90FE, 0x499DF9, 0x499EFF, 0x56A5EC, 0x53A7FB, 0x5EACEA, 0x69B7ED}},
     {"Lake", "Photo on Unsplash: unsplash.com/photos/1501785888041-af3ef285b470", wall_lake, 35954, {0x32342E, 0x524D30, 0x1C6052, 0x4F5B5B, 0x348B70, 0x33A09B, 0x579981, 0x57A99B, 0x6B775C, 0x6C9D8E, 0x83836A, 0xB79B77, 0x76AD9D, 0x8FBDD3, 0xC3C6C6, 0xBBD9F2}},
     {"Clouds", "Photo on Unsplash: unsplash.com/photos/1506905925346-21bda4d32df4", wall_clouds, 18982, {0x13171E, 0x192335, 0x242D3F, 0x313A4F, 0x364761, 0x434F69, 0x485976, 0x526584, 0x65677D, 0x6A7796, 0x8D757E, 0x87869C, 0x9D9BAE, 0xAAA8BB, 0xE7B699, 0xD4BCB9}},
 };

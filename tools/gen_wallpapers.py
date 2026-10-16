@@ -19,7 +19,7 @@ import palette  # noqa: E402
 ROOT = palette.ROOT
 # (file stem, display name, credit) in theme order.
 WALLPAPERS = [
-    ("aqua", "Aqua", "Drawn by tools/gen_aqua_wallpaper.py"),
+    ("blue", "Blue", "Drawn by tools/gen_blue_wallpaper.py"),
     ("lake", "Lake", "Photo on Unsplash: unsplash.com/photos/1501785888041-af3ef285b470"),
     ("clouds", "Clouds", "Photo on Unsplash: unsplash.com/photos/1506905925346-21bda4d32df4"),
 ]

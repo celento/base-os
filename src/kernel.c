@@ -73,7 +73,6 @@
 #define CURSOR_W       CURSOR_ART_W
 #define CURSOR_H       CURSOR_ART_H
 #define MENU_ROW       26
-#define CLOSE_S        16
 #define BTN_H          26
 #define TASKBAR_Y      (fb_h - TASKBAR_H)
 #define TASKBAR_H      40
@@ -107,7 +106,7 @@ typedef struct {
 } Theme;
 
 static const Theme themes[THEME_N] = {
-    {"Aqua",   0, 0x3B82E0},
+    {"Blue",   0, 0x3B82E0},
     {"Lake",   1, 0x2F86C8},
     {"Clouds", 2, 0x4A7FC8},
 };
@@ -296,6 +295,8 @@ static void utoa(unsigned v, char *out) {
 }
 
 static int btn_w(const char *label) { return ui_string_w(label) + 24; }
+/* App icon shown in the title bar of the window being drawn, or -1. */
+static int chrome_icon = -1;
 
 /* ---------- Shared desktop controls ---------- */
 
@@ -303,34 +304,50 @@ static int btn_w(const char *label) { return ui_string_w(label) + 24; }
 #define WIN_SCROLL 2
 #define WIN_NOCLOSE 4
 #define WIN_INACTIVE 8
+#define WIN_NOMENU 16
 
-/* Window controls are Aqua traffic lights at the left of the title bar:
- * close, minimize, zoom. Each occupies a CLOSE_S square. */
-#define WIN_BTN_GAP 22
+/* Caption buttons sit at the right of the title bar as one joined group:
+ * minimize, maximize and a wider close. Drawing and hit testing both use
+ * these rectangles. */
+#define CAP_H 20
+#define CAP_W 28
+#define CAP_CLOSE_W 46
 static void close_box_pos(int wx, int wy, int *cx, int *cy) {
-    (void)wx; *cx = -1; *cy = wy + (TITLE_BAR - CLOSE_S) / 2;
+    (void)wx; *cx = -1; *cy = wy + (TITLE_BAR - CAP_H) / 2;
 }
-static int close_box_x(int wx, int ww) { (void)ww; return wx + 12; }
+static int close_box_x(int wx, int ww) { return wx + ww - 8 - CAP_CLOSE_W; }
 static void min_box_pos(int wx, int wy, int *cx, int *cy) {
-    (void)wx; *cx = -1; *cy = wy + (TITLE_BAR - CLOSE_S) / 2;
+    (void)wx; *cx = -1; *cy = wy + (TITLE_BAR - CAP_H) / 2;
 }
-static int min_box_x(int wx, int ww) { return close_box_x(wx, ww) + WIN_BTN_GAP; }
-static int max_box_x(int wx, int ww) { return min_box_x(wx, ww) + WIN_BTN_GAP; }
+static int max_box_x(int wx, int ww) { return close_box_x(wx, ww) - CAP_W; }
+static int min_box_x(int wx, int ww) { return max_box_x(wx, ww) - CAP_W; }
 
-static void draw_win_menu_strip(int x, int y, int w, int inactive);
-/* A traffic light: a 12px gel sphere with a darker rim and a top highlight.
- * `which` is 0 close, 1 minimize, 2 zoom; inactive windows show gray. */
-static void draw_win_control(int which, int x, int y, int active) {
-    static const uint32_t rim[3] = {0xD84C41, 0xD9A024, 0x2BA633};
-    static const uint32_t fill[3] = {0xFF5F57, 0xFEBC2E, 0x28C840};
-    static const uint32_t light[3] = {0xFFB4AE, 0xFFE29B, 0xA6EDAE};
-    int d = 12, px = x + (CLOSE_S - d) / 2, py = y + (CLOSE_S - d) / 2;
-    uint8_t ring = active ? idx24(rim[which]) : INK(13);
-    uint8_t body = active ? idx24(fill[which]) : INK(8);
-    uint8_t shine = active ? idx24(light[which]) : INK(3);
-    draw_round_rect(px, py, d, d, d / 2, ring);
-    draw_round_rect(px + 1, py + 1, d - 2, d - 2, d / 2 - 1, body);
-    draw_round_rect(px + 3, py + 2, d - 6, 3, 2, shine);
+static void draw_win_menu_strip(int x, int y, int w, int inactive, int nomenu);
+/* The caption group: neutral glass for minimize and maximize, red for close
+ * while the window is active. */
+static void draw_win_control(int wx, int wy, int ww, int active) {
+    int cx, cy;
+    close_box_pos(wx, wy, &cx, &cy);
+    int gx = min_box_x(wx, ww), gw = 2 * CAP_W + CAP_CLOSE_W, kx = close_box_x(wx, ww);
+    draw_round_rect(gx, cy, gw, CAP_H, 4, active ? INK(15) : INK(11));
+    draw_round_rect(gx + 1, cy + 1, gw - 2, CAP_H - 2, 3, INK(2));
+    draw_round_rect(gx + 1, cy + 1, gw - 2, CAP_H / 2 - 1, 3, INK(0));
+    draw_rect(gx + 1, cy + CAP_H / 2 - 2, gw - 2, 2, INK(0));
+    if (active) {
+        draw_round_rect(kx, cy, CAP_CLOSE_W, CAP_H, 4, idx24(0x9E2B21));
+        draw_rect(kx, cy, 5, CAP_H, idx24(0x9E2B21));
+        draw_round_rect(kx + 1, cy + 1, CAP_CLOSE_W - 2, CAP_H - 2, 3, idx24(0xC9473A));
+        draw_rect(kx + 1, cy + 1, 4, CAP_H - 2, idx24(0xC9473A));
+        draw_round_rect(kx + 1, cy + 1, CAP_CLOSE_W - 2, CAP_H / 2 - 1, 3, idx24(0xE0796D));
+        draw_rect(kx + 1, cy + 1, 4, CAP_H / 2 - 1, idx24(0xE0796D));
+    }
+    draw_vline(max_box_x(wx, ww), cy + 1, CAP_H - 2, active ? INK(13) : INK(9));
+    draw_vline(kx, cy + 1, CAP_H - 2, active ? idx24(0x9E2B21) : INK(9));
+    uint8_t glyph = active ? INK(27) : INK(16);
+    int gy = cy + (CAP_H - ICON_SIZE) / 2;
+    icon_draw(ICON_MINUS, min_box_x(wx, ww) + (CAP_W - ICON_SIZE) / 2, gy, glyph);
+    icon_draw(ICON_MAXIMIZE, max_box_x(wx, ww) + (CAP_W - ICON_SIZE) / 2, gy, glyph);
+    icon_draw(ICON_STOP, kx + (CAP_CLOSE_W - ICON_SIZE) / 2, gy, active ? COLOR_WHITE : glyph);
 }
 
 static void draw_sb_arrow(int x, int y, int dir, uint8_t col) {
@@ -391,35 +408,28 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
 
     draw_shadow(x, y, w, h);
     draw_round_rect(x, y, w, h, r, ui_body);
-    /* Aqua title bar: a light gradient with fine pinstripes; inactive bars
-     * are flat and paler. */
-    draw_ramp_round(x, y, w, TITLE_BAR, r, 0, PAL_GRAY, PAL_GRAY_N, inactive ? 1 * 16 : 0, inactive ? 2 * 16 : 7 * 16);
-    if (!inactive)
-        for (int j = 2; j < TITLE_BAR - 1; j += 3)
-            glass_round(x + (j < r ? r : 1), y + j, w - (j < r ? 2 * r : 2), 1, 0, 0, INK(31), 12, 12);
-    glass_round(x + r, y + 1, w - 2 * r, 1, 0, 0, COLOR_WHITE, 150, 150);
-    draw_win_menu_strip(x, y, w, inactive);
-    draw_hline(x, y + TITLE_BAR, w, INK(9));
-    draw_hline(x, y + TITLE_H, w, INK(8));
-    draw_round_frame(x - 1, y - 1, w + 2, h + 2, r + 1, inactive ? INK(12) : INK(17));
-    draw_round_frame(x, y, w, h, r, INK(0));
+    /* Title bar: a light vertical gradient with a bright top edge. */
+    draw_ramp_round(x, y, w, TITLE_BAR, r, 0, PAL_GRAY, PAL_GRAY_N, 0, inactive ? 2 * 16 : 5 * 16);
+    draw_hline(x + r, y + 1, w - 2 * r, COLOR_WHITE);
+    draw_win_menu_strip(x, y, w, inactive, flags & WIN_NOMENU);
+    draw_hline(x, y + TITLE_BAR, w, (flags & WIN_NOMENU) ? INK(8) : INK(6));
+    if (!(flags & WIN_NOMENU)) draw_hline(x, y + TITLE_H, w, INK(8));
+    draw_round_frame(x - 1, y - 1, w + 2, h + 2, r + 1, inactive ? INK(12) : INK(16));
+    draw_round_frame(x, y, w, h, r, COLOR_WHITE);
 
-    if (!noclose) {
-        int cx, cy;
-        close_box_pos(x, y, &cx, &cy);
-        draw_win_control(0, close_box_x(x, w), cy, !inactive);
-        draw_win_control(1, min_box_x(x, w), cy, !inactive);
-        draw_win_control(2, max_box_x(x, w), cy, !inactive);
-    }
+    if (!noclose)
+        draw_win_control(x, y, w, !inactive);
 
-    if(!noclose)for(int d=0;d<3;d++)draw_line(x+w-4-d*3,y+h-3,x+w-3,y+h-4-d*3,ui_chrome_dk);
+    if(!noclose)for(int d=0;d<3;d++)draw_line(x+w-5-d*3,y+h-4,x+w-4,y+h-5-d*3,ui_chrome_dk);
     int title_y = y + (TITLE_BAR - CHAR_H) / 2;
+    int tx = x + 12;
+    if (chrome_icon >= 0) {
+        app_icon_draw(chrome_icon, x + 9, y + (TITLE_BAR - AI_SMALL) / 2, AI_SMALL);
+        tx = x + 34;
+    }
     if (title) {
-        int left = noclose ? x + 14 : max_box_x(x, w) + CLOSE_S + 8;
-        int xmax = x + w - 14;
-        int tw = uib_string_w(title), tx = x + (w - tw) / 2;
-        if (tx < left) tx = left;
-        draw_string_bold_clip(title, tx, title_y, inactive ? INK(18) : INK(29), xmax);
+        int xmax = noclose ? x + w - 12 : min_box_x(x, w) - 10;
+        draw_string_bold_clip(title, tx, title_y, inactive ? INK(17) : INK(29), xmax);
     }
 
     int top = TITLE_H;
@@ -436,7 +446,7 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
 }
 
 static void draw_button_styled(int x, int y, int w, int h, const char *label, int primary) {
-    /* Aqua gel: a pill with a glossy upper half. */
+    /* A pill with a glossy upper half. */
     int r = h / 2;
     if (primary) {
         draw_ramp_round(x, y, w, h, r, 1, PAL_ACCENT, PAL_ACCENT_N, 4 * 16, 12 * 16);
@@ -706,6 +716,7 @@ static void fm_navigate(int id);
 static void theme_load(void);
 static void draw_about(int wx, int wy, int ww, int wh, int fl);
 static void draw_settings(int wx, int wy, int ww, int wh, int fl);
+static int settings_window_h(void);
 static void handle_settings_click(int wx, int wy, int ww, int wh);
 static void theme_set(int id);
 static void saver_save(void);
@@ -1425,10 +1436,14 @@ static void front_window_origin(int *x, int *y) {
     *y = f >= 0 ? wins[f].y : 0;
 }
 /* Menu strip hit test on the front window: the menu index under the pointer. */
+static int win_has_menu(int kind) {
+    return kind != WK_ABOUT && kind != WK_HELP && kind != WK_HELLO && kind != WK_PROPERTIES;
+}
 static int win_menu_at(int px, int py) {
     int f = win_front();
     if (f < 0) return -1;
     Win *w = &wins[f];
+    if (!win_has_menu(w->kind)) return -1;
     if (!hit(px, py, w->x, w->y + TITLE_BAR, w->w, WMENU_H)) return -1;
     for (int i = 0; i < MENU_N; i++)
         if (hit(px, py, w->x + bar_x[i], w->y + TITLE_BAR, bar_w[i], WMENU_H)) return i;
@@ -2570,11 +2585,8 @@ static void calc_key_rect(int kx, int ky, int i, int *x, int *y, int *w, int *h)
 
 static void draw_calc(int wx, int wy, int ww, int wh, int inactive) {
     (void)ww;
-    (void)wh;
-    gui_draw_window(wx, wy, CALC_W, CALC_H, "Calculator", 0,
+    gui_draw_window(wx, wy, CALC_W, wh, "Calculator", 0,
                     inactive ? WIN_INACTIVE : 0);
-
-    draw_rect(wx, wy + TITLE_H + 1, CALC_W, CALC_H - TITLE_H - 1, ui_chrome);
     int dx = wx + CALC_MARGIN;
     int dy = wy + TITLE_H + 12;
     int dw = CALC_W - 2 * CALC_MARGIN;
@@ -3845,6 +3857,12 @@ static void draw_todo(int wx, int wy, int ww, int wh, int inactive) {
     int n = todo_count();
     if (n > rows)
         n = rows;
+    if (!n) {
+        const char *empty = "No tasks yet", *hint = "Type below and press Enter to add one.";
+        int my = wy + TITLE_H + (wh - TITLE_H - TODO_FOOT_H) / 2 - CHAR_H;
+        draw_string_bold(empty, wx + (ww - uib_string_w(empty)) / 2, my, ui_text);
+        draw_string(hint, wx + (ww - ui_string_w(hint)) / 2, my + CHAR_H + 6, ui_text_dim);
+    }
     for (int i = 0; i < n; i++) {
         int ry = wy + TITLE_H + 8 + i * TODO_ROW_H;
         draw_todo_mark(wx + TODO_MARK_X, ry + (TODO_ROW_H - TODO_CIRCLE) / 2,
@@ -4130,15 +4148,15 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         break;
     case WK_HELP:
         *w = 640;
-        *h = 250;
+        *h = 262;
         break;
     case WK_ABOUT:
         *w = 520;
-        *h = 360;
+        *h = 344;
         break;
     case WK_SETTINGS:
         *w = 560;
-        *h = 458;
+        *h = settings_window_h();
         break;
     case WK_FILES:
         *w = 720;
@@ -4203,6 +4221,11 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *h = 180;
         break;
     }
+    /* These sizes predate the window menu strip; give back its height so the
+     * content keeps its original bottom margin. */
+    if (kind == WK_CALC || kind == WK_SNAKE ||
+        kind == WK_WORDLE || kind == WK_TERM || kind == WK_TODO || kind == WK_PAINT)
+        *h += WMENU_H;
     int maxh = fb_h - MENUBAR_H - TASKBAR_H - 8;
     if (*w > fb_w - 24)
         *w = fb_w - 24;
@@ -4863,15 +4886,26 @@ static void draw_files_place_icon(int i,int x,int y,uint8_t ink,uint8_t bg) {
 }
 static void draw_files_controls(int wx,int wy,int ww,int inactive) {
     int x=files_list_x(wx,ww),y=files_header_y(wy);
+    /* Sort is a segmented control; the right-hand caption names the detail
+     * column, which follows the active sort. */
+    int seg_w=0;
+    for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++)seg_w+=files_sort_width[sort]+3;
+    draw_round_rect(x-2,y-1,seg_w+1,28,6,ui_chrome);
     for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++){
         int width=files_sort_width[sort],active=fm_view.sort==sort;
-        if(active)draw_round_rect(x,y,width,26,5,ui_chrome);
+        if(active){draw_round_rect(x,y+1,width,24,5,ui_field);draw_round_frame(x,y+1,width,24,5,ui_chrome_dk);}
         draw_string(files_sort_name[sort],x+6,y+4,active?ui_text:ui_text_dim);
         if(active){int ax=x+width-12,ay=y+10;
             for(int n=0;n<4;n++)draw_hline(ax-n,ay+(fm_view.descending?3-n:n),2*n+1,ui_text);}
         x+=width+3;
     }
-    draw_hline(files_list_x(wx,ww),y+27,files_list_w(ww),ui_chrome_dk);
+    {
+        int lw=files_list_w(ww),detail=files_detail_width(lw);
+        const char *caption=fm_view.sort==FILE_VIEW_MODIFIED?"Modified":fm_view.sort==FILE_VIEW_SIZE?"Size":"Kind";
+        int cx=files_list_x(wx,ww)+lw-detail;
+        if(detail&&cx>x+12)draw_string(caption,cx,y+4,ui_text_dim);
+    }
+    draw_hline(files_list_x(wx,ww),y+29,files_list_w(ww),ui_chrome_dk);
     int end=wx+ww-12;
     if(!fm_filter_open)return;
     y=files_filter_y(wy);
@@ -5043,12 +5077,12 @@ static void od_buttons(int px, int py, int pw, int ph, int *ox, int *oy, int *ow
     *ox = *cx - 12 - *ow;
 }
 
-static int od_list_y(int py) { return py + TITLE_H + 8; }
+static int od_list_y(int py) { return py + TITLE_H + 12; }
 
 static void draw_open_dialog(void) {
     int px, py, pw, ph;
     pick_geom(&px, &py, &pw, &ph);
-    gui_draw_window(px, py, pw, ph, "Open", 0, WIN_NOCLOSE);
+    gui_draw_window(px, py, pw, ph, "Open", 0, WIN_NOCLOSE | WIN_NOMENU);
 
     int ox, oy, ow, cx, cy, cw;
     od_buttons(px, py, pw, ph, &ox, &oy, &ow, &cx, &cy, &cw);
@@ -5060,6 +5094,13 @@ static void draw_open_dialog(void) {
     int lb = oy - 12;
     int rows = (lb - ly) / ROW_H;
     int lw = pw - 16;
+    {
+        /* The band above the list names the folder being browsed. */
+        const char *where = pick_cwd == fs_root() ? "Home" : fs_name(pick_cwd);
+        int ty = py + TITLE_BAR + (ly - py - TITLE_BAR - CHAR_H) / 2;
+        draw_string("Look in", px + 16, ty, ui_text_dim);
+        draw_string_bold_clip(where, px + 26 + ui_string_w("Look in"), ty, ui_text, px + pw - 16);
+    }
     if (pick_count == 0) {
         draw_string("(empty)", px + 16, ly, ui_text_dim);
         return;
@@ -5099,7 +5140,7 @@ static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
     int i = 0, p = 0;
     while (nbuf[p] && i < 20)
         info[i++] = nbuf[p++];
-    const char *s = " bytes";
+    const char *s = edit_len == 1 ? " byte" : " bytes";
     p = 0;
     while (s[p] && i < 30)
         info[i++] = s[p++];
@@ -5233,42 +5274,50 @@ static void draw_tb_icon(int kind, int x, int y, uint8_t ink) { (void)ink; app_i
 
 static void draw_window_contents(Win *w, int inactive) {
     context_set((int)(w - wins));
+    chrome_icon = app_icon_for(kind_icon(w->kind));
     int wx = w->x, wy = w->y, ww = w->w, wh = w->h;
     int fl = inactive ? WIN_INACTIVE : 0;
     if(w->kind==WK_PROPERTIES){
-        gui_draw_window(wx,wy,ww,wh,"Properties",0,fl);
-        int y=wy+TITLE_H+14;char row[96],number[16];
-        #define PROP(text) do { draw_string_clip(text,wx+14,y,ui_text,wx+ww-14);y+=24; }while(0)
+        gui_draw_window(wx,wy,ww,wh,"Properties",0,fl|WIN_NOMENU);
+        int y=wy+TITLE_BAR+20,lx=wx+24,vx=wx+176;char row[96],number[16];
+        /* Header: the item's icon and name, then label / value rows in two
+         * aligned columns, grouped into the item and its volume. */
+        #define PROP(label,text) do { draw_string_clip(label,lx,y,ui_text_dim,vx-12);draw_string_clip(text,vx,y,ui_text,wx+ww-24);y+=26; }while(0)
+        #define PROP_RULE() do { y+=6;draw_hline(lx,y,ww-48,ui_chrome_dk);y+=16; }while(0)
         if(fs_valid(properties_id)){
-            PROP(fs_name(properties_id));
-            PROP(fs_is_dir(properties_id)?"Type: folder":fs_is_app(properties_id)?"Type: application":"Type: file");
-            fmt_uint(number,fs_size(properties_id));kstrcpy(row,"Bytes: ");kstrcpy(row+7,number);PROP(row);
-            unsigned stamp=fs_modified(properties_id);
-            if(!stamp)PROP("Modified: unknown (older file)");
+            int id=properties_id;
+            app_icon_draw(fs_is_dir(id)?AI_FILES:fs_is_app(id)?app_icon_for(app_icon_by_name(fs_name(id))):AI_DOCUMENT,lx,y-4,AI_BIG);
+            draw_string_bold_clip(fs_name(id),lx+AI_BIG+14,y+(AI_BIG-CHAR_H)/2-4,ui_text,wx+ww-24);
+            y+=AI_BIG+4;PROP_RULE();
+            PROP("Type",fs_is_dir(id)?"Folder":fs_is_app(id)?"Application":"File");
+            fmt_uint(number,fs_size(id));kstrcpy(row,number);kstrcpy(row+kstrlen(row),fs_size(id)==1?" byte":" bytes");PROP("Size",row);
+            unsigned stamp=fs_modified(id);
+            if(!stamp)PROP("Modified","Unknown (older file)");
             else {unsigned days=stamp/86400,year=2000,month=1;int md[]={31,28,31,30,31,30,31,31,30,31,30,31};
                 for(;;){unsigned yd=(year%4==0&&(year%100!=0||year%400==0))?366:365;if(days<yd)break;days-=yd;year++;}
                 md[1]=(year%4==0&&(year%100!=0||year%400==0))?29:28;
                 while(month<12&&days>=(unsigned)md[month-1])days-=md[month++-1];
-                kstrcpy(row,"Modified: ");fmt_uint(row+10,year);int n=kstrlen(row);row[n++]='-';fmt_pad2(row+n,month);n+=2;row[n++]='-';fmt_pad2(row+n,days+1);n+=2;row[n++]=' ';fmt_pad2(row+n,stamp/3600%24);n+=2;row[n++]=':';fmt_pad2(row+n,stamp/60%60);n+=2;kstrcpy(row+n," UTC");PROP(row);
+                fmt_uint(row,year);int n=kstrlen(row);row[n++]='-';fmt_pad2(row+n,month);n+=2;row[n++]='-';fmt_pad2(row+n,days+1);n+=2;row[n++]=' ';fmt_pad2(row+n,stamp/3600%24);n+=2;row[n++]=':';fmt_pad2(row+n,stamp/60%60);n+=2;kstrcpy(row+n," UTC");PROP("Modified",row);
             }
-        }else PROP("File is no longer available.");
-        fmt_uint(number,fs_used_bytes());kstrcpy(row,"Volume bytes used: ");kstrcpy(row+19,number);PROP(row);
-        fmt_uint(number,fs_node_limit()-fs_node_count());kstrcpy(row,"Free file/folder slots: ");kstrcpy(row+kstrlen(row),number);PROP(row);
-        if(properties_reason[0])PROP(properties_reason);
-        PROP(fs_storage_name());
-        fmt_uint(number,fs_file_limit());kstrcpy(row,"Maximum file bytes: ");kstrcpy(row+kstrlen(row),number);PROP(row);
-        PROP("Editor maximum: 65535 bytes");
-        PROP(fs_storage_status()?fs_storage_status():fs_needs_sync()?"RAM changes await disk save":"Disk is synchronized");
+        }else {draw_string_clip("This item is no longer available.",lx,y,ui_text,wx+ww-24);y+=26;}
+        if(properties_reason[0]){draw_string_clip(properties_reason,lx,y,ui_text_dim,wx+ww-24);y+=26;}
+        PROP_RULE();
+        PROP("Volume",fs_storage_name());
+        fmt_uint(number,fs_used_bytes());kstrcpy(row,number);kstrcpy(row+kstrlen(row)," bytes");PROP("Used",row);
+        fmt_uint(number,fs_node_limit()-fs_node_count());PROP("Free slots",number);
+        fmt_uint(number,fs_file_limit());kstrcpy(row,number);kstrcpy(row+kstrlen(row)," bytes");PROP("Largest file",row);
+        PROP("Status",fs_storage_status()?fs_storage_status():fs_needs_sync()?"Changes waiting to be saved":"Saved to disk");
         #undef PROP
+        #undef PROP_RULE
     } else if (w->kind == WK_HELLO) {
-        gui_draw_window(wx, wy, ww, wh, "Hello", 0, fl);
+        gui_draw_window(wx, wy, ww, wh, "Hello", 0, fl | WIN_NOMENU);
         int lw = logo_string_w("BaseOS");
-        draw_logo_string("BaseOS", wx + (ww - lw) / 2, wy + TITLE_H + 26, ui_accent);
+        draw_logo_string("BaseOS", wx + (ww - lw) / 2, wy + TITLE_BAR + 30, ui_accent);
         draw_string_in_win("Hello, world. Everything you see is drawn from scratch.", wx, ww,
-                           wy + TITLE_H + 26 + LOGO_FONT_H + 10, ui_text_dim);
+                           wy + TITLE_BAR + 30 + LOGO_FONT_H + 10, ui_text_dim);
     } else if (w->kind == WK_HELP) {
-        gui_draw_window(wx, wy, ww, wh, "Help", 0, fl);
-        int y = wy + TITLE_H + 18;
+        gui_draw_window(wx, wy, ww, wh, "Help", 0, fl | WIN_NOMENU);
+        int y = wy + TITLE_BAR + 22;
         int x = wx + 24;
         static const char *tips[] = {
             "Ctrl+Space searches apps/files; Alt+Tab changes windows",
@@ -5350,6 +5399,7 @@ static void draw_one_window(Win *w,int inactive) {
     uint8_t corners[256];
     gfx_window_corners(w->x-1,w->y-1,w->w+2,w->h+2,corners,0,ui_border);
     draw_window_contents(w,inactive);
+    chrome_icon=-1;
     gfx_window_corners(w->x-1,w->y-1,w->w+2,w->h+2,corners,1,ui_border);
 }
 static int render_skip=-1,drag_cached=-1;
@@ -5399,9 +5449,10 @@ static void taskbar_layout(void) {
 static int taskbar_hover = -2;
 static int start_btn_w(void) { return 36 + uib_string_w("Apps") + 12; }
 /* The in-window menu strip. Only the front window's open menu is highlighted. */
-static void draw_win_menu_strip(int x, int y, int w, int inactive) {
+static void draw_win_menu_strip(int x, int y, int w, int inactive, int nomenu) {
     int sy = y + TITLE_BAR;
     draw_rect(x, sy, w, WMENU_H, ui_body);
+    if (nomenu) return;
     int ly = sy + (WMENU_H - CHAR_H) / 2;
     for (int i = 0; i < MENU_N; i++) {
         if (bar_x[i] + bar_w[i] > w - 8) break;
@@ -5423,7 +5474,7 @@ static int taskbar_hover_at(void) {
 static void draw_taskbar(void) {
     taskbar_layout();
     int y = TASKBAR_Y;
-    /* Light glass over the wallpaper, like the Aqua shelf. */
+    /* Light glass over the wallpaper. */
     glass_round(0, y, fb_w, TASKBAR_H, 0, 0, COLOR_WHITE, 165, 200);
     draw_hline(0, y, fb_w, INK(14));
     glass_round(0, y + 1, fb_w, 1, 0, 0, COLOR_WHITE, 120, 120);
@@ -5491,7 +5542,7 @@ static int close_hit(int wx, int wy, int ww) {
         return 0;
     int cx, cy;
     close_box_pos(wx, wy, &cx, &cy);
-    return hit(mouse_x, mouse_y, close_box_x(wx, ww)-4, cy-4, CLOSE_S+8, CLOSE_S+8);
+    return hit(mouse_x, mouse_y, close_box_x(wx, ww), cy, CAP_CLOSE_W, CAP_H);
 }
 
 static int min_hit(int wx, int wy, int ww) {
@@ -5499,7 +5550,7 @@ static int min_hit(int wx, int wy, int ww) {
         return 0;
     int cx, cy;
     min_box_pos(wx, wy, &cx, &cy);
-    return hit(mouse_x, mouse_y, min_box_x(wx, ww)-4, cy-4, CLOSE_S+8, CLOSE_S+8);
+    return hit(mouse_x, mouse_y, min_box_x(wx, ww), cy, CAP_W, CAP_H);
 }
 
 static int max_hit(int wx, int wy, int ww) {
@@ -5507,7 +5558,7 @@ static int max_hit(int wx, int wy, int ww) {
         return 0;
     int cx, cy;
     min_box_pos(wx, wy, &cx, &cy);
-    return hit(mouse_x, mouse_y, max_box_x(wx, ww)-4, cy-4, CLOSE_S+8, CLOSE_S+8);
+    return hit(mouse_x, mouse_y, max_box_x(wx, ww), cy, CAP_W, CAP_H);
 }
 
 static int fm_name_hit(int wx, int ww, int iy, int id) {
@@ -5967,7 +6018,7 @@ static void launcher_close(void) {
     dirty = 1;
 }
 
-/* Launchpad: a centered glass panel with a search field over a grid of
+/* App launcher: a centered glass panel with a search field over a grid of
  * applications. Typing filters applications and files; the grid scrolls by
  * rows when it does not fit. */
 #define LP_CELL_W 108
@@ -6857,7 +6908,7 @@ static void handle_key(void) {
             return;
         }
     }
-    if(key_sc==0x44){if(win_front()>=0){open_menu=MENU_FILE;menu_sel=0;dirty=1;}return;}
+    if(key_sc==0x44){if(win_front()>=0&&win_has_menu(wins[win_front()].kind)){open_menu=MENU_FILE;menu_sel=0;dirty=1;}return;}
     if (open_menu >= 0) {
         if(key_sc==KEY_LEFT||key_sc==KEY_RIGHT){open_menu=(open_menu+(key_sc==KEY_LEFT?MENU_N-1:1))%MENU_N;menu_sel=0;}
         else if(key_sc==KEY_UP||key_sc==KEY_DOWN){
@@ -7328,9 +7379,9 @@ static void theme_set(int id) {
 }
 
 static void draw_about(int wx, int wy, int ww, int wh, int fl) {
-    gui_draw_window(wx, wy, ww, wh, "About BaseOS", 0, fl);
+    gui_draw_window(wx, wy, ww, wh, "About BaseOS", 0, fl | WIN_NOMENU);
     int ox = wx + (ww - KILROY_ABOUT_W) / 2;
-    int oy = wy + TITLE_H + 14;
+    int oy = wy + TITLE_BAR + 22;
     blit_bits_color(ox, oy, KILROY_ABOUT_W, KILROY_ABOUT_H, kilroy_about_bits, ui_text);
     int y = oy + KILROY_ABOUT_H + 12;
     draw_string_bold("BaseOS", wx + (ww - uib_string_w("BaseOS")) / 2, y, ui_text);
@@ -7370,6 +7421,12 @@ static void settings_swatch_pos(int wx, int wy, int i, int *sx, int *sy) {
     *sy = oy + row * (SW_H + 44);
 }
 
+/* Wallpaper rows, then Display resolution, then the screen saver option. */
+static int settings_display_y(int wy) {
+    int rows = (THEME_N + 3) / 4;
+    return wy + TITLE_H + 48 + rows * (SW_H + 44) + 16;
+}
+static int settings_window_h(void) { return settings_display_y(0) + 150; }
 static void settings_saver_box(int wx, int wy, int wh, int *x, int *y) {
     *x = wx + 24;
     *y = wy + wh - 44;
@@ -7393,7 +7450,7 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
         draw_string("Start the screen saver after 90 seconds idle", bx + 28, by, ui_text);
         draw_string_clip(preference_message(PREF_SAVER), bx + 28, by + 21, ui_text_dim, wx + ww - 20);
     }
-    int ry = wy + TITLE_H + 270;
+    int ry = settings_display_y(wy);
     draw_string_bold("Display resolution", wx + 24, ry, ui_text);
     for (int i = 0; i < DISPLAY_MODE_COUNT; ++i)
         draw_button_styled(wx + 24 + i * 127, ry + 26, 119, 30,
@@ -7404,7 +7461,7 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
                      wx + 24, ry + 66, ui_text_dim, wx + ww - 20);
     draw_string_bold("Appearance", wx + 24, wy + TITLE_H + 16, ui_text);
     tool_button(wx + ww - 156, wy + TITLE_H + 8, 132, 28, ICON_REFRESH, "Retry saving", TB_NORMAL);
-    draw_string_clip(preference_message(PREF_THEME), wx + 24, wy + TITLE_H + 244, ui_text_dim, wx + ww - 20);
+    draw_string_clip(preference_message(PREF_THEME), wx + 24, settings_display_y(wy) - 30, ui_text_dim, wx + ww - 20);
     draw_hline(wx + 24, wy + TITLE_H + 38, ww - 48, ui_chrome_dk);
     wallpaper_thumbs();
     for (int i = 0; i < THEME_N; i++) {
@@ -7432,7 +7489,7 @@ static void handle_settings_click(int wx, int wy, int ww, int wh) {
         preferences_retry(); return;
     }
     for (int i = 0; i < DISPLAY_MODE_COUNT; ++i) {
-        if (hit(mouse_x, mouse_y, wx + 24 + i * 127, wy + TITLE_H + 296, 119, 30)) {
+        if (hit(mouse_x, mouse_y, wx + 24 + i * 127, settings_display_y(wy) + 26, 119, 30)) {
             display_request(i); return;
         }
     }

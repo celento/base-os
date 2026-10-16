@@ -197,7 +197,6 @@ static int tool_x(int x, int index) {
     default: return tool_divider_x(x) + 9 + TB_ICON_W + 4 + ZOOM_TEXT_W + 4;
     }
 }
-static int tool_end(int x) { return tool_x(x, VB_ZOOM_IN) + TB_ICON_W; }
 static int tool_hit(int x, int y, int mx, int my) {
     for (int i = 0; i < VB_COUNT; i++) if (hit(mx, my, tool_x(x, i), y + TOOL_Y, tool_w(i), TB_H)) return i;
     return -1;
@@ -241,7 +240,6 @@ void image_viewer_draw(int x, int y, int w, int h) {
     draw_string(percent, text_x + (ZOOM_TEXT_W - ui_string_w(percent)) / 2, ty + (TB_H - TB_TEXT_H) / 2,
                 loaded ? app_text : app_text_dim);
     tool_button(tool_x(x, VB_ZOOM_IN), ty, TB_ICON_W, TB_H, ICON_ZOOM_IN, 0, loaded ? TB_NORMAL : TB_DISABLED);
-    if (w >= 500) draw_string_clip("IMAGE VIEWER", tool_end(x) + 20, ty + (TB_H - TB_TEXT_H) / 2, app_text_dim, x + w - PAD);
     int vx = x + PAD, vy = y + TOOL_H;
     int vw = viewer.viewport_w, vh = viewer.viewport_h;
     draw_rect(vx, vy, vw, vh, well);

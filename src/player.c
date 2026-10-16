@@ -264,7 +264,7 @@ static void draw_video(int x, int y, int w, int h) {
     const VideoStatus *status = video_status();
     int viewport_h, buttons_y, library_y;
     video_geometry(h, &viewport_h, &buttons_y, &library_y);
-    draw_string_bold("Media Player", x+16, y+12, app_text);
+    draw_string_bold("Now Playing", x+16, y+12, app_text);
     const char *state = state_string(status->state);
     draw_string(state, x+w-16-ui_string_w(state), y+12, app_text_dim);
     draw_string_bold_clip(title[0] ? title : "Choose a video", x+16, y+40, app_text, x+w-16);
@@ -316,7 +316,7 @@ void player_draw(int x, int y, int w, int h) {
     }
     if (video_mode) { draw_video(x,y,w,h); return; }
     const AudioStatus *status = audio_status();
-    draw_string_bold("Media Player", x+16, y+12, app_text);
+    draw_string_bold("Now Playing", x+16, y+12, app_text);
     const char *device = status->available ? "Sound Blaster 16" : "No audio device";
     draw_string(device, x+w-16-ui_string_w(device), y+12, app_text_dim);
     draw_round_rect(x+16, y+42, w-32, 116, 8, app_chrome);

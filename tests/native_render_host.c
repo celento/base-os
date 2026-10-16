@@ -18,18 +18,21 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define TITLE_H 54
 #define INK(i) ((uint8_t)(PAL_GRAY+(i)))
 static uint8_t idx24(uint32_t c){return gfx_rgb((int)((c>>16)&255),(int)((c>>8)&255),(int)(c&255));}
-#define WIN_BTN_GAP 26
+#define CAP_H 20
+#define CAP_W 28
+#define CAP_CLOSE_W 46
 #define TERM_PAD 12
 #define EDIT_LINE_H (EDIT_FONT_H+1)
 #define TERM_FG gfx_gray(0xE8)
 #define CHAR_H UI_FONT_H
-#define CLOSE_S 16
 #define INFO_H 24
 #define SB 12
 #define WIN_INFO 1
 #define WIN_SCROLL 2
 #define WIN_NOCLOSE 4
 #define WIN_INACTIVE 8
+#define WIN_NOMENU 16
+static int chrome_icon=-1;
 #define CURSOR_W CURSOR_ART_W
 #define CURSOR_H CURSOR_ART_H
 #define MAX_WIN 8
@@ -37,7 +40,7 @@ static uint8_t idx24(uint32_t c){return gfx_rgb((int)((c>>16)&255),(int)((c>>8)&
 #define WK_NATIVE 12
 static uint8_t ui_border=2,ui_body=15,ui_chrome=3,ui_chrome_dk=2;
 /* Production strips carry menu labels; the fixture paints the same flat band. */
-static void draw_win_menu_strip(int x,int y,int w,int inactive){draw_rect(x,y+TITLE_BAR,w,WMENU_H,inactive?ui_chrome:INK(4));}
+static void draw_win_menu_strip(int x,int y,int w,int inactive,int nomenu){(void)nomenu;draw_rect(x,y+TITLE_BAR,w,WMENU_H,inactive?ui_chrome:INK(4));}
 static uint8_t ui_text_dim=1,ui_track=3;
 typedef struct {int x,y,w,h,open,min,z,kind;} Win;
 static Win wins[MAX_WIN];

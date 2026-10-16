@@ -1,7 +1,7 @@
 """The BaseOS application icon set, as SVG.
 
 Each icon is an object lit from the top left with a soft gloss and a small
-drop shadow, in the spirit of Windows 7 and Snow Leopard. The drawings live
+drop shadow. The drawings live
 in this file so the whole set shares one palette and one light source.
 Running the module writes assets/icons/<name>.svg; tools/gen_app_icons.py
 rasterizes them into src/app_icons.h.

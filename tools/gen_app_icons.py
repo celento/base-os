@@ -4,7 +4,7 @@
 
 Needs Playwright's Chromium (PLAYWRIGHT_MODULE may point at the module) and
 Pillow; normal builds only need the committed header. Icons are rendered at
-4x and box-filtered down to the big (desktop, Launchpad) and small (taskbar,
+4x and box-filtered down to the big (desktop, app launcher) and small (taskbar,
 lists) sizes, then quantized to the runtime palette plus a 48-color icon
 palette chosen from the set itself. Each pixel stores a palette index and a
 4-bit alpha so icons blend over wallpaper and chrome alike.

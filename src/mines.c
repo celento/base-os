@@ -105,7 +105,7 @@ void mines_draw(int bx, int by) {
         draw_hline(fx + 10, fy + 20, 12, gfx_gray(0x20));
         draw_hline(fx + 11, fy + 21, 10, gfx_gray(0x20));
     }
-    const char *status = state == 1 ? "Boom" : (state == 2 ? "Cleared" : "Minesweeper");
+    const char *status = state == 1 ? "Boom" : (state == 2 ? "Cleared" : "");
     draw_string(status, bx + MINES_W - MINES_PAD - ui_string_w(status), by + 8 + (28 - UI_FONT_H) / 2, app_text_dim);
 
     int gx, gy;

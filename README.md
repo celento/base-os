@@ -2,7 +2,7 @@
 
 A small hobby operating system written from scratch in C and x86 assembly. It boots directly into a graphical desktop with persistent files, document editing, HTTP browsing, media playback, and small protected native applications.
 
-BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased Geist type. The look is Aqua: curved windows with pinstriped title bars and traffic-light controls, blue gel buttons and scrollbars, a File / Edit / Window menu strip under each title, a light glass shelf at the bottom with the BaseOS mark, a centered Launchpad, and a hand-drawn color icon set. Each of the three themes is a bundled wallpaper with its own accent. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
+BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased Geist type. Windows have rounded corners, a light gradient title bar with the app icon and title on the left and minimize, maximize and close buttons on the right, and a File / Edit / Window menu strip under the title. Buttons and scrollbar thumbs are glossy, the taskbar is light glass with the BaseOS mark, the app launcher opens in the middle of the screen, and every application has a hand-drawn color icon. Each of the three themes is a bundled wallpaper with its own accent. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
 
 ![Files and Editor running side by side in BaseOS](screenshots/gallery/desktop.png)
 
@@ -89,15 +89,15 @@ Wordle and 2048 running together. Snake, Mines, and Breakout are available from 
 
 ### Wallpapers and utilities
 
-Three bundled wallpapers (the drawn Aqua blue, and the Lake and Clouds photos from Unsplash), decoded from JPEG at boot and dithered into the 256-color palette,, a screen saver, and everyday utilities. Clock reads the machine's real-time clock; System Monitor reports the OS's resource and window information.
+Three bundled wallpapers (the drawn Blue default, and the Lake and Clouds photos from Unsplash), decoded from JPEG at boot and dithered into the 256-color palette,, a screen saver, and everyday utilities. Clock reads the machine's real-time clock; System Monitor reports the OS's resource and window information.
 
 ![Appearance settings and the analog clock with the Lake wallpaper](screenshots/gallery/themes.png)
 
-### Launchpad and window menus
+### App launcher and window menus
 
-Click Apps in the taskbar or press `Ctrl+Space`. Launchpad opens in the middle of the screen with a search field above a grid of every application; typing filters apps and files, the arrow keys and the mouse wheel move through the grid and Enter opens the selection. Its footer holds About, Settings, the screen saver and Shutdown. There is no global menu bar: each window carries its own File, Edit and Window menus under the title, and `F10` opens the front window's File menu.
+Click Apps in the taskbar or press `Ctrl+Space`. The launcher opens in the middle of the screen with a search field above a grid of every application; typing filters apps and files, the arrow keys and the mouse wheel move through the grid and Enter opens the selection. Its footer holds About, Settings, the screen saver and Shutdown. There is no global menu bar: each window carries its own File, Edit and Window menus under the title, and `F10` opens the front window's File menu.
 
-![Launchpad with the application grid and search field](screenshots/gallery/search.png)
+![The app launcher with the application grid and search field](screenshots/gallery/search.png)
 
 ## Build and run
 
@@ -213,7 +213,7 @@ To regenerate the gallery, run `python3 tools/gallery.py build`. It links a docu
 
 ## License
 
-MIT. The bundled Geist and Geist Mono fonts have their own [OFL licenses](assets/fonts/), the toolbar glyphs come from Lucide ([ISC](third_party/lucide/)), and the application icons are BaseOS's own SVG drawings in [assets/icons](assets/icons/) (MIT, like the rest of the project). The Aqua wallpaper is drawn by `tools/gen_aqua_wallpaper.py`; the other wallpapers in [assets/wallpapers](assets/wallpapers/) are photos published on Unsplash under the [Unsplash License](https://unsplash.com/license), with each one's source recorded in `tools/gen_wallpapers.py`. Pinned third-party decoders retain their original licenses and notices: [minimp3](third_party/minimp3/), [stb_image](third_party/stb/) and [pl_mpeg](third_party/pl_mpeg/). Local patches and attribution are recorded alongside the vendored sources.
+MIT. The bundled Geist and Geist Mono fonts have their own [OFL licenses](assets/fonts/), the toolbar glyphs come from Lucide ([ISC](third_party/lucide/)), and the application icons are BaseOS's own SVG drawings in [assets/icons](assets/icons/) (MIT, like the rest of the project). The Blue wallpaper is drawn by `tools/gen_blue_wallpaper.py`; the other wallpapers in [assets/wallpapers](assets/wallpapers/) are photos published on Unsplash under the [Unsplash License](https://unsplash.com/license), with each one's source recorded in `tools/gen_wallpapers.py`. Pinned third-party decoders retain their original licenses and notices: [minimp3](third_party/minimp3/), [stb_image](third_party/stb/) and [pl_mpeg](third_party/pl_mpeg/). Local patches and attribution are recorded alongside the vendored sources.
 
 The [runtime and developer quick start](docs/RUNTIME_QUICK_START.md) summarizes the
 runtime profiles, everyday applications and native platform limits.

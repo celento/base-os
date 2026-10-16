@@ -100,7 +100,7 @@ void icon_draw(int id, int x, int y, uint8_t ink);
 void app_icon_draw(int id, int x, int y, int size);
 /* One palette entry (0xRRGGBB); commit with gfx_pal_commit. */
 void gfx_set_color(int index, uint32_t rgb);
-/* Aero glass: blend what is already drawn toward `tint`, from strength t0 at
+/* Glass: blend what is already drawn toward `tint`, from strength t0 at
  * the top row to t1 at the bottom (0..256), inside a rounded rectangle. */
 void glass_round(int x, int y, int w, int h, int r, int round_bottom, uint8_t tint, int t0, int t1);
 

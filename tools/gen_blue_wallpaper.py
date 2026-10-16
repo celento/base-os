@@ -1,5 +1,5 @@
-"""Draw the Aqua wallpaper: deep blue with soft light ribbons, in the spirit
-of the classic Mac OS X desktop. Writes assets/wallpapers/aqua.jpg; run
+"""Draw the default Blue wallpaper: a deep blue gradient crossed by soft,
+blurred light ribbons. Writes assets/wallpapers/blue.jpg; run
 tools/gen_wallpapers.py afterwards to rebundle.
 """
 import math
@@ -45,8 +45,8 @@ def main():
             l = rp[x, y][0]
             op[x, y] = (min(255, r + l // 2), min(255, g + l * 2 // 3), min(255, b + l))
     out = out.resize((W, H), Image.LANCZOS)
-    out.save(ROOT / "assets/wallpapers/aqua.jpg", quality=72, optimize=True, progressive=False, subsampling=2)
-    print("wrote assets/wallpapers/aqua.jpg")
+    out.save(ROOT / "assets/wallpapers/blue.jpg", quality=72, optimize=True, progressive=False, subsampling=2)
+    print("wrote assets/wallpapers/blue.jpg")
 
 
 if __name__ == "__main__":

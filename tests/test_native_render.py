@@ -38,7 +38,7 @@ class NativeRenderTests(unittest.TestCase):
             source = (ROOT / 'src/kernel.c').read_text()
             for name in ('gui_draw_window', 'cursor_restore', 'cursor_save_draw', 'draw_ui'):
                 source = source.replace('void ' + name + '(', 'static void ' + name + '(')
-            names = ('close_box_pos', 'close_box_x', 'min_box_x', 'max_box_x', 'draw_win_control',
+            names = ('close_box_pos', 'close_box_x', 'max_box_x', 'min_box_x', 'draw_win_control',
                      'draw_sb_arrow', 'draw_thumb', 'draw_scrollbars', 'gui_draw_window',
                      'term_text', 'term_canvas_geometry', 'draw_app_canvas', 'draw_term_canvas', 'draw_term',
                      'cursor_restore', 'cursor_save_draw', 'win_front',
