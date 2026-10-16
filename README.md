@@ -2,7 +2,7 @@
 
 A small hobby operating system written from scratch in C and x86 assembly. It boots directly into a graphical desktop with persistent files, document editing, HTTP browsing, media playback, and small protected native applications.
 
-BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased Geist type. The look is quiet and dark: ink-colored windows with left-aligned titles, a slim top bar, a Start menu in the taskbar, Lucide icons throughout, and a soft gradient wallpaper. Each of the eight themes changes only the gradient and one accent color. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
+BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased Geist type. The look is quiet and dark: ink-colored windows with left-aligned titles and a File / Edit / Window menu strip under each title, no global bar, an Apps menu in the taskbar, tinted Lucide icon tiles, and a soft gradient wallpaper. Each of the eight themes changes only the gradient and one accent color. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
 
 ![Files and Editor running side by side in BaseOS](screenshots/gallery/desktop.png)
 
@@ -93,11 +93,11 @@ Eight themes (Graphite, Slate, Midnight, Moss, Dune, Mauve, Ocean and Rose), a s
 
 ![Appearance settings and the analog clock using the Slate theme](screenshots/gallery/themes.png)
 
-### Start menu
+### Apps menu and window menus
 
-Click the Start button or press `Ctrl+Space`. The Start menu shows every application as a tile; typing filters apps and files, arrow keys move the selection and Enter opens it. Its footer holds Settings, the screen saver and Shutdown.
+Click Apps in the taskbar or press `Ctrl+Space`. The menu lists every application in one scrolling column; typing filters apps and files, arrow keys and the mouse wheel move through the list and Enter opens the selection. Its footer holds About, Settings, the screen saver and Shutdown. There is no global menu bar: each window carries its own File, Edit and Window menus under the title, and `F10` opens the front window's File menu.
 
-![The Start menu with the application grid and search field](screenshots/gallery/search.png)
+![The Apps menu with the application list and search field](screenshots/gallery/search.png)
 
 ## Build and run
 

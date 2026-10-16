@@ -55,8 +55,12 @@
 #define LINE_H         (CHAR_H + 4)
 #define EDIT_LINE_H    (EDIT_FONT_H + 1)
 
-#define MENUBAR_H      26
-#define TITLE_H        30
+/* No global menu bar: menus live in each window. The chrome above a client
+ * is the title band (TITLE_BAR) plus the File / Edit / Window strip (WMENU_H). */
+#define MENUBAR_H      0
+#define TITLE_BAR      30
+#define WMENU_H        24
+#define TITLE_H        54
 #define INFO_H         24
 #define SB             12
 #define ROW_H          24
@@ -158,6 +162,7 @@ static int launcher_on = 0;
 static char launch_buf[24];
 static int launch_len = 0;
 static int launch_sel = 0;
+static int launch_scroll;
 static unsigned redraw_count = 0;
 
 static uint32_t rgb_lighten(uint32_t c, int pct) {
@@ -315,15 +320,16 @@ static int btn_w(const char *label) { return ui_string_w(label) + 24; }
 /* Window controls sit at the right of the title bar: minimize, maximize, close. */
 #define WIN_BTN_GAP 26
 static void close_box_pos(int wx, int wy, int *cx, int *cy) {
-    (void)wx; *cx = -1; *cy = wy + (TITLE_H - CLOSE_S) / 2;
+    (void)wx; *cx = -1; *cy = wy + (TITLE_BAR - CLOSE_S) / 2;
 }
 static int close_box_x(int wx, int ww) { return wx + ww - 14 - CLOSE_S; }
 static void min_box_pos(int wx, int wy, int *cx, int *cy) {
-    (void)wx; *cx = -1; *cy = wy + (TITLE_H - CLOSE_S) / 2;
+    (void)wx; *cx = -1; *cy = wy + (TITLE_BAR - CLOSE_S) / 2;
 }
 static int max_box_x(int wx, int ww) { return close_box_x(wx, ww) - WIN_BTN_GAP; }
 static int min_box_x(int wx, int ww) { return max_box_x(wx, ww) - WIN_BTN_GAP; }
 
+static void draw_win_menu_strip(int x, int y, int w, int inactive);
 static void draw_win_control(int icon, int x, int y, int active) {
     icon_draw(icon, x, y, active ? INK(20) : INK(13));
 }
@@ -383,7 +389,8 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
     draw_shadow(x, y, w, h);
     draw_round_rect(x - 1, y - 1, w + 2, h + 2, r + 1, inactive ? INK(7) : INK(10));
     draw_round_rect(x, y, w, h, r, ui_body);
-    draw_round_top(x, y, w, TITLE_H, r, inactive ? ui_chrome : ui_title);
+    draw_round_top(x, y, w, TITLE_BAR, r, inactive ? ui_chrome : ui_title);
+    draw_win_menu_strip(x, y, w, inactive);
     draw_hline(x, y + TITLE_H, w, INK(1));
 
     if (!noclose) {
@@ -395,7 +402,7 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
     }
 
     if(!noclose)for(int d=0;d<3;d++)draw_line(x+w-4-d*3,y+h-3,x+w-3,y+h-4-d*3,ui_chrome_dk);
-    int title_y = y + (TITLE_H - CHAR_H) / 2;
+    int title_y = y + (TITLE_BAR - CHAR_H) / 2;
     if (title) {
         int tx = x + 14;
         int xmax = noclose ? x + w - 14 : min_box_x(x, w) - 12;
@@ -526,12 +533,38 @@ static int icon_hit(int id, int px, int py) {
     return hit(px, py, x0 - 6, icons[id].y - 4, (x1 - x0) + 12, TILE_S + CHAR_H + 16);
 }
 
-/* Simple geometric symbols share a 32px canvas and a two-pixel stroke. */
-/* App tiles are quiet: a soft dark square with a light Lucide glyph. */
+/* Every application has one tint; tiles are that color with a white glyph. */
+static uint32_t app_tint(int glyph) {
+    switch (glyph) {
+    case ICON_APP_FILES: return 0x4080FF;    case ICON_APP_EDITOR: return 0x8040C0;
+    case ICON_APP_CALC: return 0x404080;     case ICON_APP_PAINT: return 0xC04080;
+    case ICON_APP_VIEWER: return 0x8080C0;   case ICON_APP_SNAKE: return 0x408040;
+    case ICON_APP_WORDLE: return 0x80C040;   case ICON_APP_TERMINAL: return 0x303030;
+    case ICON_APP_TODO: return 0x40C0C0;     case ICON_APP_CLOCK: return 0x4040C0;
+    case ICON_APP_CALENDAR: return 0xC04040; case ICON_APP_MINES: return 0x804040;
+    case ICON_APP_2048: return 0xC08040;     case ICON_APP_BREAKOUT: return 0x804080;
+    case ICON_APP_MONITOR: return 0x408080;  case ICON_APP_SETTINGS: return 0x606060;
+    case ICON_APP_BROWSER: return 0x40C080;  case ICON_APP_PLAYER: return 0xC00040;
+    case ICON_APP_WRITER: return 0x4080C0;   case ICON_APP_SHEET: return 0x40C040;
+    case ICON_APP_TRASH: return 0x808080;    case ICON_APP_NATIVE: return 0x404040;
+    case ICON_APP_HELLO: return 0xC0C040;    case ICON_APP_ABOUT: return 0x4080C0;
+    case ICON_APP_HELP: return 0x4080C0;     default: return 0x606060;
+    }
+}
+/* Tiles 32px and up carry the 24px glyph; smaller ones the 16px glyph. */
+static void draw_glyph_tile(int glyph, int x, int y, int size) {
+    draw_round_rect(x, y, size, size, size >= 32 ? 10 : 6, idx24(app_tint(glyph)));
+    if (size >= 32) icon_draw_large(glyph, x + (size - APP_ICON_SIZE) / 2, y + (size - APP_ICON_SIZE) / 2, COLOR_WHITE);
+    else icon_draw(glyph, x + (size - ICON_SIZE) / 2, y + (size - ICON_SIZE) / 2, COLOR_WHITE);
+}
+/* Desktop icons are free-standing glyphs in the app's tint, no container.
+ * Dark tints are lifted so they read on the wallpaper. */
 static void draw_app_tile(int x, int y, int id, int size, int selected) {
-    draw_round_rect(x, y, size, size, 10, selected ? INK(8) : INK(5));
-    if (selected) draw_round_frame(x, y, size, size, 10, ui_accent);
-    icon_draw_large(icons[id].icon, x + (size - APP_ICON_SIZE) / 2, y + (size - APP_ICON_SIZE) / 2, INK(28));
+    uint32_t c = app_tint(icons[id].icon);
+    int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+    if (r * 299 + g * 587 + b * 114 < 110 * 1000) c = rgb_lighten(c, 45);
+    if (selected) draw_round_rect(x - 6, y - 6, size + 12, size + 12, 10, INK(6));
+    icon_draw_desk(icons[id].icon, x + (size - DESK_ICON_SIZE) / 2, y + (size - DESK_ICON_SIZE) / 2, idx24(c));
 }
 
 static void draw_desktop_icons(int selected) {
@@ -582,27 +615,27 @@ void draw_desktop(void) {
     kmemcpy(fb, cache, n);
 }
 
-/* Menu bar */
+/* Window menus: every window carries a File / Edit / Window strip under its
+ * title. Pulldowns open from the front window's strip. */
 enum {
     MENU_NONE = -1,
-    MENU_BASEOS = 0,
-    MENU_FILE,
+    MENU_FILE = 0,
     MENU_EDITM,
-    MENU_SPECIAL,
+    MENU_WINDOW,
     MENU_N
 };
 
-static const char *bar_name[MENU_N] = {"BaseOS", "File", "Edit", "System"};
-static int bar_x[MENU_N];
+static const char *bar_name[MENU_N] = {"File", "Edit", "Window"};
+static int bar_x[MENU_N]; /* offsets from the window's left edge */
 static int bar_w[MENU_N];
 
-static const char *m_baseos[] = {"About BaseOS", "Search...", "Settings", "Help"};
-static const char *m_file[] = {"New", "New Folder", "Open", "Close", "Save", "Duplicate", "Properties"};
+static const char *m_file[] = {"New", "New Folder", "Open", "Close", "Save", "Duplicate", "Properties", "-", "Empty Trash"};
 static const char *m_edit[] = {"Cut", "Copy", "Paste", "Find...", "Replace..."};
-static const char *m_special[] = {"Empty Trash", "Show Desktop", "Screen Saver", "-", "Shutdown"};
+static const char *m_window[] = {"Minimize", "Maximize", "Show Desktop", "-", "About BaseOS", "Help"};
 
-static const char **menu_items[MENU_N] = {m_baseos, m_file, m_edit, m_special};
-static const int menu_count[MENU_N] = {4, 7, 5, 5};
+static const char **menu_items[MENU_N] = {m_file, m_edit, m_window};
+static const int menu_count[MENU_N] = {9, 5, 6};
+static void front_window_origin(int *x, int *y);
 
 static int menu_item_enabled(int m, int item);
 static int front_kind(void);
@@ -647,10 +680,10 @@ static const char *menu_label(int m, int i) {
 }
 
 static void menu_bar_init(void) {
-    int x = 16; /* 16px left inset */
+    int x = 6;
     for (int i = 0; i < MENU_N; i++) {
         bar_x[i] = x;
-        bar_w[i] = (i == 0 ? uib_string_w(bar_name[i]) : ui_string_w(bar_name[i])) + 20;
+        bar_w[i] = ui_string_w(bar_name[i]) + 20;
         x += bar_w[i];
     }
 }
@@ -666,9 +699,12 @@ static int menu_pulldown_w(int m) {
 }
 
 static void menu_geom(int m, int *x, int *y, int *w, int *h) {
-    *x = bar_x[m];
-    *y = MENUBAR_H - 1;
+    int wx, wy;
+    front_window_origin(&wx, &wy);
+    *x = wx + bar_x[m];
+    *y = wy + TITLE_H - 1;
     *w = menu_pulldown_w(m);
+    if (*x + *w > fb_w - 4) *x = fb_w - 4 - *w;
     *h = 8;
     for (int i = 0; i < menu_count[m]; i++)
         *h += (menu_label(m, i)[0] == '-') ? 9 : MENU_ROW;
@@ -690,33 +726,6 @@ static int menu_item_at(int m, int px, int py) {
 }
 
 static uint32_t frame_count = 0;
-
-static void draw_menubar(int open_menu, int menu_sel) {
-    (void)menu_sel;
-    desk_band(0, MENUBAR_H);
-    draw_hline(0, MENUBAR_H - 1, fb_w, INK(4));
-
-    int label_y = (MENUBAR_H - CHAR_H) / 2;
-    for (int i = 0; i < MENU_N; i++) {
-        int inv = (open_menu == i);
-        if (inv) {
-            draw_round_rect(bar_x[i], 3, bar_w[i], MENUBAR_H - 6, 5, INK(7));
-            draw_string(bar_name[i], bar_x[i] + 10, label_y, INK(29));
-        } else if (i == 0)
-            draw_string_bold(bar_name[i], bar_x[i] + 10, label_y, INK(27));
-        else
-            draw_string(bar_name[i], bar_x[i] + 10, label_y, INK(22));
-    }
-
-    const char *storage = fs_storage_status();
-    if(!storage && session_status[0])storage=session_status;
-    if(!storage && native_launch_status[0])storage=native_launch_status;
-    if (storage) {
-        int sx = fb_w - 16 - ui_string_w(storage), left = bar_x[MENU_N - 1] + bar_w[MENU_N - 1] + 12;
-        draw_string_clip(storage, sx > left ? sx : left, label_y,
-                         fs_sync_busy() ? ui_text_dim : gfx_rgb(0xF0, 0x70, 0x70), fb_w - 12);
-    }
-}
 
 /* "Thu Oct 15  20:34" for the taskbar clock. */
 static void clock_text(char *clk) {
@@ -1369,6 +1378,21 @@ static int win_front(void) {
     }
     return best;
 }
+static void front_window_origin(int *x, int *y) {
+    int f = win_front();
+    *x = f >= 0 ? wins[f].x : 8;
+    *y = f >= 0 ? wins[f].y : 0;
+}
+/* Menu strip hit test on the front window: the menu index under the pointer. */
+static int win_menu_at(int px, int py) {
+    int f = win_front();
+    if (f < 0) return -1;
+    Win *w = &wins[f];
+    if (!hit(px, py, w->x, w->y + TITLE_BAR, w->w, WMENU_H)) return -1;
+    for (int i = 0; i < MENU_N; i++)
+        if (hit(px, py, w->x + bar_x[i], w->y + TITLE_BAR, bar_w[i], WMENU_H)) return i;
+    return -1;
+}
 
 static int front_kind(void) {
     int i = win_front();
@@ -1623,6 +1647,10 @@ static int win_geom_kind(int kind, int *x, int *y, int *w, int *h) {
 }
 
 static int menu_item_enabled(int m, int item) {
+    if (m == MENU_WINDOW) {
+        if (item <= 1) return !open_dlg && win_front() >= 0;
+        return 1;
+    }
     if (m == MENU_EDITM) {
         if(item>=3)return !open_dlg&&(front_kind()==WK_EDIT||front_kind()==WK_WRITER);
         /* File and text clipboard formats remain distinct. */
@@ -1660,6 +1688,7 @@ static int menu_item_enabled(int m, int item) {
     }
     if (m == MENU_FILE) {
         if(item==6)return !open_dlg && front_kind()==WK_FILES && fm_row_id(fm_selected)>=0;
+        if(item==8)return !open_dlg && trash_id >= 0 && fs_child_count(trash_id) > 0;
         if (!open_dlg && (snake_is_front() || wordle_is_front()))
             return item == 0 || item == 3; /* New Game, Close */
         if (item == 1) {
@@ -1686,11 +1715,6 @@ static int menu_item_enabled(int m, int item) {
                 return 0;
             return 1;
         }
-        return 1;
-    }
-    if (m == MENU_SPECIAL) {
-        if (item == 0) /* Empty Trash */
-            return trash_id >= 0 && fs_child_count(trash_id) > 0;
         return 1;
     }
     (void)item;
@@ -5186,7 +5210,7 @@ static int kind_icon(int kind) {
     default: return ICON_WINDOW;
     }
 }
-static void draw_tb_icon(int kind, int x, int y, uint8_t ink) { icon_draw(kind_icon(kind), x, y, ink); }
+static void draw_tb_icon(int kind, int x, int y, uint8_t ink) { (void)ink; draw_glyph_tile(kind_icon(kind), x, y, 20); }
 
 static void draw_window_contents(Win *w, int inactive) {
     context_set((int)(w - wins));
@@ -5320,6 +5344,7 @@ void draw_ui(void) {
     context_set(front);
 }
 
+static int start_btn_w(void);
 static void taskbar_layout(void) {
     int order[MAX_WIN];
     int n = 0;
@@ -5337,25 +5362,38 @@ static void taskbar_layout(void) {
         }
     }
     tb_n = 0;
-    int limit=n?(fb_w-56-176-(n-1)*4)/n:0;
-    int x=56;
+    int x=8+start_btn_w()+8;
+    int limit=n?(fb_w-x-176-(n-1)*6)/n:0;
     for (int k = 0; k < n; k++) {
         int i = order[k];
         char title[TERM_TASK_TITLE_LEN];
-        int tile_w = 40 + ui_string_w(win_display_title(i, title));
+        int tile_w = 50 + ui_string_w(win_display_title(i, title));
         if(tile_w>limit)tile_w=limit;
         if(tile_w<40)tile_w=40;
         tb_id[tb_n] = i;
         tb_w[tb_n] = tile_w;
         tb_x[tb_n++] = x;
-        x+=tile_w+4;
+        x+=tile_w+6;
     }
 }
 
 static int taskbar_hover = -2;
+static int start_btn_w(void) { return 36 + uib_string_w("Apps") + 12; }
+/* The in-window menu strip. Only the front window's open menu is highlighted. */
+static void draw_win_menu_strip(int x, int y, int w, int inactive) {
+    int sy = y + TITLE_BAR;
+    draw_rect(x, sy, w, WMENU_H, inactive ? ui_chrome : INK(4));
+    int ly = sy + (WMENU_H - CHAR_H) / 2;
+    for (int i = 0; i < MENU_N; i++) {
+        if (bar_x[i] + bar_w[i] > w - 8) break;
+        int open = !inactive && open_menu == i;
+        if (open) draw_round_rect(x + bar_x[i], sy + 2, bar_w[i], WMENU_H - 4, 5, INK(8));
+        draw_string(bar_name[i], x + bar_x[i] + 10, ly, open ? INK(30) : inactive ? ui_text_dim : INK(24));
+    }
+}
 static int taskbar_hover_at(void) {
     if(open_dlg||name_dlg||edit_close_dlg||launcher_on||mouse_y<TASKBAR_Y)return -2;
-    if(hit(mouse_x,mouse_y,8,TASKBAR_Y+5,36,30))return -1;
+    if(hit(mouse_x,mouse_y,8,TASKBAR_Y+5,start_btn_w(),30))return -1;
     taskbar_layout();
     for(int t=0;t<tb_n;t++)if(hit(mouse_x,mouse_y,tb_x[t],TASKBAR_Y+5,tb_w[t],30))return tb_id[t];
     return -2;
@@ -5367,10 +5405,11 @@ static void draw_taskbar(void) {
     draw_hline(0,y,fb_w,INK(4));
     int front = win_front();
     int ty = y + (TASKBAR_H - CHAR_H) / 2;
-    int iy = y + (TASKBAR_H - ICON_SIZE) / 2;
-    /* Start button: the BaseOS mark. */
-    if(launcher_on||taskbar_hover==-1)draw_round_rect(8,y+5,36,30,8,launcher_on?INK(8):INK(6));
-    icon_draw_large(ICON_LOGO,14,y+8,launcher_on?INK(30):INK(24));
+    int iy = y + (TASKBAR_H - 20) / 2;
+    /* Apps button: the BaseOS mark and its label. */
+    if(launcher_on||taskbar_hover==-1)draw_round_rect(8,y+5,start_btn_w(),30,8,launcher_on?INK(8):INK(6));
+    draw_logo(18,y+11,18);
+    draw_string_bold("Apps",44,ty,launcher_on?INK(30):INK(26));
     for (int t = 0; t < tb_n; t++) {
         int i = tb_id[t];
         char native_title[TERM_TASK_TITLE_LEN];
@@ -5379,19 +5418,28 @@ static void draw_taskbar(void) {
         uint8_t ink = active ? INK(29) : (wins[i].min ? ui_text_dim : INK(23));
         if(active)draw_round_rect(tb_x[t],y+5,tb_w[t],30,8,INK(7));
         else if(taskbar_hover==i)draw_round_rect(tb_x[t],y+5,tb_w[t],30,8,INK(5));
-        draw_tb_icon(wins[i].kind,tb_x[t]+10,iy,ink);
-        draw_string_clip(title,tb_x[t]+32,ty,ink,tb_x[t]+tb_w[t]-8);
+        draw_tb_icon(wins[i].kind,tb_x[t]+8,iy,ink);
+        draw_string_clip(title,tb_x[t]+34,ty,ink,tb_x[t]+tb_w[t]-8);
         if(!wins[i].min)draw_round_rect(tb_x[t]+tb_w[t]/2-(active?8:2),y+TASKBAR_H-4,active?16:4,2,1,active?ui_accent:INK(15));
     }
-    if(tb_n==0)draw_string("Ctrl + Space to search",56,ty,INK(16));
+    if(tb_n==0)draw_string("Ctrl + Space to search",8+start_btn_w()+8,ty,INK(16));
     char clk[40];clock_text(clk);
-    draw_string(clk,fb_w-14-ui_string_w(clk),ty,INK(24));
+    int clock_x=fb_w-14-ui_string_w(clk);
+    draw_string(clk,clock_x,ty,INK(24));
+    /* Tray text: storage, session or launch status, left of the clock. */
+    const char *status = fs_storage_status();
+    if(!status && session_status[0])status=session_status;
+    if(!status && native_launch_status[0])status=native_launch_status;
+    if (status) {
+        int sx = clock_x - 20 - ui_string_w(status), left = tb_n ? tb_x[tb_n-1] + tb_w[tb_n-1] + 12 : 8 + start_btn_w() + 8;
+        draw_string_clip(status, sx > left ? sx : left, ty, fs_sync_busy() ? ui_text_dim : gfx_rgb(0xF0, 0x70, 0x70), clock_x - 12);
+    }
 }
 
 static int taskbar_hit(void) {
     if (mouse_y < TASKBAR_Y)
         return 0;
-    if (hit(mouse_x,mouse_y,8,TASKBAR_Y+5,36,30)) { launcher_open(); return 1; }
+    if (hit(mouse_x,mouse_y,8,TASKBAR_Y+5,start_btn_w(),30)) { launcher_open(); return 1; }
     taskbar_layout();
     for (int t = 0; t < tb_n; t++) {
         if (hit(mouse_x, mouse_y, tb_x[t], TASKBAR_Y, tb_w[t], TASKBAR_H)) {
@@ -5726,19 +5774,18 @@ static void menu_activate(int m, int item) {
     if (!menu_item_enabled(m, item))
         return;
 
-    if (m == MENU_BASEOS) {
-        if (item == 0)
-            win_open(WK_ABOUT);
-        else if (item == 1)
-            launcher_open();
-        else if (item == 2)
-            win_open(WK_SETTINGS);
-        else if (item == 3)
-            win_open(WK_HELP);
+    if (m == MENU_WINDOW) {
+        if (item == 0) win_minimize(win_front());
+        else if (item == 1) win_arrange(win_front(), 0);
+        else if (item == 2) show_desktop();
+        else if (item == 4) win_open(WK_ABOUT);
+        else if (item == 5) win_open(WK_HELP);
         return;
     }
     if (m == MENU_FILE) {
-        if (item == 0) {
+        if (item == 8) {
+            do_empty_trash();
+        } else if (item == 0) {
             open_dlg = 0;
             if (front_kind() == WK_WRITER || front_kind() == WK_SPREADSHEET) {
                 document_request(win_front(), DOCUMENT_NEW, -1);
@@ -5812,18 +5859,6 @@ static void menu_activate(int m, int item) {
         dirty = 1;
         return;
     }
-    if (m == MENU_SPECIAL) {
-        if (item == 0) {
-            do_empty_trash();
-        } else if (item == 1) {
-            show_desktop();
-        } else if (item == 2) {
-            saver_start();
-        } else if (item == 4) {
-            do_shutdown();
-        }
-        return;
-    }
 }
 
 typedef struct {
@@ -5892,6 +5927,7 @@ static void launcher_open(void) {
     launcher_on = 1;
     launch_len = 0;
     launch_sel = 0;
+    launch_scroll = 0;
     open_menu = MENU_NONE;
     launcher_refresh();
     dirty = 1;
@@ -5902,39 +5938,46 @@ static void launcher_close(void) {
     dirty = 1;
 }
 
-/* Start menu: anchored above the Start button. With no query it shows every
- * application as a tile grid; typing switches to a result list. */
-#define START_W 492
-#define START_COLS 5
-#define START_CELL_W 92
-#define START_CELL_H 80
+/* Start menu: a vertical list anchored above the Apps button. With no query it
+ * lists every application; typing filters applications and files. */
+#define START_W 336
+#define START_ROW 30
 #define START_FOOT 44
-#define START_FIELD_H 36
-static int launcher_apps(void) {
-    int n = 0;
-    for (int i = 0; i < launch_n; i++) if (launch_items[i].icon >= 0) n++;
-    return n;
+#define START_FIELD_H 34
+#define START_HEAD (12 + START_FIELD_H + 10 + 22)
+static int launcher_fit(void) {
+    int rows = (TASKBAR_Y - 8 - MENUBAR_H - 6 - START_HEAD - 8 - START_FOOT) / START_ROW;
+    return rows < 3 ? 3 : rows;
 }
-static int launcher_grid(void) { return launch_len == 0; }
 static int launcher_rows(void) {
-    if (launcher_grid()) return (launcher_apps() + START_COLS - 1) / START_COLS;
-    return launch_n < 8 ? launch_n : 8;
+    int fit = launcher_fit();
+    return launch_n < fit ? launch_n : fit;
 }
 static void launcher_geom(int *x, int *y, int *w, int *h) {
     int rows = launcher_rows();
     *w = START_W;
-    if (launcher_grid()) *h = 12 + START_FIELD_H + 14 + rows * START_CELL_H + 10 + START_FOOT;
-    else *h = 12 + START_FIELD_H + 12 + rows * 28 + (rows ? 12 : 30) + START_FOOT;
+    *h = START_HEAD + (rows ? rows * START_ROW : 30) + 8 + START_FOOT;
     *x = 8;
     *y = TASKBAR_Y - 8 - *h;
     if (*y < MENUBAR_H + 6) *y = MENUBAR_H + 6;
 }
-static void launcher_cell(int x, int y, int i, int *cx, int *cy) {
-    int left = x + (START_W - START_COLS * START_CELL_W) / 2;
-    *cx = left + (i % START_COLS) * START_CELL_W;
-    *cy = y + 12 + START_FIELD_H + 14 + (i / START_COLS) * START_CELL_H;
+static void launcher_clamp_scroll(void) {
+    int rows = launcher_rows();
+    if (launch_scroll > launch_n - rows) launch_scroll = launch_n - rows;
+    if (launch_scroll < 0) launch_scroll = 0;
 }
-static int launcher_footer_x(int x, int button) { return x + START_W - 16 - (3 - button) * 36; }
+static void launcher_reveal(void) {
+    int rows = launcher_rows();
+    launcher_clamp_scroll();
+    if (launch_sel < launch_scroll) launch_scroll = launch_sel;
+    if (rows && launch_sel >= launch_scroll + rows) launch_scroll = launch_sel - rows + 1;
+}
+static void launcher_scroll(int amount) {
+    launch_scroll += amount;
+    launcher_clamp_scroll();
+    dirty = 1;
+}
+static int launcher_footer_x(int x, int button) { return x + START_W - 16 - (4 - button) * 36; }
 
 static void launcher_run(int i) {
     if (i < 0 || i >= launch_n)
@@ -5950,29 +5993,26 @@ static void launcher_run(int i) {
 }
 
 static void launcher_key(void) {
-    int grid = launcher_grid(), count = grid ? launcher_apps() : launch_n;
     if (key_sc == KEY_ESC) {
         launcher_close();
+        return;
     } else if (key_sc == KEY_ENTER) {
         launcher_run(launch_sel);
-    } else if (key_sc == KEY_UP || key_sc == KEY_LEFT) {
-        int step = key_sc == KEY_UP && grid ? START_COLS : 1;
-        if (launch_sel - step >= 0) launch_sel -= step;
-        dirty = 1;
-    } else if (key_sc == KEY_DOWN || key_sc == KEY_RIGHT) {
-        int step = key_sc == KEY_DOWN && grid ? START_COLS : 1;
-        if (launch_sel + step < count) launch_sel += step;
-        dirty = 1;
+        return;
+    } else if (key_sc == KEY_UP) {
+        if (launch_sel > 0) launch_sel--;
+    } else if (key_sc == KEY_DOWN) {
+        if (launch_sel + 1 < launch_n) launch_sel++;
     } else if (key_sc == KEY_BACKSPACE) {
         if (launch_len > 0)
             launch_len--;
         launcher_refresh();
-        dirty = 1;
     } else if (key_char && launch_len < 22) {
         launch_buf[launch_len++] = key_char;
         launcher_refresh();
-        dirty = 1;
-    }
+    } else return;
+    launcher_reveal();
+    dirty = 1;
 }
 
 static void draw_launcher(void) {
@@ -5980,14 +6020,15 @@ static void draw_launcher(void) {
         return;
     int x, y, w, h;
     launcher_geom(&x, &y, &w, &h);
+    launcher_clamp_scroll();
     draw_round_rect(x - 1, y - 1, w + 2, h + 2, 11, INK(9));
     draw_round_rect(x, y, w, h, 10, INK(3));
     int fx = x + 14, fy = y + 12, fw = w - 28, fh = START_FIELD_H;
     draw_round_rect(fx, fy, fw, fh, 8, INK(1));
     draw_round_frame(fx, fy, fw, fh, 8, launch_len ? ui_accent : INK(7));
-    icon_draw(ICON_SEARCH, fx + 12, fy + (fh - ICON_SIZE) / 2, INK(16));
+    icon_draw(ICON_SEARCH, fx + 11, fy + (fh - ICON_SIZE) / 2, INK(16));
     launch_buf[launch_len] = 0;
-    int tx = fx + 38;
+    int tx = fx + 36;
     int ty = fy + (fh - CHAR_H) / 2;
     if (launch_len)
         draw_string(launch_buf, tx, ty, ui_text);
@@ -5995,48 +6036,44 @@ static void draw_launcher(void) {
         draw_string("Search apps and files", tx, ty, INK(16));
     int cx = tx + ui_string_w(launch_buf);
     if ((frame_count / 35) & 1)
-        draw_rect(cx + 1, fy + 9, 1, fh - 18, INK(28));
-    if (launcher_grid()) {
-        int apps = launcher_apps();
-        for (int i = 0; i < apps; i++) {
-            int gx, gy;
-            launcher_cell(x, y, i, &gx, &gy);
-            int sel = i == launch_sel, id = launch_items[i].icon;
-            int tile = gx + (START_CELL_W - TILE_S) / 2;
-            if (sel) draw_round_rect(gx + 4, gy, START_CELL_W - 8, START_CELL_H - 6, 10, INK(5));
-            draw_app_tile(tile, gy + 6, id, TILE_S, sel);
-            int lw = ui_string_w(icons[id].label);
-            draw_string_clip(icons[id].label, gx + (START_CELL_W - lw) / 2, gy + 6 + TILE_S + 5, sel ? INK(30) : INK(23), gx + START_CELL_W - 4);
+        draw_rect(cx + 1, fy + 8, 1, fh - 16, INK(28));
+    draw_string(launch_len ? "Results" : "Apps", fx + 6, fy + fh + 12, INK(17));
+    int ly = y + START_HEAD;
+    int rows = launcher_rows();
+    for (int i = 0; i < rows; i++) {
+        int item = launch_scroll + i, ry = ly + i * START_ROW;
+        int sel = item == launch_sel;
+        if (sel) draw_round_rect(fx, ry, fw, START_ROW - 2, 7, INK(6));
+        uint8_t ink = sel ? INK(30) : ui_text;
+        const char *kind = 0;
+        if (launch_items[item].icon >= 0) {
+            draw_glyph_tile(icons[launch_items[item].icon].icon, fx + 6, ry + 2, 24);
+        } else {
+            int native = file_extension(launch_items[item].name, ".bex");
+            draw_round_rect(fx + 6, ry + 2, 24, 24, 6, INK(7));
+            icon_draw(native ? ICON_APP_NATIVE : ICON_FILE_TEXT, fx + 10, ry + 6, INK(26));
+            kind = native ? "Native app" : "File";
         }
-    } else {
-        int ly = fy + fh + 12;
-        int rows = launcher_rows();
-        for (int i = 0; i < rows; i++) {
-            int ry = ly + i * 28;
-            int sel = (i == launch_sel);
-            if (sel) draw_round_rect(fx, ry, fw, 26, 6, INK(6));
-            uint8_t ink = sel ? INK(30) : ui_text;
-            const char *kind;
-            if (launch_items[i].icon >= 0) {
-                icon_draw(icons[launch_items[i].icon].icon, fx + 10, ry + 5, ink);
-                kind = "Application";
-            } else {
-                int native = file_extension(launch_items[i].name, ".bex");
-                icon_draw(native ? ICON_APP_NATIVE : ICON_FILE_TEXT, fx + 10, ry + 5, ink);
-                kind = native ? "Native app" : "File";
-            }
-            draw_string_clip(launch_items[i].name, fx + 36, ry + (26 - CHAR_H) / 2, ink, fx + fw - 110);
-            draw_string(kind, fx + fw - 12 - ui_string_w(kind), ry + (26 - CHAR_H) / 2, ui_text_dim);
+        int right = fx + fw - 12;
+        if (kind) {
+            right -= ui_string_w(kind) + 12;
+            draw_string(kind, fx + fw - 12 - ui_string_w(kind), ry + (START_ROW - 2 - CHAR_H) / 2, ui_text_dim);
         }
-        if (launch_n == 0)
-            draw_string("No matches", fx + 4, ly + 2, ui_text_dim);
+        draw_string_clip(launch_items[item].name, fx + 40, ry + (START_ROW - 2 - CHAR_H) / 2, ink, right);
     }
-    /* Footer: identity on the left, system actions on the right. */
+    if (launch_n == 0)
+        draw_string("No matches", fx + 6, ly + 6, ui_text_dim);
+    if (launch_n > rows) {
+        int track = rows * START_ROW - 2, thumb = track * rows / launch_n, top = track * launch_scroll / launch_n;
+        draw_round_rect(x + w - 7, ly, 3, track, 1, INK(5));
+        draw_round_rect(x + w - 7, ly + top, 3, thumb < 12 ? 12 : thumb, 1, INK(14));
+    }
+    /* Footer: identity on the left; About, Settings, Sleep and Power on the right. */
     int foot = y + h - START_FOOT;
     draw_hline(x + 14, foot, w - 28, INK(6));
     draw_string_bold("BaseOS", x + 18, foot + (START_FOOT - CHAR_H) / 2, INK(20));
-    static const int foot_icon[3] = {ICON_SETTINGS, ICON_MOON, ICON_POWER};
-    for (int b = 0; b < 3; b++)
+    static const int foot_icon[4] = {ICON_APP_ABOUT, ICON_SETTINGS, ICON_MOON, ICON_POWER};
+    for (int b = 0; b < 4; b++)
         tool_button(launcher_footer_x(x, b), foot + 8, 32, 28, foot_icon[b], 0, TB_FLAT);
 }
 
@@ -6048,28 +6085,20 @@ static int launcher_click(void) {
         return 1;
     }
     int foot = y + h - START_FOOT;
-    for (int b = 0; b < 3; b++) {
+    for (int b = 0; b < 4; b++) {
         if (!hit(mouse_x, mouse_y, launcher_footer_x(x, b), foot + 8, 32, 28)) continue;
         launcher_close();
-        if (b == 0) icon_open(ICON_DESK_SETTINGS);
-        else if (b == 1) saver_start();
-        else menu_activate(MENU_SPECIAL, 4);
+        if (b == 0) win_open(WK_ABOUT);
+        else if (b == 1) icon_open(ICON_DESK_SETTINGS);
+        else if (b == 2) saver_start();
+        else do_shutdown();
         return 1;
     }
-    if (launcher_grid()) {
-        int apps = launcher_apps();
-        for (int i = 0; i < apps; i++) {
-            int gx, gy;
-            launcher_cell(x, y, i, &gx, &gy);
-            if (hit(mouse_x, mouse_y, gx + 4, gy, START_CELL_W - 8, START_CELL_H - 6)) { launcher_run(i); return 1; }
-        }
-        return 1;
-    }
-    int ly = y + 12 + START_FIELD_H + 12;
+    int ly = y + START_HEAD;
     int rows = launcher_rows();
     for (int i = 0; i < rows; i++) {
-        if (hit(mouse_x, mouse_y, x + 14, ly + i * 28, w - 28, 26)) {
-            launcher_run(i);
+        if (hit(mouse_x, mouse_y, x + 14, ly + i * START_ROW, w - 28, START_ROW - 2)) {
+            launcher_run(launch_scroll + i);
             return 1;
         }
     }
@@ -6474,33 +6503,22 @@ static void handle_click(void) {
             menu_activate(open_menu, item);
             return;
         }
-        for (int i = 0; i < MENU_N; i++) {
-            if (hit(mouse_x, mouse_y, bar_x[i], 0, bar_w[i], MENUBAR_H)) {
-                if (i == open_menu) {
-                    open_menu = MENU_NONE;
-                    menu_sel = -1;
-                } else {
-                    open_menu = i;
-                    menu_sel = menu_item_at(i, mouse_x, mouse_y);
-                }
-                dirty = 1;
-                return;
+        int bar = win_menu_at(mouse_x, mouse_y);
+        if (bar >= 0) {
+            if (bar == open_menu) {
+                open_menu = MENU_NONE;
+                menu_sel = -1;
+            } else {
+                open_menu = bar;
+                menu_sel = menu_item_at(bar, mouse_x, mouse_y);
             }
+            dirty = 1;
+            return;
         }
         open_menu = MENU_NONE;
         menu_sel = -1;
         dirty = 1;
         return;
-    }
-
-    for (int i = 0; i < MENU_N; i++) {
-        if (hit(mouse_x, mouse_y, bar_x[i], 0, bar_w[i], MENUBAR_H)) {
-            open_menu = i;
-            menu_sel = -1;
-            fm_last_click_item = -1;
-            dirty = 1;
-            return;
-        }
     }
 
     if (open_dlg) {
@@ -6541,7 +6559,12 @@ static void handle_click(void) {
             win_request_close(i);
             return;
         }
-        if (hit(mouse_x, mouse_y, w->x, w->y, w->w, TITLE_H)) {
+        if (!open_dlg && hit(mouse_x, mouse_y, w->x, w->y + TITLE_BAR, w->w, WMENU_H)) {
+            int m = win_menu_at(mouse_x, mouse_y);
+            if (m >= 0) { open_menu = m; menu_sel = -1; fm_last_click_item = -1; dirty = 1; }
+            return;
+        }
+        if (hit(mouse_x, mouse_y, w->x, w->y, w->w, TITLE_BAR)) {
             if (title_click_window == i && input_gesture_ticks()-title_click_time < 28) {
                 title_click_window=-1; win_arrange(i,0); return;
             }
@@ -6638,6 +6661,7 @@ static void handle_click(void) {
 }
 
 static void handle_wheel(int amount) {
+    if(amount&&launcher_on&&!name_dlg&&!open_dlg&&!display_pending){launcher_scroll(amount);return;}
     if(!amount||name_dlg||edit_close_dlg||open_dlg||launcher_on||open_menu>=0||display_pending)return;
     int target=-1;
     for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&!wins[i].min&&
@@ -6781,7 +6805,7 @@ static void handle_key(void) {
             return;
         }
     }
-    if(key_sc==0x44){open_menu=MENU_FILE;menu_sel=0;dirty=1;return;}
+    if(key_sc==0x44){if(win_front()>=0){open_menu=MENU_FILE;menu_sel=0;dirty=1;}return;}
     if (open_menu >= 0) {
         if(key_sc==KEY_LEFT||key_sc==KEY_RIGHT){open_menu=(open_menu+(key_sc==KEY_LEFT?MENU_N-1:1))%MENU_N;menu_sel=0;}
         else if(key_sc==KEY_UP||key_sc==KEY_DOWN){
@@ -7742,7 +7766,6 @@ static void render_scene(void) {
                 draw_ui();
                 if (open_dlg)
                     draw_open_dialog();
-                draw_menubar(open_menu, menu_sel);
                 draw_taskbar();
                 draw_pulldown(open_menu, menu_sel);
                 draw_drag_ghost();

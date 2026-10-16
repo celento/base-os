@@ -6,6 +6,8 @@
 #include "input_ingress.h"
 #include "native_ui.h"
 #define MAX_WIN 8
+/* Fixture chrome metrics: the routing under test is parameterized by these,
+ * and the pointer coordinates below are tuned to them. */
 #define MENUBAR_H 36
 #define TITLE_H 32
 #define TIMER_HZ 70

@@ -204,7 +204,7 @@ class DocumentCollectorTest(unittest.TestCase):
         self.assertEqual(matcher.find(pixels, 'document.rtf', (32, 32, 32)), [])
 
     def test_filename_match_is_field_bounded_and_rejects_suffix_despite_ocr(self):
-        self.assertEqual(name_field_bounds(1280, 720), (452, 230, 828, 308))
+        self.assertEqual(name_field_bounds(1280, 720), (452, 204, 828, 282))
         with tempfile.TemporaryDirectory() as temporary:
             session = Session.__new__(Session); session.directory = pathlib.Path(temporary)
             matcher = WhiteUiText(ROOT / 'src/font.h')
@@ -219,7 +219,7 @@ class DocumentCollectorTest(unittest.TestCase):
                 self.assertEqual(session.has_text(event, 'document.rtf'), expected)
                 self.assertEqual(event['ocr'], 'document.rtf')
                 self.assertEqual(event['glyph_matches'][0]['foreground_rgb'], [32, 32, 32])
-                self.assertEqual(event['glyph_matches'][0]['bounds'], [452, 230, 828, 308])
+                self.assertEqual(event['glyph_matches'][0]['bounds'], [452, 204, 828, 282])
 
     def test_floppy_does_not_wait_for_async_markers(self):
         session = Session.__new__(Session)

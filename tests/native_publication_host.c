@@ -26,7 +26,7 @@ static void task_test_step(int owner) {
     if(operation==CLEAR_TEXT)io->print(&io->binding,"Ordinary text can force a full redraw.");
     if(operation==PUBLISH)io->present(&io->binding);
 }
-#define TITLE_H 32
+#define TITLE_H 54
 #define TERM_PAD 12
 #define EDIT_LINE_H 14
 static unsigned char rendered[800*600],reference[sizeof rendered],frame[64000];

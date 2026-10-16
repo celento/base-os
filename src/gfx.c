@@ -799,3 +799,7 @@ void icon_draw(int id, int x, int y, uint8_t ink) {
 void icon_draw_large(int id, int x, int y, uint8_t ink) {
     if (id >= 0 && id < ICON_COUNT) icon_blit(app_icon_bits[id], APP_ICON_SIZE, x, y, ink);
 }
+void icon_draw_desk(int id, int x, int y, uint8_t ink) {
+    if (id >= ICON_DESK_FIRST && id < ICON_DESK_FIRST + ICON_DESK_N)
+        icon_blit(desk_icon_bits[id - ICON_DESK_FIRST], DESK_ICON_SIZE, x, y, ink);
+}

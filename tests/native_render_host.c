@@ -13,7 +13,9 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define PRESENT_BASE ((uintptr_t)test_mirror)
 #define GFX_HOST_TEST
 #include "../src/gfx.c"
-#define TITLE_H 30
+#define TITLE_BAR 30
+#define WMENU_H 24
+#define TITLE_H 54
 #define INK(i) ((uint8_t)(PAL_GRAY+(i)))
 #define WIN_BTN_GAP 26
 #define TERM_PAD 12
@@ -33,6 +35,8 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define WK_TERM 11
 #define WK_NATIVE 12
 static uint8_t ui_border=2,ui_body=15,ui_chrome=3,ui_chrome_dk=2,ui_title=4;
+/* Production strips carry menu labels; the fixture paints the same flat band. */
+static void draw_win_menu_strip(int x,int y,int w,int inactive){draw_rect(x,y+TITLE_BAR,w,WMENU_H,inactive?ui_chrome:INK(4));}
 static uint8_t ui_text_dim=1,ui_track=3;
 typedef struct {int x,y,w,h,open,min,z,kind;} Win;
 static Win wins[MAX_WIN];
@@ -162,7 +166,7 @@ static void owned_eligibility(void){
     assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_OUTPUT})==TERM_RENDER_NONE);
     assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_LIFECYCLE})==TERM_RENDER_FULL);
     wins[2].min=0;
-    wins[3]=(Win){.x=90,.y=60,.w=380,.h=300,.open=1,.z=2};
+    wins[3]=(Win){.x=90,.y=40,.w=380,.h=320,.open=1,.z=2}; /* client interior contains wins[2] */
     assert(window_content_hidden(2));
     assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_CANVAS})==TERM_RENDER_NONE);
     assert(term_task_render_action((TermTaskUpdate){2,APP_VIEW_LIFECYCLE})==TERM_RENDER_FULL);
@@ -296,7 +300,7 @@ static void occlusion_pixels(int bpp){
     wins[3]=exact;wins[3].x=x+1;wins[3].y=80;
     composite_begin(800,600,bpp);composite_update(TERM_RENDER_FULL,TERM_TASK_CANVAS,10);
     /* Existing whole-window containment remains valid for canvas updates. */
-    wins[3]=(Win){.x=80,.y=60,.w=540,.h=450,.open=1,.z=2};
+    wins[3]=(Win){.x=80,.y=40,.w=540,.h=460,.open=1,.z=2};
     assert(window_content_hidden(2));
     composite_begin(800,600,bpp);composite_update(TERM_RENDER_NONE,TERM_TASK_CANVAS,11);
     /* Multiple partial covers are intentionally not combined into a region. */

@@ -42,7 +42,7 @@ void feature_test(void){
     int width=wins[1].w;win_arrange(1,0);check_ui(!wins[1].maximized,"restore size");win_arrange(1,2);check_ui(wins[1].w==width,"resnap");
     platform_log("UI folders\n");
     open_files(fs_root());open_files(fs_find_child(0,"Programs"));check_ui(window_state[2].cwd==0&&window_state[3].cwd!=0,"independent folders");
-    mouse_x=wins[win_front()].x+45;mouse_y=files_list_y(wins[win_front()].y)+ROW_H+8;
+    mouse_x=files_list_x(wins[win_front()].x,wins[win_front()].w)+45;mouse_y=files_list_y(wins[win_front()].y)+ROW_H+8;
     handle_files_click(wins[win_front()].x,wins[win_front()].y,wins[win_front()].w,wins[win_front()].h);
     check_ui(fm_selected==1,"file rows match new header and spacing");
     mouse_x=40;mouse_y=TASKBAR_Y+TASKBAR_H/2;handle_click();
@@ -62,7 +62,7 @@ void feature_test(void){
     check_ui(paint_write_named("regression.pbm"),"paint saves real file");
     int extra=win_open(WK_CLOCK);taskbar_layout();check_ui(tb_n==MAX_WIN,"all taskbar slots");
     for(int t=0;t<tb_n;t++){
-        check_ui(tb_x[t]>=112&&tb_x[t]+tb_w[t]<=fb_w-8,"taskbar remains inside screen");
+        check_ui(tb_x[t]>=8+start_btn_w()+8&&tb_x[t]+tb_w[t]<=fb_w-8,"taskbar remains inside screen");
         if(t)check_ui(tb_x[t]>=tb_x[t-1]+tb_w[t-1]+6,"taskbar targets do not overlap");
     }
     win_close(extra);

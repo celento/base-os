@@ -5,7 +5,7 @@
 #include <string.h>
 #include "app_view.h"
 #define MAX_WIN 8
-#define TITLE_H 32
+#define TITLE_H 54
 #define NATIVE_TOOLBAR_H 30
 #define NATIVE_CLIENT_PAD 8
 #define EDIT_CHAR_W 8
@@ -40,7 +40,7 @@ void native_ui_refresh(unsigned ticks,unsigned buttons){assert(ticks==42&&button
 static void win_close(int slot){closed=slot;wins[slot].open=0;}
 #include "native_window_shell_kernel.inc"
 int main(void){
-    wins[2]=(Win){.kind=WK_NATIVE,.w=240,.h=100,.open=1};
+    wins[2]=(Win){.kind=WK_NATIVE,.w=240,.h=122,.open=1};
     assert(native_output_columns(&wins[2])==27);
     assert(native_output_rows(&wins[2])==2);
     assert(native_output_total(2)==5); /* Entire bounded rows remain readable. */

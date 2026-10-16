@@ -4,7 +4,7 @@
 #undef main
 #include "app.h"
 #define MAX_WIN 8
-#define MENUBAR_H 36
+#define MENUBAR_H 0
 #define BTN_H 30
 #define SPREADSHEET_SAVE_OK 1
 static struct { int open, seq; } wins[MAX_WIN];

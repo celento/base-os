@@ -6,7 +6,7 @@
 #include "app.h"
 #define EDIT_BUF_SIZE 65536
 #define MAX_WIN 8
-#define TITLE_H 32
+#define TITLE_H 54
 #define INFO_H 28
 #define ROW_H 28
 #define SB 16
@@ -139,8 +139,8 @@ static void paste_sort_and_scroll(void) {
     assert(fm_first==fm_vis_count()-4);filter_text("item 01");files_scroll(4);
     assert(fm_first==0&&fm_count==1&&fm_selected==-1);
     fm_filter_clear(1);fm_first=1000;fm_manual_scroll=1;files_scroll(1000);assert(fm_first==0);
-    assert(files_rows(50,200)==2);fm_filter_show();assert(files_rows(50,200)==1);
-    assert(files_list_y(50)==191);fm_filter_clear(1);
+    assert(files_rows(50,224)==2);fm_filter_show();assert(files_rows(50,224)==1);
+    assert(files_list_y(50)==213);fm_filter_clear(1);
     /* Actual click hit-testing shares the same compact geometry. */
     mouse_x=8+60+3+5;mouse_y=files_header_y(0)+8;
     handle_files_click(0,0,360,200);assert(fm_view.sort==FILE_VIEW_TYPE);

@@ -13,7 +13,7 @@ void feature_test(void) {
         dragging_win=id;drag_active=1;render_desktop_frame();
         gfx_present();
 #else
-        draw_desktop();draw_desktop_icons(-1);draw_ui();draw_menubar(-1,-1);draw_taskbar();flip_vga();
+        draw_desktop();draw_desktop_icons(-1);draw_ui();draw_taskbar();flip_vga();
 #endif
     }
     platform_log("RENDER_TICKS=");kprint_uint(timer_ticks()-began);platform_log(" FRAMES=20\n");
