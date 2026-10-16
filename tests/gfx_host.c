@@ -39,7 +39,7 @@ int main(void){
     draw_rect(0,0,73,53,COLOR_GREEN);uint8_t saved[256];gfx_window_corners(10,10,40,30,saved,0,COLOR_GRAY);
     draw_rect(10,10,40,30,COLOR_WHITE);gfx_window_corners(10,10,40,30,saved,1,COLOR_GRAY);
     assert(get_pixel(10,10)==COLOR_GREEN&&get_pixel(49,39)==COLOR_GREEN&&get_pixel(30,25)==COLOR_WHITE);
-    uint8_t before[sizeof back];memcpy(before,back,sizeof back);draw_shadow(10,10,40,30);assert(!memcmp(before,back,sizeof back));
+    draw_shadow(10,10,40,30);assert(get_pixel(30,25)==COLOR_WHITE&&get_pixel(10,10)==COLOR_GREEN&&get_pixel(70,50)==COLOR_GREEN); /* inside and far outside untouched */
     gfx_window_corners(-4,-4,40,30,saved,0,COLOR_GRAY);gfx_window_corners(-4,-4,40,30,saved,1,COLOR_GRAY);
     draw_rect(0,0,73,53,COLOR_GREEN);
     draw_round_frame(10,10,28,28,14,COLOR_WHITE);

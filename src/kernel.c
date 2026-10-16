@@ -23,6 +23,10 @@
 #include "file_view.h"
 #include "video.h"
 #include "image_viewer.h"
+#include "image_decode.h"
+#include "app_icons.h"
+#define WALLPAPERS_DEFINE_DATA
+#include "wallpapers.h"
 #include "audio_example.h"
 #include "platform.h"
 #include "physmem.h"
@@ -75,7 +79,7 @@
 #define TASKBAR_H      40
 #define MAX_WIN        8
 
-#define THEME_N        8
+#define THEME_N        WALLPAPER_N
 
 #define KEYBOARD_STATUS_PORT 0x64
 #define KEYBOARD_DATA_PORT   0x60
@@ -94,27 +98,18 @@
 
 #define EDIT_BUF_SIZE  65536
 
-/* Each theme is a three-stop dark gradient with one quiet accent. Window
- * chrome is always dark; only these colors change. */
+/* A theme is a bundled wallpaper and the accent that suits it. The chrome
+ * itself is always light glass. */
 typedef struct {
     const char *name;
-    uint32_t sky_top;
-    uint32_t sky_mid;
-    uint32_t horizon;
-    uint32_t ridge;
+    int wallpaper;
     uint32_t accent;
 } Theme;
 
 static const Theme themes[THEME_N] = {
-    /* name        top       mid       light     unused    accent */
-    {"Graphite",  0x0F1013, 0x1A1C22, 0x2A2E38, 0x000000, 0x5B8DEF},
-    {"Slate",     0x0E1117, 0x182030, 0x2B3A54, 0x000000, 0x6D9BF2},
-    {"Midnight",  0x0A0B14, 0x141633, 0x2A2F66, 0x000000, 0x8A94F5},
-    {"Moss",      0x0C110E, 0x15241B, 0x25402F, 0x000000, 0x6FC48E},
-    {"Dune",      0x12100C, 0x221D15, 0x3B3224, 0x000000, 0xD8B06A},
-    {"Mauve",     0x120E14, 0x231A2A, 0x3E2E4A, 0x000000, 0xC39AE0},
-    {"Ocean",     0x0A1216, 0x12242C, 0x1F3D49, 0x000000, 0x5FC2D9},
-    {"Rose",      0x14100F, 0x2A1A1C, 0x4A2C31, 0x000000, 0xE08A9A},
+    {"Aqua",   0, 0x3B82E0},
+    {"Lake",   1, 0x2F86C8},
+    {"Clouds", 2, 0x4A7FC8},
 };
 
 static int theme_id = 0;
@@ -179,21 +174,12 @@ static uint32_t rgb_darken(uint32_t c, int pct) {
            (uint32_t)(b * pct / 100);
 }
 
-static uint32_t rgb_lerp(uint32_t a, uint32_t b, int t, int n) {
-    int r0 = (a >> 16) & 255, g0 = (a >> 8) & 255, b0 = a & 255;
-    int r1 = (b >> 16) & 255, g1 = (b >> 8) & 255, b1 = b & 255;
-    if (n < 1) n = 1;
-    return ((uint32_t)(r0 + (r1 - r0) * t / n) << 16) |
-           ((uint32_t)(g0 + (g1 - g0) * t / n) << 8) |
-           (uint32_t)(b0 + (b1 - b0) * t / n);
-}
-
 static uint8_t idx24(uint32_t c) {
     return gfx_rgb((c >> 16) & 255, (c >> 8) & 255, c & 255);
 }
 
-/* Neutrals are a 32-step ink ramp tinted toward the night sky. INK(0) is the
- * deepest shade and INK(31) the brightest text. */
+/* Neutrals are a 32-step ink ramp with a faint cool cast. INK(0) is the
+ * brightest surface and INK(31) the darkest text. */
 #define INK(i) ((uint8_t)(PAL_GRAY + (i)))
 
 static void theme_apply(void) {
@@ -201,30 +187,31 @@ static void theme_apply(void) {
     ui_accent_rgb = t->accent;
     ui_accent_rgb_lt = rgb_lighten(t->accent, 45);
     ui_accent_rgb_dk = rgb_darken(t->accent, 62);
-    /* Wallpaper ramp: a 64-step gradient from the deepest to the lightest tone. */
-    gfx_set_ramp(PAL_DESK, 32, t->sky_top, t->sky_mid);
-    gfx_set_ramp(PAL_DESK + 31, 33, t->sky_mid, t->horizon);
-    /* Neutral ink ramp with a faint cool cast: dark surfaces, light text. */
-    gfx_set_ramp(PAL_GRAY, 17, 0x0C0D10, 0x6B6F78);
-    gfx_set_ramp(PAL_GRAY + 16, 16, 0x6B6F78, 0xF2F3F5);
+    /* The wallpaper's own colors, chosen offline by tools/gen_wallpapers.py. */
+    for (int i = 0; i < WALLPAPER_COLORS; i++)
+        gfx_set_color(PAL_DESK + i, wallpapers[t->wallpaper].colors[i]);
+    /* Neutral ink ramp with a faint cool cast: light surfaces, dark text.
+     * tools/palette.py mirrors these two segments for the asset tools. */
+    gfx_set_ramp(PAL_GRAY, 17, 0xF7F8FA, 0x8A9099);
+    gfx_set_ramp(PAL_GRAY + 16, 16, 0x8A9099, 0x14161B);
     gfx_set_ramp(PAL_ACCENT, 9, ui_accent_rgb_lt, ui_accent_rgb);
     gfx_set_ramp(PAL_ACCENT + 8, 8, ui_accent_rgb, ui_accent_rgb_dk);
     gfx_pal_commit();
     ui_accent = PAL_ACCENT + 8;
-    ui_accent_dk = PAL_ACCENT + 4; /* lighter step reads better on dark chrome */
-    ui_track = INK(2);
-    ui_field = INK(2);
-    ui_paper = INK(2);
-    ui_body = INK(3);
-    ui_chrome = INK(4);
-    ui_title = INK(5);
-    ui_chrome_dk = INK(7);
-    ui_border = INK(9);
-    ui_text_dim = INK(19);
+    ui_accent_dk = PAL_ACCENT + 12;
+    ui_track = INK(3);
+    ui_field = INK(0);
+    ui_paper = INK(0);
+    ui_body = INK(1);
+    ui_chrome = INK(2);
+    ui_title = INK(3);
+    ui_chrome_dk = INK(6);
+    ui_border = INK(11);
+    ui_text_dim = INK(18);
     ui_text = INK(29);
     {
         int r = (t->accent >> 16) & 255, g = (t->accent >> 8) & 255, b = t->accent & 255;
-        ui_on_accent = (r * 299 + g * 587 + b * 114) / 1000 > 140 ? INK(1) : COLOR_WHITE;
+        ui_on_accent = (r * 299 + g * 587 + b * 114) / 1000 > 140 ? INK(31) : COLOR_WHITE;
     }
     desk_cache_theme = -1;
     app_accent = ui_accent;
@@ -317,21 +304,33 @@ static int btn_w(const char *label) { return ui_string_w(label) + 24; }
 #define WIN_NOCLOSE 4
 #define WIN_INACTIVE 8
 
-/* Window controls sit at the right of the title bar: minimize, maximize, close. */
-#define WIN_BTN_GAP 26
+/* Window controls are Aqua traffic lights at the left of the title bar:
+ * close, minimize, zoom. Each occupies a CLOSE_S square. */
+#define WIN_BTN_GAP 22
 static void close_box_pos(int wx, int wy, int *cx, int *cy) {
     (void)wx; *cx = -1; *cy = wy + (TITLE_BAR - CLOSE_S) / 2;
 }
-static int close_box_x(int wx, int ww) { return wx + ww - 14 - CLOSE_S; }
+static int close_box_x(int wx, int ww) { (void)ww; return wx + 12; }
 static void min_box_pos(int wx, int wy, int *cx, int *cy) {
     (void)wx; *cx = -1; *cy = wy + (TITLE_BAR - CLOSE_S) / 2;
 }
-static int max_box_x(int wx, int ww) { return close_box_x(wx, ww) - WIN_BTN_GAP; }
-static int min_box_x(int wx, int ww) { return max_box_x(wx, ww) - WIN_BTN_GAP; }
+static int min_box_x(int wx, int ww) { return close_box_x(wx, ww) + WIN_BTN_GAP; }
+static int max_box_x(int wx, int ww) { return min_box_x(wx, ww) + WIN_BTN_GAP; }
 
 static void draw_win_menu_strip(int x, int y, int w, int inactive);
-static void draw_win_control(int icon, int x, int y, int active) {
-    icon_draw(icon, x, y, active ? INK(20) : INK(13));
+/* A traffic light: a 12px gel sphere with a darker rim and a top highlight.
+ * `which` is 0 close, 1 minimize, 2 zoom; inactive windows show gray. */
+static void draw_win_control(int which, int x, int y, int active) {
+    static const uint32_t rim[3] = {0xD84C41, 0xD9A024, 0x2BA633};
+    static const uint32_t fill[3] = {0xFF5F57, 0xFEBC2E, 0x28C840};
+    static const uint32_t light[3] = {0xFFB4AE, 0xFFE29B, 0xA6EDAE};
+    int d = 12, px = x + (CLOSE_S - d) / 2, py = y + (CLOSE_S - d) / 2;
+    uint8_t ring = active ? idx24(rim[which]) : INK(13);
+    uint8_t body = active ? idx24(fill[which]) : INK(8);
+    uint8_t shine = active ? idx24(light[which]) : INK(3);
+    draw_round_rect(px, py, d, d, d / 2, ring);
+    draw_round_rect(px + 1, py + 1, d - 2, d - 2, d / 2 - 1, body);
+    draw_round_rect(px + 3, py + 2, d - 6, 3, 2, shine);
 }
 
 static void draw_sb_arrow(int x, int y, int dir, uint8_t col) {
@@ -350,7 +349,11 @@ static void draw_sb_arrow(int x, int y, int dir, uint8_t col) {
 }
 
 static void draw_thumb(int x, int y, int w, int h) {
-    draw_round_rect(x + 1, y + 1, w - 2, h - 2, 3, INK(12));
+    int r = (w < h ? w : h) / 2 - 1;
+    draw_round_rect(x + 1, y + 1, w - 2, h - 2, r, PAL_ACCENT + 11);
+    draw_round_rect(x + 2, y + 2, w - 4, h - 4, r - 1, PAL_ACCENT + 7);
+    if (w < h) draw_round_rect(x + 3, y + 3, (w - 6) / 2 + 1, h - 6, 2, PAL_ACCENT + 4);
+    else draw_round_rect(x + 3, y + 3, w - 6, (h - 6) / 2 + 1, 2, PAL_ACCENT + 4);
 }
 
 static void draw_scrollbars(int x, int y, int w, int h, int top) {
@@ -384,29 +387,39 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
                      const char *info, int flags) {
     int noclose = flags & WIN_NOCLOSE;
     int inactive = flags & WIN_INACTIVE;
-    int r = 7;
+    int r = 9;
 
     draw_shadow(x, y, w, h);
-    draw_round_rect(x - 1, y - 1, w + 2, h + 2, r + 1, inactive ? INK(7) : INK(10));
     draw_round_rect(x, y, w, h, r, ui_body);
-    draw_round_top(x, y, w, TITLE_BAR, r, inactive ? ui_chrome : ui_title);
+    /* Aqua title bar: a light gradient with fine pinstripes; inactive bars
+     * are flat and paler. */
+    draw_ramp_round(x, y, w, TITLE_BAR, r, 0, PAL_GRAY, PAL_GRAY_N, inactive ? 1 * 16 : 0, inactive ? 2 * 16 : 7 * 16);
+    if (!inactive)
+        for (int j = 2; j < TITLE_BAR - 1; j += 3)
+            glass_round(x + (j < r ? r : 1), y + j, w - (j < r ? 2 * r : 2), 1, 0, 0, INK(31), 12, 12);
+    glass_round(x + r, y + 1, w - 2 * r, 1, 0, 0, COLOR_WHITE, 150, 150);
     draw_win_menu_strip(x, y, w, inactive);
-    draw_hline(x, y + TITLE_H, w, INK(1));
+    draw_hline(x, y + TITLE_BAR, w, INK(9));
+    draw_hline(x, y + TITLE_H, w, INK(8));
+    draw_round_frame(x - 1, y - 1, w + 2, h + 2, r + 1, inactive ? INK(12) : INK(17));
+    draw_round_frame(x, y, w, h, r, INK(0));
 
     if (!noclose) {
         int cx, cy;
         close_box_pos(x, y, &cx, &cy);
-        draw_win_control(ICON_MINUS, min_box_x(x, w), cy, !inactive);
-        draw_win_control(ICON_MAXIMIZE, max_box_x(x, w), cy, !inactive);
-        draw_win_control(ICON_STOP, close_box_x(x, w), cy, !inactive);
+        draw_win_control(0, close_box_x(x, w), cy, !inactive);
+        draw_win_control(1, min_box_x(x, w), cy, !inactive);
+        draw_win_control(2, max_box_x(x, w), cy, !inactive);
     }
 
     if(!noclose)for(int d=0;d<3;d++)draw_line(x+w-4-d*3,y+h-3,x+w-3,y+h-4-d*3,ui_chrome_dk);
     int title_y = y + (TITLE_BAR - CHAR_H) / 2;
     if (title) {
-        int tx = x + 14;
-        int xmax = noclose ? x + w - 14 : min_box_x(x, w) - 12;
-        draw_string_bold_clip(title, tx, title_y, inactive ? ui_text_dim : INK(28), xmax);
+        int left = noclose ? x + 14 : max_box_x(x, w) + CLOSE_S + 8;
+        int xmax = x + w - 14;
+        int tw = uib_string_w(title), tx = x + (w - tw) / 2;
+        if (tx < left) tx = left;
+        draw_string_bold_clip(title, tx, title_y, inactive ? INK(18) : INK(29), xmax);
     }
 
     int top = TITLE_H;
@@ -423,9 +436,16 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
 }
 
 static void draw_button_styled(int x, int y, int w, int h, const char *label, int primary) {
-    draw_round_rect(x, y, w, h, 6, primary ? ui_accent : INK(9));
-    if (!primary)
-        draw_round_rect(x + 1, y + 1, w - 2, h - 2, 5, INK(5));
+    /* Aqua gel: a pill with a glossy upper half. */
+    int r = h / 2;
+    if (primary) {
+        draw_ramp_round(x, y, w, h, r, 1, PAL_ACCENT, PAL_ACCENT_N, 4 * 16, 12 * 16);
+        draw_round_frame(x, y, w, h, r, PAL_ACCENT + 14);
+    } else {
+        draw_ramp_round(x, y, w, h, r, 1, PAL_GRAY, PAL_GRAY_N, 0, 5 * 16);
+        draw_round_frame(x, y, w, h, r, INK(13));
+    }
+    glass_round(x + 2, y + 1, w - 4, h / 2 - 1, h / 2 - 1, 0, COLOR_WHITE, 150, 40);
     int tw = ui_string_w(label);
     int tx = x + (w - tw) / 2;
     int ty = y + (h - CHAR_H) / 2;
@@ -533,38 +553,32 @@ static int icon_hit(int id, int px, int py) {
     return hit(px, py, x0 - 6, icons[id].y - 4, (x1 - x0) + 12, TILE_S + CHAR_H + 16);
 }
 
-/* Every application has one tint; tiles are that color with a white glyph. */
-static uint32_t app_tint(int glyph) {
+/* The color icon for a Lucide application glyph (icons[].icon, kind_icon()). */
+static int app_icon_for(int glyph) {
     switch (glyph) {
-    case ICON_APP_FILES: return 0x4080FF;    case ICON_APP_EDITOR: return 0x8040C0;
-    case ICON_APP_CALC: return 0x404080;     case ICON_APP_PAINT: return 0xC04080;
-    case ICON_APP_VIEWER: return 0x8080C0;   case ICON_APP_SNAKE: return 0x408040;
-    case ICON_APP_WORDLE: return 0x80C040;   case ICON_APP_TERMINAL: return 0x303030;
-    case ICON_APP_TODO: return 0x40C0C0;     case ICON_APP_CLOCK: return 0x4040C0;
-    case ICON_APP_CALENDAR: return 0xC04040; case ICON_APP_MINES: return 0x804040;
-    case ICON_APP_2048: return 0xC08040;     case ICON_APP_BREAKOUT: return 0x804080;
-    case ICON_APP_MONITOR: return 0x408080;  case ICON_APP_SETTINGS: return 0x606060;
-    case ICON_APP_BROWSER: return 0x40C080;  case ICON_APP_PLAYER: return 0xC00040;
-    case ICON_APP_WRITER: return 0x4080C0;   case ICON_APP_SHEET: return 0x40C040;
-    case ICON_APP_TRASH: return 0x808080;    case ICON_APP_NATIVE: return 0x404040;
-    case ICON_APP_HELLO: return 0xC0C040;    case ICON_APP_ABOUT: return 0x4080C0;
-    case ICON_APP_HELP: return 0x4080C0;     default: return 0x606060;
+    case ICON_APP_FILES: return AI_FILES;       case ICON_APP_EDITOR: return AI_EDITOR;
+    case ICON_APP_CALC: return AI_CALC;         case ICON_APP_PAINT: return AI_PAINT;
+    case ICON_APP_VIEWER: return AI_VIEWER;     case ICON_APP_SNAKE: return AI_SNAKE;
+    case ICON_APP_WORDLE: return AI_WORDLE;     case ICON_APP_TERMINAL: return AI_TERMINAL;
+    case ICON_APP_TODO: return AI_TODO;         case ICON_APP_CLOCK: return AI_CLOCK;
+    case ICON_APP_CALENDAR: return AI_CALENDAR; case ICON_APP_MINES: return AI_MINES;
+    case ICON_APP_2048: return AI_G2048;        case ICON_APP_BREAKOUT: return AI_BREAKOUT;
+    case ICON_APP_MONITOR: return AI_MONITOR;   case ICON_APP_SETTINGS: return AI_SETTINGS;
+    case ICON_APP_BROWSER: return AI_BROWSER;   case ICON_APP_PLAYER: return AI_PLAYER;
+    case ICON_APP_WRITER: return AI_WRITER;     case ICON_APP_SHEET: return AI_SHEET;
+    case ICON_APP_TRASH: return AI_TRASH;       case ICON_APP_NATIVE: return AI_NATIVE;
+    case ICON_APP_HELLO: return AI_HELLO;       case ICON_APP_ABOUT: return AI_ABOUT;
+    case ICON_APP_HELP: return AI_HELP;         case ICON_FOLDER: return AI_FILES;
+    case ICON_FILE_TEXT: return AI_DOCUMENT;    default: return AI_WINDOW;
     }
 }
-/* Tiles 32px and up carry the 24px glyph; smaller ones the 16px glyph. */
-static void draw_glyph_tile(int glyph, int x, int y, int size) {
-    draw_round_rect(x, y, size, size, size >= 32 ? 10 : 6, idx24(app_tint(glyph)));
-    if (size >= 32) icon_draw_large(glyph, x + (size - APP_ICON_SIZE) / 2, y + (size - APP_ICON_SIZE) / 2, COLOR_WHITE);
-    else icon_draw(glyph, x + (size - ICON_SIZE) / 2, y + (size - ICON_SIZE) / 2, COLOR_WHITE);
-}
-/* Desktop icons are free-standing glyphs in the app's tint, no container.
- * Dark tints are lifted so they read on the wallpaper. */
+/* Desktop icons stand free on the wallpaper; a selection is a glass pane. */
 static void draw_app_tile(int x, int y, int id, int size, int selected) {
-    uint32_t c = app_tint(icons[id].icon);
-    int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
-    if (r * 299 + g * 587 + b * 114 < 110 * 1000) c = rgb_lighten(c, 45);
-    if (selected) draw_round_rect(x - 6, y - 6, size + 12, size + 12, 10, INK(6));
-    icon_draw_desk(icons[id].icon, x + (size - DESK_ICON_SIZE) / 2, y + (size - DESK_ICON_SIZE) / 2, idx24(c));
+    if (selected) {
+        glass_round(x - 8, y - 6, size + 16, size + CHAR_H + 20, 8, 1, COLOR_WHITE, 110, 110);
+        draw_round_frame(x - 8, y - 6, size + 16, size + CHAR_H + 20, 8, INK(0));
+    }
+    app_icon_draw(app_icon_for(icons[id].icon), x + (size - AI_BIG) / 2, y + (size - AI_BIG) / 2, AI_BIG);
 }
 
 static void draw_desktop_icons(int selected) {
@@ -573,34 +587,61 @@ static void draw_desktop_icons(int selected) {
         int lx, ly, lw;
         icon_label_pos(i, &lx, &ly, &lw);
         draw_app_tile(icons[i].x, icons[i].y, i, TILE_S, sel);
-        draw_string(icons[i].label, lx, ly, sel ? INK(30) : INK(25));
+        draw_string(icons[i].label, lx + 1, ly + 1, INK(31));
+        draw_string(icons[i].label, lx, ly, INK(0));
     }
 }
 
-/* The wallpaper is generated only when the theme changes, then copied from RAM.
- * It is a quiet diagonal gradient with one soft bloom of light in the upper
- * right, ordered-dithered so the 64-step ramp shows no banding. */
+/* The wallpaper is a bundled JPEG, decoded when the theme changes and kept in
+ * RAM. It is scaled bilinearly to the screen and ordered-dithered into the
+ * palette through a lazily filled nearest-color table. */
 static const uint8_t wall_bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
-static void desktop_render(void) {
-    int bx = fb_w * 78 / 100, by = fb_h * 18 / 100;
-    int reach = fb_w * fb_w * 42 / 100;
-    for (int y = 0; y < fb_h; y++) {
-        for (int x = 0; x < fb_w; x++) {
-            int base = (x * 22 / fb_w + y * 30 / fb_h) * 16; /* 0..52 in 1/16ths */
-            int dx = x - bx, dy = (y - by) * 3 / 2, d2 = dx * dx + dy * dy;
-            int bloom = d2 < reach ? (reach - d2) / (reach / 480 + 1) : 0; /* up to 30 */
-            int tone16 = base + bloom;
-            int tone = tone16 >> 4;
-            if ((tone16 & 15) > wall_bayer[y & 3][x & 3]) tone++;
-            if (tone > 63) tone = 63;
-            fb[y * fb_w + x] = (uint8_t)(PAL_DESK + tone);
+static uint8_t near_lut[32768];
+static int near_lut_theme = -2;
+static uint8_t wall_near(int r, int g, int b) {
+    r = r < 0 ? 0 : r > 255 ? 255 : r;
+    g = g < 0 ? 0 : g > 255 ? 255 : g;
+    b = b < 0 ? 0 : b > 255 ? 255 : b;
+    int key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+    uint8_t v = near_lut[key];
+    if (v == 255) { v = gfx_rgb((r & ~7) | 4, (g & ~7) | 4, (b & ~7) | 4); near_lut[key] = v; }
+    return v;
+}
+/* Paints wallpaper `wp` into dst (dw x dh, pitch dw). Returns 0 if the JPEG
+ * cannot be decoded. The viewer's decode workspace is reused; both decodes
+ * are synchronous and never nested. */
+static int wallpaper_paint(const Wallpaper *wp, uint8_t *dst, int dw, int dh) {
+    if (near_lut_theme != theme_id) { kmemset(near_lut, 255, sizeof near_lut); near_lut_theme = theme_id; }
+    ImageDecoded img;
+    if (image_decode(wp->jpeg, wp->bytes, (void *)(IMAGE_BASE + 0x400000), 0x300000, &img) != IMAGE_OK ||
+        img.channels < 1 || img.width < 2 || img.height < 2) return 0;
+    int sw = (int)img.width, sh = (int)img.height, ch = (int)img.channels;
+    const uint8_t *px = img.pixels;
+    for (int y = 0; y < dh; y++) {
+        int fy = y * (sh - 1) * 256 / (dh > 1 ? dh - 1 : 1), sy = fy >> 8, ty = fy & 255;
+        const uint8_t *row0 = px + (unsigned)sy * (unsigned)sw * (unsigned)ch;
+        const uint8_t *row1 = sy + 1 < sh ? row0 + (unsigned)sw * (unsigned)ch : row0;
+        uint8_t *out = dst + y * dw;
+        for (int x = 0; x < dw; x++) {
+            int fx = x * (sw - 1) * 256 / (dw > 1 ? dw - 1 : 1), sx = fx >> 8, tx = fx & 255;
+            const uint8_t *a = row0 + sx * ch, *b = sx + 1 < sw ? a + ch : a;
+            const uint8_t *c = row1 + sx * ch, *d = sx + 1 < sw ? c + ch : c;
+            int rgb[3];
+            for (int k = 0; k < 3; k++) {
+                int kk = ch >= 3 ? k : 0;
+                int top = a[kk] + (b[kk] - a[kk]) * tx / 256, bot = c[kk] + (d[kk] - c[kk]) * tx / 256;
+                rgb[k] = top + (bot - top) * ty / 256;
+            }
+            int dither = (int)wall_bayer[y & 3][x & 3] - 7;
+            out[x] = wall_near(rgb[0] + dither, rgb[1] + dither, rgb[2] + dither);
         }
     }
+    return 1;
 }
-
-/* Menu bar and taskbar are flat, near-black bands. */
-static void desk_band(int y, int h) {
-    draw_rect(0, y, fb_w, h, INK(1));
+static void desktop_render(void) {
+    if (wallpaper_paint(&wallpapers[themes[theme_id].wallpaper], fb, fb_w, fb_h)) return;
+    /* Decode failure: a plain sky, so the desktop still works. */
+    draw_rect(0, 0, fb_w, fb_h, idx24(0x5B86B8));
 }
 
 void draw_desktop(void) {
@@ -759,8 +800,8 @@ static void draw_pulldown(int open_menu, int menu_sel) {
     int x, y, w, h;
     menu_geom(open_menu, &x, &y, &w, &h);
     draw_shadow(x, y, w, h);
-    draw_round_rect(x, y, w, h, 7, INK(9));
-    draw_round_rect(x + 1, y + 1, w - 2, h - 2, 6, INK(4));
+    draw_round_rect(x, y, w, h, 7, INK(13));
+    draw_round_rect(x + 1, y + 1, w - 2, h - 2, 6, INK(0));
 
     int iy = y + 4;
     for (int i = 0; i < menu_count[open_menu]; i++) {
@@ -2995,7 +3036,7 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
             draw_round_rect(tx, ty, PAINT_CELL, PAINT_CELL, 6, INK(10));
             draw_round_rect(tx + 1, ty + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, INK(6));
         }
-        doodle_ink = i == paint_tool ? INK(1) : ui_text;
+        doodle_ink = i == paint_tool ? ui_on_accent : ui_text;
         draw_tool_doodle(i, tx, ty);
     }
 
@@ -3015,7 +3056,7 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
                 draw_round_rect(bx + 1, by + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, INK(6));
             }
             int rad = i + 1;
-            uint8_t dotc = on ? INK(1) : ui_text;
+            uint8_t dotc = on ? ui_on_accent : ui_text;
             draw_round_rect(bx + PAINT_CELL / 2 - rad, by + PAINT_CELL / 2 - rad,
                             rad * 2, rad * 2, rad, dotc);
         }
@@ -3678,7 +3719,7 @@ static void draw_native_window(int slot,int inactive){
     Win *w=&wins[slot];char title[APP_VIEW_TITLE_LEN];
     gui_draw_window(w->x,w->y,w->w,w->h,win_display_title(slot,title),0,inactive?WIN_INACTIVE:0);
     int top=w->y+TITLE_H+1;
-    draw_rect(w->x+1,top,w->w-2,w->h-TITLE_H-2,INK(1));
+    draw_rect(w->x+1,top,w->w-2,w->h-TITLE_H-2,INK(30));
     draw_rect(w->x+1,top,w->w-2,NATIVE_TOOLBAR_H,ui_chrome_dk);
     int output=app_view_output_visible(slot);
     tool_button(w->x+8,top+3,100,NATIVE_TOOLBAR_H-6,ICON_LIST,app_view_output_dropped(slot)?"Output*":"Output",
@@ -3717,7 +3758,7 @@ static void draw_native_window(int slot,int inactive){
 static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
     char title[TERM_TASK_TITLE_LEN];
     gui_draw_window(wx, wy, ww, wh, win_display_title(context_slot, title), 0, inactive ? WIN_INACTIVE : 0);
-    draw_rect(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1, INK(1));
+    draw_rect(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1, INK(30));
 
     int ax = wx + 1 + TERM_PAD;
     int canvas_height=draw_term_canvas(wx,wy,ww,wh);
@@ -4637,21 +4678,6 @@ static void files_info(char *info, int max) {
 
 static int file_extension(const char *name,const char *suffix);
 /* Filled, color-coded file icons for unselected rows. */
-static uint8_t file_kind_color(const char *name) {
-    static const struct { const char *ext; uint32_t rgb; } kinds[] = {
-        {".bsh",0x4CC38A},{".csv",0x4CC38A},{".bwr",0x5B8CFF},{".rtf",0x5B8CFF},{".pdf",0xF0647A},
-        {".html",0x3FC9D6},{".htm",0x3FC9D6},{".bos",0xB48CFF},{".png",0xB48CFF},{".jpg",0xB48CFF},
-        {".jpeg",0xB48CFF},{".bmp",0xB48CFF},{".gif",0xB48CFF},{".pbm",0xB48CFF},{".wav",0xE8C547},
-        {".mp3",0xE8C547},{".mpg",0xE8C547},{".mpeg",0xE8C547},{".bex",0x52D1E8},{".sh",0x52D1E8},{".bas",0x52D1E8},
-    };
-    for (unsigned i = 0; i < sizeof kinds / sizeof kinds[0]; i++)
-        if (file_extension(name, kinds[i].ext)) return idx24(kinds[i].rgb);
-    return INK(20);
-}
-static void draw_file_glyph(int x, int y, const char *name, int is_dir) {
-    if (is_dir) { icon_draw(ICON_FOLDER, x, y, ui_accent); return; }
-    icon_draw(ICON_FILE_TEXT, x, y, file_kind_color(name));
-}
 /* Application nodes are named after their desktop icon; a few have longer names. */
 static int app_icon_by_name(const char *name) {
     for (int i = 0; i < ICON_DESK_COUNT; i++)
@@ -4673,15 +4699,8 @@ static void draw_file_row_named(int x, int y, int w, const char *name,
     if (sel)
         draw_round_rect(x + 2, y, w - 4, ROW_H - 2, 5, ui_accent);
     (void)bg;
-    int icon_y = y + (ROW_H - ICON_SIZE) / 2;
-    if (!sel && !dim && !is_app && kstrcmp(name, "..") != 0)
-        draw_file_glyph(x + 5, icon_y, name, is_dir);
-    else if (is_dir)
-        icon_draw(ICON_FOLDER, x + 4, icon_y, fg);
-    else if (is_app)
-        icon_draw(app_icon_by_name(name), x + 4, icon_y, fg);
-    else
-        icon_draw(ICON_FILE_TEXT, x + 4, icon_y, fg);
+    int icon_y = y + (ROW_H - AI_SMALL) / 2;
+    app_icon_draw(is_dir ? AI_FILES : is_app ? app_icon_for(app_icon_by_name(name)) : AI_DOCUMENT, x + 4, icon_y, AI_SMALL);
     int ty = y + (ROW_H - CHAR_H) / 2;
     int end=x+w-12;
     if(detail&&detail_width){
@@ -4915,7 +4934,7 @@ static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
     /* Toolbar: back, forward, up, breadcrumbs, filter */
     int tx=wx+side+1,tw=ww-side-2;
     draw_rect(tx,top,tw,FILES_TOOL_H-1,inactive?ui_chrome:ui_title);
-    draw_hline(tx,top+FILES_TOOL_H-1,tw,INK(1));
+    draw_hline(tx,top+FILES_TOOL_H-1,tw,INK(7));
     static const int nav_icon[3]={ICON_BACK,ICON_FORWARD,ICON_UP};
     for(int i=0;i<3;i++){
         int enabled=i==0?fm_history_target(-1)>=0:i==1?fm_history_target(1)>=0:fm_has_parent();
@@ -5210,7 +5229,7 @@ static int kind_icon(int kind) {
     default: return ICON_WINDOW;
     }
 }
-static void draw_tb_icon(int kind, int x, int y, uint8_t ink) { (void)ink; draw_glyph_tile(kind_icon(kind), x, y, 20); }
+static void draw_tb_icon(int kind, int x, int y, uint8_t ink) { (void)ink; app_icon_draw(app_icon_for(kind_icon(kind)), x, y, AI_SMALL); }
 
 static void draw_window_contents(Win *w, int inactive) {
     context_set((int)(w - wins));
@@ -5382,13 +5401,16 @@ static int start_btn_w(void) { return 36 + uib_string_w("Apps") + 12; }
 /* The in-window menu strip. Only the front window's open menu is highlighted. */
 static void draw_win_menu_strip(int x, int y, int w, int inactive) {
     int sy = y + TITLE_BAR;
-    draw_rect(x, sy, w, WMENU_H, inactive ? ui_chrome : INK(4));
+    draw_rect(x, sy, w, WMENU_H, ui_body);
     int ly = sy + (WMENU_H - CHAR_H) / 2;
     for (int i = 0; i < MENU_N; i++) {
         if (bar_x[i] + bar_w[i] > w - 8) break;
         int open = !inactive && open_menu == i;
-        if (open) draw_round_rect(x + bar_x[i], sy + 2, bar_w[i], WMENU_H - 4, 5, INK(8));
-        draw_string(bar_name[i], x + bar_x[i] + 10, ly, open ? INK(30) : inactive ? ui_text_dim : INK(24));
+        if (open) {
+            draw_round_rect(x + bar_x[i], sy + 2, bar_w[i], WMENU_H - 4, 5, INK(5));
+            draw_round_frame(x + bar_x[i], sy + 2, bar_w[i], WMENU_H - 4, 5, INK(10));
+        }
+        draw_string(bar_name[i], x + bar_x[i] + 10, ly, open ? INK(31) : inactive ? ui_text_dim : INK(27));
     }
 }
 static int taskbar_hover_at(void) {
@@ -5401,38 +5423,45 @@ static int taskbar_hover_at(void) {
 static void draw_taskbar(void) {
     taskbar_layout();
     int y = TASKBAR_Y;
-    desk_band(y,TASKBAR_H);
-    draw_hline(0,y,fb_w,INK(4));
+    /* Light glass over the wallpaper, like the Aqua shelf. */
+    glass_round(0, y, fb_w, TASKBAR_H, 0, 0, COLOR_WHITE, 165, 200);
+    draw_hline(0, y, fb_w, INK(14));
+    glass_round(0, y + 1, fb_w, 1, 0, 0, COLOR_WHITE, 120, 120);
     int front = win_front();
     int ty = y + (TASKBAR_H - CHAR_H) / 2;
-    int iy = y + (TASKBAR_H - 20) / 2;
+    int iy = y + (TASKBAR_H - AI_SMALL) / 2;
     /* Apps button: the BaseOS mark and its label. */
-    if(launcher_on||taskbar_hover==-1)draw_round_rect(8,y+5,start_btn_w(),30,8,launcher_on?INK(8):INK(6));
+    if (launcher_on || taskbar_hover == -1) {
+        glass_round(8, y + 5, start_btn_w(), 30, 8, 1, launcher_on ? INK(31) : COLOR_WHITE, launcher_on ? 40 : 120, launcher_on ? 40 : 120);
+        draw_round_frame(8, y + 5, start_btn_w(), 30, 8, INK(14));
+    }
     draw_logo(18,y+11,18);
-    draw_string_bold("Apps",44,ty,launcher_on?INK(30):INK(26));
+    draw_string_bold("Apps",44,ty,INK(29));
     for (int t = 0; t < tb_n; t++) {
         int i = tb_id[t];
         char native_title[TERM_TASK_TITLE_LEN];
         const char *title = win_display_title(i, native_title);
         int active = (i == front);
-        uint8_t ink = active ? INK(29) : (wins[i].min ? ui_text_dim : INK(23));
-        if(active)draw_round_rect(tb_x[t],y+5,tb_w[t],30,8,INK(7));
-        else if(taskbar_hover==i)draw_round_rect(tb_x[t],y+5,tb_w[t],30,8,INK(5));
+        uint8_t ink = wins[i].min ? INK(17) : INK(29);
+        if (active || taskbar_hover == i) {
+            glass_round(tb_x[t], y + 5, tb_w[t], 30, 8, 1, active ? INK(31) : COLOR_WHITE, active ? 36 : 110, active ? 36 : 110);
+            draw_round_frame(tb_x[t], y + 5, tb_w[t], 30, 8, active ? INK(15) : INK(12));
+        }
         draw_tb_icon(wins[i].kind,tb_x[t]+8,iy,ink);
-        draw_string_clip(title,tb_x[t]+34,ty,ink,tb_x[t]+tb_w[t]-8);
-        if(!wins[i].min)draw_round_rect(tb_x[t]+tb_w[t]/2-(active?8:2),y+TASKBAR_H-4,active?16:4,2,1,active?ui_accent:INK(15));
+        draw_string_clip(title,tb_x[t]+32,ty,ink,tb_x[t]+tb_w[t]-8);
+        if(!wins[i].min)draw_round_rect(tb_x[t]+tb_w[t]/2-(active?8:2),y+TASKBAR_H-4,active?16:4,2,1,active?PAL_ACCENT+8:INK(14));
     }
     if(tb_n==0)draw_string("Ctrl + Space to search",8+start_btn_w()+8,ty,INK(16));
     char clk[40];clock_text(clk);
     int clock_x=fb_w-14-ui_string_w(clk);
-    draw_string(clk,clock_x,ty,INK(24));
+    draw_string(clk,clock_x,ty,INK(29));
     /* Tray text: storage, session or launch status, left of the clock. */
     const char *status = fs_storage_status();
     if(!status && session_status[0])status=session_status;
     if(!status && native_launch_status[0])status=native_launch_status;
     if (status) {
         int sx = clock_x - 20 - ui_string_w(status), left = tb_n ? tb_x[tb_n-1] + tb_w[tb_n-1] + 12 : 8 + start_btn_w() + 8;
-        draw_string_clip(status, sx > left ? sx : left, ty, fs_sync_busy() ? ui_text_dim : gfx_rgb(0xF0, 0x70, 0x70), clock_x - 12);
+        draw_string_clip(status, sx > left ? sx : left, ty, fs_sync_busy() ? INK(17) : gfx_rgb(0xC0, 0x30, 0x30), clock_x - 12);
     }
 }
 
@@ -5938,46 +5967,58 @@ static void launcher_close(void) {
     dirty = 1;
 }
 
-/* Start menu: a vertical list anchored above the Apps button. With no query it
- * lists every application; typing filters applications and files. */
-#define START_W 336
-#define START_ROW 30
-#define START_FOOT 44
-#define START_FIELD_H 34
-#define START_HEAD (12 + START_FIELD_H + 10 + 22)
-static int launcher_fit(void) {
-    int rows = (TASKBAR_Y - 8 - MENUBAR_H - 6 - START_HEAD - 8 - START_FOOT) / START_ROW;
-    return rows < 3 ? 3 : rows;
+/* Launchpad: a centered glass panel with a search field over a grid of
+ * applications. Typing filters applications and files; the grid scrolls by
+ * rows when it does not fit. */
+#define LP_CELL_W 108
+#define LP_CELL_H 92
+#define LP_FIELD_H 34
+#define LP_PAD 24
+#define LP_FOOT 44
+#define LP_HEAD (LP_PAD + LP_FIELD_H + 18)
+static int launcher_cols(void) {
+    int c = (fb_w - 80 - 2 * LP_PAD) / LP_CELL_W;
+    return c > 6 ? 6 : c < 3 ? 3 : c;
 }
+static int launcher_fit(void) {
+    int rows = (TASKBAR_Y - 40 - LP_HEAD - 12 - LP_FOOT) / LP_CELL_H;
+    return rows < 2 ? 2 : rows;
+}
+static int launcher_total_rows(void) { int c = launcher_cols(); return (launch_n + c - 1) / c; }
 static int launcher_rows(void) {
-    int fit = launcher_fit();
-    return launch_n < fit ? launch_n : fit;
+    int total = launcher_total_rows(), fit = launcher_fit();
+    return total < fit ? total : fit;
 }
 static void launcher_geom(int *x, int *y, int *w, int *h) {
     int rows = launcher_rows();
-    *w = START_W;
-    *h = START_HEAD + (rows ? rows * START_ROW : 30) + 8 + START_FOOT;
-    *x = 8;
-    *y = TASKBAR_Y - 8 - *h;
-    if (*y < MENUBAR_H + 6) *y = MENUBAR_H + 6;
+    *w = launcher_cols() * LP_CELL_W + 2 * LP_PAD;
+    *h = LP_HEAD + (rows ? rows * LP_CELL_H : 40) + 12 + LP_FOOT;
+    *x = (fb_w - *w) / 2;
+    *y = (TASKBAR_Y - *h) / 2;
+    if (*y < 16) *y = 16;
+}
+static void launcher_cell(int x, int y, int i, int *cx, int *cy) {
+    int c = launcher_cols(), k = i - launch_scroll * c;
+    *cx = x + LP_PAD + (k % c) * LP_CELL_W;
+    *cy = y + LP_HEAD + (k / c) * LP_CELL_H;
 }
 static void launcher_clamp_scroll(void) {
-    int rows = launcher_rows();
-    if (launch_scroll > launch_n - rows) launch_scroll = launch_n - rows;
+    int rows = launcher_rows(), total = launcher_total_rows();
+    if (launch_scroll > total - rows) launch_scroll = total - rows;
     if (launch_scroll < 0) launch_scroll = 0;
 }
 static void launcher_reveal(void) {
-    int rows = launcher_rows();
+    int c = launcher_cols(), row = launch_sel / c, rows = launcher_rows();
     launcher_clamp_scroll();
-    if (launch_sel < launch_scroll) launch_scroll = launch_sel;
-    if (rows && launch_sel >= launch_scroll + rows) launch_scroll = launch_sel - rows + 1;
+    if (row < launch_scroll) launch_scroll = row;
+    if (rows && row >= launch_scroll + rows) launch_scroll = row - rows + 1;
 }
 static void launcher_scroll(int amount) {
     launch_scroll += amount;
     launcher_clamp_scroll();
     dirty = 1;
 }
-static int launcher_footer_x(int x, int button) { return x + START_W - 16 - (4 - button) * 36; }
+static int launcher_footer_x(int x, int w, int button) { return x + w - 16 - (4 - button) * 36; }
 
 static void launcher_run(int i) {
     if (i < 0 || i >= launch_n)
@@ -5993,16 +6034,22 @@ static void launcher_run(int i) {
 }
 
 static void launcher_key(void) {
+    int c = launcher_cols();
     if (key_sc == KEY_ESC) {
         launcher_close();
         return;
     } else if (key_sc == KEY_ENTER) {
         launcher_run(launch_sel);
         return;
-    } else if (key_sc == KEY_UP) {
+    } else if (key_sc == KEY_LEFT) {
         if (launch_sel > 0) launch_sel--;
-    } else if (key_sc == KEY_DOWN) {
+    } else if (key_sc == KEY_RIGHT) {
         if (launch_sel + 1 < launch_n) launch_sel++;
+    } else if (key_sc == KEY_UP) {
+        if (launch_sel - c >= 0) launch_sel -= c;
+    } else if (key_sc == KEY_DOWN) {
+        if (launch_sel + c < launch_n) launch_sel += c;
+        else if (launch_sel / c < (launch_n - 1) / c) launch_sel = launch_n - 1;
     } else if (key_sc == KEY_BACKSPACE) {
         if (launch_len > 0)
             launch_len--;
@@ -6015,17 +6062,25 @@ static void launcher_key(void) {
     dirty = 1;
 }
 
+static int launcher_item_icon(int i) {
+    if (launch_items[i].icon >= 0) return app_icon_for(icons[launch_items[i].icon].icon);
+    return file_extension(launch_items[i].name, ".bex") ? AI_NATIVE : AI_DOCUMENT;
+}
+
 static void draw_launcher(void) {
     if (!launcher_on)
         return;
     int x, y, w, h;
     launcher_geom(&x, &y, &w, &h);
     launcher_clamp_scroll();
-    draw_round_rect(x - 1, y - 1, w + 2, h + 2, 11, INK(9));
-    draw_round_rect(x, y, w, h, 10, INK(3));
-    int fx = x + 14, fy = y + 12, fw = w - 28, fh = START_FIELD_H;
-    draw_round_rect(fx, fy, fw, fh, 8, INK(1));
-    draw_round_frame(fx, fy, fw, fh, 8, launch_len ? ui_accent : INK(7));
+    shade_rect(0, 0, fb_w, TASKBAR_Y, 1);
+    draw_shadow(x, y, w, h);
+    glass_round(x, y, w, h, 14, 1, COLOR_WHITE, 205, 215);
+    draw_round_frame(x - 1, y - 1, w + 2, h + 2, 15, INK(14));
+    draw_round_frame(x, y, w, h, 14, INK(0));
+    int fx = x + LP_PAD, fy = y + LP_PAD, fw = w - 2 * LP_PAD, fh = LP_FIELD_H;
+    draw_round_rect(fx, fy, fw, fh, 8, INK(0));
+    draw_round_frame(fx, fy, fw, fh, 8, launch_len ? ui_accent : INK(12));
     icon_draw(ICON_SEARCH, fx + 11, fy + (fh - ICON_SIZE) / 2, INK(16));
     launch_buf[launch_len] = 0;
     int tx = fx + 36;
@@ -6033,48 +6088,42 @@ static void draw_launcher(void) {
     if (launch_len)
         draw_string(launch_buf, tx, ty, ui_text);
     else
-        draw_string("Search apps and files", tx, ty, INK(16));
+        draw_string("Search apps and files", tx, ty, INK(15));
     int cx = tx + ui_string_w(launch_buf);
     if ((frame_count / 35) & 1)
         draw_rect(cx + 1, fy + 8, 1, fh - 16, INK(28));
-    draw_string(launch_len ? "Results" : "Apps", fx + 6, fy + fh + 12, INK(17));
-    int ly = y + START_HEAD;
-    int rows = launcher_rows();
-    for (int i = 0; i < rows; i++) {
-        int item = launch_scroll + i, ry = ly + i * START_ROW;
-        int sel = item == launch_sel;
-        if (sel) draw_round_rect(fx, ry, fw, START_ROW - 2, 7, INK(6));
-        uint8_t ink = sel ? INK(30) : ui_text;
-        const char *kind = 0;
-        if (launch_items[item].icon >= 0) {
-            draw_glyph_tile(icons[launch_items[item].icon].icon, fx + 6, ry + 2, 24);
-        } else {
-            int native = file_extension(launch_items[item].name, ".bex");
-            draw_round_rect(fx + 6, ry + 2, 24, 24, 6, INK(7));
-            icon_draw(native ? ICON_APP_NATIVE : ICON_FILE_TEXT, fx + 10, ry + 6, INK(26));
-            kind = native ? "Native app" : "File";
+    int c = launcher_cols(), rows = launcher_rows();
+    int first = launch_scroll * c, last = first + rows * c;
+    if (last > launch_n) last = launch_n;
+    for (int i = first; i < last; i++) {
+        int gx, gy;
+        launcher_cell(x, y, i, &gx, &gy);
+        int sel = i == launch_sel;
+        if (sel) {
+            draw_round_rect(gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6, 10, INK(3));
+            draw_round_frame(gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6, 10, PAL_ACCENT + 4);
         }
-        int right = fx + fw - 12;
-        if (kind) {
-            right -= ui_string_w(kind) + 12;
-            draw_string(kind, fx + fw - 12 - ui_string_w(kind), ry + (START_ROW - 2 - CHAR_H) / 2, ui_text_dim);
-        }
-        draw_string_clip(launch_items[item].name, fx + 40, ry + (START_ROW - 2 - CHAR_H) / 2, ink, right);
+        app_icon_draw(launcher_item_icon(i), gx + (LP_CELL_W - AI_BIG) / 2, gy + 10, AI_BIG);
+        const char *label = launch_items[i].name;
+        int lw = ui_string_w(label);
+        if (lw > LP_CELL_W - 12) lw = LP_CELL_W - 12;
+        draw_string_clip(label, gx + (LP_CELL_W - lw) / 2, gy + 10 + AI_BIG + 8, sel ? INK(31) : INK(27), gx + LP_CELL_W - 6);
     }
     if (launch_n == 0)
-        draw_string("No matches", fx + 6, ly + 6, ui_text_dim);
-    if (launch_n > rows) {
-        int track = rows * START_ROW - 2, thumb = track * rows / launch_n, top = track * launch_scroll / launch_n;
-        draw_round_rect(x + w - 7, ly, 3, track, 1, INK(5));
-        draw_round_rect(x + w - 7, ly + top, 3, thumb < 12 ? 12 : thumb, 1, INK(14));
+        draw_string("No matches", fx + 6, y + LP_HEAD + 8, ui_text_dim);
+    if (launcher_total_rows() > rows) {
+        int track = rows * LP_CELL_H - 8, total = launcher_total_rows();
+        int thumb = track * rows / total, top = track * launch_scroll / total;
+        draw_round_rect(x + w - 10, y + LP_HEAD, 4, track, 2, INK(5));
+        draw_round_rect(x + w - 10, y + LP_HEAD + top, 4, thumb < 16 ? 16 : thumb, 2, INK(14));
     }
     /* Footer: identity on the left; About, Settings, Sleep and Power on the right. */
-    int foot = y + h - START_FOOT;
-    draw_hline(x + 14, foot, w - 28, INK(6));
-    draw_string_bold("BaseOS", x + 18, foot + (START_FOOT - CHAR_H) / 2, INK(20));
+    int foot = y + h - LP_FOOT;
+    draw_hline(x + LP_PAD, foot, w - 2 * LP_PAD, INK(7));
+    draw_string_bold("BaseOS", x + LP_PAD + 4, foot + (LP_FOOT - CHAR_H) / 2, INK(18));
     static const int foot_icon[4] = {ICON_APP_ABOUT, ICON_SETTINGS, ICON_MOON, ICON_POWER};
     for (int b = 0; b < 4; b++)
-        tool_button(launcher_footer_x(x, b), foot + 8, 32, 28, foot_icon[b], 0, TB_FLAT);
+        tool_button(launcher_footer_x(x, w, b), foot + 8, 32, 28, foot_icon[b], 0, TB_FLAT);
 }
 
 static int launcher_click(void) {
@@ -6084,9 +6133,9 @@ static int launcher_click(void) {
         launcher_close();
         return 1;
     }
-    int foot = y + h - START_FOOT;
+    int foot = y + h - LP_FOOT;
     for (int b = 0; b < 4; b++) {
-        if (!hit(mouse_x, mouse_y, launcher_footer_x(x, b), foot + 8, 32, 28)) continue;
+        if (!hit(mouse_x, mouse_y, launcher_footer_x(x, w, b), foot + 8, 32, 28)) continue;
         launcher_close();
         if (b == 0) win_open(WK_ABOUT);
         else if (b == 1) icon_open(ICON_DESK_SETTINGS);
@@ -6094,11 +6143,14 @@ static int launcher_click(void) {
         else do_shutdown();
         return 1;
     }
-    int ly = y + START_HEAD;
-    int rows = launcher_rows();
-    for (int i = 0; i < rows; i++) {
-        if (hit(mouse_x, mouse_y, x + 14, ly + i * START_ROW, w - 28, START_ROW - 2)) {
-            launcher_run(launch_scroll + i);
+    int c = launcher_cols(), rows = launcher_rows();
+    int first = launch_scroll * c, last = first + rows * c;
+    if (last > launch_n) last = launch_n;
+    for (int i = first; i < last; i++) {
+        int gx, gy;
+        launcher_cell(x, y, i, &gx, &gy);
+        if (hit(mouse_x, mouse_y, gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6)) {
+            launcher_run(i);
             return 1;
         }
     }
@@ -6297,7 +6349,7 @@ static void draw_edit_close(void) {
     shade_rect(0, 0, fb_w, fb_h, 1);
     draw_shadow(x, y, 460, 184);
     draw_round_rect(x - 1, y - 1, 462, 186, 11, ui_border);
-    draw_round_rect(x, y, 460, 184, 10, INK(4));
+    draw_round_rect(x, y, 460, 184, 10, INK(1));
     draw_string_bold(document_pending_owner ? "Saving changes..." : document_action == DOCUMENT_CLOSE ? "Save changes before closing?"
         : "Save changes before replacing?", x + 22, y + 20, ui_text);
     const Document *doc = &window_state[edit_close_owner].doc;
@@ -6365,7 +6417,7 @@ static void draw_namedlg(void) {
     shade_rect(0, MENUBAR_H, fb_w, TASKBAR_Y - MENUBAR_H, 1);
     draw_shadow(x, y, w, h);
     draw_round_rect(x - 1, y - 1, w + 2, h + 2, 11, ui_border);
-    draw_round_rect(x, y, w, h, 10, INK(4));
+    draw_round_rect(x, y, w, h, 10, INK(1));
     int pdf = name_target == 6;
     draw_string_bold(pdf ? "Export PDF pages" : name_target == 5 ? "Export values (CSV)" :
                      name_target == 4 ? "Save spreadsheet as" :
@@ -7299,6 +7351,16 @@ static void draw_about(int wx, int wy, int ww, int wh, int fl) {
 #define SW_H   60
 #define SW_GAP 16
 
+/* Swatch thumbnails are decoded once, the first time Settings is drawn. */
+static uint8_t wall_thumb[WALLPAPER_N][SW_W * SW_H];
+static int wall_thumb_ready = 0;
+static void wallpaper_thumbs(void) {
+    if (wall_thumb_ready) return;
+    wall_thumb_ready = 1;
+    for (int i = 0; i < WALLPAPER_N; i++)
+        if (!wallpaper_paint(&wallpapers[i], wall_thumb[i], SW_W, SW_H))
+            kmemset(wall_thumb[i], INK(8), SW_W * SW_H);
+}
 static void settings_swatch_pos(int wx, int wy, int i, int *sx, int *sy) {
     int ox = wx + 24;
     int oy = wy + TITLE_H + 48;
@@ -7344,6 +7406,7 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
     tool_button(wx + ww - 156, wy + TITLE_H + 8, 132, 28, ICON_REFRESH, "Retry saving", TB_NORMAL);
     draw_string_clip(preference_message(PREF_THEME), wx + 24, wy + TITLE_H + 244, ui_text_dim, wx + ww - 20);
     draw_hline(wx + 24, wy + TITLE_H + 38, ww - 48, ui_chrome_dk);
+    wallpaper_thumbs();
     for (int i = 0; i < THEME_N; i++) {
         int sx, sy;
         settings_swatch_pos(wx, wy, i, &sx, &sy);
@@ -7351,18 +7414,13 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
         int cur = (i == theme_id);
         if (cur)
             draw_round_rect(sx - 3, sy - 3, SW_W + 6, SW_H + 6, 9, ui_accent);
-        draw_round_rect(sx - 1, sy - 1, SW_W + 2, SW_H + 2, 7, cur ? INK(1) : INK(8));
-        /* Miniature of the theme: its gradient, a window and its accent. */
+        draw_round_rect(sx - 1, sy - 1, SW_W + 2, SW_H + 2, 7, cur ? INK(0) : INK(12));
+        /* Miniature of the wallpaper, with the theme's accent. */
         for (int row = 0; row < SW_H; row++) {
-            int k = row * 63 / (SW_H - 1);
-            uint32_t c = k < 32 ? rgb_lerp(t->sky_top, t->sky_mid, k, 31) : rgb_lerp(t->sky_mid, t->horizon, k - 31, 32);
-            int inset = row < 5 ? 5 - row : row > SW_H - 6 ? row - (SW_H - 6) : 0;
-            draw_hline(sx + inset, sy + row, SW_W - 2 * inset, idx24(c));
+            int inset = row < 4 ? 4 - row : row > SW_H - 5 ? row - (SW_H - 5) : 0;
+            for (int col = inset; col < SW_W - inset; col++)
+                put_pixel(sx + col, sy + row, wall_thumb[t->wallpaper][row * SW_W + col]);
         }
-        draw_round_rect(sx + 10, sy + 12, SW_W - 20, SW_H - 24, 4, INK(4));
-        draw_hline(sx + 14, sy + 18, SW_W - 28, INK(10));
-        draw_round_rect(sx + 14, sy + 24, (SW_W - 28) * 2 / 3, 3, 1, INK(12));
-        draw_round_rect(sx + 14, sy + 31, (SW_W - 28) / 2, 3, 1, INK(9));
         draw_round_rect(sx + SW_W - 24, sy + SW_H - 22, 10, 10, 5, idx24(t->accent));
         int nw = ui_string_w(t->name);
         int nx = sx + (SW_W - nw) / 2;
@@ -7399,12 +7457,32 @@ static void handle_settings_click(int wx, int wy, int ww, int wh) {
 }
 
 
+/* The BaseOS mark: a glossy accent tile with the "B" cut as two bowls. */
 static void draw_logo(int x, int y, int size) {
-    int r = size / 2;
-    for (int t = 0; t < size / 12 + 1; t++)
-        draw_round_frame(x + t, y + t, size - 2 * t, size - 2 * t, r - t, ui_accent);
-    int d = size / 4;
-    draw_round_rect(x + r - d / 2, y + r - d / 2, d, d, d / 2, INK(30));
+    int r = size / 4;
+    draw_round_rect(x - 1, y - 1, size + 2, size + 2, r + 1, ui_accent_dk);
+    draw_ramp_round(x, y, size, size, r, 1, PAL_ACCENT, PAL_ACCENT_N, 1 * 16, 11 * 16);
+    draw_hline(x + r, y + 1, size - 2 * r, PAL_ACCENT);
+
+    int m = size * 22 / 100;
+    int sw = size * 13 / 100;
+    if (sw < 2) sw = 2;
+    int gh = size - 2 * m;
+    int bx = x + m;
+    int by = y + m;
+    int bowl_w = size * 52 / 100;
+    int bowl_h = gh * 55 / 100;
+    int cut = sw;
+    uint8_t ink = COLOR_WHITE;
+    uint8_t hole = PAL_ACCENT + 7;
+    draw_round_rect(bx, by, bowl_w, bowl_h, bowl_h / 2, ink);
+    draw_round_rect(bx + sw, by + cut, bowl_w - sw - cut, bowl_h - 2 * cut, (bowl_h - 2 * cut) / 2, hole);
+    int by2 = by + gh - bowl_h - sw / 2;
+    int bowl_w2 = bowl_w + sw;
+    draw_round_rect(bx, by2, bowl_w2, bowl_h + sw / 2, (bowl_h + sw / 2) / 2, ink);
+    draw_round_rect(bx + sw, by2 + cut, bowl_w2 - sw - cut, bowl_h + sw / 2 - 2 * cut,
+                    (bowl_h + sw / 2 - 2 * cut) / 2, hole);
+    draw_rect(bx, by, sw, gh, ink);
 }
 
 static void boot_splash(void) {
@@ -7415,11 +7493,12 @@ static void boot_splash(void) {
     draw_logo(lx, ly, size);
     int ty = ly + size + 30;
     int lw = logo_string_w("BaseOS");
-    draw_logo_string("BaseOS", (fb_w - lw) / 2 + 1, ty + 1, INK(0));
+    draw_logo_string("BaseOS", (fb_w - lw) / 2 + 1, ty + 1, INK(31));
     draw_logo_string("BaseOS", (fb_w - lw) / 2, ty, COLOR_WHITE);
     int sy = ty + LOGO_FONT_H + 8;
     const char *sub = "a tiny operating system";
-    draw_string(sub, (fb_w - ui_string_w(sub)) / 2, sy, INK(24));
+    draw_string(sub, (fb_w - ui_string_w(sub)) / 2 + 1, sy + 1, INK(31));
+    draw_string(sub, (fb_w - ui_string_w(sub)) / 2, sy, INK(0));
     int bw = 200;
     int bx = (fb_w - bw) / 2;
     int by = sy + CHAR_H + 36;
@@ -7778,7 +7857,7 @@ static void draw_display_confirmation(void) {
     if (!display_pending) return;
     int x = (fb_w - 420) / 2, y = (fb_h - 150) / 2;
     shade_rect(0, 0, fb_w, fb_h, 1);
-    draw_round_rect(x, y, 420, 150, 10, INK(4));
+    draw_round_rect(x, y, 420, 150, 10, INK(1));
     draw_round_frame(x, y, 420, 150, 10, ui_border);
     draw_string_bold("Keep this display resolution?", x + 24, y + 20, ui_text);
     char seconds[16], message[80];

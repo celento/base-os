@@ -1,6 +1,8 @@
 #include "gfx.h"
 #define ICONS_DEFINE_DATA
 #include "icons.h"
+#define APP_ICONS_DEFINE_DATA
+#include "app_icons.h"
 #include "font.h"
 #include "layout.h"
 #include "fs.h"
@@ -14,6 +16,7 @@ uint8_t *lfb;
 uint32_t pal32[256];
 
 static uint16_t pal16[256];
+static uint8_t pal_shade0[256];
 static uint8_t pal_shade1[256];
 static uint8_t pal_shade2[256];
 static void (*flip_hook)(void);
@@ -61,6 +64,7 @@ static void pal_finish(void) {
         pal16[i] = (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
     }
     for (int i = 0; i < 256; i++) {
+        pal_shade0[i] = gfx_darker((uint8_t)i, 90);
         pal_shade1[i] = gfx_darker((uint8_t)i, 78);
         pal_shade2[i] = gfx_darker((uint8_t)i, 58);
     }
@@ -140,9 +144,23 @@ int gfx_luma(uint8_t c) {
     return (int)((r * 299u + g * 587u + b * 114u) / 1000u);
 }
 
+/* The ink ramp may run light-to-dark or dark-to-light; pick the step whose
+ * committed value is closest to the requested gray. */
 uint8_t gfx_gray(int v) {
     v = clamp255(v);
-    return (uint8_t)(PAL_GRAY + (v * (PAL_GRAY_N - 1) + 127) / 255);
+    int best = 0, bd = 0x7FFFFFFF;
+    for (int i = 0; i < PAL_GRAY_N; i++) {
+        int d = (int)((pal32[PAL_GRAY + i] >> 8) & 255) - v;
+        if (d < 0) d = -d;
+        if (d < bd) { bd = d; best = i; }
+    }
+    return (uint8_t)(PAL_GRAY + best);
+}
+
+void gfx_set_color(int index, uint32_t rgb) {
+    if (index < 0 || index > 255) return;
+    palette_changed();
+    pal32[index] = rgb & 0xFFFFFF;
 }
 
 static void pal_build(void) {
@@ -153,6 +171,8 @@ static void pal_build(void) {
         pal32[PAL_GRAY + i] = (v << 16) | (v << 8) | v;
     }
     gfx_set_ramp(PAL_DESK, PAL_DESK_N, 0x4C8FD6, 0x0E2A52);
+    for (int i = 0; i < PAL_ICON_N; i++)
+        pal32[PAL_ICON + i] = app_icon_palette[i];
     gfx_set_ramp(PAL_ACCENT, PAL_ACCENT_N, 0x8AB4F0, 0x143C80);
     for (int i = 0; i < 125; i++) {
         pal32[PAL_CUBE + i] = ((uint32_t)cube_lv[i / 25] << 16) |
@@ -508,7 +528,7 @@ void draw_bevel(int x, int y, int w, int h, uint8_t light, uint8_t dark) {
 void shade_rect(int x, int y, int w, int h, int level) {
     if (!clip_rect(&x, &y, &w, &h))
         return;
-    const uint8_t *tab = level >= 2 ? pal_shade2 : pal_shade1;
+    const uint8_t *tab = level >= 2 ? pal_shade2 : level == 1 ? pal_shade1 : pal_shade0;
     for (int j = 0; j < h; j++) {
         uint8_t *row = fb + (y + j) * fb_w + x;
         for (int i = 0; i < w; i++)
@@ -517,7 +537,17 @@ void shade_rect(int x, int y, int w, int h, int level) {
 }
 
 /* Flat chrome: do not darken the desktop around windows or popups. */
-void draw_shadow(int x,int y,int w,int h) {(void)x;(void)y;(void)w;(void)h;}
+/* A soft halo below and beside a window: the frame paints over the inside. */
+void draw_shadow(int x,int y,int w,int h) {
+    for (int ring = 5; ring >= 1; ring--) {
+        int level = ring <= 2 ? 1 : 0;
+        shade_rect(x - ring + 1, y + h, w + 2 * ring - 2, 1, level);
+        shade_rect(x - ring + 1, y - ring + 2, w + 2 * ring - 2, 1, level);
+        shade_rect(x - ring, y - ring + 3, 1, h + 2 * ring - 3, level);
+        shade_rect(x + w + ring - 1, y - ring + 3, 1, h + 2 * ring - 3, level);
+        y++;
+    }
+}
 
 void blit_bits_color(int ox, int oy, int w, int h, const unsigned char *bits, uint8_t color) {
     int bpr = (w + 7) / 8;
@@ -796,10 +826,44 @@ static void icon_blit(const uint8_t *bits, int size, int x, int y, uint8_t ink) 
 void icon_draw(int id, int x, int y, uint8_t ink) {
     if (id >= 0 && id < ICON_COUNT) icon_blit(icon_bits[id], ICON_SIZE, x, y, ink);
 }
-void icon_draw_large(int id, int x, int y, uint8_t ink) {
-    if (id >= 0 && id < ICON_COUNT) icon_blit(app_icon_bits[id], APP_ICON_SIZE, x, y, ink);
+/* Color icons: a palette index per pixel followed by packed 4-bit alpha. */
+void app_icon_draw(int id, int x, int y, int size) {
+    if (id < 0 || id >= AI_COUNT || (size != AI_BIG && size != AI_SMALL)) return;
+    const uint8_t *bits = size == AI_BIG ? app_icon_big[id] : app_icon_small[id];
+    const uint8_t *alpha = bits + size * size;
+    for (int row = 0; row < size; row++) {
+        for (int col = 0; col < size; col++) {
+            int i = row * size + col;
+            int level = (i & 1) ? alpha[i >> 1] & 15 : alpha[i >> 1] >> 4;
+            if (!level) continue;
+            int px = x + col, py = y + row;
+            if (px < 0 || py < 0 || px >= fb_w || py >= fb_h) continue;
+            put_pixel(px, py, level == 15 ? bits[i] : gfx_mix(get_pixel(px, py), bits[i], level * 17));
+        }
+    }
 }
-void icon_draw_desk(int id, int x, int y, uint8_t ink) {
-    if (id >= ICON_DESK_FIRST && id < ICON_DESK_FIRST + ICON_DESK_N)
-        icon_blit(desk_icon_bits[id - ICON_DESK_FIRST], DESK_ICON_SIZE, x, y, ink);
+
+void glass_round(int x, int y, int w, int h, int r, int round_bottom, uint8_t tint, int t0, int t1) {
+    if (w <= 0 || h <= 0) return;
+    if (r < 0) r = 0;
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+    for (int j = 0; j < h; j++) {
+        int yy = y + j;
+        if (yy < 0 || yy >= fb_h) continue;
+        int t = t0 + (t1 - t0) * j / (h > 1 ? h - 1 : 1);
+        int corner_row = j < r ? j : (round_bottom && j >= h - r ? h - 1 - j : -1);
+        uint8_t *row = fb + yy * fb_w;
+        for (int i = 0; i < w; i++) {
+            int xx = x + i;
+            if (xx < 0 || xx >= fb_w) continue;
+            int cov = 16;
+            if (corner_row >= 0) {
+                int cx = i < r ? i : (i >= w - r ? w - 1 - i : -1);
+                if (cx >= 0) cov = corner_cov(cx, corner_row, r);
+            }
+            if (cov <= 0) continue;
+            row[xx] = gfx_mix(row[xx], tint, t * cov / 16);
+        }
+    }
 }

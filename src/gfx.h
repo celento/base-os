@@ -22,8 +22,10 @@
 
 #define PAL_GRAY       16
 #define PAL_GRAY_N     32
-#define PAL_DESK       48
-#define PAL_DESK_N     64
+#define PAL_DESK       48  /* wallpaper colors, set per theme */
+#define PAL_DESK_N     16
+#define PAL_ICON       64  /* fixed colors of the app icon set */
+#define PAL_ICON_N     48
 #define PAL_ACCENT     112
 #define PAL_ACCENT_N   16
 #define PAL_CUBE       128
@@ -94,8 +96,13 @@ int hit(int px, int py, int x, int y, int w, int h);
 
 /* Draw an ICON_* glyph from icons.h (ICON_SIZE square) in ink, antialiased. */
 void icon_draw(int id, int x, int y, uint8_t ink);
-void icon_draw_large(int id, int x, int y, uint8_t ink); /* APP_ICON_SIZE */
-void icon_draw_desk(int id, int x, int y, uint8_t ink); /* DESK_ICON_SIZE, APP_* glyphs only */
+/* Color application icons (src/app_icons.h): size is AI_BIG or AI_SMALL. */
+void app_icon_draw(int id, int x, int y, int size);
+/* One palette entry (0xRRGGBB); commit with gfx_pal_commit. */
+void gfx_set_color(int index, uint32_t rgb);
+/* Aero glass: blend what is already drawn toward `tint`, from strength t0 at
+ * the top row to t1 at the bottom (0..256), inside a rounded rectangle. */
+void glass_round(int x, int y, int w, int h, int r, int round_bottom, uint8_t tint, int t0, int t1);
 
 void flip_rect(int x0, int y0, int rw, int rh);
 void flip_vga(void);

@@ -17,6 +17,7 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define WMENU_H 24
 #define TITLE_H 54
 #define INK(i) ((uint8_t)(PAL_GRAY+(i)))
+static uint8_t idx24(uint32_t c){return gfx_rgb((int)((c>>16)&255),(int)((c>>8)&255),(int)(c&255));}
 #define WIN_BTN_GAP 26
 #define TERM_PAD 12
 #define EDIT_LINE_H (EDIT_FONT_H+1)
@@ -34,7 +35,7 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define MAX_WIN 8
 #define WK_TERM 11
 #define WK_NATIVE 12
-static uint8_t ui_border=2,ui_body=15,ui_chrome=3,ui_chrome_dk=2,ui_title=4;
+static uint8_t ui_border=2,ui_body=15,ui_chrome=3,ui_chrome_dk=2;
 /* Production strips carry menu labels; the fixture paints the same flat band. */
 static void draw_win_menu_strip(int x,int y,int w,int inactive){draw_rect(x,y+TITLE_BAR,w,WMENU_H,inactive?ui_chrome:INK(4));}
 static uint8_t ui_text_dim=1,ui_track=3;
