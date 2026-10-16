@@ -573,12 +573,12 @@ static void test_format_controls(const char *directory) {
     key(0x0b, SPREADSHEET_MOD_CTRL); width(0,104); width(1,104);
     /* Every pointer control remains available at the minimum client width. */
     jump("A1"); spreadsheet_draw(30,20,360,260);
-    toolbar(100,50); format(0,0,SHEET_FORMAT_FIXED2,"12.50");
-    toolbar(145,50); format(0,0,SHEET_FORMAT_CURRENCY,"$12.50");
-    toolbar(172,50); format(0,0,SHEET_FORMAT_PERCENT,"1250.00%");
-    toolbar(35,50); format(0,0,SHEET_FORMAT_GENERAL,"12.5");
-    toolbar(335,50); width(0,120); toolbar(265,50); width(0,104);
-    toolbar(308,17); assert(strstr(spreadsheet_status(),"Go to")); key(0x01,0);
+    toolbar(93,50); format(0,0,SHEET_FORMAT_FIXED2,"12.50");
+    toolbar(125,50); format(0,0,SHEET_FORMAT_CURRENCY,"$12.50");
+    toolbar(157,50); format(0,0,SHEET_FORMAT_PERCENT,"1250.00%");
+    toolbar(41,50); format(0,0,SHEET_FORMAT_GENERAL,"12.5");
+    toolbar(310,50); width(0,120); toolbar(246,50); width(0,104);
+    toolbar(276,18); assert(strstr(spreadsheet_status(),"Go to")); key(0x01,0);
     /* Applying a format commits pending source as its own undo step. */
     key(0x04,SPREADSHEET_MOD_CTRL); type("9.876"); key(0x03,SPREADSHEET_MOD_CTRL);
     assert(!spreadsheet_editing()); cell(0,0,SHEET_NUMBER,"9.876",9876,SHEET_OK);

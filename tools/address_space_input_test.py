@@ -60,19 +60,23 @@ class VisibleText:
 
     Only screenshot RGB pixels are observed. At the normal Terminal foreground
     and background, alpha levels 0..7 are below brightness 130 and 8..15 above.
-    All 18x8 pixels (including spaces) must match. Origins come from the visible
-    screenshot, never window structs, debug symbols, or guest memory.
+    All EDIT_FONT_H x EDIT_FONT_W pixels (including spaces) must match. Origins
+    come from the visible screenshot, never window structs, debug symbols, or
+    guest memory. The cell size is read from the committed font header.
     """
     def __init__(self, font_path):
         source = Path(font_path).read_text()
-        match = re.search(r'edit_font_px\[95\]\[72\]\s*=\s*\{(.*?)\n\};', source, re.S)
-        if not match:
+        metric = lambda name: int(re.search(r'^#define\s+' + name + r'\s+(\d+)\s*$', source, re.M)[1])
+        self.height, bpr = metric('EDIT_FONT_H'), metric('EDIT_FONT_BPR')
+        self.width = bpr * 2
+        match = re.search(r'edit_font_px\[95\]\[(\d+)\]\s*=\s*\{(.*?)\n\};', source, re.S)
+        if not match or int(match[1]) != self.height * bpr:
             raise ValueError('Production monospace font shape changed')
-        values = np.array([int(v, 16) for v in re.findall(r'0x([0-9a-fA-F]{2})', match[1])], dtype=np.uint8)
-        if values.size != 95 * 72:
+        values = np.array([int(v, 16) for v in re.findall(r'0x([0-9a-fA-F]{2})', match[2])], dtype=np.uint8)
+        if values.size != 95 * self.height * bpr:
             raise ValueError('Production monospace font byte count changed')
-        packed = values.reshape(95, 18, 4)
-        self.glyphs = np.stack((packed >> 4, packed & 15), axis=-1).reshape(95, 18, 8) >= 8
+        packed = values.reshape(95, self.height, bpr)
+        self.glyphs = np.stack((packed >> 4, packed & 15), axis=-1).reshape(95, self.height, self.width) >= 8
 
     def template(self, text):
         if not text or any(not 32 <= ord(char) <= 126 for char in text):
@@ -89,24 +93,25 @@ class VisibleText:
     def find_mask(self, mask, text):
         template = self.template(text)
         height, width = mask.shape
-        tw = template.shape[1]
-        if height < 18 or width < tw:
+        tw, gh, gw = template.shape[1], self.height, self.width
+        if height < gh or width < tw:
             return []
         # Locate the first non-space glyph via all of its row bit signatures.
         first = next((i for i, char in enumerate(text) if char != ' '), None)
         if first is None:
             raise ValueError('An all-space line is not visible evidence')
-        x0 = first * 8
-        rows = np.zeros((height, width - 7), dtype=np.uint8)
-        for bit in range(8):
-            rows |= mask[:, bit:width - 7 + bit].astype(np.uint8) << (7 - bit)
-        expected = np.packbits(template[:, x0:x0 + 8], axis=1)[:, 0]
-        candidates = np.ones((height - 17, width - tw + 1), dtype=bool)
-        for row in range(18):
-            candidates &= rows[row:row + height - 17, x0:x0 + width - tw + 1] == expected[row]
+        x0 = first * gw
+        rows = np.zeros((height, width - gw + 1), dtype=np.uint16)
+        expected = np.zeros(gh, dtype=np.uint16)
+        for bit in range(gw):
+            rows |= mask[:, bit:width - gw + 1 + bit].astype(np.uint16) << (gw - 1 - bit)
+            expected |= template[:, x0 + bit].astype(np.uint16) << (gw - 1 - bit)
+        candidates = np.ones((height - gh + 1, width - tw + 1), dtype=bool)
+        for row in range(gh):
+            candidates &= rows[row:row + height - gh + 1, x0:x0 + width - tw + 1] == expected[row]
         found = []
         for y, x in zip(*np.where(candidates)):
-            if np.array_equal(mask[y:y + 18, x:x + tw], template):
+            if np.array_equal(mask[y:y + gh, x:x + tw], template):
                 found.append([int(x), int(y)])
         return found
 

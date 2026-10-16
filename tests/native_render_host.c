@@ -13,14 +13,16 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define PRESENT_BASE ((uintptr_t)test_mirror)
 #define GFX_HOST_TEST
 #include "../src/gfx.c"
-#define TITLE_H 32
+#define TITLE_H 30
+#define INK(i) ((uint8_t)(PAL_GRAY+(i)))
+#define WIN_BTN_GAP 26
 #define TERM_PAD 12
 #define EDIT_LINE_H (EDIT_FONT_H+1)
 #define TERM_FG gfx_gray(0xE8)
 #define CHAR_H UI_FONT_H
-#define CLOSE_S 18
-#define INFO_H 28
-#define SB 16
+#define CLOSE_S 16
+#define INFO_H 24
+#define SB 12
 #define WIN_INFO 1
 #define WIN_SCROLL 2
 #define WIN_NOCLOSE 4
@@ -30,8 +32,8 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define MAX_WIN 8
 #define WK_TERM 11
 #define WK_NATIVE 12
-static uint8_t ui_border=2,ui_body=15,ui_chrome=3,ui_chrome_dk=2;
-static uint8_t ui_text=0,ui_text_dim=1,ui_accent=9,ui_track=3;
+static uint8_t ui_border=2,ui_body=15,ui_chrome=3,ui_chrome_dk=2,ui_title=4;
+static uint8_t ui_text_dim=1,ui_track=3;
 typedef struct {int x,y,w,h,open,min,z,kind;} Win;
 static Win wins[MAX_WIN];
 static int context_slot,dirty,name_dlg,edit_close_dlg,open_dlg,launcher_on;
@@ -272,7 +274,7 @@ static void occlusion_pixels(int bpp){
     fixture_reset();
     wins[2]=(Win){.x=100,.y=100,.w=500,.h=380,.open=1,.z=1,.kind=WK_TERM};
     int dw,dh;term_canvas_geometry(500,380,160,100,&dw,&dh);
-    int x=113,y=145;
+    int x=100+1+TERM_PAD,y=100+TITLE_H+1+TERM_PAD; /* canvas origin of wins[2] */
     Win exact={.x=x-8,.y=y-TITLE_H-1,.w=dw+16,.h=dh+TITLE_H+9,.open=1,.z=2};
     /* Inclusive near and exclusive far edges of the conservative opaque area. */
     for(int edge=0;edge<10;edge++){

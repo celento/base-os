@@ -126,7 +126,7 @@ class GuiMediaCollectorTests(unittest.TestCase):
             width=sum(font.advance[ord(c)-32] for c in state)
             left,top=x+1+w-2-30-width,y+33+56
             mask=font.bitmap(state,'ui')
-            screen[top:top+18,left:left+mask.shape[1]][mask]=30
+            screen[top:top+mask.shape[0],left:left+mask.shape[1]][mask]=30
             session=mock.Mock();session.frame.return_value=(screen,123.5);session.directory=Path('/unwritten')
             self.assertEqual(gate.player_state(session,font,state,'host-only')['state'],state)
 

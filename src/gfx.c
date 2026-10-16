@@ -779,13 +779,12 @@ void gfx_present(void) {
     }
 }
 
-/* Toolbar icons: ICON_SIZE square, 16 coverage levels blended over the surface. */
-void icon_draw(int id, int x, int y, uint8_t ink) {
-    if (id < 0 || id >= ICON_COUNT) return;
-    const uint8_t *bits = icon_bits[id];
-    for (int row = 0; row < ICON_SIZE; row++) {
-        for (int col = 0; col < ICON_SIZE; col++) {
-            int i = row * ICON_SIZE + col;
+/* Icons: ICON_SIZE (toolbars, rows) or APP_ICON_SIZE (tiles, Start menu)
+ * squares with 16 coverage levels blended over the surface. */
+static void icon_blit(const uint8_t *bits, int size, int x, int y, uint8_t ink) {
+    for (int row = 0; row < size; row++) {
+        for (int col = 0; col < size; col++) {
+            int i = row * size + col;
             int level = (i & 1) ? bits[i >> 1] & 15 : bits[i >> 1] >> 4;
             if (!level) continue;
             int px = x + col, py = y + row;
@@ -793,4 +792,10 @@ void icon_draw(int id, int x, int y, uint8_t ink) {
             put_pixel(px, py, level == 15 ? ink : gfx_mix(get_pixel(px, py), ink, level * 256 / 15));
         }
     }
+}
+void icon_draw(int id, int x, int y, uint8_t ink) {
+    if (id >= 0 && id < ICON_COUNT) icon_blit(icon_bits[id], ICON_SIZE, x, y, ink);
+}
+void icon_draw_large(int id, int x, int y, uint8_t ink) {
+    if (id >= 0 && id < ICON_COUNT) icon_blit(app_icon_bits[id], APP_ICON_SIZE, x, y, ink);
 }

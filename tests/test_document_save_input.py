@@ -163,10 +163,11 @@ class DocumentCollectorTest(unittest.TestCase):
     def test_white_ui_glyph_match_and_one_core_pixel_rejection(self):
         matcher = WhiteUiText(ROOT / 'src/font.h')
         template = matcher.template('Cancel')
-        self.assertEqual(template.shape, (18, 62))
+        width = sum(matcher.advances[ord(c) - 32] for c in 'Cancel') + matcher.cell
+        self.assertEqual(template.shape, (matcher.height, width))
         pixels = np.full((80, 150, 3), (40, 92, 177), dtype=np.uint8)
         x, y = 33, 21
-        pixels[y:y + 18, x:x + 62][template] = (255, 255, 255)
+        pixels[y:y + matcher.height, x:x + width][template] = (255, 255, 255)
         self.assertEqual(matcher.find(pixels, 'Cancel'), [[x, y]])
         row, column = np.argwhere(template)[0]
         pixels[y + row, x + column] = (40, 92, 177)
@@ -179,7 +180,7 @@ class DocumentCollectorTest(unittest.TestCase):
             matcher = WhiteUiText(ROOT / 'src/font.h')
             template = matcher.template('Cancel')
             pixels = np.full((80, 150, 3), (40, 92, 177), dtype=np.uint8)
-            pixels[21:39, 33:95][template] = 255
+            pixels[21:21 + template.shape[0], 33:33 + template.shape[1]][template] = 255
             image = session.directory / 'cancel.png'; Image.fromarray(pixels).save(image)
             event = dict(ocr='Save changes before closing?', screenshot=str(image),
                          dumped=12.125, pending_generations=[7])
@@ -196,14 +197,14 @@ class DocumentCollectorTest(unittest.TestCase):
         template = matcher.template('document.rtf')
         pixels = np.full((80, 376, 3), 246, dtype=np.uint8)
         x, y = 12, 8
-        pixels[y:y + 18, x:x + template.shape[1]][template] = (32, 32, 32)
+        pixels[y:y + matcher.height, x:x + template.shape[1]][template] = (32, 32, 32)
         self.assertEqual(matcher.find(pixels, 'document.rtf', (32, 32, 32)), [[x, y]])
         row, column = np.argwhere(template)[0]
         pixels[y + row, x + column] = 246
         self.assertEqual(matcher.find(pixels, 'document.rtf', (32, 32, 32)), [])
 
     def test_filename_match_is_field_bounded_and_rejects_suffix_despite_ocr(self):
-        self.assertEqual(name_field_bounds(1280, 720), (452, 240, 828, 318))
+        self.assertEqual(name_field_bounds(1280, 720), (452, 230, 828, 308))
         with tempfile.TemporaryDirectory() as temporary:
             session = Session.__new__(Session); session.directory = pathlib.Path(temporary)
             matcher = WhiteUiText(ROOT / 'src/font.h')
@@ -211,13 +212,14 @@ class DocumentCollectorTest(unittest.TestCase):
                                       ('document.rtf', 40, False), ('Xdocument.rtf', 464, False)):
                 pixels = np.full((720, 1280, 3), 246, dtype=np.uint8)
                 template = matcher.template(word)
-                pixels[248:266, x:x + template.shape[1]][template] = (32, 32, 32)
+                top = name_field_bounds(1280, 720)[1] + 8
+                pixels[top:top + template.shape[0], x:x + template.shape[1]][template] = (32, 32, 32)
                 path = session.directory / 'filename.png'; Image.fromarray(pixels).save(path)
                 event = dict(ocr='document.rtf', screenshot=str(path), dumped=12.125, pending_generations=[])
                 self.assertEqual(session.has_text(event, 'document.rtf'), expected)
                 self.assertEqual(event['ocr'], 'document.rtf')
                 self.assertEqual(event['glyph_matches'][0]['foreground_rgb'], [32, 32, 32])
-                self.assertEqual(event['glyph_matches'][0]['bounds'], [452, 240, 828, 318])
+                self.assertEqual(event['glyph_matches'][0]['bounds'], [452, 230, 828, 308])
 
     def test_floppy_does_not_wait_for_async_markers(self):
         session = Session.__new__(Session)

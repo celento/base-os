@@ -61,7 +61,7 @@ class LargerMemoryInputTests(unittest.TestCase):
         pixels = np.full((650, 900, 3), 32, dtype=np.uint8)
         for index, line in enumerate(lines):
             glyphs = self.font.template(line)
-            region = pixels[15 + index * 20:33 + index * 20, 17:17 + glyphs.shape[1]]
+            region = pixels[15 + index * 20:15 + index * 20 + self.font.height, 17:17 + glyphs.shape[1]]
             region[glyphs] = 230
         return pixels
 
@@ -130,7 +130,7 @@ class LargerMemoryInputTests(unittest.TestCase):
         # A damaged final digit must not be accepted as the shorter prefix 12.
         damaged = self.pixels(['Pool free: 123'])
         template = self.font.template('3');y, x = np.argwhere(template)[0]
-        damaged[15 + y, 17 + len('Pool free: 12') * 8 + x] = 32
+        damaged[15 + y, 17 + len('Pool free: 12') * self.font.width + x] = 32
         with self.assertRaises(AssertionError):
             gate.read_decimal(self.font, damaged, 'Pool free: ')
 

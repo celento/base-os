@@ -9,22 +9,22 @@
 
 enum { TB_NORMAL, TB_ACTIVE, TB_DISABLED, TB_PRIMARY, TB_FLAT };
 
-#define TB_H 30
-#define TB_ICON_W 32
-#define TB_TEXT_H 18 /* UI font line height (UI_FONT_H) */
+#define TB_H 26
+#define TB_ICON_W 28
+#define TB_TEXT_H 17 /* UI font line height (UI_FONT_H) */
 
 /* Width of a button: square for icon-only, icon + label otherwise. */
 static inline int tool_button_w(const char *label) {
-    return label && label[0] ? ICON_SIZE + ui_string_w(label) + 26 : TB_ICON_W;
+    return label && label[0] ? ICON_SIZE + ui_string_w(label) + 22 : TB_ICON_W;
 }
 
 static inline void tool_button(int x, int y, int w, int h, int icon, const char *label, int state) {
     uint8_t ink = app_text;
     if (state == TB_ACTIVE || state == TB_PRIMARY) {
-        draw_round_rect(x, y, w, h, 7, app_accent);
+        draw_round_rect(x, y, w, h, 6, app_accent);
         ink = app_on_accent;
     } else if (state == TB_NORMAL) {
-        draw_round_rect(x, y, w, h, 7, app_chrome_dk);
+        draw_round_rect(x, y, w, h, 6, app_chrome_dk);
     } else if (state == TB_DISABLED) {
         ink = gfx_mix(app_text_dim, app_chrome, 110);
     }

@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Rasterize the UI and editor fonts into 4-bit anti-aliased bitmaps (src/font.h).
 
-Inter (UI, regular + bold) and JetBrains Mono (editor/terminal) are pulled from
-the Google Fonts repository into assets/fonts. Both are OFL licensed.
+Geist (UI, regular + medium) and Geist Mono (editor/terminal) come from the
+Google Fonts repository into assets/fonts. Both are OFL licensed.
+
+Glyphs are rendered unhinted at 4x and box-filtered down, with the baseline
+snapped to a whole pixel, so stems keep their true weight and letters sit on
+one line. A mild gamma lift keeps light-on-dark text from looking thin.
 """
 import os
 import sys
@@ -17,13 +21,15 @@ PROOF = os.path.join(ROOT, "screenshots", "font-proof.png")
 FIRST = 32
 COUNT = 95
 
-UI_SIZE = 14
-UI_WEIGHT = 430
+UI_SIZE = 13
+UI_WEIGHT = 450
 UI_BOLD_WEIGHT = 600
-EDIT_SIZE = 13
+EDIT_SIZE = 12
 EDIT_WEIGHT = 450
-LOGO_SIZE = 34
-LOGO_WEIGHT = 720
+LOGO_SIZE = 30
+LOGO_WEIGHT = 650
+SS = 4          # supersampling factor
+GAMMA = 0.85    # coverage ** GAMMA; below 1 darkens mid-levels slightly
 LOGO_TEXT = "BaseOS0123456789.:-"
 
 
@@ -44,21 +50,27 @@ def load(path, size, weight, opsz=None):
 
 
 def render_glyph(font, ch, cell_h, max_w, mono_adv=None):
-    """Return (advance, rows) where rows is a list of lists of levels 0..15."""
+    """Return (advance, rows) where rows is a list of lists of levels 0..15.
+
+    `font` is the SS-times larger face; `cell_h`/`max_w` are 1x pixel sizes."""
     pad = 4
-    im = Image.new("L", (max_w + pad * 2, cell_h + pad), 0)
+    asc, _ = font.getmetrics()
+    # Snap the baseline (asc / SS) to a whole 1x pixel.
+    baseline = int(round(asc / SS))
+    im = Image.new("L", ((max_w + pad * 2) * SS, (cell_h + pad) * SS), 0)
     d = ImageDraw.Draw(im)
-    d.text((pad, 0), ch, font=font, fill=255)
+    d.text((pad * SS, baseline * SS - asc), ch, font=font, fill=255)
+    small = im.resize((max_w + pad * 2, cell_h + pad), Image.BOX)
     if mono_adv is not None:
         adv = mono_adv
     else:
-        adv = int(round(font.getlength(ch)))
+        adv = int(round(font.getlength(ch) / SS))
     rows = []
     for y in range(cell_h):
         row = []
         for x in range(max_w):
-            a = im.getpixel((x + pad, y))
-            row.append((a + 8) // 17)
+            a = small.getpixel((x + pad, y)) / 255.0
+            row.append(int(round((a ** GAMMA) * 15)))
         rows.append(row)
     return adv, rows
 
@@ -105,23 +117,26 @@ def emit_array(name, advs, glyphs, bpr, cell_h):
 
 
 def main():
-    inter = os.path.join(FONTS, "Inter.ttf")
-    mono = os.path.join(FONTS, "JetBrainsMono.ttf")
-    ui = load(inter, UI_SIZE, UI_WEIGHT, opsz=14)
-    uib = load(inter, UI_SIZE, UI_BOLD_WEIGHT, opsz=14)
-    ed = load(mono, EDIT_SIZE, EDIT_WEIGHT)
-    logo = load(inter, LOGO_SIZE, LOGO_WEIGHT, opsz=32)
+    sans = os.path.join(FONTS, "Geist.ttf")
+    mono = os.path.join(FONTS, "GeistMono.ttf")
+    ui = load(sans, UI_SIZE * SS, UI_WEIGHT)
+    uib = load(sans, UI_SIZE * SS, UI_BOLD_WEIGHT)
+    ed = load(mono, EDIT_SIZE * SS, EDIT_WEIGHT)
+    logo = load(sans, LOGO_SIZE * SS, LOGO_WEIGHT)
 
-    ui_asc, ui_desc = ui.getmetrics()
-    ui_h = ui_asc + ui_desc
+    def metrics(font):
+        asc, desc = font.getmetrics()
+        asc = int(round(asc / SS))
+        desc = -(-desc // SS)
+        return asc, asc + desc
+
+    ui_asc, ui_h = metrics(ui)
     ui_w = 16
-    ed_asc, ed_desc = ed.getmetrics()
-    ed_h = ed_asc + ed_desc
-    ed_adv = int(round(ed.getlength("M")))
+    ed_asc, ed_h = metrics(ed)
+    ed_adv = int(round(ed.getlength("M") / SS))
     ed_w = ed_adv
-    lg_asc, lg_desc = logo.getmetrics()
-    lg_h = lg_asc + lg_desc
-    lg_w = 32
+    lg_asc, lg_h = metrics(logo)
+    lg_w = 30
 
     ui_adv, ui_px, ui_bpr = build(ui, ui_h, ui_w)
     uib_adv, uib_px, _ = build(uib, ui_h, ui_w)

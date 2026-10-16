@@ -2,7 +2,7 @@
 
 A small hobby operating system written from scratch in C and x86 assembly. It boots directly into a graphical desktop with persistent files, document editing, HTTP browsing, media playback, and small protected native applications.
 
-BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased bitmap fonts. Its dark "Nightfall" look puts tinted ink-colored windows and frosted menu and task bars over a generated night landscape; each of the eight themes has its own sky, ridges and accent color. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
+BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased Geist type. The look is quiet and dark: ink-colored windows with left-aligned titles, a slim top bar, a Start menu in the taskbar, Lucide icons throughout, and a soft gradient wallpaper. Each of the eight themes changes only the gradient and one accent color. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
 
 ![Files and Editor running side by side in BaseOS](screenshots/gallery/desktop.png)
 
@@ -89,15 +89,15 @@ Wordle and 2048 running together. Snake, Mines, and Breakout are available from 
 
 ### Themes and utilities
 
-Eight landscape themes (Nightfall, Aurora, Lagoon, Glacier, Orchid, Bloom, Moss and Graphite), a screen saver, and everyday utilities. Clock reads the machine's real-time clock; System Monitor reports the OS's resource and window information.
+Eight themes (Graphite, Slate, Midnight, Moss, Dune, Mauve, Ocean and Rose), a screen saver, and everyday utilities. Clock reads the machine's real-time clock; System Monitor reports the OS's resource and window information.
 
-![Appearance settings and the analog clock using the Aurora theme](screenshots/gallery/themes.png)
+![Appearance settings and the analog clock using the Slate theme](screenshots/gallery/themes.png)
 
-### App and file search
+### Start menu
 
-Click Apps or press `Ctrl+Space`, type a name, and press Enter. Arrow keys select a result and Escape closes the launcher.
+Click the Start button or press `Ctrl+Space`. The Start menu shows every application as a tile; typing filters apps and files, arrow keys move the selection and Enter opens it. Its footer holds Settings, the screen saver and Shutdown.
 
-![The BaseOS launcher with searchable applications](screenshots/gallery/search.png)
+![The Start menu with the application grid and search field](screenshots/gallery/search.png)
 
 ## Build and run
 
@@ -213,7 +213,7 @@ To regenerate the gallery, run `python3 tools/gallery.py build`. It links a docu
 
 ## License
 
-MIT. The bundled Inter and JetBrains Mono fonts have their own [OFL licenses](assets/fonts/). Pinned third-party decoders retain their original licenses and notices: [minimp3](third_party/minimp3/), [stb_image](third_party/stb/) and [pl_mpeg](third_party/pl_mpeg/). Local patches and attribution are recorded alongside the vendored sources.
+MIT. The bundled Geist and Geist Mono fonts have their own [OFL licenses](assets/fonts/), and the Lucide icons are [ISC licensed](third_party/lucide/). Pinned third-party decoders retain their original licenses and notices: [minimp3](third_party/minimp3/), [stb_image](third_party/stb/) and [pl_mpeg](third_party/pl_mpeg/). Local patches and attribution are recorded alongside the vendored sources.
 
 The [runtime and developer quick start](docs/RUNTIME_QUICK_START.md) summarizes the
 runtime profiles, everyday applications and native platform limits.

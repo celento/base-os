@@ -163,16 +163,17 @@ def read_decimal(font, pixels, prefix):
     """Read only exact production glyphs following a fully matched prefix."""
     mask = font.screenshot_mask(pixels)
     results = set()
+    gh, gw = font.height, font.width
     for x, y in font.find_mask(mask, prefix):
-        cursor, digits = x + len(prefix) * 8, ''
+        cursor, digits = x + len(prefix) * gw, ''
         for _ in range(10):
-            tile = mask[y:y + 18, cursor:cursor + 8]
+            tile = mask[y:y + gh, cursor:cursor + gw]
             matched = [str(n) for n in range(10) if np.array_equal(tile, font.template(str(n)))]
             if not matched:
                 break
             digits += matched[0]
-            cursor += 8
-        if digits and np.array_equal(mask[y:y + 18, cursor:cursor + 8], font.template(' ')) and font.find_mask(mask, prefix + digits):
+            cursor += gw
+        if digits and np.array_equal(mask[y:y + gh, cursor:cursor + gw], font.template(' ')) and font.find_mask(mask, prefix + digits):
             results.add(int(digits))
     if len(results) != 1:
         raise AssertionError('No unique exact visible SDK number for ' + prefix)

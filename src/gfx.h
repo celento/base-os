@@ -94,6 +94,7 @@ int hit(int px, int py, int x, int y, int w, int h);
 
 /* Draw an ICON_* glyph from icons.h (ICON_SIZE square) in ink, antialiased. */
 void icon_draw(int id, int x, int y, uint8_t ink);
+void icon_draw_large(int id, int x, int y, uint8_t ink); /* APP_ICON_SIZE */
 
 void flip_rect(int x0, int y0, int rw, int rh);
 void flip_vga(void);

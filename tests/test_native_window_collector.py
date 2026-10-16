@@ -57,7 +57,7 @@ class NativeWindowCollectorTests(unittest.TestCase):
     def test_exact_shell_font_diagnostic_match(self):
         font = collector.ShellFont(); screen = np.full((130, 640, 3), 32, dtype=np.uint8)
         text = 'WINDOW LOG ROW 63'; mask = font.bitmap(text)
-        screen[41:59, 37:37+mask.shape[1]][mask] = 232
+        screen[41:41+mask.shape[0], 37:37+mask.shape[1]][mask] = 232
         self.assertTrue(font.matches(screen, 37, 41, text))
         self.assertTrue(font.contains(screen, (0, 0, 640, 130), text))
         self.assertFalse(font.contains(screen, (0, 0, 640, 130), 'WINDOW LOG ROW 15'))

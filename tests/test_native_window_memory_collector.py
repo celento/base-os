@@ -40,7 +40,7 @@ class NativeWindowMemoryCollectorTests(unittest.TestCase):
     def test_known_menu_diagnostic_bitmap(self):
         shell = ShellFont(); image = np.full((720, 1280, 3), 230, dtype=np.uint8)
         mask = shell.bitmap(collector.REFUSAL, 'ui'); x = 273
-        image[9:27, x:x+mask.shape[1]][mask] = (216, 58, 58)
+        image[9:9+mask.shape[0], x:x+mask.shape[1]][mask] = (216, 58, 58)
         self.assertTrue(collector.refusal_visible(image, shell))
         image[:] = 230
         self.assertFalse(collector.refusal_visible(image, shell))

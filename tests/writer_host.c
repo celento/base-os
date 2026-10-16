@@ -528,9 +528,9 @@ static void test_viewport_reveal(void) {
     writer_draw(0,0,420,260); key(0x4f,WRITER_MOD_CTRL);
     key(0x21,WRITER_MOD_CTRL); key(0x1e,WRITER_MOD_CTRL); type("target"); key(0x1c,0);
     writer_draw(0,0,420,260);
-    assert(colored_pixels(22,74,380,90,COLOR_BLUE) > 10);
+    assert(colored_pixels(22,50,380,200,COLOR_BLUE) > 10);
     key(0x01,0); key(0x02,WRITER_MOD_CTRL); writer_draw(0,0,420,260);
-    assert(colored_pixels(22,74,380,152,COLOR_BLUE) > 10);
+    assert(colored_pixels(22,50,380,200,COLOR_BLUE) > 10);
     /* A deliberate scroll away from selection survives a larger resize. */
     writer_scroll(-100); writer_draw(0,0,720,520);
     assert(!colored_pixels(22,74,680,412,COLOR_BLUE));
@@ -542,11 +542,12 @@ static void test_heading_coverage(void) {
     load_fixture("A"); key(0x02, WRITER_MOD_CTRL); key(0x47, WRITER_MOD_CTRL);
     writer_draw(0,0,420,260);
     int bpr, h, w; const unsigned char *bits = ui_glyph('A', &bpr, &h, &w);
-    assert(h == 18 && w == 16);
+    assert(h == UI_FONT_H && w == 16);
+    int scaled_h = (h * 3 + 1) / 2;
     /* Independent four-subpixel area reference for exactly 1.5x magnification.
      * Skip x=0 because the ordinary insertion caret is painted there. */
     unsigned mixed = 0;
-    for (int y = 0; y < 27; y++) for (int x = 1; x < 24; x++) {
+    for (int y = 0; y < scaled_h; y++) for (int x = 1; x < 24; x++) {
         int sum = 0;
         for (int sy = 0; sy < 2; sy++) for (int sx = 0; sx < 2; sx++)
             sum += glyph_level(bits,bpr,(4*y+2*sy+1)/6,(4*x+2*sx+1)/6);
@@ -590,16 +591,16 @@ static void test_drawing(const char *path) {
     assert(!writer_drag(30,20,720,520,200,180));
     for (int width = WRITER_MIN_W; width <= WRITER_W; width += WRITER_W - WRITER_MIN_W) {
         assert(ui_string_w("Tab: focus   Arrows/Space: paper   Esc: cancel") <= 376);
-        /* Wide windows use one 30px toolbar row; the minimum width wraps the
+        /* Wide windows use one TB_H toolbar row; the minimum width wraps the
          * history/file groups onto a second 28px row. RTF and PDF are icon +
          * label buttons separated by a 4px gap that hits nothing. */
-        int wide = width == WRITER_W, top = wide ? 8 : 35, bottom = top + (wide ? 30 : 28) - 1;
-        int rtf = wide ? 456 : 129, pdf = rtf + 75;
+        int wide = width == WRITER_W, top = wide ? 8 : 35, bottom = top + (wide ? 26 : 28) - 1;
+        int rtf = wide ? 412 : 117, pdf = rtf + 66;
         assert(writer_click(30,20,width,260,30+rtf,20+top,0) == WRITER_REQUEST_EXPORT);
-        assert(writer_click(30,20,width,260,30+rtf+70,20+bottom,0) == WRITER_REQUEST_EXPORT);
+        assert(writer_click(30,20,width,260,30+rtf+61,20+bottom,0) == WRITER_REQUEST_EXPORT);
         assert(writer_click(30,20,width,260,30+pdf,20+top,0) == WRITER_REQUEST_PDF);
-        assert(writer_click(30,20,width,260,30+pdf+70,20+bottom,0) == WRITER_REQUEST_PDF);
-        assert(writer_click(30,20,width,260,30+rtf+73,20+top+5,0) == 0);
+        assert(writer_click(30,20,width,260,30+pdf+63,20+bottom,0) == WRITER_REQUEST_PDF);
+        assert(writer_click(30,20,width,260,30+rtf+64,20+top+5,0) == 0);
     }
     assert(writer_key(0x19, 0, WRITER_MOD_CTRL | WRITER_MOD_SHIFT) == WRITER_REQUEST_PDF);
     assert(writer_key(0x19, 0, WRITER_MOD_CTRL) == 0);

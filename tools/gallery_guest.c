@@ -38,8 +38,8 @@ static void gallery_show(int n) {
 }
 void feature_test(void) {
     gallery_clear();
-    open_files(fs_root());gallery_place(250,70,640,500);
-    open_edit();gallery_place(700,190,540,430);
+    open_files(fs_root());gallery_place(230,60,620,480);
+    open_edit();gallery_place(640,150,560,420);
     const char *note="Welcome to BaseOS\n\nA small operating system, built from scratch.\n\nMake yourself at home:\n\n  Open apps with Ctrl + Space\n  Snap windows with Alt + Left or Right\n  Save a document with Ctrl + S\n  Explore commands with help and man\n\nFiles and editor drafts survive a reboot.\n";
     while(*note)edit_insert(*note++);
     edit_write_named("Welcome.txt");

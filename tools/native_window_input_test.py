@@ -139,22 +139,25 @@ class ShellFont:
     """Source bitmap matcher for known shell text at an observed UI origin."""
     def __init__(self):
         source = (ROOT / 'src/font.h').read_text()
-        self.glyphs = {}; self.levels = {}
-        for kind, width in (('edit', 8), ('ui', 16)):
+        metric = lambda name: int(re.search(r'^#define\s+' + name + r'\s+(\d+)\s*$', source, re.M)[1])
+        self.glyphs = {}; self.levels = {}; self.height = {}; self.cell = {}
+        for kind, prefix in (('edit', 'EDIT'), ('ui', 'UI')):
+            rows, width = metric(prefix + '_FONT_H'), metric(prefix + '_FONT_BPR') * 2
+            self.height[kind], self.cell[kind] = rows, width
             match = re.search(r'\b' + kind + r'_font_px\[95\]\[\d+\]\s*=\s*(\{.*?\});', source, re.S)
             require(match is not None, 'Missing shell font table')
             data = np.array(ast.literal_eval(match[1].replace('{', '[').replace('}', ']')), dtype=np.uint8)
-            unpacked = np.empty((95, 18, width), dtype=np.uint8)
-            unpacked[:, :, ::2] = (data.reshape(95, 18, width//2) >> 4)
-            unpacked[:, :, 1::2] = data.reshape(95, 18, width//2) & 15
+            unpacked = np.empty((95, rows, width), dtype=np.uint8)
+            unpacked[:, :, ::2] = (data.reshape(95, rows, width//2) >> 4)
+            unpacked[:, :, 1::2] = data.reshape(95, rows, width//2) & 15
             self.levels[kind] = unpacked
             self.glyphs[kind] = unpacked > 0
         match = re.search(r'ui_font_adv\[95\]\s*=\s*(\{.*?\});', source, re.S)
         self.advance = ast.literal_eval(match[1].replace('{', '[').replace('}', ']'))
 
     def bitmap(self, text, kind='edit', levels=False):
-        widths = [8 if kind == 'edit' else self.advance[ord(c)-32] for c in text]
-        canvas = np.zeros((18, sum(widths) + (8 if kind == 'ui' else 0)), dtype=np.uint8 if levels else bool)
+        widths = [self.cell['edit'] if kind == 'edit' else self.advance[ord(c)-32] for c in text]
+        canvas = np.zeros((self.height[kind], sum(widths) + (self.cell['ui'] // 2 if kind == 'ui' else 0)), dtype=np.uint8 if levels else bool)
         x = 0
         for c, advance in zip(text, widths):
             glyph = (self.levels if levels else self.glyphs)[kind][ord(c)-32]
@@ -165,8 +168,9 @@ class ShellFont:
 
     def matches(self, image, x, y, text, kind='edit'):
         mask = self.bitmap(text, kind)
-        patch = image[y:y+18, x:x+mask.shape[1]]
-        if patch.shape != (18, mask.shape[1], 3):
+        rows = self.height[kind]
+        patch = image[y:y+rows, x:x+mask.shape[1]]
+        if patch.shape != (rows, mask.shape[1], 3):
             return False
         observed = np.any(patch != patch[0, 0], axis=2)
         if kind == 'edit':
@@ -187,9 +191,9 @@ class ShellFont:
         background = np.array([32, 32, 32], dtype=np.uint8)
         binary = np.any(image != background, axis=2)
         # Match one whole informative row first; this avoids calling the full
-        # 18-row comparison for every foreground pixel in a desktop screenshot.
+        # glyph-height comparison for every foreground pixel in a desktop screenshot.
         row_mask = mask[iy]
-        for top in range(y, y+h-17):
+        for top in range(y, y+h-self.height[kind]+1):
             row = binary[top+iy, x:x+w]
             if len(row) < len(row_mask):
                 continue

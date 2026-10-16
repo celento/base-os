@@ -110,33 +110,36 @@ def normalized(text):
 class WhiteUiText:
     """Exact solid-color production UI glyph cores in screenshot pixels only.
 
-    Proportional glyph advances and all 18 rows, including zero pixels, must
-    match. Used for the selected white-on-blue Cancel button and strict name
+    Proportional glyph advances and all UI_FONT_H rows, including zero pixels,
+    must match. Used for the selected white-on-blue Cancel button and strict name
     fields; it never reads the guest model or window state.
     """
     def __init__(self, font_path):
         raw = pathlib.Path(font_path).read_bytes()
         source = raw.decode('ascii')
+        metric = lambda name: int(re.search(r'^#define\s+' + name + r'\s+(\d+)\s*$', source, re.M)[1])
+        self.height, bpr = metric('UI_FONT_H'), metric('UI_FONT_BPR')
+        self.cell = bpr * 2
         advances = re.search(r'ui_font_adv\[95\]\s*=\s*\{(.*?)\n\};', source, re.S)
-        pixels = re.search(r'ui_font_px\[95\]\[144\]\s*=\s*\{(.*?)\n\};', source, re.S)
-        assert advances and pixels, 'Production UI font layout changed'
+        pixels = re.search(r'ui_font_px\[95\]\[(\d+)\]\s*=\s*\{(.*?)\n\};', source, re.S)
+        assert advances and pixels and int(pixels[1]) == self.height * bpr, 'Production UI font layout changed'
         self.advances = [int(value) for value in re.findall(r'\d+', advances[1])]
-        packed = np.array([int(value, 16) for value in re.findall(r'0x([0-9a-fA-F]{2})', pixels[1])],
+        packed = np.array([int(value, 16) for value in re.findall(r'0x([0-9a-fA-F]{2})', pixels[2])],
                           dtype=np.uint8)
-        assert len(self.advances) == 95 and packed.size == 95 * 144
-        packed = packed.reshape(95, 18, 8)
-        self.glyphs = np.stack((packed >> 4, packed & 15), axis=-1).reshape(95, 18, 16) == 15
+        assert len(self.advances) == 95 and packed.size == 95 * self.height * bpr
+        packed = packed.reshape(95, self.height, bpr)
+        self.glyphs = np.stack((packed >> 4, packed & 15), axis=-1).reshape(95, self.height, self.cell) == 15
         self.font_sha256 = sha(raw)
 
     def template(self, text):
         if not text.strip() or any(not 32 <= ord(char) <= 126 for char in text):
             raise ValueError('Expected visible printable ASCII text')
-        width = sum(self.advances[ord(char) - 32] for char in text) + 16
-        template = np.zeros((18, width), dtype=bool)
+        width = sum(self.advances[ord(char) - 32] for char in text) + self.cell
+        template = np.zeros((self.height, width), dtype=bool)
         position = 0
         for char in text:
             index = ord(char) - 32
-            template[:, position:position + 16] |= self.glyphs[index]
+            template[:, position:position + self.cell] |= self.glyphs[index]
             position += self.advances[index]
         return template
 
@@ -144,22 +147,22 @@ class WhiteUiText:
         mask = np.all(np.asarray(pixels)[:, :, :3] == foreground, axis=2)
         template = self.template(text)
         height, width = mask.shape
-        tw = template.shape[1]
-        if height < 18 or width < tw:
+        tw, gh, cell = template.shape[1], self.height, self.cell
+        if height < gh or width < tw:
             return []
         first = next(index for index, char in enumerate(text) if char != ' ')
         x0 = sum(self.advances[ord(char) - 32] for char in text[:first])
-        rows = np.zeros((height, width - 15), dtype=np.uint16)
-        expected = np.zeros(18, dtype=np.uint16)
-        for bit in range(16):
-            rows |= mask[:, bit:width - 15 + bit].astype(np.uint16) << (15 - bit)
-            expected |= template[:, x0 + bit].astype(np.uint16) << (15 - bit)
-        candidates = np.ones((height - 17, width - tw + 1), dtype=bool)
-        for row in range(18):
-            candidates &= rows[row:row + height - 17, x0:x0 + width - tw + 1] == expected[row]
+        rows = np.zeros((height, width - cell + 1), dtype=np.uint16)
+        expected = np.zeros(gh, dtype=np.uint16)
+        for bit in range(cell):
+            rows |= mask[:, bit:width - cell + 1 + bit].astype(np.uint16) << (cell - 1 - bit)
+            expected |= template[:, x0 + bit].astype(np.uint16) << (cell - 1 - bit)
+        candidates = np.ones((height - gh + 1, width - tw + 1), dtype=bool)
+        for row in range(gh):
+            candidates &= rows[row:row + height - gh + 1, x0:x0 + width - tw + 1] == expected[row]
         found = []
         for y, x in zip(*np.where(candidates)):
-            if np.array_equal(mask[y:y + 18, x:x + tw], template):
+            if np.array_equal(mask[y:y + gh, x:x + tw], template):
                 found.append([int(x), int(y)])
         return found
 
@@ -508,7 +511,7 @@ class Session(DesktopSession):
                             font_sha256=self.white_ui_text.font_sha256,
                             foreground_rgb=list(foreground), bounds=list(bounds),
                             method='exact UI alpha-15 cores at foreground RGB, all zeros and 16px end margin included',
-                            template_size=[self.white_ui_text.template(text).shape[1], 18])
+                            template_size=[self.white_ui_text.template(text).shape[1], self.white_ui_text.height])
             matches.append(existing)
         return bool(existing['positions'])
 

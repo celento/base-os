@@ -10,7 +10,7 @@
 #define INFO_H 28
 #define ROW_H 28
 #define SB 16
-#define ICON_APP_TRASH 1
+#define ICON_DESK_TRASH 1
 #include "files_kernel_types.inc"
 static WindowState states[MAX_WIN],*window_state=states;
 int ui_string_w(const char *s){int n=0;while(s[n])n++;return n*8;}

@@ -103,7 +103,7 @@ static void test_tick_classification(void){
     }
     fake.error=MEDIA_BAD_FILE;expect_full_change();assert(message[0]);
     fake.error=MEDIA_NO_DEVICE;expect_full_change();
-    assert(player_click(25,30,420,390,25+220,30+185));
+    assert(click_transport(420,390,PB_CLEAR));
     expect_full_change();assert(!message[0]);
     fake.volume--;expect_full_change();fake.volume++;expect_full_change();
 
@@ -127,7 +127,7 @@ static void test_tick_classification(void){
     assert(player_click(25,30,640,584,25+70,30+303));expect_full_change();
     assert(player_open_file(4)==MEDIA_OK);expect_full_change();
     assert(player_open_file(FS_MAX_NODES)==MEDIA_BAD_FILE);expect_full_change();
-    assert(player_click(25,30,420,390,25+220,30+185));expect_full_change();
+    assert(click_transport(420,390,PB_CLEAR));expect_full_change();
     assert(!player_key(0,'?'));assert(!player_tick());
 
     now=refresh_time+TIMER_HZ-1;
@@ -236,7 +236,7 @@ int main(void){
     assert(click_transport(420,390,PB_STOP));assert(fake.state==AUDIO_STOPPED);
     assert(player_tick());assert(!player_tick());now+=TIMER_HZ;assert(player_tick());
     fake.error=MEDIA_NO_DEVICE;assert(player_tick()&&message[0]);
-    assert(player_click(25,30,420,390,25+220,30+185));assert(!message[0]);
+    assert(click_transport(420,390,PB_CLEAR));assert(!message[0]);
     strcpy(names[2],"Film.mpg");player_refresh();assert(player_open_file(2)==0);
     assert(video_mode&&fake_video.state==VIDEO_LOADING&&fake.state==AUDIO_STOPPED);
     draw_at(640,584);draw_at(420,390);draw_at(420,362);

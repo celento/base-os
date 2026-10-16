@@ -28,7 +28,8 @@ class AddressSpaceInputTests(unittest.TestCase):
         pixels = np.full((390, 880, 3), 32, dtype=np.uint8)
         for number, text in enumerate(lines):
             mask = self.font.template(text)
-            region = pixels[y + number * 19:y + number * 19 + 18, x:x + mask.shape[1]]
+            step = self.font.height + 1
+            region = pixels[y + number * step:y + number * step + self.font.height, x:x + mask.shape[1]]
             region[mask] = 230
         return pixels
 
@@ -56,7 +57,7 @@ class AddressSpaceInputTests(unittest.TestCase):
                  '/Documents/workspace-array-3.txt', 'Native task finished.']
         pixels = self.pixels(lines)
         for index, line in enumerate(lines):
-            self.assertEqual(self.font.find(pixels, line), [[27, 39 + index * 19]])
+            self.assertEqual(self.font.find(pixels, line), [[27, 39 + index * (self.font.height + 1)]])
         self.assertEqual(self.font.find(pixels, 'Seed: 4140131181'), [])
         self.assertEqual(self.font.find(pixels, '/Documents/workspace-array-4.txt'), [])
         # A single missing glyph pixel cannot establish a complete result line.
@@ -70,9 +71,10 @@ class AddressSpaceInputTests(unittest.TestCase):
         # and independent production gray ramp/mix arithmetic.
         import re
         source = (ROOT / 'src/font.h').read_text()
-        body = re.search(r'edit_font_px\[95\]\[72\]\s*=\s*\{(.*?)\n\};', source, re.S)[1]
-        packed = np.array([int(v, 16) for v in re.findall(r'0x([0-9a-fA-F]{2})', body)], dtype=np.uint8).reshape(95, 18, 4)
-        levels = np.stack((packed >> 4, packed & 15), axis=-1).reshape(95, 18, 8)
+        body = re.search(r'edit_font_px\[95\]\[\d+\]\s*=\s*\{(.*?)\n\};', source, re.S)[1]
+        rows, cols = self.font.height, self.font.width
+        packed = np.array([int(v, 16) for v in re.findall(r'0x([0-9a-fA-F]{2})', body)], dtype=np.uint8).reshape(95, rows, cols // 2)
+        levels = np.stack((packed >> 4, packed & 15), axis=-1).reshape(95, rows, cols)
         gray = np.array([i * 255 // 31 for i in range(32)])
         shades = []
         for alpha in range(16):

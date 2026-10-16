@@ -4,8 +4,8 @@
 #include "file_view.h"
 #define MAX_WIN 8
 #define EDIT_BUF_SIZE 65536
-#define ICON_APP_TRASH 2
-static const struct {const char *label;} icons[ICON_APP_TRASH]={{"Terminal"},{"Files"}};
+#define ICON_DESK_TRASH 2
+static const struct {const char *label;} icons[ICON_DESK_TRASH]={{"Terminal"},{"Files"}};
 enum { WK_NONE=-1, WK_TERM, WK_EDIT, WK_CLOCK, WK_CAL, WK_MINES, WK_2048,
        WK_BREAKOUT, WK_SYSMON, WK_HELLO, WK_PROPERTIES, WK_WRITER, WK_SPREADSHEET,
        WK_VIEW, WK_BROWSER, WK_PLAYER, WK_NATIVE };
