@@ -48,6 +48,8 @@ uint8_t gfx_rgb(int r, int g, int b);
 uint8_t gfx_gray(int v);
 void gfx_set_ramp(int base, int n, uint32_t c0, uint32_t c1);
 void gfx_pal_commit(void);
+/* Fill the PAL_ICON band (PAL_ICON_N colors). The UI layer supplies the art. */
+void gfx_set_icon_palette(const uint32_t *rgb);
 uint8_t gfx_mix(uint8_t a, uint8_t b, int t);   /* t 0..256 toward b */
 uint8_t gfx_darker(uint8_t c, int pct);
 uint8_t gfx_lighter(uint8_t c, int pct);
@@ -94,10 +96,6 @@ void draw_string_shadow(const char *str, int x, int y, uint8_t color, uint8_t sh
 
 int hit(int px, int py, int x, int y, int w, int h);
 
-/* Draw an ICON_* glyph from icons.h (ICON_SIZE square) in ink, antialiased. */
-void icon_draw(int id, int x, int y, uint8_t ink);
-/* Color application icons (src/app_icons.h): size is AI_BIG or AI_SMALL. */
-void app_icon_draw(int id, int x, int y, int size);
 /* One palette entry (0xRRGGBB); commit with gfx_pal_commit. */
 void gfx_set_color(int index, uint32_t rgb);
 /* Glass: blend what is already drawn toward `tint`, from strength t0 at

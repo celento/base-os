@@ -103,6 +103,4 @@ int process_reap(ProcessHandle process);
 int process_step(ProcessHandle process);
 ProcessHandle process_schedule_one(void);
 void process_counts(ProcessCounts *out);
-int program_key(void);
-void program_present(void);
 #endif

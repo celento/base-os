@@ -2,6 +2,7 @@
  * This fixture only runs with disposable images from download_test.py. */
 #define FEATURE_TEST
 #include "../src/shell/desktop/desktop.c"
+#include "audio_example.h"
 #include "../src/kernel/download.h"
 #ifndef HTTP_PORT
 #define HTTP_PORT "18080"

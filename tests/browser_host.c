@@ -13,6 +13,7 @@ static uint8_t test_mirror[0x100000];
 #define PRESENT_BASE ((uintptr_t)test_mirror)
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
+#include "../src/ui/icons.c"
 #define BROWSER_HOST_TEST
 #include "../src/apps/browser.c"
 

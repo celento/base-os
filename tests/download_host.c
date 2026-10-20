@@ -37,8 +37,6 @@ int net_http_start(const char *url,char *body,unsigned cap){
 }
 void net_cancel(void){cancelled++;busy=0;response.state=NET_HTTP_ERROR;strcpy(response.error,"Request cancelled");}
 int basic_run(const char *text,int n,const ProgramIO *io){(void)text;(void)n;(void)io;return -1;}
-int program_key(void){return 0;}
-void program_present(void){}
 int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;return -1;}
 int process_create(const void *p,unsigned n,const char *argument,unsigned length,ProcessHandle *out){(void)p;(void)n;(void)argument;(void)length;(void)out;return -1;}
 int process_create_mode(const void *file,unsigned bytes,const char *argument,unsigned length,

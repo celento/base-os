@@ -1,4 +1,4 @@
-#include "ui/app.h"
+#include "kernel/rtc.h"
 #include "kernel/platform.h"
 
 const char *const rtc_month_name[12] = {

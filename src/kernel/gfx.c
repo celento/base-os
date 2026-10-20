@@ -1,8 +1,4 @@
 #include "kernel/gfx.h"
-#define ICONS_DEFINE_DATA
-#include "ui/icons.h"
-#define APP_ICONS_DEFINE_DATA
-#include "ui/app_icons.h"
 #include "kernel/font.h"
 #include "kernel/layout.h"
 #include "kernel/fs.h"
@@ -163,6 +159,15 @@ void gfx_set_color(int index, uint32_t rgb) {
     pal32[index] = rgb & 0xFFFFFF;
 }
 
+/* The UI layer owns the colors of the PAL_ICON band; they survive mode changes. */
+static uint32_t pal_icon_band[PAL_ICON_N];
+
+void gfx_set_icon_palette(const uint32_t *rgb) {
+    for (int i = 0; i < PAL_ICON_N; i++)
+        pal_icon_band[i] = pal32[PAL_ICON + i] = rgb[i] & 0xFFFFFF;
+    gfx_pal_commit();
+}
+
 static void pal_build(void) {
     for (int i = 0; i < 16; i++)
         pal32[i] = pal_base[i];
@@ -172,7 +177,7 @@ static void pal_build(void) {
     }
     gfx_set_ramp(PAL_DESK, PAL_DESK_N, 0x4C8FD6, 0x0E2A52);
     for (int i = 0; i < PAL_ICON_N; i++)
-        pal32[PAL_ICON + i] = app_icon_palette[i];
+        pal32[PAL_ICON + i] = pal_icon_band[i];
     gfx_set_ramp(PAL_ACCENT, PAL_ACCENT_N, 0x8AB4F0, 0x143C80);
     for (int i = 0; i < 125; i++) {
         pal32[PAL_CUBE + i] = ((uint32_t)cube_lv[i / 25] << 16) |
@@ -822,40 +827,6 @@ void gfx_present(void) {
             if(!changed&&run>=0){flip_rect(run,y,x-run,1);run=-1;}
         }
         if(run>=0)flip_rect(run,y,fb_w-run,1);
-    }
-}
-
-/* Icons: ICON_SIZE (toolbars, rows) or APP_ICON_SIZE (tiles, Start menu)
- * squares with 16 coverage levels blended over the surface. */
-static void icon_blit(const uint8_t *bits, int size, int x, int y, uint8_t ink) {
-    for (int row = 0; row < size; row++) {
-        for (int col = 0; col < size; col++) {
-            int i = row * size + col;
-            int level = (i & 1) ? bits[i >> 1] & 15 : bits[i >> 1] >> 4;
-            if (!level) continue;
-            int px = x + col, py = y + row;
-            if (px < 0 || py < 0 || px >= fb_w || py >= fb_h) continue;
-            put_pixel(px, py, level == 15 ? ink : gfx_mix(get_pixel(px, py), ink, level * 256 / 15));
-        }
-    }
-}
-void icon_draw(int id, int x, int y, uint8_t ink) {
-    if (id >= 0 && id < ICON_COUNT) icon_blit(icon_bits[id], ICON_SIZE, x, y, ink);
-}
-/* Color icons: a palette index per pixel followed by packed 4-bit alpha. */
-void app_icon_draw(int id, int x, int y, int size) {
-    if (id < 0 || id >= AI_COUNT || (size != AI_BIG && size != AI_SMALL)) return;
-    const uint8_t *bits = size == AI_BIG ? app_icon_big[id] : app_icon_small[id];
-    const uint8_t *alpha = bits + size * size;
-    for (int row = 0; row < size; row++) {
-        for (int col = 0; col < size; col++) {
-            int i = row * size + col;
-            int level = (i & 1) ? alpha[i >> 1] & 15 : alpha[i >> 1] >> 4;
-            if (!level) continue;
-            int px = x + col, py = y + row;
-            if (px < 0 || py < 0 || px >= fb_w || py >= fb_h) continue;
-            put_pixel(px, py, level == 15 ? bits[i] : gfx_mix(get_pixel(px, py), bits[i], level * 17));
-        }
     }
 }
 

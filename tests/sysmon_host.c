@@ -10,6 +10,7 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define PRESENT_BASE ((uintptr_t)test_mirror)
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
+#include "../src/ui/icons.c"
 #include "ui/app.h"
 #include "apps/sysmon.h"
 #include "kernel/program.h"

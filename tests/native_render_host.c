@@ -13,6 +13,7 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define PRESENT_BASE ((uintptr_t)test_mirror)
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
+#include "../src/ui/icons.c"
 #define TITLE_BAR 30
 #define WMENU_H 24
 #define TITLE_H 54

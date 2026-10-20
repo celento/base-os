@@ -1,8 +1,11 @@
 /*
- * BaseOS Kernel
- * VBE 1280x720 desktop, PS/2 mouse, RAM filesystem, apps
+ * BaseOS desktop shell: windows, taskbar, launcher, the built-in desktop
+ * apps and session restore. The kernel calls it only through baseos_shell
+ * (kernel/shell.h); everything below the shell is in src/kernel.
  */
 
+#include "kernel/kernel.h"
+#include "kernel/shell.h"
 #include "lib/canvas_view.h"
 #include "apps/app_view.h"
 #include "kernel/gfx.h"
@@ -17,8 +20,7 @@
 #include "apps/player.h"
 #include "apps/writer.h"
 #include "apps/sheet.h"
-#include "lib/example_docs.h"
-#include "lib/example_sheet.h"
+#include "lib/provision.h"
 #include "apps/file_clipboard.h"
 #include "apps/file_view.h"
 #include "lib/video.h"
@@ -27,17 +29,14 @@
 #include "ui/app_icons.h"
 #define WALLPAPERS_DEFINE_DATA
 #include "shell/desktop/wallpapers.h"
-#include "audio_example.h"
 #include "kernel/platform.h"
 #include "kernel/physmem.h"
 #include "kernel/input_ingress.h"
 #include "lib/history.h"
 #include "kernel/program.h"
-#include "native_example.h"
-#include "sdk_examples.h"
-#include "kernel/persist.h"
 #include "ui/app.h"
 #include "ui/toolbar.h"
+#include "ui/icon_draw.h"
 #include "kernel/font.h"
 #include "apps/clock.h"
 #include "apps/calendar.h"
@@ -79,11 +78,6 @@
 #define MAX_WIN        8
 
 #define THEME_N        WALLPAPER_N
-
-#define KEYBOARD_STATUS_PORT 0x64
-#define KEYBOARD_DATA_PORT   0x60
-#define QEMU_SHUTDOWN_PORT   0x604
-#define VBOX_SHUTDOWN_PORT   0xB004
 
 #define KEY_LCTRL      0x1D
 #define KEY_LSHIFT     0x2A
@@ -132,17 +126,6 @@ static uint8_t ui_paper;
 static uint8_t ui_title;
 static uint8_t ui_on_accent;
 static int desk_cache_theme = -1;
-uint8_t app_accent;
-uint8_t app_accent_dk;
-uint8_t app_text;
-uint8_t app_text_dim;
-uint8_t app_chrome;
-uint8_t app_chrome_dk;
-uint8_t app_body;
-uint8_t app_field;
-uint8_t app_paper;
-uint8_t app_border;
-uint8_t app_on_accent;
 static int display_pending = 0, display_previous = -1;
 static uint32_t display_deadline;
 static const char *display_message = "";
@@ -224,54 +207,6 @@ static void theme_apply(void) {
     app_paper = ui_paper;
     app_border = ui_border;
     app_on_accent = ui_on_accent;
-}
-
-void drain_8042(void);
-static inline void outb(uint16_t port, uint8_t val) {
-    asm volatile("outb %0, %1" : : "a"(val), "Nd"(port));
-}
-
-static inline void outw(uint16_t port, uint16_t val) {
-    asm volatile("outw %0, %1" : : "a"(val), "Nd"(port));
-}
-
-static inline uint8_t inb(uint16_t port) {
-    uint8_t ret;
-    asm volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
-
-void drain_8042(void);
-
-/* ---------- Serial ---------- */
-
-static void serial_write(char c) {
-    char text[2] = {c, 0};
-    platform_log(text);
-}
-
-void kprint_debug(const char *str) { platform_log(str); }
-
-static void kprint_uint(unsigned v) {
-    char tmp[10];
-    int n = 0;
-    if (v == 0) {
-        serial_write('0');
-        return;
-    }
-    while (v && n < 10) {
-        tmp[n++] = (char)('0' + (v % 10));
-        v /= 10;
-    }
-    while (n)
-        serial_write(tmp[--n]);
-}
-
-static void kprint_hex32(uint32_t v) {
-    static const char *hex = "0123456789ABCDEF";
-    kprint_debug("0x");
-    for (int i = 7; i >= 0; i--)
-        serial_write(hex[(v >> (i * 4)) & 0xF]);
 }
 
 /* ---------- Helpers ---------- */
@@ -840,10 +775,7 @@ static int mouse_y;
 static int mouse_left = 0;
 static int mouse_right = 0;
 static int mouse_moved = 0;
-static int mouse_ok = 0;
 
-static int mouse_type;
-static InputIngress device_input;
 static uint32_t input_sample_ticks;
 static int input_routing, input_cursor_moved, input_tail_pending;
 static unsigned input_suppressed, input_saver_buttons, input_unknown_buttons, input_sync_loss;
@@ -859,81 +791,6 @@ static uint8_t cursor_saved[CURSOR_W * CURSOR_H];
 static int cursor_sx = -1, cursor_sy = -1;
 static int cursor_on = 0;
 
-
-static int mouse_wait_write(void) {
-    for (int i = 0; i < 100000; i++) {
-        if ((inb(0x64) & 2) == 0)
-            return 1;
-    }
-    return 0;
-}
-
-static int mouse_wait_read(void) {
-    for (int i = 0; i < 100000; i++) {
-        if (inb(0x64) & 1)
-            return 1;
-    }
-    return 0;
-}
-
-static void mouse_flush(void) {
-    for (int i = 0; i < 32; i++) {
-        if (!(inb(0x64) & 1))
-            break;
-        (void)inb(0x60);
-    }
-}
-
-static int mouse_cmd(uint8_t cmd) {
-    if (!mouse_wait_write())
-        return 0;
-    outb(0x64, 0xD4);
-    if (!mouse_wait_write())
-        return 0;
-    outb(0x60, cmd);
-    if (!mouse_wait_read())
-        return 0;
-    uint8_t ack = inb(0x60);
-    return ack == 0xFA;
-}
-
-void mouse_init(void) {
-    mouse_flush();
-
-    if (!mouse_wait_write())
-        return;
-    outb(0x64, 0xA8);
-
-    if (!mouse_wait_write())
-        return;
-    outb(0x64, 0x20);
-    if (!mouse_wait_read())
-        return;
-    uint8_t status = inb(0x60);
-    status &= (uint8_t)~0x03; /* Both PS/2 IRQs stay masked; input is polled. */
-    status &= (uint8_t)~0x20;
-    if (!mouse_wait_write())
-        return;
-    outb(0x64, 0x60);
-    if (!mouse_wait_write())
-        return;
-    outb(0x60, status);
-
-    if (!mouse_cmd(0xF6))
-        return;
-    /* QEMU's IntelliMouse negotiation: 200, 100, 80 samples/second. */
-    mouse_type=0;
-    if(mouse_cmd(0xF3)&&mouse_cmd(200)&&mouse_cmd(0xF3)&&mouse_cmd(100)&&
-       mouse_cmd(0xF3)&&mouse_cmd(80)&&mouse_cmd(0xF2)&&mouse_wait_read()){
-        mouse_type=inb(0x60);
-    }
-    if (!mouse_cmd(0xF4))
-        return;
-
-    mouse_flush();
-    mouse_ok = 1;
-    input_mouse_type(&device_input, (unsigned)mouse_type);
-}
 
 void cursor_restore(void) {
     if (!cursor_on)
@@ -977,57 +834,9 @@ static int alt_down;
 static int ctrl_down = 0;
 static uint8_t key_sc = 0;
 static char key_char = 0;
-static int input_ready;
-void platform_poll(void){if(input_ready)drain_8042();audio_poll();net_poll();}
-void fs_background_poll(void){platform_poll();}
-
-static unsigned input_acquire(unsigned budget) {
-    unsigned acquired=0;
-    /* Acquisition only, including when rendering/storage/syscalls poll us. */
-    for (unsigned i = 0; i < budget; i++) {
-        uint8_t status = inb(KEYBOARD_STATUS_PORT);
-        if (!(status & 1)) break;
-        uint8_t data = inb(KEYBOARD_DATA_PORT);
-        ++acquired;
-        uint32_t ticks = timer_ticks();
-        if (status & 0xc0) input_device_loss(&device_input, ticks);
-        else if (status & 0x20) input_mouse_byte(&device_input, data, ticks);
-        else input_keyboard_byte(&device_input, data, ticks);
-    }
-    return acquired;
-}
-void drain_8042(void) { (void)input_acquire(32); }
 
 static void poll_time(void) {
     frame_count = timer_ticks();
-}
-
-/* ---------- Video init ---------- */
-static void video_init(void) {
-    const BootInfo *bi = (const BootInfo *)BOOTINFO_ADDR;
-    if (!video_info_valid(bi))
-        panic("no supported, verified linear framebuffer");
-    fb_w = bi->width;
-    fb_h = bi->height;
-    fb_bpp = bi->bpp;
-    fb_pitch = bi->pitch;
-    lfb = (uint8_t *)bi->lfb;
-    gfx_init((uint8_t *)FB_BASE, lfb, fb_w, fb_h, fb_bpp, fb_pitch);
-    gfx_set_flip_hook(platform_poll);
-
-    kprint_debug("Video ");
-    kprint_uint((unsigned)fb_w);
-    serial_write('x');
-    kprint_uint((unsigned)fb_h);
-    serial_write('x');
-    kprint_uint((unsigned)fb_bpp);
-    kprint_debug(" pitch=");
-    kprint_uint((unsigned)fb_pitch);
-    kprint_debug(" LFB=");
-    kprint_hex32((uint32_t)(uintptr_t)lfb);
-    kprint_debug(" flags=");
-    kprint_uint(bi->magic == BOOTINFO_MAGIC ? bi->flags : 0);
-    serial_write('\n');
 }
 
 /* ---------- Window manager ---------- */
@@ -1406,9 +1215,7 @@ static void do_shutdown(void) {
         dirty = 1;
         return; /* Keep unsaved work available after a failed flush. */
     }
-    outw(QEMU_SHUTDOWN_PORT, 0x2000);
-    outw(VBOX_SHUTDOWN_PORT, 0x2000);
-    asm volatile("hlt");
+    kernel_power_off();
 }
 
 static int find_open_kind(int kind) {
@@ -7568,9 +7375,8 @@ static void boot_splash(void) {
     int shown = 0;
     while (1) {
         poll_time();
-        audio_poll();
-        net_poll();
-        if(download_tick()){
+        kernel_services_poll();
+        if(kernel_events_take(KERNEL_EVENT_DOWNLOADS)){
             int original=context_slot;
             for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&wins[i].kind==WK_FILES){context_set(i);fm_refresh();}
             context_set(original);dirty=1;
@@ -7835,64 +7641,6 @@ static void session_restore(void){
 }
 int program_key(void){ return desktop_program_key(); }
 void program_present(void){cursor_restore();draw_ui();flip_vga();cursor_on=0;dirty=1;}
-static void install_examples(void){
-    if(fs_find_child(fs_root(),"Browser")<0)fs_create_app(fs_root(),"Browser");
-    if(fs_find_child(fs_root(),"Media Player")<0)fs_create_app(fs_root(),"Media Player");
-    if(fs_find_child(fs_root(),"Writer")<0)fs_create_app(fs_root(),"Writer");
-    if(fs_find_child(fs_root(),"Spreadsheet")<0)fs_create_app(fs_root(),"Spreadsheet");
-    int media=fs_find_child(fs_root(),"Media");if(media<0)media=fs_mkdir(fs_root(),"Media");
-    if(media>=0&&fs_find_child(media,"chime.wav")<0){int id=fs_create(media,"chime.wav");if(id>=0)fs_write(id,(const char *)audio_example,sizeof audio_example);}
-    int docs=fs_find_child(fs_root(),"Documents");
-    if(docs>=0&&fs_find_child(docs,"budget.bsh")<0){
-        unsigned size=example_budget_sheet((unsigned char *)edit_scratch,EDIT_BUF_SIZE);
-        if(size){int id=fs_create(docs,"budget.bsh");if(id>=0&&fs_write(id,edit_scratch,(int)size)!=(int)size)fs_delete(id);}
-    }
-    if(docs>=0&&fs_find_child(docs,"budget.csv")<0){
-        int id=fs_create(docs,"budget.csv");
-        if(id>=0&&fs_write(id,example_budget_csv,kstrlen(example_budget_csv))!=kstrlen(example_budget_csv))fs_delete(id);
-    }
-    if(docs>=0&&fs_find_child(docs,"Spreadsheet guide.txt")<0){
-        int id=fs_create(docs,"Spreadsheet guide.txt");
-        if(id>=0&&fs_write(id,example_sheet_guide,kstrlen(example_sheet_guide))!=kstrlen(example_sheet_guide))fs_delete(id);
-    }
-    if(docs>=0&&fs_find_child(docs,"welcome.html")<0){
-        const char *page=
-            "<title>BaseOS guide</title><h1>BaseOS guide</h1>"
-            "<p>Open apps and files with Ctrl+Space. Alt+Tab changes windows.</p>"
-            "<h2>Files</h2><p>Ctrl+F filters this folder. Ctrl+1 through Ctrl+4 select Name, Type, Size or Modified sorting. "
-            "Ctrl+C, Ctrl+X and Ctrl+V copy or move the selected file. Existing unrelated names are never replaced.</p>"
-            "<h2>Documents</h2><p>Writer saves editable BWR files. Ctrl+Shift+E exports RTF; Ctrl+Shift+P exports Letter or A4 PDF. "
-            "PDF is for viewing or printing on the host. Spreadsheet opens budget.bsh and exchanges CSV values.</p>"
-            "<h2>Native apps</h2><p>Open a .bex program from Files or search. In Terminal, "
-            "start /Programs/docstats.bex /Documents/stats-sample.txt scans that document. S saves the report; Q exits. "
-            "Existing installed examples are preserved when the kernel is updated.</p>"
-            "<h2>Media and storage</h2><p>Media Player supports WAV, MP3 and bounded MPEG-1/MP2. "
-            "Terminal df shows this volume's actual limits. The explicit large profile allows 16 MiB files and WAV/MP3 sources.</p>"
-            "<h2>Browser</h2><p>Use HTTP addresses or file:///Documents/welcome.html. "
-            "HTTPS, JavaScript and CSS layout are not supported. Never enter passwords over HTTP.</p>";
-        int id=fs_create(docs,"welcome.html");if(id>=0)fs_write(id,page,kstrlen(page));
-    }
-    int dir=fs_find_child(fs_root(),"Programs");if(dir<0)dir=fs_mkdir(fs_root(),"Programs");if(dir<0)return;
-    if(fs_find_child(dir,"hello.bex")<0){int id=fs_create(dir,"hello.bex");if(id>=0)fs_write(id,(const char *)native_example,sizeof native_example);}
-    if(fs_find_child(dir,"hello-c.bex")<0){int id=fs_create(dir,"hello-c.bex");if(id>=0)fs_write(id,(const char *)sdk_hello,sizeof sdk_hello);}
-    if(fs_find_child(dir,"notebook.bex")<0){int id=fs_create(dir,"notebook.bex");if(id>=0)fs_write(id,(const char *)sdk_notebook,sizeof sdk_notebook);}
-    if(fs_find_child(dir,"counter.bex")<0){int id=fs_create(dir,"counter.bex");if(id>=0)fs_write(id,(const char *)sdk_counter,sizeof sdk_counter);}
-    if(fs_find_child(dir,"docstats.bex")<0){int id=fs_create(dir,"docstats.bex");if(id>=0)fs_write(id,(const char *)sdk_docstats,sizeof sdk_docstats);}
-    if(fs_find_child(dir,"pointer.bex")<0){int id=fs_create(dir,"pointer.bex");if(id>=0)fs_write(id,(const char *)sdk_pointer,sizeof sdk_pointer);}
-    if(fs_find_child(dir,"pointer-window.bex")<0){int id=fs_create(dir,"pointer-window.bex");if(id>=0)fs_write(id,(const char *)sdk_pointer_window,sizeof sdk_pointer_window);}
-    if(docs>=0&&fs_find_child(docs,"stats-sample.txt")<0){
-        unsigned length=example_stats_document(edit_scratch,EDIT_BUF_SIZE);
-        if(length&&length<=fs_file_limit()){
-            int id=fs_create(docs,"stats-sample.txt");
-            if(id>=0&&fs_write(id,edit_scratch,(int)length)<0)fs_delete(id);
-        }
-    }
-    const char *demo="10 PRINT \"BASIC: press a key while the picture draws\"\n20 LET A=0\n30 RECT A,A/2,8,8,A+32\n40 INKEY B\n50 IF B > 0 THEN 100\n60 WAIT 20\n70 LET A=A+2\n80 IF A < 150 THEN 30\n90 END\n100 PRINT B\n110 END\n";
-    if(fs_find_child(dir,"demo.bas")<0){int id=fs_create(dir,"demo.bas");if(id>=0)fs_write(id,demo,kstrlen(demo));}
-    const char *script="pwd\nls /\necho Scripts run one command per line.\ndf\n";
-    if(fs_find_child(dir,"demo.sh")<0){int id=fs_create(dir,"demo.sh");if(id>=0)fs_write(id,script,kstrlen(script));}
-}
-
 static void render_scene(void) {
                 int isel = icon_sel;
                 if (fm_drag_active && icon_hit(ICON_DESK_TRASH, mouse_x, mouse_y))
@@ -7994,25 +7742,6 @@ static void render_desktop_frame(void) {
         }else kmemcpy(fb,(void *)DRAG_CACHE,fb_w*fb_h);
         draw_one_window(&wins[dragging_win],0);context_set(win_front());
     }else {drag_cached=-1;render_scene();}
-}
-
-/* ---------- kmain ---------- */
-
-/* Device polling never dispatches app work or filesystem mutations. */
-static enum FsSyncProgress storage_poll(void) {
-    native_sync_tick();
-    const char *before = fs_storage_status();
-    unsigned started = timer_ticks();
-    enum FsSyncProgress progress = FS_SYNC_IDLE;
-    for (unsigned unit = 0; unit < 256; unit++) {
-        progress = fs_sync_step();
-        if (progress == FS_SYNC_IDLE || progress == FS_SYNC_FINISHED || timer_ticks() != started) break;
-        platform_poll();
-        if (timer_ticks() != started) break;
-    }
-    native_sync_tick();
-    if (before != fs_storage_status()) dirty = 1;
-    return progress;
 }
 
 /* Partial repaint and canvas-only occlusion both need unchanged composition.
@@ -8432,37 +8161,19 @@ static int desktop_program_key(void) {
     return result;
 }
 
-void kmain(void) {
-    kprint_debug("Kernel started\nBuild " BASEOS_BUILD_LABEL "\n");
-    platform_validate_memory();
+/* ---------- Shell contract (kernel/shell.h) ---------- */
+
+static uint32_t last_blink, last_clock, last_session;
+
+/* Storage is mounted and input is not live yet. display_load may change the
+ * video mode, so the kernel sizes the pointer after this returns. */
+static void desktop_prepare(void) {
+    icon_palette_install();
     kmemset(window_state, 0, sizeof(WindowState) * MAX_WIN);
-    disk_configure(((const BootInfo *)BOOTINFO_ADDR)->sectors_per_track);
     poll_time();
-
-    video_init();
-    if (physmem_init() != PHYS_OK)
-        panic("owned-page metadata/map initialization failed");
-    PhysmemStats pages;
-    if (physmem_stats(&pages) != PHYS_OK)
-        panic("owned-page accounting unavailable");
-    kprint_debug("Owned pages total="); kprint_uint(pages.total);
-    kprint_debug(" allocated="); kprint_uint(pages.allocated);
-    kprint_debug(" high_water="); kprint_uint(pages.high_water); serial_write('\n');
-    audio_init();
-    net_init();
-
-    fs_init();
-    int mounted = fs_load_disk();
-    audio_configure_source_workspace(fs_large_profile(), fs_large_arenas_available());
-    if (mounted == 0)
-        kprint_debug("FS loaded from disk\n");
-    else if (mounted == FS_LOAD_BLANK)
-        kprint_debug("FS seeded fresh\n");
-    else
-        kprint_debug("FS load failed; disk protected, session is RAM-only\n");
     trash_id = fs_find_child(fs_root(), "trash");
     prefs_id = fs_find_child(fs_root(), "prefs");
-    install_examples();
+    provision_system_files(edit_scratch, EDIT_BUF_SIZE);
     theme_load();
     saver_load();
     display_load();
@@ -8470,165 +8181,151 @@ void kmain(void) {
     term_reset();
     term_set_program_input(desktop_program_input);
     term_set_native_launch(terminal_native_launch);
-    kprint_debug("FS ready\n");
+    term_set_program_io(program_key, program_present);
 
     menu_bar_init();
     icons_init();
     mouse_x = fb_w / 2;
     mouse_y = fb_h / 2;
+}
 
-    input_init(&device_input, fb_w, fb_h, mouse_x, mouse_y);
-    mouse_init();
-    if (mouse_ok)
-        kprint_debug("Mouse ready\n");
-    else
-        kprint_debug("Mouse init failed\n");
-
-    drain_8042();
-
-    input_ready=1;
-    if(mouse_ok){
-        const NativeUiHooks native_hooks={native_host_snapshot,native_host_acquired,native_host_focus};
-        native_ui_init(&native_hooks);
-    }
+static void desktop_start(void) {
+    if(kernel_pointer_ready()){const NativeUiHooks native_hooks={native_host_snapshot,native_host_acquired,native_host_focus};native_ui_init(&native_hooks);}
     boot_splash();
     session_restore();
 #ifdef FEATURE_TEST
     extern void feature_test(void);feature_test();
 #endif
     last_input_frame = frame_count;
+    last_session = frame_count;
+}
 
-    uint32_t last_blink = 0;
-    uint32_t last_clock = 0;
-    uint32_t last_session = frame_count;
+/* One cooperative frame. The kernel has already pumped storage and devices. */
+static int desktop_turn(void) {
+    if (kernel_events_take(KERNEL_EVENT_STORAGE)) dirty = 1;
+    document_persistence_poll();
+    preferences_tick();
+    if(todo_tick()&&find_open_kind(WK_TODO)>=0)dirty=1;
+    if(cal_agenda_tick()&&find_open_kind(WK_CAL)>=0)dirty=1;
+    poll_time();
+    if(kernel_events_take(KERNEL_EVENT_DOWNLOADS)){
+        int original=context_slot;
+        for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&wins[i].kind==WK_FILES){context_set(i);fm_refresh();}
+        context_set(original);dirty=1;
+    }
+    if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
+    if(writer_tick()&&find_open_kind(WK_WRITER)>=0)dirty=1;
+    if(spreadsheet_tick()&&find_open_kind(WK_SPREADSHEET)>=0)dirty=1;
+    int player_update=player_tick();
+    int player_slot=find_open_kind(WK_PLAYER);
+    if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
+    TermTaskUpdate term_update=app_view_poll_update();
+    native_window_complete(term_update);
+    /* Publication/clear changes become visible to input before the next
+     * routed sample, including when rendering is occluded or deferred. */
+    native_ui_refresh(timer_ticks(),device_input.buttons);
+    if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
+    context_set(win_front());
+    drain_8042();
 
-    while (1) {
-        storage_poll();
-        document_persistence_poll();
-        preferences_tick();
-        if(todo_tick()&&find_open_kind(WK_TODO)>=0)dirty=1;
-        if(cal_agenda_tick()&&find_open_kind(WK_CAL)>=0)dirty=1;
-        poll_time();
-        audio_poll();
-        net_poll();
-        if(download_tick()){
-            int original=context_slot;
-            for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&wins[i].kind==WK_FILES){context_set(i);fm_refresh();}
-            context_set(original);dirty=1;
-        }
-        if(browser_tick()&&find_open_kind(WK_BROWSER)>=0)dirty=1;
-        if(writer_tick()&&find_open_kind(WK_WRITER)>=0)dirty=1;
-        if(spreadsheet_tick()&&find_open_kind(WK_SPREADSHEET)>=0)dirty=1;
-        int player_update=player_tick();
-        int player_slot=find_open_kind(WK_PLAYER);
-        if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
-        TermTaskUpdate term_update=app_view_poll_update();
-        native_window_complete(term_update);
-        /* Publication/clear changes become visible to input before the next
-         * routed sample, including when rendering is occluded or deferred. */
-        native_ui_refresh(timer_ticks(),device_input.buttons);
-        if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
-        context_set(win_front());
-        drain_8042();
+    unsigned input_count = desktop_input_turn();
+    if (saver_on) {
+        if(fs_needs_sync())fs_autosync();
+        saver_frame();
+        return 1;
+    }
+    if (!input_count && saver_enabled && !display_pending &&
+        video_status()->state!=VIDEO_PLAYING && video_status()->state!=VIDEO_LOADING &&
+        frame_count-last_input_frame>SAVER_DELAY && !open_dlg && !name_dlg && !edit_close_dlg) {
+        saver_start();
+    }
 
-        unsigned input_count = desktop_input_turn();
-        if (saver_on) {
-            if(fs_needs_sync())fs_autosync();
-            saver_frame();
-            continue;
-        }
-        if (!input_count && saver_enabled && !display_pending &&
-            video_status()->state!=VIDEO_PLAYING && video_status()->state!=VIDEO_LOADING &&
-            frame_count-last_input_frame>SAVER_DELAY && !open_dlg && !name_dlg && !edit_close_dlg) {
-            saver_start();
-        }
-
-        /* Flush changed files once the mouse is up, so a save or a drag
-         * lands on the floppy without waiting for Shutdown. */
-        if (!mouse_left && !fm_renaming && fs_needs_sync()) {
-            const char *before = fs_storage_status();
-            fs_autosync();
-            if (before != fs_storage_status()) dirty = 1;
-        }
-        snake_tick();
-        if (find_open_kind(WK_BREAKOUT) >= 0 && !wins[find_open_kind(WK_BREAKOUT)].min) {
-            static uint32_t bo_last = 0;
-            if (frame_count != bo_last) {
-                bo_last = frame_count;
-                bo_tick();
-                dirty = 1;
-            }
-        }
-        if (name_dlg) {
-            static uint32_t nb = 0;
-            uint32_t b = frame_count / 35;
-            if (b != nb) { nb = b; dirty = 1; }
-        }
-        if (launcher_on || find_open_kind(WK_CLOCK) >= 0) {
-            static uint32_t blink_last = 0;
-            uint32_t b = frame_count / 35;
-            if (b != blink_last) {
-                blink_last = b;
-                dirty = 1;
-            }
-        }
-        if ((front_kind() == WK_EDIT && !open_dlg && edit_sel_a == edit_sel_b) ||
-            fm_renaming) {
-            uint32_t b = frame_count / 35;
-            if (b != last_blink) {
-                last_blink = b;
-                dirty = 1;
-            }
-        }
-
-        uint32_t ck = frame_count / 70;
-        if (ck != last_clock) {
-            last_clock = ck;
+    /* Flush changed files once the mouse is up, so a save or a drag
+     * lands on the floppy without waiting for Shutdown. */
+    if (!mouse_left && !fm_renaming && fs_needs_sync()) {
+        const char *before = fs_storage_status();
+        fs_autosync();
+        if (before != fs_storage_status()) dirty = 1;
+    }
+    snake_tick();
+    if (find_open_kind(WK_BREAKOUT) >= 0 && !wins[find_open_kind(WK_BREAKOUT)].min) {
+        static uint32_t bo_last = 0;
+        if (frame_count != bo_last) {
+            bo_last = frame_count;
+            bo_tick();
             dirty = 1;
         }
-
-        if(!fs_sync_busy()&&!display_pending&&frame_count-last_session>=5*TIMER_HZ&&frame_count-last_input_frame>=TIMER_HZ&&!mouse_left&&!name_dlg&&!edit_close_dlg&&!open_dlg){session_save();last_session=frame_count;}
-        if(drag_cached>=0 && dragging_win<0)dirty=1;
-        if(mouse_moved&&dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
-        int moved = mouse_moved;
-        mouse_moved = 0;
-        int term_action=term_task_render_action(term_update);
-        if(term_action==TERM_RENDER_FULL)dirty=1;
-        int playback_update=player_update==PLAYER_VIDEO_FRAME||player_update==PLAYER_AUDIO_PROGRESS;
-        int playback_only=playback_update&&partial_client_ready(player_slot);
-        if(playback_update&&player_slot>=0&&!wins[player_slot].min&&!playback_only)dirty=1;
-        int canvas_only=term_action==TERM_RENDER_CANVAS&&!dirty;
-        if (dirty || playback_only || canvas_only || moved || !cursor_on) {
-            int ox = cursor_sx, oy = cursor_sy, oon = cursor_on;
-            cursor_restore();
-            if (dirty || playback_only || canvas_only) {
-                if(dirty){
-                    render_desktop_frame();
-                    draw_display_confirmation();
-                }else if(canvas_only){
-                    Win *w=&wins[term_update.slot];
-                    context_set(term_update.slot);
-                    draw_term_canvas(w->x,w->y,w->w,w->h);
-                }else{
-                    Win *w=&wins[player_slot];
-                    context_set(player_slot);
-                    if(player_update==PLAYER_AUDIO_PROGRESS)
-                        player_draw_audio_progress(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
-                    else player_draw_playback(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
-                }
-                redraw_count++;
-                dirty = 0;
-                cursor_save_draw();
-                gfx_present();
-                if(redraw_count==1)platform_log("DESKTOP-READY\n");
-            } else {
-                cursor_save_draw();
-                if (oon)
-                    flip_rect(ox, oy, CURSOR_W, CURSOR_H);
-                flip_rect(cursor_sx, cursor_sy, CURSOR_W, CURSOR_H);
-            }
-        }
-        /* ATA uses polling, not IRQ14: do not sleep once per sector wait. */
-        if(!fs_sync_busy()&&!dirty&&!mouse_left&&!mouse_moved&&!input_pending(&device_input))__asm__ volatile("hlt");
     }
+    if (name_dlg) {
+        static uint32_t nb = 0;
+        uint32_t b = frame_count / 35;
+        if (b != nb) { nb = b; dirty = 1; }
+    }
+    if (launcher_on || find_open_kind(WK_CLOCK) >= 0) {
+        static uint32_t blink_last = 0;
+        uint32_t b = frame_count / 35;
+        if (b != blink_last) {
+            blink_last = b;
+            dirty = 1;
+        }
+    }
+    if ((front_kind() == WK_EDIT && !open_dlg && edit_sel_a == edit_sel_b) ||
+        fm_renaming) {
+        uint32_t b = frame_count / 35;
+        if (b != last_blink) {
+            last_blink = b;
+            dirty = 1;
+        }
+    }
+
+    uint32_t ck = frame_count / 70;
+    if (ck != last_clock) {
+        last_clock = ck;
+        dirty = 1;
+    }
+
+    if(!fs_sync_busy()&&!display_pending&&frame_count-last_session>=5*TIMER_HZ&&frame_count-last_input_frame>=TIMER_HZ&&!mouse_left&&!name_dlg&&!edit_close_dlg&&!open_dlg){session_save();last_session=frame_count;}
+    if(drag_cached>=0 && dragging_win<0)dirty=1;
+    if(mouse_moved&&dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
+    int moved = mouse_moved;
+    mouse_moved = 0;
+    int term_action=term_task_render_action(term_update);
+    if(term_action==TERM_RENDER_FULL)dirty=1;
+    int playback_update=player_update==PLAYER_VIDEO_FRAME||player_update==PLAYER_AUDIO_PROGRESS;
+    int playback_only=playback_update&&partial_client_ready(player_slot);
+    if(playback_update&&player_slot>=0&&!wins[player_slot].min&&!playback_only)dirty=1;
+    int canvas_only=term_action==TERM_RENDER_CANVAS&&!dirty;
+    if (dirty || playback_only || canvas_only || moved || !cursor_on) {
+        int ox = cursor_sx, oy = cursor_sy, oon = cursor_on;
+        cursor_restore();
+        if (dirty || playback_only || canvas_only) {
+            if(dirty){
+                render_desktop_frame();
+                draw_display_confirmation();
+            }else if(canvas_only){
+                Win *w=&wins[term_update.slot];
+                context_set(term_update.slot);
+                draw_term_canvas(w->x,w->y,w->w,w->h);
+            }else{
+                Win *w=&wins[player_slot];
+                context_set(player_slot);
+                if(player_update==PLAYER_AUDIO_PROGRESS)
+                    player_draw_audio_progress(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
+                else player_draw_playback(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
+            }
+            redraw_count++;
+            dirty = 0;
+            cursor_save_draw();
+            gfx_present();
+            if(redraw_count==1)platform_log("DESKTOP-READY\n");
+        } else {
+            cursor_save_draw();
+            if (oon)
+                flip_rect(ox, oy, CURSOR_W, CURSOR_H);
+            flip_rect(cursor_sx, cursor_sy, CURSOR_W, CURSOR_H);
+        }
+    }
+    return dirty||mouse_left||mouse_moved;
 }
+
+const Shell baseos_shell = {"desktop", desktop_prepare, desktop_start, desktop_turn};

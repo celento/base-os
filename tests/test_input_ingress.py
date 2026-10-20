@@ -24,7 +24,7 @@ class InputIngressTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='baseos-desktop-input-') as temporary:
             directory = Path(temporary)
             start = source.index('/* Desktop-only compatibility adapter')
-            end = source.index('void kmain(void)', start)
+            end = source.index('/* ---------- Shell contract (kernel/shell.h)', start)
             functions = function(source, 'input_gesture_ticks') + function(source, 'double_click')
             functions += function(source, 'win_resize_tick') + function(source, 'saver_start')
             (directory / 'desktop_input_kernel.inc').write_text(functions + source[start:end])

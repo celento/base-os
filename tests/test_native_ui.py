@@ -26,7 +26,7 @@ class NativeUiTests(unittest.TestCase):
                 'native_canvas_geometry','native_host_snapshot','native_host_acquired','native_host_focus','desktop_native_pointer')
             code=''.join(function(source,name) for name in names)
             start=source.index('/* Desktop-only compatibility adapter')
-            code+=source[start:source.index('void kmain(void)',start)]
+            code+=source[start:source.index('/* ---------- Shell contract (kernel/shell.h)',start)]
             (directory/'desktop_input_kernel.inc').write_text(code)
             output=directory/'desktop-ui'
             subprocess.run([shutil.which('clang') or 'cc','-std=gnu11','-O1','-g',

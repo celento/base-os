@@ -139,7 +139,7 @@ void feature_test(void){
              native_file_info(second,second_file,&info)==BOS_OK&&native_sync_poll(second,second_op)==BOS_PENDING,
              "PM stopped owner cleanup damaged survivor");
     began=timer_ticks();while(native_sync_poll(second,second_op)==BOS_PENDING){
-        pm_check(timer_ticks()-began<120*TIMER_HZ,"PM shared save deadline");storage_poll();platform_poll();
+        pm_check(timer_ticks()-began<120*TIMER_HZ,"PM shared save deadline");kernel_storage_poll();platform_poll();
     }
     pm_check(native_sync_poll(second,second_op)==BOS_OK,"PM surviving save did not complete");
     pm_report_until(1,4,pm_reports[1][4]+2);

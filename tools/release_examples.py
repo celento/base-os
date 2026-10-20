@@ -49,7 +49,7 @@ def require_pointer_service(source):
         'BOS_FEATURE_OWNED_NATIVE_WINDOW:BOS_FEATURE_HOSTED_UI;}',
     )
     required = {
-        'src/shell/desktop/desktop.c': ('if(mouse_ok){const NativeUiHooks native_hooks={native_host_snapshot,native_host_acquired,native_host_focus};native_ui_init(&native_hooks);}',),
+        'src/shell/desktop/desktop.c': ('if(kernel_pointer_ready()){const NativeUiHooks native_hooks={native_host_snapshot,native_host_acquired,native_host_focus};native_ui_init(&native_hooks);}',),
         'src/kernel/process.c': (
             'if(!current_task||!current_task->bound||!native_ui_available())return BOS_E_UNSUPPORTED;',
             'else if(call==BOS_CALL_UI)r[7]=(unsigned)native_ui_call(r,a,b,c,d,e);'),

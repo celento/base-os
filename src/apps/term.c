@@ -175,6 +175,14 @@ TermTaskUpdate term_task_poll_update(void){return app_view_poll_update();}
 int term_task_poll(void){return app_view_poll();}
 static void (*program_input_hook)(int active);
 void term_set_program_input(void (*hook)(int active)) { program_input_hook=hook; }
+static int no_program_key(void) { return 0; }
+static void no_program_present(void) {}
+static int (*program_key_hook)(void)=no_program_key;
+static void (*program_present_hook)(void)=no_program_present;
+void term_set_program_io(int (*key)(void),void (*present)(void)) {
+    program_key_hook=key?key:no_program_key;
+    program_present_hook=present?present:no_program_present;
+}
 static int execute(const char *,int,int *);
 /* Unlike the legacy one-argument commands, mv must consume two complete
  * operands before resolving either path. Do not accept quoted-prefix suffixes,
@@ -338,7 +346,7 @@ static int execute(const char *s,int depth,int *budget){
         if(!kstrcmp(cmd,"exec")&&fs_size(id)>=4&&image[0]=='B'&&image[1]=='E'&&image[2]=='X'&&image[3]=='2'){
             push("Legacy exec supports BEX1 only; use start for this program.");return -1;
         }
-        ProgramIO io={push,plot,program_key,program_present,canvas_resize,canvas_rect};app_view_canvas_unbuffered(selected);canvas_reset();
+        ProgramIO io={push,plot,program_key_hook,program_present_hook,canvas_resize,canvas_rect};app_view_canvas_unbuffered(selected);canvas_reset();
         if(program_input_hook)program_input_hook(1);
         int rc=!kstrcmp(cmd,"basic")?basic_run(fs_data(id),fs_size(id),&io):process_run(fs_data(id),fs_size(id),&io);
         if(program_input_hook)program_input_hook(0);
