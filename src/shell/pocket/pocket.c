@@ -493,11 +493,16 @@ static int pocket_turn(void) {
     }
     last_tick = now;
     unsigned second = now / TIMER_HZ;
-    if (current == APP_CLOCK && second != last_second) dirty = 1;
+    if (second != last_second) {
+        /* The status bar shows wall-clock minutes, so follow the RTC rather
+         * than minutes since boot. */
+        RtcTime wall;
+        rtc_read(&wall);
+        unsigned minute = (unsigned)(wall.hour * 60 + wall.min);
+        if (current == APP_CLOCK || minute != last_minute) dirty = 1;
+        last_minute = minute;
+    }
     last_second = second;
-    unsigned minute = second / 60;
-    if (minute != last_minute) dirty = 1;
-    last_minute = minute;
     if (dirty) {
         present_scene();
     } else if (moved) {
@@ -510,7 +515,9 @@ static int pocket_turn(void) {
     /* Start saving only after the frame is on screen; a floppy snapshot can
      * hold the CPU for a moment. */
     if (!pointer_down && fs_needs_sync()) fs_autosync();
-    return dirty || current == APP_BREAKOUT;
+    /* Breakout advances once per timer tick; the tick's interrupt wakes the
+     * kernel from hlt, so idle here instead of spinning. */
+    return dirty;
 }
 
 const Shell baseos_shell = {"pocket", pocket_prepare, pocket_start, pocket_turn};
