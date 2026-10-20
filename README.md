@@ -200,7 +200,10 @@ The compositor caches the background during window drags and uploads changed scr
 
 | Directory | Contents |
 | --- | --- |
-| `src/` | Bootloader, kernel, graphics, filesystem, apps, and interpreters |
+| `src/kernel/`, `src/lib/` | Bootloader, kernel services, filesystem, drivers, codecs, and interpreters |
+| `src/ui/` | Shared icon art, theme tokens, and toolbar helpers |
+| `src/apps/` | App components, independent of any windowing |
+| `src/shell/` | Shells: `desktop` (the default) and `pocket` (a phone-style shell) |
 | `tests/` | Host and QEMU regression fixtures |
 | `tools/` | Disk tools, font generation, test runners, and screenshot capture |
 | `examples/`, `sdk/` | Native assembly and C examples, application SDK |
@@ -208,6 +211,8 @@ The compositor caches the background during window drags and uploads changed scr
 | `screenshots/gallery/` | The README screenshots |
 | `docs/` | Technical reference |
 | `build/` | Generated binaries and persistent disk image, ignored by Git |
+
+The kernel and the user interface are separate layers. The desktop is one shell; `make pocket` builds the same kernel and apps with a phone-style shell instead (`make run-pocket` to try it). See [the architecture guide](docs/ARCHITECTURE.md) for the layers, the shell contract, and how to add a shell.
 
 To regenerate the gallery, run `python3 tools/gallery.py build`. It links a documentation-only fixture that supplies sample app content, then captures the real guest through QEMU. It never boots or modifies your saved disk image.
 
