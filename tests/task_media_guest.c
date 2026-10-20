@@ -1,6 +1,7 @@
 /* Real network/audio work between independent native desktop task slices. */
 #define FEATURE_TEST
 #include "../src/shell/desktop/desktop.c"
+#include "sdk_examples.h"
 #include "../src/apps/browser.h"
 #include "media_fixture.h"
 #include "task_media_examples.h"

@@ -3,8 +3,8 @@
 #include "kernel/fs.h"
 #include "kernel/net.h"
 
-/* One background transfer, independent of any Terminal window. The desktop
- * calls download_tick immediately after net_poll, outside borrowed fs_data
+/* One background transfer, independent of any Terminal window. The kernel
+ * calls download_tick in kernel_services_poll right after net_poll, outside borrowed fs_data
  * lifetimes and before another app can replace the shared HTTP result.
  * No download function waits for network or disk I/O. DOWNLOAD_ACTIVE also
  * includes a validated complete body waiting for fs_sync_busy() to clear:

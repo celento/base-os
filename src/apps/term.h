@@ -42,6 +42,9 @@ void term_input_lost(int slot);
 void term_enter(void);
 /* Desktop input ownership around synchronous BASIC/exec only. */
 void term_set_program_input(void (*hook)(int active));
+/* Host keyboard and present callbacks for synchronous BASIC/exec. Without a
+ * host, programs read no keys and presenting does nothing. */
+void term_set_program_io(int (*key)(void),void (*present)(void));
 /* Fixed desktop dispatcher, called only for an explicit shell start command.
  * It may launch an owned window without rebinding/resetting this Terminal. */
 void term_set_native_launch(int (*hook)(int slot,int file,unsigned identity,

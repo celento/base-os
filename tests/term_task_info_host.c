@@ -39,8 +39,6 @@ static void fixture_set_state(FixtureProcess *p,int state){
     p->state=state;if(p->slot>=0)states[p->slot]=state;
 }
 int basic_run(const char *s,int n,const ProgramIO *io){(void)s;(void)n;(void)io;return 0;}
-int program_key(void){return 0;}
-void program_present(void){}
 int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;exec_calls++;return exec_result;}
 int process_create(const void *file,unsigned bytes,const char *argument,unsigned length,ProcessHandle *out){
     assert(file&&bytes>=16&&out);

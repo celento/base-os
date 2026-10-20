@@ -184,7 +184,7 @@ void feature_test(void){
     as_check(native_file_info(first,first_file,&info)==BOS_E_STALE&&native_sync_poll(first,first_op)==BOS_E_STALE&&
              native_file_info(second,second_file,&info)==BOS_OK&&native_sync_poll(second,second_op)==BOS_PENDING,"AS close kept survivor");
     began=timer_ticks();while(native_sync_poll(second,second_op)==BOS_PENDING){
-        as_check(timer_ticks()-began<120*TIMER_HZ,"AS durable save deadline");storage_poll();platform_poll();
+        as_check(timer_ticks()-began<120*TIMER_HZ,"AS durable save deadline");kernel_storage_poll();platform_poll();
     }
     as_check(native_sync_poll(second,second_op)==BOS_OK,"AS surviving receipt durable");as_until(1,14,as_reports[1][14]+2);
     ProcessHandle replacement=as_launch(5,app,1);as_until(5,2,1);

@@ -2,10 +2,11 @@
 #define TOOLBAR_H
 /* Shared toolbar controls: icon buttons with optional labels, in the app
  * theme tokens. Header-only so app modules and their host tests need no new
- * sources; icon_draw() lives in gfx.c. */
+ * sources beyond ui/icons.c, which draws the icons. */
 #include "kernel/gfx.h"
 #include "ui/app.h"
 #include "ui/icons.h"
+#include "ui/icon_draw.h"
 
 enum { TB_NORMAL, TB_ACTIVE, TB_DISABLED, TB_PRIMARY, TB_FLAT };
 

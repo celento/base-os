@@ -12,6 +12,7 @@ static unsigned char presented[FB_CAPACITY];
 #define PRESENT_BASE ((uintptr_t)presented)
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
+#include "../src/ui/icons.c"
 #include "../src/apps/calendar_agenda.c"
 #include "../src/apps/calendar.c"
 

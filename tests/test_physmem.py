@@ -63,7 +63,7 @@ unsigned char measured_table_bytes[sizeof(NativeTask) * PROCESS_TASKS];
                   'table end:', hex(0x3000000 + measured['measured_table_bytes']))
 
     def test_late_initialization_order(self):
-        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
+        source = (ROOT / 'src/kernel/kernel.c').read_text()
         main = source[source.index('void kmain(void)'):]
         self.assertLess(main.index('platform_validate_memory();'), main.index('video_init();'))
         self.assertLess(main.index('video_init();'), main.index('physmem_init()'))

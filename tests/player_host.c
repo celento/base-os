@@ -12,6 +12,7 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define PRESENT_BASE ((uintptr_t)test_mirror)
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
+#include "../src/ui/icons.c"
 
 static char names[FS_MAX_NODES][FS_NAME_LEN];
 static unsigned generations[FS_MAX_NODES];

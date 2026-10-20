@@ -138,7 +138,7 @@ static void lm_counter_save(unsigned wanted){
         as_check(timer_ticks()-began<120*TIMER_HZ,"LM frozen save deadline");as_step(3);
         int id=as_file("/Documents/counter-4.txt");
         if(id>=0&&fs_size(id)==3&&fs_data(id)[0]==(char)('0'+wanted/10)&&fs_data(id)[1]=='0'&&fs_data(id)[2]=='\n')break;
-        storage_poll();platform_poll();
+        kernel_storage_poll();platform_poll();
     }
     as_check(!fs_sync(),"LM frozen save durable");
 }
