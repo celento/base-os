@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "physmem.h"
+#include "kernel/physmem.h"
 
 char __kernel_end[1];
 void panic(const char *message) { fprintf(stderr, "%s\n", message); abort(); }

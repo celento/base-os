@@ -2,9 +2,9 @@
  * objects and public client output; it is separate from PS/2 desktop evidence.
  * kernel.c is found through the supplied, provenance-checked runtime source. */
 #define FEATURE_TEST
-#include "kernel.c"
-#include "native_files.h"
-#include "native_sync.h"
+#include "shell/desktop/desktop.c"
+#include "kernel/native_files.h"
+#include "kernel/native_sync.h"
 #define PM_BYTES 24576u
 static ProcessHandle pm_handles[PROCESS_TASKS];
 static unsigned pm_reports[PROCESS_TASKS][8],pm_generations[PROCESS_TASKS];

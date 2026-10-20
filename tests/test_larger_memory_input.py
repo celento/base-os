@@ -26,7 +26,7 @@ class LargerMemoryInputTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix='larger-memory-host-')
         cls.directory = Path(cls.temp.name)
-        cls.font = gate.desktop.VisibleText(ROOT / 'src/font.h')
+        cls.font = gate.desktop.VisibleText(ROOT / 'src/kernel/font.h')
         cls.binaries = {}
         for variant in (1, 2):
             wrapper = cls.directory / f'variant-{variant}.c'

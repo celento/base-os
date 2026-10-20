@@ -3,9 +3,9 @@
  * Modes: 1 large binary roundtrip, 2 v3 migration, 3 floppy, 4 protected IDE,
  *        5 full-capacity save/restart/reclaim/refill.
  */
-#include "platform.h"
-#include "persist.h"
-#include "fs.h"
+#include "kernel/platform.h"
+#include "kernel/persist.h"
+#include "kernel/fs.h"
 
 #ifndef DATA_VOLUME_MODE
 #define DATA_VOLUME_MODE 1

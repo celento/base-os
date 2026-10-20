@@ -5,10 +5,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "program.h"
-#include "platform.h"
-#include "audio.h"
-#include "fs.h"
+#include "kernel/program.h"
+#include "kernel/platform.h"
+#include "kernel/audio.h"
+#include "kernel/fs.h"
 static void released(unsigned owner);
 #define NATIVE_OWNER_RELEASE_HOOK(owner) released(owner)
 #include "native_platform_service_stubs.h"

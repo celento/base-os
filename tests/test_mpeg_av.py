@@ -37,7 +37,7 @@ class MpegAvTests(unittest.TestCase):
                         '-Werror', '-fsanitize=address,undefined', '-DVIDEO_HOST_TEST',
                         '-DMEDIA_MP3_HOST_TEST',
                         '-I', str(ROOT / 'src'), str(ROOT / 'tests/mpeg_av_host.c'),
-                        str(ROOT / 'src/video.c'), str(ROOT / 'src/media_mp3.c'),
+                        str(ROOT / 'src/lib/video.c'), str(ROOT / 'src/lib/media_mp3.c'),
                         '-lm', '-o', str(cls.executable)],
                        check=True)
         cls.environment = dict(os.environ)

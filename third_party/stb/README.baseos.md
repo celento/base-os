@@ -25,7 +25,7 @@ SHA-256 of the resulting vendored header:
 stb offers an MIT or public-domain dual license. BaseOS uses the MIT option.
 The copyright and complete license are preserved in both upstream files.
 
-`src/image_decode.c` enables JPEG, PNG, BMP, and the first GIF frame. HDR,
+`src/lib/image_decode.c` enables JPEG, PNG, BMP, and the first GIF frame. HDR,
 linear floating-point conversion, SIMD, stdio, and thread-local storage are
 disabled. JPEG's scalar IDCT and color conversion are integer-only. The wrapper
 and decoder are compiled with the same `-msoft-float` options as the kernel and

@@ -67,7 +67,7 @@ def prepare(build, work):
     runtime = build.parent
     # The application is built through this checkout's SDK, so establish it is
     # byte-identical to the supplied production build, independently of HEAD.
-    for name in ('sdk/baseos.h', 'sdk/baseos_abi.h', 'sdk/start.c', 'sdk/app.ld', 'src/layout.h'):
+    for name in ('sdk/baseos.h', 'sdk/baseos_abi.h', 'sdk/start.c', 'sdk/app.ld', 'src/kernel/layout.h'):
         assert (ROOT / name).read_bytes() == (runtime / name).read_bytes(), name
     files, frozen = freeze(work)
     guest = ROOT / 'tests/process_memory_guest.c'
@@ -75,11 +75,11 @@ def prepare(build, work):
                     '-ffreestanding', '-m32', '-fno-pie', '-fno-pic',
                     '-fno-stack-protector', '-fno-builtin', '-mno-sse', '-mno-mmx',
                     '-msoft-float', '-I', str(runtime), '-I', str(runtime / 'src'),
-                    '-I', str(build), '-c', str(guest), '-o', str(work / 'kernel.o')], check=True)
-    objects = [p for p in sorted(build.glob('*.o')) if p.name != 'kernel.o']
+                    '-I', str(build), '-c', str(guest), '-o', str(work / 'desktop.o')], check=True)
+    objects = [p for p in sorted(build.glob('*.o')) if p.name != 'desktop.o']
     subprocess.run([tool('ld'), '-T', str(build / 'linker.ld'), '-nostdlib', '-m',
                     'elf_i386', '-z', 'noexecstack', '-o', str(work / 'kernel.elf'),
-                    str(work / 'kernel.o'), *map(str, objects)], check=True)
+                    str(work / 'desktop.o'), *map(str, objects)], check=True)
     subprocess.run([tool('objcopy'), '-O', 'binary', str(work / 'kernel.elf'),
                     str(work / 'kernel.bin')], check=True)
     c = constants();image = bytearray(c['DISK_SECTORS'] * 512)
@@ -91,9 +91,9 @@ def prepare(build, work):
                     fixture_sources={str(p.relative_to(ROOT)):sha(p) for p in
                                      (guest, ROOT / 'tests/process_memory_app.c', Path(__file__))},
                     fixture_artifacts={name:sha(work / name) for name in
-                                       ('kernel.o', 'kernel.elf', 'kernel.bin', 'boot.img', 'process-memory.bex')},
+                                       ('desktop.o', 'kernel.elf', 'kernel.bin', 'boot.img', 'process-memory.bex')},
                     production_object_sha256={p.name:sha(p) for p in objects},
-                    fixture_runtime_kernel_source_sha256=sha(runtime / 'src/kernel.c'))
+                    fixture_runtime_kernel_source_sha256=sha(runtime / 'src/shell/desktop/desktop.c'))
     return files, identity
 
 

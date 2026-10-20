@@ -23,7 +23,7 @@ class NativeLaunchTests(unittest.TestCase):
                        env=dict(os.environ, ASAN_OPTIONS='detect_leaks=0', UBSAN_OPTIONS='halt_on_error=1'))
 
     def test_desktop_file_dispatch_and_owned_start(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-native-launch-host-') as tmp:
             directory = Path(tmp)
             start = source.index('typedef struct {\n    char name[FS_NAME_LEN]; /* A result owns')
@@ -38,15 +38,15 @@ class NativeLaunchTests(unittest.TestCase):
                      'str_has', 'launcher_refresh', 'launcher_close', 'launcher_run')
             (directory / 'native_launch_ops.inc').write_text(''.join(function(source, name) for name in names))
             self.compile_run('native_launch_host', directory,
-                             [ROOT / 'tests/net_stub.c', ROOT / 'src/download.c', ROOT / 'src/file_view.c', '-DDOWNLOAD_HOST_TEST'])
+                             [ROOT / 'tests/net_stub.c', ROOT / 'src/kernel/download.c', ROOT / 'src/apps/file_view.c', '-DDOWNLOAD_HOST_TEST'])
 
     def test_example_save_feedback(self):
         with tempfile.TemporaryDirectory(prefix='baseos-native-save-host-') as tmp:
             self.compile_run('native_save_host', Path(tmp))
 
     def test_owned_window_factory_transaction(self):
-        source = (ROOT / 'src/kernel.c').read_text()
-        process = (ROOT / 'src/process.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
+        process = (ROOT / 'src/kernel/process.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-window-factory-') as tmp:
             directory = Path(tmp)
             declarations = source[source.index('enum { NATIVE_LAUNCH_WINDOW='):
@@ -60,7 +60,7 @@ class NativeLaunchTests(unittest.TestCase):
                            ('valid_image', 'image_magic', 'image_plan', 'process_probe_launch'))
             code = code.replace('static int process_probe_launch(', 'int process_probe_launch(')
             (directory / 'native_window_probe.inc').write_text(code)
-            self.compile_run('native_window_factory_host', directory, [ROOT / 'src/executable.c'])
+            self.compile_run('native_window_factory_host', directory, [ROOT / 'src/kernel/executable.c'])
 
 
 if __name__ == '__main__':

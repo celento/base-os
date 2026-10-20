@@ -119,7 +119,7 @@ class WriterCodecTests(unittest.TestCase):
         subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra',
                         '-Werror', '-fsanitize=address,undefined', '-I', str(ROOT / 'src'),
                         str(ROOT / 'tests/writer_codec_test.c'),
-                        str(ROOT / 'src/writer_codec.c'), '-o', str(executable)], check=True)
+                        str(ROOT / 'src/lib/writer_codec.c'), '-o', str(executable)], check=True)
         env = dict(os.environ)
         env.setdefault('ASAN_OPTIONS', 'detect_leaks=0')
         cls.host_result = subprocess.run([str(executable), str(cls.directory)], check=True,

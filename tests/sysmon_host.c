@@ -4,15 +4,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "layout.h"
+#include "kernel/layout.h"
 static uint8_t test_mirror[FB_CAPACITY];
 #undef PRESENT_BASE
 #define PRESENT_BASE ((uintptr_t)test_mirror)
 #define GFX_HOST_TEST
-#include "../src/gfx.c"
-#include "app.h"
-#include "sysmon.h"
-#include "program.h"
+#include "../src/kernel/gfx.c"
+#include "ui/app.h"
+#include "apps/sysmon.h"
+#include "kernel/program.h"
 void kmemset(void *d,int v,int n){memset(d,v,(size_t)n);}
 void kmemcpy(void *d,const void *s,int n){memmove(d,s,(size_t)n);}
 void fmt_uint(char *s,unsigned n){sprintf(s,"%u",n);}
@@ -44,7 +44,7 @@ static void checked_bold(const char *s,int x,int y,uint8_t c,int xmax){
 #define draw_hline checked_line
 #define draw_string_clip checked_text
 #define draw_string_bold_clip checked_bold
-#include "../src/sysmon.c"
+#include "../src/apps/sysmon.c"
 #undef draw_rect
 #undef draw_round_rect
 #undef draw_hline

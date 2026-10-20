@@ -22,7 +22,7 @@ import volume
 class AddressSpaceInputTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.font = VisibleText(ROOT / 'src/font.h')
+        cls.font = VisibleText(ROOT / 'src/kernel/font.h')
 
     def pixels(self, lines, x=27, y=39):
         pixels = np.full((390, 880, 3), 32, dtype=np.uint8)
@@ -70,7 +70,7 @@ class AddressSpaceInputTests(unittest.TestCase):
         # Use the source font's original 4-bit values, not the detector templates,
         # and independent production gray ramp/mix arithmetic.
         import re
-        source = (ROOT / 'src/font.h').read_text()
+        source = (ROOT / 'src/kernel/font.h').read_text()
         body = re.search(r'edit_font_px\[95\]\[\d+\]\s*=\s*\{(.*?)\n\};', source, re.S)[1]
         rows, cols = self.font.height, self.font.width
         packed = np.array([int(v, 16) for v in re.findall(r'0x([0-9a-fA-F]{2})', body)], dtype=np.uint8).reshape(95, rows, cols // 2)

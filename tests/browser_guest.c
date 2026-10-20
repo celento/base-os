@@ -1,9 +1,9 @@
 /* Normal browser flows over an actual QEMU RTL8139 connection. */
-#include "app.h"
-#include "browser.h"
-#include "fs.h"
-#include "net.h"
-#include "platform.h"
+#include "ui/app.h"
+#include "apps/browser.h"
+#include "kernel/fs.h"
+#include "kernel/net.h"
+#include "kernel/platform.h"
 #ifndef HTTP_PORT
 #define HTTP_PORT "18080"
 #endif

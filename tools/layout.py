@@ -5,7 +5,7 @@ import re
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def constants():
-    text = (ROOT / 'src/layout.h').read_text()
+    text = (ROOT / 'src/kernel/layout.h').read_text()
     result = {k: int(v, 0) for k, v in re.findall(
         r'^#define\s+(\w+)\s+(0x[0-9A-Fa-f]+|[0-9]+)\s*$', text, re.M)}
     validate(result)

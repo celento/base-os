@@ -1,8 +1,8 @@
 /* Dispatcher-only fixtures: deterministic service results, no device I/O. Real
  * filesystem/coordinator behavior is covered separately by their service tests. */
 #include "../sdk/baseos_abi.h"
-#include "native_files.h"
-#include "native_sync.h"
+#include "kernel/native_files.h"
+#include "kernel/native_sync.h"
 #include "native_ui_service_stubs.h"
 static unsigned stub_sync_calls,stub_file_calls,stub_release_files,stub_release_sync;
 static unsigned stub_owner,stub_handle,stub_offset,stub_length;

@@ -1,7 +1,7 @@
 /* Exact desktop dispatch with real Terminal/FS; process execution is guest-tested. */
 #define TERM_TASK_FIXTURE_ONLY
 #include "term_task_info_host.c"
-#include "file_view.h"
+#include "apps/file_view.h"
 #define MAX_WIN 8
 #define EDIT_BUF_SIZE 65536
 #define ICON_DESK_TRASH 2

@@ -4,8 +4,8 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
-#include "fs.h"
-#include "platform.h"
+#include "kernel/fs.h"
+#include "kernel/platform.h"
 
 static unsigned now, steps, polls, clock_calls, status_calls, sync_ticks;
 static unsigned step_tick_at, poll_tick_at, status_change_at, plan_length;

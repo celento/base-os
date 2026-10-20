@@ -2,8 +2,8 @@
 #define main file_view_model_main
 #include "file_view_host.c"
 #undef main
-#include "history.h"
-#include "app.h"
+#include "lib/history.h"
+#include "ui/app.h"
 #define EDIT_BUF_SIZE 65536
 #define MAX_WIN 8
 #define TITLE_H 54

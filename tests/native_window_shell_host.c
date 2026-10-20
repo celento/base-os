@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "app_view.h"
+#include "apps/app_view.h"
 #define MAX_WIN 8
 #define TITLE_H 54
 #define NATIVE_TOOLBAR_H 30

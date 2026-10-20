@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class NativePublicationProcessTests(unittest.TestCase):
     def test_production_interrupt_boundaries(self):
-        source = (ROOT / 'src/process.c').read_text()
+        source = (ROOT / 'src/kernel/process.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-native-publication-process-') as temporary:
             directory = Path(temporary)
             extract(source, directory, 'native_publication_process')
@@ -27,8 +27,8 @@ class NativePublicationProcessTests(unittest.TestCase):
                             '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-fsanitize=address,undefined',
                             '-I', str(ROOT / 'src'), '-I', str(directory),
                             str(ROOT / 'tests/native_publication_process_host.c'),
-                            str(ROOT / 'src/physmem.c'), str(ROOT / 'src/bootinfo.c'),
-                str(ROOT / 'src/executable.c'),
+                            str(ROOT / 'src/kernel/physmem.c'), str(ROOT / 'src/kernel/bootinfo.c'),
+                str(ROOT / 'src/kernel/executable.c'),
                             '-o', str(executable)], check=True)
             subprocess.run([str(executable)], check=True, env=dict(
                 os.environ, ASAN_OPTIONS='detect_leaks=0', UBSAN_OPTIONS='halt_on_error=1'))

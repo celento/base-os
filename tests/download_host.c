@@ -3,15 +3,15 @@
 #define main filesystem_fixture_main
 #include "fs_host.c"
 #undef main
-#include "net_wire.h"
+#include "kernel/net_wire.h"
 #define DOWNLOAD_HOST_TEST
-#include "../src/download.c"
+#include "../src/kernel/download.c"
 static unsigned char terminal_arena[0x100000];
 #define TERM_MEMORY ((uintptr_t)terminal_arena)
-#include "../src/app_storage.c"
-#include "../src/app_canvas.c"
-#include "../src/app_view.c"
-#include "../src/term.c"
+#include "../src/apps/app_storage.c"
+#include "../src/apps/app_canvas.c"
+#include "../src/apps/app_view.c"
+#include "../src/apps/term.c"
 #define V (views[selected])
 
 static NetHttpResult response;

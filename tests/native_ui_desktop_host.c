@@ -1,8 +1,8 @@
 /* The production WM hook + ordered adapter + endpoint core, with ordinary
  * window/Terminal fixtures instead of device hardware or guest execution. */
 #define NATIVE_UI_DESKTOP_REAL
-#include "native_ui.h"
-#include "app_view.h"
+#include "kernel/native_ui.h"
+#include "apps/app_view.h"
 #define NATIVE_TOOLBAR_H 30
 #define NATIVE_CLIENT_PAD 8
 static int fb_h=600;

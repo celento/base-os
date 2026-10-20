@@ -1,6 +1,6 @@
 /* The existing ordinary desktop/session suite, plus a 16 MiB native stream. */
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 #define BASEOS_UI_SHARED_TEST
 #define feature_test base_desktop_test
 #include "ui_guest.c"

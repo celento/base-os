@@ -17,7 +17,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class FileViewKernelTests(unittest.TestCase):
     def test_files_selection_and_input(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-files-kernel-host-') as temporary:
             directory = pathlib.Path(temporary)
             first = source.index('typedef struct {\n    char buf[EDIT_BUF_SIZE];')
@@ -56,7 +56,7 @@ class FileViewKernelTests(unittest.TestCase):
                             '-Wno-unused-function', '-fsanitize=address,undefined',
                             '-I', str(ROOT / 'src'), '-I', str(directory),
                             str(ROOT / 'tests/file_view_kernel_host.c'),
-                            str(ROOT / 'src/file_view.c'), str(ROOT / 'src/file_clipboard.c'),
+                            str(ROOT / 'src/apps/file_view.c'), str(ROOT / 'src/apps/file_clipboard.c'),
                             '-o', str(executable)], check=True)
             environment = dict(os.environ, ASAN_OPTIONS=os.environ.get('ASAN_OPTIONS', 'detect_leaks=0'),
                                UBSAN_OPTIONS='halt_on_error=1')

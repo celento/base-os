@@ -4,7 +4,7 @@ static int bounded_poll(unsigned sectors);
 #define main unused_large_fixture_main
 #include "large_volume_host.c"
 #undef main
-#include "../src/native_sync.c"
+#include "../src/kernel/native_sync.c"
 unsigned large_test_polls;
 static unsigned service_polls;
 static int bounded_poll(unsigned sectors) { assert(sectors <= 8); ++service_polls; return 0; }

@@ -1,0 +1,347 @@
+/* A small image client for the existing cooperative BaseOS window manager. */
+#include "ui/app.h"
+#include "apps/image_viewer.h"
+#include "kernel/layout.h"
+#include "kernel/platform.h"
+#include "ui/toolbar.h"
+
+/* The integration commit adds these to the shared E820-checked memory map. */
+#ifndef IMAGE_BASE
+#define IMAGE_BASE 0x1900000
+#endif
+#ifndef IMAGE_CAPACITY
+#define IMAGE_CAPACITY 0x700000
+#endif
+#define IMAGE_PIXELS_BYTES IMAGE_MAX_PIXELS
+#define TOOL_H 40
+#define FOOT_H 48
+#define PAD 10
+#define ZOOM_COUNT 10
+static const unsigned zooms[ZOOM_COUNT] = {10, 25, 50, 75, 100, 125, 150, 200, 300, 400};
+
+#ifdef IMAGE_VIEWER_HOST_TEST
+static uint8_t host_image_memory[IMAGE_CAPACITY];
+#define IMAGE_MEMORY host_image_memory
+#else
+#define IMAGE_MEMORY ((uint8_t *)IMAGE_BASE)
+#endif
+_Static_assert(IMAGE_PIXELS_BYTES < IMAGE_CAPACITY, "image workspace missing");
+
+static struct {
+    unsigned width, height, format, scale;
+    int loaded, fit, pan_x, pan_y, viewport_w, viewport_h;
+    char title[96], status[160];
+} viewer;
+
+static void copy(char *out, unsigned size, const char *text) {
+    if (!size) return;
+    unsigned n = 0;
+    if (text) while (text[n] && n + 1 < size) { out[n] = text[n]; n++; }
+    out[n] = 0;
+}
+static void append(char *out, unsigned size, const char *text) {
+    unsigned n = 0; while (n < size && out[n]) n++;
+    if (n < size) copy(out + n, size - n, text);
+}
+static void append_number(char *out, unsigned size, unsigned value) {
+    char number[12]; fmt_uint(number, value); append(out, size, number);
+}
+static unsigned minimum(unsigned a, unsigned b) { return a < b ? a : b; }
+static int clamp(int value, int low, int high) {
+    return value < low ? low : value > high ? high : value;
+}
+
+/* A fixed palette subset avoids recoloring photos when desktop theme ramps
+ * change. Cube and gray candidates are computed directly, with weighted RGB
+ * distance; no per-pixel 256-entry search is needed in the cooperative UI. */
+static uint8_t palette_color(unsigned red, unsigned green, unsigned blue) {
+    static const unsigned levels[5] = {0, 64, 128, 192, 255};
+    unsigned ri = minimum((red + 32) / 64, 4);
+    unsigned gi = minimum((green + 32) / 64, 4);
+    unsigned bi = minimum((blue + 32) / 64, 4);
+    int dr = (int)red - (int)levels[ri];
+    int dg = (int)green - (int)levels[gi];
+    int db = (int)blue - (int)levels[bi];
+    unsigned cube_distance = (unsigned)(3 * dr * dr + 4 * dg * dg + 2 * db * db);
+    unsigned gray = (3 * red + 4 * green + 2 * blue + 4) / 9;
+    unsigned gray_index = (gray * (PAL_GRAY_N - 1) + 127) / 255;
+    gray = gray_index * 255 / (PAL_GRAY_N - 1);
+    dr = (int)red - (int)gray;
+    dg = (int)green - (int)gray;
+    db = (int)blue - (int)gray;
+    unsigned gray_distance = (unsigned)(3 * dr * dr + 4 * dg * dg + 2 * db * db);
+    return (uint8_t)(gray_distance <= cube_distance ? PAL_GRAY + gray_index :
+                     PAL_CUBE + ri * 25 + gi * 5 + bi);
+}
+
+/* Serpentine error diffusion preserves gradients and average photo colors in
+ * the 256-color desktop. The two small error rows live only during conversion,
+ * after decoding has returned, so they never overlap the decoder's stack use. */
+static void quantize(const ImageDecoded *image) {
+    int16_t rows[2][(IMAGE_MAX_DIMENSION + 2) * 3];
+    int16_t *current = rows[0], *next = rows[1];
+    unsigned row_entries = (image->width + 2) * 3;
+    for (unsigned i = 0; i < row_entries; i++) current[i] = 0;
+    for (unsigned y = 0; y < image->height; y++) {
+        if (!(y & 7)) platform_poll();
+        for (unsigned i = 0; i < row_entries; i++) next[i] = 0;
+        int direction = y & 1 ? -1 : 1;
+        int x = direction > 0 ? 0 : (int)image->width - 1;
+        for (unsigned step = 0; step < image->width; step++, x += direction) {
+            const uint8_t *source = image->pixels + (y * image->width + (unsigned)x) * image->channels;
+            unsigned rgb[3] = {source[0], source[0], source[0]}, alpha = 255;
+            if (image->channels >= 3) { rgb[1] = source[1]; rgb[2] = source[2]; }
+            if (image->channels == 2 || image->channels == 4) alpha = source[image->channels - 1];
+            unsigned at = ((unsigned)x + 1) * 3;
+            for (unsigned channel = 0; channel < 3; channel++) {
+                if (alpha != 255) {
+                    unsigned background = (((unsigned)x / 12 + y / 12) & 1) ? 208 : 232;
+                    rgb[channel] = (rgb[channel] * alpha + background * (255 - alpha) + 127) / 255;
+                }
+                int error = current[at + channel];
+                int adjusted = (int)rgb[channel] + (error + (error >= 0 ? 8 : -8)) / 16;
+                rgb[channel] = (unsigned)clamp(adjusted, 0, 255);
+            }
+            uint8_t index = palette_color(rgb[0], rgb[1], rgb[2]);
+            IMAGE_MEMORY[y * image->width + (unsigned)x] = index;
+            unsigned color = pal32[index];
+            for (unsigned channel = 0; channel < 3; channel++) {
+                int error = (int)rgb[channel] - (int)((color >> (16 - 8 * channel)) & 255);
+                int offset = (int)at + (int)channel;
+                current[offset + 3 * direction] += (int16_t)(7 * error);
+                next[offset - 3 * direction] += (int16_t)(3 * error);
+                next[offset] += (int16_t)(5 * error);
+                next[offset + 3 * direction] += (int16_t)error;
+            }
+        }
+        int16_t *swap = current; current = next; next = swap;
+    }
+}
+
+static void set_status(void) {
+    if (!viewer.loaded) return;
+    copy(viewer.status, sizeof viewer.status, image_format_name(viewer.format));
+    append(viewer.status, sizeof viewer.status, "  |  ");
+    append_number(viewer.status, sizeof viewer.status, viewer.width);
+    append(viewer.status, sizeof viewer.status, " x ");
+    append_number(viewer.status, sizeof viewer.status, viewer.height);
+    append(viewer.status, sizeof viewer.status, " px  |  ");
+    append_number(viewer.status, sizeof viewer.status, viewer.scale);
+    append(viewer.status, sizeof viewer.status, viewer.fit ? "% fit" : "%");
+}
+
+int image_viewer_open(const void *file, unsigned bytes, const char *name) {
+    viewer.loaded = 0;
+    viewer.width = viewer.height = viewer.format = 0;
+    viewer.pan_x = viewer.pan_y = 0;
+    viewer.fit = 1; viewer.scale = 100;
+    copy(viewer.title, sizeof viewer.title, name && *name ? name : "Image Viewer");
+    ImageDecoded image;
+    ImagePollHook previous = image_decode_set_poll_hook(platform_poll);
+    int error = image_decode(file, bytes, IMAGE_MEMORY + IMAGE_PIXELS_BYTES,
+                             IMAGE_CAPACITY - IMAGE_PIXELS_BYTES, &image);
+    image_decode_set_poll_hook(previous);
+    if (error != IMAGE_OK) {
+        copy(viewer.status, sizeof viewer.status, image_error_string(error));
+        return error;
+    }
+    unsigned count = image.width * image.height;
+    uint8_t *destination = IMAGE_MEMORY;
+    if (!image.channels) {
+        for (unsigned i = 0; i < count; i++) {
+            if (!(i & 4095)) platform_poll();
+            destination[i] = image.pixels[i];
+        }
+    } else quantize(&image);
+    viewer.width = image.width; viewer.height = image.height; viewer.format = image.format;
+    viewer.loaded = 1;
+    set_status();
+    return IMAGE_OK;
+}
+
+static void geometry(int w, int h) {
+    viewer.viewport_w = w - 2 * PAD;
+    viewer.viewport_h = h - TOOL_H - FOOT_H;
+    if (viewer.viewport_w < 1) viewer.viewport_w = 1;
+    if (viewer.viewport_h < 1) viewer.viewport_h = 1;
+    if (!viewer.loaded) return;
+    if (viewer.fit) {
+        unsigned xs = (unsigned)viewer.viewport_w * 100 / viewer.width;
+        unsigned ys = (unsigned)viewer.viewport_h * 100 / viewer.height;
+        viewer.scale = minimum(xs, ys);
+        /* Never shrink away a one-pixel side; tiny Paint drawings can grow. */
+        if (viewer.scale < 1) viewer.scale = 1;
+        if (viewer.scale > 400) viewer.scale = 400;
+    }
+    int sw = (int)(viewer.width * viewer.scale / 100);
+    int sh = (int)(viewer.height * viewer.scale / 100);
+    viewer.pan_x = clamp(viewer.pan_x, 0, sw > viewer.viewport_w ? sw - viewer.viewport_w : 0);
+    viewer.pan_y = clamp(viewer.pan_y, 0, sh > viewer.viewport_h ? sh - viewer.viewport_h : 0);
+    set_status();
+}
+
+/* Toolbar geometry, shared by drawing and hit testing: Fit and 1:1 form a
+ * labelled toggle group (their icons alone look alike), then a divider, then
+ * zoom out, the zoom percentage, zoom in. */
+enum { VB_FIT, VB_ACTUAL, VB_ZOOM_OUT, VB_ZOOM_IN, VB_COUNT };
+#define TOOL_Y 5
+#define ZOOM_TEXT_W 52
+static const char *const tool_labels[VB_COUNT] = { "Fit", "1:1", 0, 0 };
+static int tool_w(int index) { return tool_button_w(tool_labels[index]); }
+static int tool_divider_x(int x) { return x + PAD + tool_w(VB_FIT) + 4 + tool_w(VB_ACTUAL) + 8; }
+static int tool_x(int x, int index) {
+    switch (index) {
+    case VB_FIT: return x + PAD;
+    case VB_ACTUAL: return x + PAD + tool_w(VB_FIT) + 4;
+    case VB_ZOOM_OUT: return tool_divider_x(x) + 9;
+    default: return tool_divider_x(x) + 9 + TB_ICON_W + 4 + ZOOM_TEXT_W + 4;
+    }
+}
+static int tool_hit(int x, int y, int mx, int my) {
+    for (int i = 0; i < VB_COUNT; i++) if (hit(mx, my, tool_x(x, i), y + TOOL_Y, tool_w(i), TB_H)) return i;
+    return -1;
+}
+
+static void message_lines(const char *text, int x, int y, int width, int height) {
+    while (*text && height >= 20 && width > 16) {
+        char line[160]; unsigned used = 0, split = 0;
+        while (text[used] && used + 1 < sizeof line) {
+            line[used] = text[used]; line[used + 1] = 0;
+            if (ui_string_w(line) > width) break;
+            if (text[used] == ' ') split = used;
+            used++;
+        }
+        if (text[used] && split) used = split;
+        if (!used) break;
+        line[used] = 0;
+        draw_string(line, x, y, app_text_dim);
+        text += used;
+        while (*text == ' ') text++;
+        y += 22; height -= 22;
+    }
+}
+
+void image_viewer_draw(int x, int y, int w, int h) {
+    if (w < 1 || h < 1) return;
+    geometry(w, h);
+    uint8_t well = app_field;
+    draw_rect(x, y, w, h, app_chrome);
+    int loaded = viewer.loaded, ty = y + TOOL_Y;
+    tool_button(tool_x(x, VB_FIT), ty, tool_w(VB_FIT), TB_H, ICON_FIT, tool_labels[VB_FIT],
+                !loaded ? TB_DISABLED : viewer.fit ? TB_ACTIVE : TB_FLAT);
+    tool_button(tool_x(x, VB_ACTUAL), ty, tool_w(VB_ACTUAL), TB_H, ICON_ACTUAL, tool_labels[VB_ACTUAL],
+                !loaded ? TB_DISABLED : !viewer.fit && viewer.scale == 100 ? TB_ACTIVE : TB_FLAT);
+    tool_divider(tool_divider_x(x), ty, TB_H);
+    tool_button(tool_x(x, VB_ZOOM_OUT), ty, TB_ICON_W, TB_H, ICON_ZOOM_OUT, 0, loaded ? TB_NORMAL : TB_DISABLED);
+    char percent[16] = "";
+    if (loaded) { append_number(percent, sizeof percent, viewer.scale); append(percent, sizeof percent, "%"); }
+    else copy(percent, sizeof percent, "--");
+    int text_x = tool_x(x, VB_ZOOM_OUT) + TB_ICON_W + 4;
+    draw_string(percent, text_x + (ZOOM_TEXT_W - ui_string_w(percent)) / 2, ty + (TB_H - TB_TEXT_H) / 2,
+                loaded ? app_text : app_text_dim);
+    tool_button(tool_x(x, VB_ZOOM_IN), ty, TB_ICON_W, TB_H, ICON_ZOOM_IN, 0, loaded ? TB_NORMAL : TB_DISABLED);
+    int vx = x + PAD, vy = y + TOOL_H;
+    int vw = viewer.viewport_w, vh = viewer.viewport_h;
+    draw_rect(vx, vy, vw, vh, well);
+    if (viewer.loaded) {
+        int sw = (int)(viewer.width * viewer.scale / 100);
+        int sh = (int)(viewer.height * viewer.scale / 100);
+        if (sw < 1) sw = 1;
+        if (sh < 1) sh = 1;
+        int left = vx + (sw < vw ? (vw - sw) / 2 : -viewer.pan_x);
+        int top = vy + (sh < vh ? (vh - sh) / 2 : -viewer.pan_y);
+        int x0 = left > vx ? left : vx, y0 = top > vy ? top : vy;
+        int x1 = left + sw < vx + vw ? left + sw : vx + vw;
+        int y1 = top + sh < vy + vh ? top + sh : vy + vh;
+        /* Clip to both client viewport and framebuffer before direct writes. */
+        x0 = clamp(x0, 0, fb_w); x1 = clamp(x1, 0, fb_w);
+        y0 = clamp(y0, 0, fb_h); y1 = clamp(y1, 0, fb_h);
+        for (int dy = y0; dy < y1; dy++) {
+            unsigned sy = (unsigned)(dy - top) * viewer.height / (unsigned)sh;
+            const uint8_t *source = IMAGE_MEMORY + sy * viewer.width;
+            uint8_t *destination = fb + dy * fb_w;
+            for (int dx = x0; dx < x1; dx++) {
+                unsigned sx = (unsigned)(dx - left) * viewer.width / (unsigned)sw;
+                destination[dx] = source[sx];
+            }
+        }
+    } else {
+        const char *heading = viewer.title[0] ? "Image could not be opened" : "Open an image from Files";
+        draw_string_clip(heading, vx + 16, vy + 22, app_text, vx + vw - 12);
+        message_lines(viewer.status[0] ? viewer.status : "JPEG, PNG, BMP, GIF and BaseOS Paint",
+                      vx + 16, vy + 48, vw - 32, vh - 56);
+    }
+    const char *status = viewer.status[0] ? viewer.status : "No image open";
+    draw_string_clip(status, x + PAD, y + h - FOOT_H + 7, app_text, x + w - PAD);
+    draw_string_clip("F: fit   1: actual   +/-: zoom   Arrows / wheel: pan",
+                     x + PAD, y + h - 22, app_text_dim, x + w - PAD);
+}
+
+static int set_zoom(unsigned scale, int fit) {
+    if (!viewer.loaded) return 0;
+    unsigned old = viewer.scale ? viewer.scale : 100;
+    int center_x = viewer.pan_x + viewer.viewport_w / 2;
+    int center_y = viewer.pan_y + viewer.viewport_h / 2;
+    int old_w = (int)(viewer.width * old / 100), old_h = (int)(viewer.height * old / 100);
+    viewer.scale = scale; viewer.fit = fit;
+    if (fit) viewer.pan_x = viewer.pan_y = 0;
+    else {
+        viewer.pan_x = old_w < viewer.viewport_w ?
+            ((int)(viewer.width * scale / 100) - viewer.viewport_w) / 2 :
+            (int)((unsigned)center_x * scale / old) - viewer.viewport_w / 2;
+        viewer.pan_y = old_h < viewer.viewport_h ?
+            ((int)(viewer.height * scale / 100) - viewer.viewport_h) / 2 :
+            (int)((unsigned)center_y * scale / old) - viewer.viewport_h / 2;
+    }
+    geometry(viewer.viewport_w + 2 * PAD, viewer.viewport_h + TOOL_H + FOOT_H);
+    return 1;
+}
+static int step_zoom(int direction) {
+    if (!viewer.loaded) return 0;
+    unsigned next = viewer.scale;
+    if (direction > 0) {
+        for (unsigned i = 0; i < ZOOM_COUNT; i++) if (zooms[i] > next) { next = zooms[i]; break; }
+    } else {
+        for (unsigned i = ZOOM_COUNT; i; i--) if (zooms[i - 1] < next) { next = zooms[i - 1]; break; }
+    }
+    return set_zoom(next, 0);
+}
+static int pan(int dx, int dy) {
+    if (!viewer.loaded || viewer.fit) return 0;
+    viewer.pan_x += dx; viewer.pan_y += dy;
+    geometry(viewer.viewport_w + 2 * PAD, viewer.viewport_h + TOOL_H + FOOT_H);
+    return 1;
+}
+int image_viewer_key(int sc, char ch) {
+    if (ch == 'f' || ch == 'F' || ch == '0') return set_zoom(viewer.scale, 1);
+    if (ch == '1') return set_zoom(100, 0);
+    if (ch == '+' || ch == '=') return step_zoom(1);
+    if (ch == '-' || ch == '_') return step_zoom(-1);
+    if (sc == KEY_LEFT) return pan(-48, 0);
+    if (sc == KEY_RIGHT) return pan(48, 0);
+    if (sc == KEY_UP) return pan(0, -48);
+    if (sc == KEY_DOWN) return pan(0, 48);
+    if (sc == 0x49) return pan(0, -viewer.viewport_h * 3 / 4); /* Page Up */
+    if (sc == 0x51) return pan(0, viewer.viewport_h * 3 / 4); /* Page Down */
+    if (sc == 0x47) { viewer.pan_x = viewer.pan_y = 0; return viewer.loaded; } /* Home */
+    return 0;
+}
+int image_viewer_click(int x, int y, int w, int h, int mx, int my) {
+    geometry(w, h);
+    switch (tool_hit(x, y, mx, my)) {
+    case VB_FIT: return set_zoom(viewer.scale, 1);
+    case VB_ACTUAL: return set_zoom(100, 0);
+    case VB_ZOOM_OUT: return step_zoom(-1);
+    case VB_ZOOM_IN: return step_zoom(1);
+    default: return 0;
+    }
+}
+int image_viewer_scroll(int lines) { return pan(0, clamp(lines, -32, 32) * 36); }
+void image_viewer_close(void) {
+    viewer.loaded = 0; viewer.title[0] = viewer.status[0] = 0;
+    viewer.width = viewer.height = viewer.format = 0;
+    viewer.pan_x = viewer.pan_y = 0; viewer.fit = 1; viewer.scale = 100;
+}
+int image_viewer_loaded(void) { return viewer.loaded; }
+const char *image_viewer_title(void) { return viewer.title[0] ? viewer.title : "Image Viewer"; }
+const char *image_viewer_status(void) { return viewer.status[0] ? viewer.status : "No image open"; }

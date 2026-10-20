@@ -30,7 +30,7 @@ def function(source, name):
 
 class EditorBindingTests(unittest.TestCase):
     def test_source_versions_and_recovery(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-editor-binding-host-') as temporary:
             directory = pathlib.Path(temporary)
             first = source.index('typedef struct {\n    char buf[EDIT_BUF_SIZE];')
@@ -52,7 +52,7 @@ class EditorBindingTests(unittest.TestCase):
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-Wno-unused-function', '-fsanitize=address,undefined',
                             '-I', str(ROOT / 'src'), '-I', str(directory),
-                            str(ROOT / 'tests/editor_binding_host.c'), str(ROOT / 'src/history.c'),
+                            str(ROOT / 'tests/editor_binding_host.c'), str(ROOT / 'src/lib/history.c'),
                             '-o', str(output)], check=True)
             env = dict(os.environ, ASAN_OPTIONS=os.environ.get('ASAN_OPTIONS', 'detect_leaks=0'),
                        UBSAN_OPTIONS='halt_on_error=1')

@@ -20,11 +20,11 @@ def capture(build, directory):
     subprocess.run([tool('gcc'), '-Os', '-ffreestanding', '-m32', '-fno-pie',
                     '-fno-stack-protector', '-fno-builtin', '-mno-sse', '-mno-mmx',
                     '-msoft-float', '-I', str(ROOT), '-I', str(ROOT/'src'), '-I', str(build),
-                    '-c', str(ROOT/'tests/audio_guest.c'), '-o', str(directory/'kernel.o')], check=True)
-    objects = [str(p) for p in build.glob('*.o') if p.name != 'kernel.o']
+                    '-c', str(ROOT/'tests/audio_guest.c'), '-o', str(directory/'desktop.o')], check=True)
+    objects = [str(p) for p in build.glob('*.o') if p.name != 'desktop.o']
     subprocess.run([tool('ld'), '-T', str(build/'linker.ld'), '-nostdlib', '-m', 'elf_i386',
                     '-z', 'noexecstack', '-o', str(directory/'kernel.elf'),
-                    str(directory/'kernel.o'), *objects], check=True)
+                    str(directory/'desktop.o'), *objects], check=True)
     subprocess.run([tool('objcopy'), '-O', 'binary', str(directory/'kernel.elf'),
                     str(directory/'kernel.bin')], check=True)
     c = constants()

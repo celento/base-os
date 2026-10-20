@@ -4,14 +4,14 @@ Each icon is an object lit from the top left with a soft gloss and a small
 drop shadow. The drawings live
 in this file so the whole set shares one palette and one light source.
 Running the module writes assets/icons/<name>.svg; tools/gen_app_icons.py
-rasterizes them into src/app_icons.h.
+rasterizes them into src/ui/app_icons.h.
 """
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUT = ROOT / "assets/icons"
 
-# Order defines the AI_* enum in src/app_icons.h.
+# Order defines the AI_* enum in src/ui/app_icons.h.
 ICONS = []
 
 

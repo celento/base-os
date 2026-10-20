@@ -154,7 +154,7 @@ MPEG-2 stereo 22.05 kHz, and MPEG-2.5 mono 8 kHz fixtures have been verified.
 
 ## Media Player client
 
-`src/player.c` is a singleton client-area app. The desktop owns its window and
+`src/apps/player.c` is a singleton client-area app. The desktop owns its window and
 calls `player_init`, `player_draw`, `player_click`, `player_key`, and
 `player_tick`. `player_open_file(id)` opens and plays a filesystem item directly;
 `player_refresh()` updates its alphabetical WAV/MP3/MPEG-1 library. The library skips

@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "layout.h"
+#include "kernel/layout.h"
 #define main filesystem_fixture_main
 #include "fs_host.c"
 #undef main
@@ -12,9 +12,9 @@ static uint8_t test_mirror[0x100000];
 #undef PRESENT_BASE
 #define PRESENT_BASE ((uintptr_t)test_mirror)
 #define GFX_HOST_TEST
-#include "../src/gfx.c"
+#include "../src/kernel/gfx.c"
 #define BROWSER_HOST_TEST
-#include "../src/browser.c"
+#include "../src/apps/browser.c"
 
 uint8_t app_accent=COLOR_BLUE,app_accent_dk=COLOR_NAVY,app_text=COLOR_BLACK;
 uint8_t app_text_dim=COLOR_GRAY,app_chrome=COLOR_LTGRAY,app_chrome_dk=COLOR_GRAY;

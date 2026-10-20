@@ -1,7 +1,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
-#include "app.h"
+#include "ui/app.h"
 static unsigned snapshot_index;
 static int stuck, binary, twelve, invalid_bcd;
 uint8_t rtc_test_read(uint8_t reg) {

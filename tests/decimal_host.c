@@ -1,7 +1,7 @@
 #include <assert.h>
 #include <limits.h>
 #include <stdio.h>
-#include "../src/decimal.c"
+#include "../src/lib/decimal.c"
 static int32_t parse(const char *s) { int32_t v; assert(decimal_parse(s, &v)); return v; }
 int main(void) {
     int32_t v;

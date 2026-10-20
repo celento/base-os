@@ -40,7 +40,7 @@ def host_decode(encoded,directory):
     cc=shutil.which('clang') or 'cc'
     subprocess.run([cc,'-std=gnu11','-O1','-g','-Wall','-Wextra','-Werror',
         '-fsanitize=address,undefined','-DMEDIA_MP3_HOST_TEST','-I',str(ROOT/'src'),
-        str(ROOT/'tests/media_mp3_host.c'),str(ROOT/'src/media_mp3.c'),'-o',str(decoder)],check=True)
+        str(ROOT/'tests/media_mp3_host.c'),str(ROOT/'src/lib/media_mp3.c'),'-o',str(decoder)],check=True)
     output=directory/'reference.s16'
     env=dict(os.environ);env['ASAN_OPTIONS']='detect_leaks=0'
     subprocess.run([str(decoder),str(encoded),str(output)],env=env,check=True)
@@ -50,10 +50,10 @@ def guest_capture(build,directory,fixture="mp3_guest.c",expected="AUDIO-MP3-PASS
     subprocess.run([tool('gcc'),'-Os','-ffreestanding','-m32','-fno-pie',
         '-fno-stack-protector','-fno-builtin','-mno-sse','-mno-mmx','-msoft-float',
         '-I',str(ROOT),'-I',str(ROOT/'src'),'-I',str(build),'-I',str(directory),
-        '-c',str(ROOT/'tests'/fixture),'-o',str(directory/'kernel.o')],check=True)
-    objects=[str(p) for p in build.glob('*.o') if p.name!='kernel.o']
+        '-c',str(ROOT/'tests'/fixture),'-o',str(directory/'desktop.o')],check=True)
+    objects=[str(p) for p in build.glob('*.o') if p.name!='desktop.o']
     subprocess.run([tool('ld'),'-T',str(build/'linker.ld'),'-nostdlib','-m','elf_i386',
-        '-z','noexecstack','-o',str(directory/'kernel.elf'),str(directory/'kernel.o'),*objects],check=True)
+        '-z','noexecstack','-o',str(directory/'kernel.elf'),str(directory/'desktop.o'),*objects],check=True)
     subprocess.run([tool('objcopy'),'-O','binary',str(directory/'kernel.elf'),str(directory/'kernel.bin')],check=True)
     c=constants();disk=bytearray(c['DISK_SECTORS']*512);disk[:512]=(build/'boot.bin').read_bytes()
     install_kernel(disk,(directory/'kernel.bin').read_bytes(),c)

@@ -1,12 +1,12 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "platform.h"
+#include "kernel/platform.h"
 static unsigned char bounce[DMA_CAPACITY];
 #undef DMA_BASE
 #define DMA_BASE ((uintptr_t)bounce)
 #define PERSIST_HOST_TEST
-#include "../src/persist.c"
+#include "../src/kernel/persist.c"
 
 static unsigned now;
 static int reset_count, recal_count, seek_count, transfers;

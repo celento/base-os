@@ -1,4 +1,4 @@
-"""Rasterize the SVG icon set into src/app_icons.h.
+"""Rasterize the SVG icon set into src/ui/app_icons.h.
 
     python3 tools/gen_app_icons.py [--sheet preview.png]
 
@@ -114,7 +114,7 @@ def main():
     for n, im in zip(names, small):
         lines.append(f"    /* {n} */ {{{','.join(str(v) for v in quantize(im))}}},")
     lines += ["};", "#endif", "", "#endif", ""]
-    (ROOT / "src/app_icons.h").write_text("\n".join(lines))
+    (ROOT / "src/ui/app_icons.h").write_text("\n".join(lines))
 
     if args.sheet:
         cols, cell = 9, BIG + SMALL + 14
@@ -125,7 +125,7 @@ def main():
             sheet.paste(preview(b, colors), (x, y))
             sheet.paste(preview(s, colors), (x + BIG + 4, y + BIG - SMALL))
         sheet.resize((sheet.width * 3, sheet.height * 3), Image.NEAREST).save(args.sheet)
-    print(f"Wrote {len(names)} icons at {BIG} and {SMALL} px with {palette.PAL_ICON_N} icon colors to src/app_icons.h")
+    print(f"Wrote {len(names)} icons at {BIG} and {SMALL} px with {palette.PAL_ICON_N} icon colors to src/ui/app_icons.h")
 
 
 def preview(im, colors):

@@ -1,7 +1,7 @@
-#include "net.h"
-#include "platform.h"
-#include "fs.h"
-#include "term.h"
+#include "kernel/net.h"
+#include "kernel/platform.h"
+#include "kernel/fs.h"
+#include "apps/term.h"
 #ifndef HTTP_PORT
 #define HTTP_PORT "18080"
 #endif

@@ -22,7 +22,7 @@ class NativeWindowShellTests(unittest.TestCase):
             self.assertLess(points['show'][0],points['stop'][0])
             self.assertEqual(points['stop'][1]+42,y+160)
     def test_actual_shell_helpers(self):
-        source=(ROOT/'src/kernel.c').read_text()
+        source=(ROOT/'src/shell/desktop/desktop.c').read_text()
         names=('native_output_rows','native_output_columns','native_output_total',
                'native_output_scroll_by','native_output_toggle','native_task_key_dispatch',
                'native_window_complete','session_window_kind')

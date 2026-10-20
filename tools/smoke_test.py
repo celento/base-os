@@ -131,7 +131,7 @@ def main(build, keep):
 
         # Reassemble only entry code to poison BSS before runtime clearing.
         subprocess.run(['nasm', '-f', 'elf', '-DTEST_DIRTY_BSS', '-p', str(build / 'layout.inc'),
-                        str(pathlib.Path(__file__).resolve().parents[1] / 'src/kernel_entry.asm'),
+                        str(pathlib.Path(__file__).resolve().parents[1] / 'src/kernel/kernel_entry.asm'),
                         '-o', str(directory / 'kernel_entry.o')], check=True)
         ld = 'x86_64-elf-ld' if shutil.which('x86_64-elf-ld') else 'ld'
         objcopy = 'x86_64-elf-objcopy' if shutil.which('x86_64-elf-objcopy') else 'objcopy'
@@ -152,7 +152,7 @@ def main(build, keep):
                         '-msoft-float', '-I', str(root / 'src'), '-c', str(root / 'tests/storage_guest.c'),
                         '-o', str(directory / 'storage_guest.o')], check=True)
         subprocess.run(['nasm', '-f', 'elf', '-Dkmain=storage_guest', '-p', str(build / 'layout.inc'),
-                        str(root / 'src/kernel_entry.asm'), '-o', str(directory / 'storage_entry.o')], check=True)
+                        str(root / 'src/kernel/kernel_entry.asm'), '-o', str(directory / 'storage_entry.o')], check=True)
         objects[0] = str(directory / 'storage_entry.o')
         subprocess.run([ld, '-T', str(build / 'linker.ld'), '-nostdlib', '-m', 'elf_i386',
                         '-z', 'noexecstack', '-o', str(directory / 'storage.elf'), *objects,

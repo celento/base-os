@@ -1,6 +1,6 @@
 /* The existing filesystem/Terminal host fixture does not emulate hardware.
  * Network protocol and lifecycle behavior have their own dedicated fixtures. */
-#include "net.h"
+#include "kernel/net.h"
 static NetStatus status;
 static NetHttpResult result;
 const NetStatus *net_status(void){return &status;}

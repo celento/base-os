@@ -11,7 +11,7 @@ class NativeRectangleTests(unittest.TestCase):
 
     def test_scalar_equivalence_and_lifecycle(self):
         self.run_host('native_rectangle_host', extra=(str(ROOT / 'tests/net_stub.c'),
-                      str(ROOT / 'src/download.c'), '-DDOWNLOAD_HOST_TEST'))
+                      str(ROOT / 'src/kernel/download.c'), '-DDOWNLOAD_HOST_TEST'))
 
 
 if __name__ == '__main__':

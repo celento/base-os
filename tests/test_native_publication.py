@@ -11,14 +11,14 @@ class NativePublicationTests(unittest.TestCase):
     # Reuse only the sanitizer runner; existing render tests remain independent.
     def test_published_pixels_and_geometry(self):
         def prepare(directory):
-            source = (ROOT / 'src/kernel.c').read_text()
+            source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
             code = ''.join(function(source, name) for name in
                            ('draw_app_canvas', 'draw_term_canvas'))
             (directory / 'native_publication_render.inc').write_text(code)
         for rectangle in (False, True):
             with self.subTest(rectangle=rectangle):
-                extra = (str(ROOT / 'tests/net_stub.c'), str(ROOT / 'src/download.c'),
-                         '-DDOWNLOAD_HOST_TEST', str(ROOT / 'src/canvas_view.c'))
+                extra = (str(ROOT / 'tests/net_stub.c'), str(ROOT / 'src/kernel/download.c'),
+                         '-DDOWNLOAD_HOST_TEST', str(ROOT / 'src/lib/canvas_view.c'))
                 if rectangle:
                     extra += ('-DNATIVE_RECTANGLE_CALLBACK',)
                 self.run_host('native_publication_host', prepare, extra)

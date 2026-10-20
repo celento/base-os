@@ -1,6 +1,6 @@
 #ifndef PROCESS_GUEST_FIXTURE_H
 #define PROCESS_GUEST_FIXTURE_H
-#include "physmem.h"
+#include "kernel/physmem.h"
 /* FEATURE_TEST guests include the real kmain: validated RAM/video and late
  * physmem initialization have already run. Never initialize a ready core twice. */
 static inline PhysmemStats guest_process_memory(void){

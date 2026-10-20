@@ -29,15 +29,15 @@ Make image initialization an explicit operation. Normal builds should update onl
 
 ### 2. Disk failures can turn into permanent data loss
 
-`src/fs.c:554` writes the new header and payload over the sole previous snapshot. A partial write can invalidate both the old and new state. The checksum detects damage but cannot recover the previous version.
+`src/kernel/fs.c:554` writes the new header and payload over the sole previous snapshot. A partial write can invalidate both the old and new state. The checksum detects damage but cannot recover the previous version.
 
-`src/kernel.c:6115` treats every load failure as a fresh filesystem. `fs_init` has already marked the seeded files dirty, and the main loop later autosaves them. A transient read failure or damaged image can therefore lead to overwriting recoverable data with defaults. `fs_sync` also discards the save result, leaving failures invisible and eligible for immediate repeated attempts.
+`src/shell/desktop/desktop.c:6115` treats every load failure as a fresh filesystem. `fs_init` has already marked the seeded files dirty, and the main loop later autosaves them. A transient read failure or damaged image can therefore lead to overwriting recoverable data with defaults. `fs_sync` also discards the save result, leaving failures invisible and eligible for immediate repeated attempts.
 
 Distinguish an unformatted disk from a read error or corrupt volume. Preserve the disk on load failure, expose save failures, and introduce a bounded retry policy. Design a recoverable commit scheme before promising durable saves. Two maximum-size snapshots will not fit on this floppy with the current capacity, so redundancy requires an explicit capacity or storage-layout decision.
 
 ### 3. Startup does not establish all C runtime requirements
 
-`src/kernel_entry.asm:313` sets segments and the stack, then calls C without explicitly clearing `.bss`. The current build works because the loader reads zero-filled padding beyond the binary. The binary-size check excludes `.bss`, so a future larger static array can break this silently.
+`src/kernel/kernel_entry.asm:313` sets segments and the stack, then calls C without explicitly clearing `.bss`. The current build works because the loader reads zero-filled padding beyond the binary. The binary-size check excludes `.bss`, so a future larger static array can break this silently.
 
 Neither assembly entry path establishes a clear direction flag before string instructions. The initial `rep stosw` operations themselves depend on it, as does the C ABI's direction-flag expectation.
 
@@ -53,35 +53,35 @@ Install exception gates early, with correct handling of exception error codes, a
 
 The current selected display modes fit between the 2 MB backbuffer and 3 MB filesystem table. The other fixed arenas also appear separated for the present sizes. But no firmware memory map is collected, and no common reservation mechanism checks RAM availability, reserved regions, the stack, or arena growth.
 
-`src/kernel.c:1252` accepts dimensions up to 2048×2048. Such a one-byte-per-pixel backbuffer would overwrite the filesystem table. The current loader chooses smaller modes, so this is a broken validation boundary rather than a demonstrated default-boot collision.
+`src/shell/desktop/desktop.c:1252` accepts dimensions up to 2048×2048. Such a one-byte-per-pixel backbuffer would overwrite the filesystem table. The current loader chooses smaller modes, so this is a broken validation boundary rather than a demonstrated default-boot collision.
 
 Centralize addresses and capacities, add compile/link assertions for fixed areas, and validate the actual framebuffer size. Collect and validate firmware RAM information before claiming support beyond the configured QEMU machine. A general-purpose heap or paging system can wait until a feature actually needs it.
 
 ### 6. Graphics failure handling can write to an invented address
 
-`src/kernel_entry.asm:141` uses `test ax, 0x0091` followed by `jz` to check mode attributes. This accepts any one of the requested bits; it does not require all three. Require supported, graphics, and linear framebuffer attributes together.
+`src/kernel/kernel_entry.asm:141` uses `test ax, 0x0091` followed by `jz` to check mode attributes. This accepts any one of the requested bits; it does not require all three. Require supported, graphics, and linear framebuffer attributes together.
 
-`src/kernel.c:1271` proceeds with an unverified framebuffer address after all mode-setting attempts fail. Stop with a serial error instead. The pitch check must require at least width times bytes per pixel, and accepted formats must match the renderer's channel layout. The renderer currently assumes fixed RGB layouts without validating VBE color masks.
+`src/shell/desktop/desktop.c:1271` proceeds with an unverified framebuffer address after all mode-setting attempts fail. Stop with a serial error instead. The pitch check must require at least width times bytes per pixel, and accepted formats must match the renderer's channel layout. The renderer currently assumes fixed RGB layouts without validating VBE color masks.
 
 The successful QEMU boot used the firmware-provided address, so the unsafe fallback was not exercised by the smoke test.
 
 ### 7. Display polling is used as elapsed time
 
-`src/kernel.c:1216` counts observed VGA retrace transitions. Rendering and synchronous disk I/O can miss transitions. Code then divides that count by 70 for uptime and uses it for gameplay, double-click timing, animation, and the splash exit condition. These timings vary with workload and display behavior; the splash has no independent timeout if retrace never advances.
+`src/shell/desktop/desktop.c:1216` counts observed VGA retrace transitions. Rendering and synchronous disk I/O can miss transitions. Code then divides that count by 70 for uptime and uses it for gameplay, double-click timing, animation, and the splash exit condition. These timings vary with workload and display behavior; the splash has no independent timeout if retrace never advances.
 
 Introduce a monotonic hardware clock and base deadlines on elapsed time. This can remain a single cooperative event loop. Device interrupt handling and sleeping while idle can follow separately.
 
 ### 8. Floppy recovery does not restore the requested track
 
-`src/persist.c:255` recalibrates after a failed transfer, then retries without seeking back to the requested cylinder. Recalibration moves the head to cylinder zero. Retrying a transfer for a later cylinder therefore does not restore its physical preconditions.
+`src/kernel/persist.c:255` recalibrates after a failed transfer, then retries without seeking back to the requested cylinder. Recalibration moves the head to cylinder zero. Retrying a transfer for a later cylinder therefore does not restore its physical preconditions.
 
 Seek to the requested cylinder on every retry. Propagate all command-byte failures, reset/reinitialize the controller when a transaction loses synchronization, and ensure DMA is masked on every exit. Validate result status and transfer completion before reporting success. The current driver also assumes drive A and 1.44 MB geometry; either make that an explicit supported-machine constraint or pass the boot drive through startup.
 
 ## Smaller follow-ups
 
-- `src/fs.c:474`: recursive copying ignores failures in child copies, so a full node table can produce a partial copy reported as success. Roll back or explicitly report partial completion.
-- `src/rtc.c:28`: a single RTC read after checking update-in-progress can straddle a clock update. Read matching stable snapshots with a bounded failure path.
-- `Makefile:26` and `src/fs.c:19`: the loader sector budget and filesystem start are independent. Assert the kernel reservation ends before LBA 384. Increasing the loader budget as the current error suggests must not consume filesystem sectors.
+- `src/kernel/fs.c:474`: recursive copying ignores failures in child copies, so a full node table can produce a partial copy reported as success. Roll back or explicitly report partial completion.
+- `src/kernel/rtc.c:28`: a single RTC read after checking update-in-progress can straddle a clock update. Read matching stable snapshots with a bounded failure path.
+- `Makefile:26` and `src/kernel/fs.c:19`: the loader sector budget and filesystem start are independent. Assert the kernel reservation ends before LBA 384. Increasing the loader budget as the current error suggests must not consume filesystem sectors.
 - Keep the 6,332-line desktop module working while gradually extracting hardware startup/input/timing behind small interfaces. Its size makes changes harder to review, but splitting files alone will not fix the bugs above.
 
 ## Recommended order

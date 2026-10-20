@@ -31,7 +31,7 @@ def reference(source,directory):
     executable=directory/'video-host'
     subprocess.run([shutil.which('clang') or 'cc','-std=gnu11','-O1','-g','-Wall','-Wextra','-Werror',
                     '-fsanitize=address,undefined','-DVIDEO_HOST_TEST','-DMEDIA_MP3_HOST_TEST','-I',str(ROOT/'src'),
-                    str(ROOT/'tests/video_host.c'),str(ROOT/'src/video.c'),str(ROOT/'src/media_mp3.c'),'-lm','-o',str(executable)],check=True)
+                    str(ROOT/'tests/video_host.c'),str(ROOT/'src/lib/video.c'),str(ROOT/'src/lib/media_mp3.c'),'-lm','-o',str(executable)],check=True)
     output=directory/'reference.yuv';env=dict(os.environ);env['ASAN_OPTIONS']='detect_leaks=0'
     env['UBSAN_OPTIONS']='halt_on_error=1:print_stacktrace=1'
     subprocess.run([str(executable),str(source),str(output),'320','240','25','1','75','0'],env=env,check=True)
@@ -46,10 +46,10 @@ def reference(source,directory):
 def build_guest(build,directory):
     subprocess.run([tool('gcc'),'-Os','-ffreestanding','-m32','-fno-pie','-fno-stack-protector',
                     '-fno-builtin','-mno-sse','-mno-mmx','-msoft-float','-I',str(ROOT),'-I',str(ROOT/'src'),
-                    '-I',str(build),'-c',str(ROOT/'tests/video_guest.c'),'-o',str(directory/'kernel.o')],check=True)
-    objects=[str(p) for p in sorted(build.glob('*.o')) if p.name!='kernel.o']
+                    '-I',str(build),'-c',str(ROOT/'tests/video_guest.c'),'-o',str(directory/'desktop.o')],check=True)
+    objects=[str(p) for p in sorted(build.glob('*.o')) if p.name!='desktop.o']
     subprocess.run([tool('ld'),'-T',str(build/'linker.ld'),'-nostdlib','-m','elf_i386','-z','noexecstack',
-                    '-o',str(directory/'kernel.elf'),str(directory/'kernel.o'),*objects],check=True)
+                    '-o',str(directory/'kernel.elf'),str(directory/'desktop.o'),*objects],check=True)
     subprocess.run([tool('objcopy'),'-O','binary',str(directory/'kernel.elf'),str(directory/'kernel.bin')],check=True)
     c=constants();image=bytearray(c['DISK_SECTORS']*512);image[:512]=(build/'boot.bin').read_bytes()
     install_kernel(image,(directory/'kernel.bin').read_bytes(),c)

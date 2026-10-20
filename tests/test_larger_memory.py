@@ -26,7 +26,7 @@ class LargerMemoryTests(unittest.TestCase):
         cls.inspector = cls.work / 'inspector'
         subprocess.run([shutil.which('cc') or 'gcc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
                         '-I', str(ROOT / 'src'), str(ROOT / 'tests/executable_inspect_host.c'),
-                        str(ROOT / 'src/executable.c'), '-o', str(cls.inspector)], check=True)
+                        str(ROOT / 'src/kernel/executable.c'), '-o', str(cls.inspector)], check=True)
         cls.plans = {}
         for label in ('memory-a', 'memory-b'):
             path = cls.work / (label + '.bex')

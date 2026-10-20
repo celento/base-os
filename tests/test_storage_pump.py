@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class StoragePumpTests(unittest.TestCase):
     def test_actual_production_pump_contract(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-storage-pump-') as temporary:
             folder = Path(temporary)
             # Compile the actual function body, never a copied scheduling loop.

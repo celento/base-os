@@ -1,5 +1,5 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 #include "process_guest_fixture.h"
 static void check(int ok,const char *why){if(!ok)panic(why);}
 static void command(const char *s){while(*s)term_char(*s++);term_enter();}

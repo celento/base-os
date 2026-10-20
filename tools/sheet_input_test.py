@@ -88,11 +88,11 @@ class SheetCheck(WriterCheck):
         self.s = session
         self.o = Observations(session, pathlib.Path(build) / 'kernel.elf')
         debug = DebugInfo(pathlib.Path(build) / 'kernel.elf')
-        self.state_address, (self.state_size, self.state_fields) = debug.variable('state', 'src/sheet.c')
-        self.snapshot_size, self.snapshot_fields = debug.structure('Snapshot', 'src/sheet.c')
-        self.doc_size, self.doc_fields = debug.structure('SheetDoc', 'src/sheet.c')
-        self.cell_size, self.cell_fields = debug.structure('SheetCell', 'src/sheet.c')
-        arena_size, self.arena_fields = debug.structure('SpreadsheetArena', 'src/sheet.c')
+        self.state_address, (self.state_size, self.state_fields) = debug.variable('state', 'src/apps/sheet.c')
+        self.snapshot_size, self.snapshot_fields = debug.structure('Snapshot', 'src/apps/sheet.c')
+        self.doc_size, self.doc_fields = debug.structure('SheetDoc', 'src/apps/sheet.c')
+        self.cell_size, self.cell_fields = debug.structure('SheetCell', 'src/apps/sheet.c')
+        arena_size, self.arena_fields = debug.structure('SpreadsheetArena', 'src/apps/sheet.c')
         assert self.state_size < 4096 and self.cell_size == 104
         assert arena_size <= session.layout['SHEET_CAPACITY']
         assert 6 * self.doc_size < arena_size

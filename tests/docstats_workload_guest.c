@@ -1,6 +1,6 @@
 /* Normal complete DocStats scans with another app, redraw and real SB16 PCM. */
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 static void check(int ok,const char *why){if(!ok)panic(why);}
 static int file(const char *path){return fs_resolve(fs_root(),path);}
 static void command(const char *s){while(*s)term_char(*s++);term_enter();}

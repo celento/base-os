@@ -1,8 +1,8 @@
 /* Ordinary full-volume mount/save/remount benchmark on disposable images.
  * tools/fs_crc_benchmark.py links this entry with otherwise normal objects. */
-#include "platform.h"
-#include "persist.h"
-#include "fs.h"
+#include "kernel/platform.h"
+#include "kernel/persist.h"
+#include "kernel/fs.h"
 
 /* Fixed document modification time makes independently saved images comparable. */
 unsigned crc_benchmark_clock(void) { return 1234567890u; }

@@ -1,7 +1,7 @@
 Adobe standard Times font advance metrics
 =======================================
 
-The tables in src/writer_pdf.c are a modified, reduced representation of
+The tables in src/lib/writer_pdf.c are a modified, reduced representation of
 Adobe's Times-Roman, Times-Bold, Times-Italic and Times-BoldItalic AFM 4.1
 files (font version 002.000; creation date May 1, 1997). They contain only
 95 printable ASCII WinAnsi glyph advance widths, in 1/1000 em units. The

@@ -1,7 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "../src/text_search.c"
+#include "../src/lib/text_search.c"
 int main(void){
     const char *text="One fish\ntwo FISH\nred fish\n";int n=(int)strlen(text),count;
     assert(text_find(text,n,"fish",0,1,0)==4);

@@ -26,7 +26,7 @@ def build_fixture(build, directory, mode):
     entry = directory / 'node-entry.o'
     if not entry.exists():
         subprocess.run(['nasm', '-f', 'elf', '-Dkmain=node_capacity_guest',
-                        '-p', str(build / 'layout.inc'), str(ROOT / 'src/kernel_entry.asm'),
+                        '-p', str(build / 'layout.inc'), str(ROOT / 'src/kernel/kernel_entry.asm'),
                         '-o', str(entry)], check=True)
     objects = [str(entry)] + [str(p) for p in sorted(build.glob('*.o')) if p.name != 'kernel_entry.o']
     subprocess.run([tool('ld'), '-T', str(build / 'linker.ld'), '-nostdlib', '-m', 'elf_i386',

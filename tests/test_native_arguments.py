@@ -23,7 +23,7 @@ class NativeArgumentsTests(unittest.TestCase):
 
     def test_terminal_document_arguments(self):
         self.native('native_arguments_host', [ROOT / 'tests/net_stub.c',
-                    ROOT / 'src/download.c', '-DDOWNLOAD_HOST_TEST'])
+                    ROOT / 'src/kernel/download.c', '-DDOWNLOAD_HOST_TEST'])
 
     def test_docstats_streaming_and_selection(self):
         self.native('docstats_host')

@@ -52,7 +52,7 @@ def build_fixture(build, directory, mode):
     entry = directory / 'data_volume_entry.o'
     if not entry.exists():
         subprocess.run(['nasm', '-f', 'elf', '-Dkmain=data_volume_guest',
-                        '-p', str(build / 'layout.inc'), str(ROOT / 'src/kernel_entry.asm'),
+                        '-p', str(build / 'layout.inc'), str(ROOT / 'src/kernel/kernel_entry.asm'),
                         '-o', str(entry)], check=True)
     objects = [str(entry)] + [str(p) for p in sorted(build.glob('*.o'))
                               if p.name != 'kernel_entry.o']

@@ -17,7 +17,7 @@ class TerminalCheck:
     def __init__(self, session, build):
         self.s = session
         self.ui = WriterCheck(session, build)
-        self.size, self.fields = DebugInfo(pathlib.Path(build) / 'kernel.elf').structure('Terminal', 'src/term.c')
+        self.size, self.fields = DebugInfo(pathlib.Path(build) / 'kernel.elf').structure('Terminal', 'src/apps/term.c')
         assert self.size * 8 <= 0xc0000
 
     def front(self):

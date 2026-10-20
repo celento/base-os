@@ -3,10 +3,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "layout.h"
-#include "gfx.h"
-#include "fs.h"
-#include "history.h"
+#include "kernel/layout.h"
+#include "kernel/gfx.h"
+#include "kernel/fs.h"
+#include "lib/history.h"
 
 static struct {
     uint8_t before[32];

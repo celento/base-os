@@ -133,7 +133,7 @@ def prepare(build, output, build_log):
         x87_decoder, x87_reference = output/'decode-x87', output/'reference-x87.s16'
         calibration_command = ['cc', '-std=gnu11', '-Os', '-g', '-Wall', '-Wextra', '-Werror',
             '-mfpmath=387', '-DMEDIA_MP3_HOST_TEST', '-I'+str(ROOT/'src'),
-            str(ROOT/'tests/media_mp3_host.c'), str(ROOT/'src/media_mp3.c'), '-o', str(x87_decoder)]
+            str(ROOT/'tests/media_mp3_host.c'), str(ROOT/'src/lib/media_mp3.c'), '-o', str(x87_decoder)]
         subprocess.run(calibration_command, check=True)
         subprocess.run([str(x87_decoder), str(song), str(x87_reference)], check=True)
         baseline = np.frombuffer(reference.read_bytes(), dtype='<i2').astype(np.int32)
@@ -153,7 +153,7 @@ def prepare(build, output, build_log):
                                   for name in ('ffmpeg', 'ffprobe', 'gcc', 'ld', 'objcopy')}
         manifest['host_compiler'] = shutil.which('clang') or shutil.which('cc')
         manifest['host_decoder_executable'] = file_record(output/'decode')
-        manifest['audio_oracle'] = dict(decoder='Frozen src/media_mp3.c and third_party/minimp3/minimp3.h, MINIMP3_NO_SIMD',
+        manifest['audio_oracle'] = dict(decoder='Frozen src/lib/media_mp3.c and third_party/minimp3/minimp3.h, MINIMP3_NO_SIMD',
             host='Existing tests/media_mp3_host.c; MEDIA_MP3_HOST_TEST; native compiler float rounding',
             guest='Unchanged production i386 x87 decoder; Makefile -mhard-float -mfpmath=387',
             sample_rate=44100, channels=2, sample_format='signed 16-bit little-endian interleaved stereo',

@@ -27,9 +27,9 @@ void kstrcpy(char *to,const char *from){strcpy(to,from);}
 static unsigned char view_arena[0xC0000],published_arena[NATIVE_CANVAS_CAPACITY];
 #define TERM_MEMORY ((uintptr_t)view_arena)
 #define NATIVE_CANVAS_MEMORY ((uintptr_t)published_arena)
-#include "../src/app_storage.c"
-#include "../src/app_canvas.c"
-#include "../src/app_view.c"
+#include "../src/apps/app_storage.c"
+#include "../src/apps/app_canvas.c"
+#include "../src/apps/app_view.c"
 void term_write_at(int slot,const char *text){(void)slot;(void)text;assert(!"Owned output must never reach Terminal");}
 enum { INITIAL, STOP_PRESENT, STOP_YIELD, STOP_SLEEP, STOP_SYNC, STOP_APP,
        CLOSE_PRESENT, APP_SUCCESS, APP_NONZERO, ERROR_RESULT };

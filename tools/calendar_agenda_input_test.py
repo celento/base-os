@@ -149,15 +149,15 @@ class CalendarCheck:
         self.s = session
         self.o = Observations(session, pathlib.Path(build) / 'kernel.elf')
         self.debug = DebugInfo(pathlib.Path(build) / 'kernel.elf')
-        self.item_size, self.item_fields = self.debug.structure('CalAppointment', 'src/calendar_agenda.c')
-        self.draft_address, (self.draft_size, self.draft_fields) = self.debug.variable('ca_draft', 'src/calendar_agenda.c')
+        self.item_size, self.item_fields = self.debug.structure('CalAppointment', 'src/apps/calendar_agenda.c')
+        self.draft_address, (self.draft_size, self.draft_fields) = self.debug.variable('ca_draft', 'src/apps/calendar_agenda.c')
         assert self.item_size == 116 and self.draft_size == 128
-        self.items_address = self.address('ca_items', 'src/calendar_agenda.c', MAX_ITEMS * self.item_size)
+        self.items_address = self.address('ca_items', 'src/apps/calendar_agenda.c', MAX_ITEMS * self.item_size)
         self.addresses = {}
         for name in ('ca_count', 'ca_state', 'ca_pending', 'ca_next_id'):
-            self.addresses[name] = self.address(name, 'src/calendar_agenda.c', 4)
+            self.addresses[name] = self.address(name, 'src/apps/calendar_agenda.c', 4)
         for name in ('view_year', 'view_month', 'view_day', 'selected', 'first_row', 'confirm', 'entry_focus'):
-            self.addresses[name] = self.address(name, 'src/calendar.c', 4)
+            self.addresses[name] = self.address(name, 'src/apps/calendar.c', 4)
 
     def address(self, name, unit, size):
         _, entry = self.debug.named(name, ('DW_TAG_variable',), unit)

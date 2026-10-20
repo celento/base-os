@@ -2,10 +2,10 @@
  * No memory observation, fault probes, forced low-memory knobs or debugger.
  * kernel.c is resolved from the explicitly supplied clean runtime checkout. */
 #define FEATURE_TEST
-#include "kernel.c"
-#include "native_files.h"
-#include "native_sync.h"
-#include "executable.h"
+#include "shell/desktop/desktop.c"
+#include "kernel/native_files.h"
+#include "kernel/native_sync.h"
+#include "kernel/executable.h"
 static ProcessHandle as_handles[PROCESS_TASKS];
 static unsigned as_reports[PROCESS_TASKS][16],as_pending[PROCESS_TASKS][8],as_generation[PROCESS_TASKS];
 static unsigned as_pages[PROCESS_TASKS],as_mapped[PROCESS_TASKS];

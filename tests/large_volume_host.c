@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
-#include "platform.h"
+#include "kernel/platform.h"
 static unsigned char node_arena[FS_CAPACITY], image_arena[FS_IMG_CAPACITY];
 static unsigned char pool_arena[FS_POOL_CAPACITY];
 static unsigned char high_pool[FS_LARGE_POOL_CAPACITY], high_image[FS_LARGE_IMG_CAPACITY];
@@ -21,7 +21,7 @@ int platform_memory_range_available(uint32_t base, uint32_t end) {
 #define FS_POOL_BASE ((uintptr_t)pool_arena)
 #define FS_LARGE_POOL_BASE ((uintptr_t)high_pool)
 #define FS_LARGE_IMG_BASE ((uintptr_t)high_image)
-#include "../src/fs.c"
+#include "../src/kernel/fs.c"
 #include "ata_async_stub.h"
 
 static unsigned char floppy[DISK_SECTORS * SECTOR_SIZE], old_floppy[sizeof(floppy)];
