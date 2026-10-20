@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "sheet_model.h"
+#include "lib/sheet_model.h"
 
 static SheetDoc doc, before;
 static unsigned polls;

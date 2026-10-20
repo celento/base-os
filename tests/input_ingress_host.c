@@ -1,7 +1,7 @@
 /* Ordinary deterministic keyboard/mouse samples against the production FIFO. */
 #include <assert.h>
 #include <stdio.h>
-#include "input_ingress.h"
+#include "kernel/input_ingress.h"
 static InputIngress in;
 static InputSample sample;
 static void fresh(unsigned type) { input_init(&in, 800, 600, 400, 300); input_mouse_type(&in, type); }

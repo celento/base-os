@@ -18,7 +18,7 @@ class SheetModelTests(unittest.TestCase):
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra',
                             '-Werror', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                             '-I', str(ROOT / 'src'), str(ROOT / 'tests' / source),
-                            str(ROOT / 'src/sheet_model.c'), str(ROOT / 'src/decimal.c'),
+                            str(ROOT / 'src/lib/sheet_model.c'), str(ROOT / 'src/lib/decimal.c'),
                             '-o', str(executable)], check=True)
             env = dict(os.environ)
             env.setdefault('ASAN_OPTIONS', 'detect_leaks=0')

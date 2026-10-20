@@ -2,7 +2,7 @@
 #define main writer_fixture_main
 #include "writer_host.c"
 #undef main
-#include "sheet.h"
+#include "apps/sheet.h"
 #define MAX_WIN 8
 #define MENU_NONE (-1)
 enum { WK_EDIT = 5, WK_WRITER = 22, WK_SPREADSHEET = 23 };

@@ -25,7 +25,7 @@ class OwnedAppViewTests(unittest.TestCase):
         compiler = shutil.which('clang') or shutil.which('cc')
         with tempfile.TemporaryDirectory(prefix='baseos-owned-view-process-') as temporary:
             directory = Path(temporary)
-            source = (ROOT / 'src/process.c').read_text()
+            source = (ROOT / 'src/kernel/process.c').read_text()
             extract(source, directory, 'private_space', scheduler=True)
             helpers = ''.join(function(source, name) for name in
                               ('descriptor', 'process_user_root', 'document_parent', 'file_call'))
@@ -39,8 +39,8 @@ class OwnedAppViewTests(unittest.TestCase):
                             '-Wno-unused-function', '-fsanitize=address,undefined',
                             '-I', str(ROOT / 'src'), '-I', str(directory),
                             str(ROOT / 'tests/owned_app_view_process_host.c'),
-                            str(ROOT / 'src/physmem.c'), str(ROOT / 'src/bootinfo.c'),
-                            str(ROOT / 'src/executable.c'), '-o', str(output)], check=True)
+                            str(ROOT / 'src/kernel/physmem.c'), str(ROOT / 'src/kernel/bootinfo.c'),
+                            str(ROOT / 'src/kernel/executable.c'), '-o', str(output)], check=True)
             for ram in (64, 128):
                 subprocess.run([str(output), str(ram), str(image)], check=True, env=dict(os.environ,
                     ASAN_OPTIONS='detect_leaks=0', UBSAN_OPTIONS='halt_on_error=1'))

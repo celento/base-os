@@ -3,14 +3,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "layout.h"
+#include "kernel/layout.h"
 static unsigned char host_presented[FB_CAPACITY];
 #undef PRESENT_BASE
 #define PRESENT_BASE ((uintptr_t)host_presented)
 #define GFX_HOST_TEST
-#include "../src/gfx.c"
+#include "../src/kernel/gfx.c"
 #define IMAGE_VIEWER_HOST_TEST
-#include "../src/image_viewer.c"
+#include "../src/apps/image_viewer.c"
 
 uint8_t app_accent, app_accent_dk, app_text, app_text_dim, app_chrome, app_chrome_dk;
 uint8_t app_body, app_field, app_paper, app_border, app_on_accent;

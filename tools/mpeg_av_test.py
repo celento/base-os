@@ -26,7 +26,7 @@ def host_reference(source,directory,metadata):
     executable=directory/'mpeg-av-host'
     subprocess.run([shutil.which('clang') or 'cc','-std=gnu11','-O1','-g','-Wall','-Wextra','-Werror',
                    '-fsanitize=address,undefined','-DVIDEO_HOST_TEST','-DMEDIA_MP3_HOST_TEST','-I',str(ROOT/'src'),
-                   str(ROOT/'tests/mpeg_av_host.c'),str(ROOT/'src/video.c'),str(ROOT/'src/media_mp3.c'),
+                   str(ROOT/'tests/mpeg_av_host.c'),str(ROOT/'src/lib/video.c'),str(ROOT/'src/lib/media_mp3.c'),
                    '-lm','-o',str(executable)],check=True)
     independent=decode_audio_reference(source,metadata['source_channels'])
     count=independent.stat().st_size//4;actual=directory/'reference.s16'
@@ -52,10 +52,10 @@ def build_guest(build,directory,metadata,controls,native=False):
     (out/'mpeg_av_metadata.h').write_text(''.join(f'#define AV_{key} {value}u\n' for key,value in values.items()))
     subprocess.run([tool('gcc'),'-Os','-ffreestanding','-m32','-fno-pie','-fno-stack-protector','-fno-builtin',
         '-mno-sse','-mno-mmx','-msoft-float',f'-DMPEG_AV_CONTROLS={int(controls)}',f'-DMPEG_NATIVE_TASKS={int(native)}','-I',str(ROOT),'-I',str(ROOT/'src'),
-        '-I',str(build),'-I',str(out),'-c',str(ROOT/'tests/mpeg_av_guest.c'),'-o',str(out/'kernel.o')],check=True)
-    objects=[str(p) for p in sorted(build.glob('*.o')) if p.name!='kernel.o']
+        '-I',str(build),'-I',str(out),'-c',str(ROOT/'tests/mpeg_av_guest.c'),'-o',str(out/'desktop.o')],check=True)
+    objects=[str(p) for p in sorted(build.glob('*.o')) if p.name!='desktop.o']
     subprocess.run([tool('ld'),'-T',str(build/'linker.ld'),'-nostdlib','-m','elf_i386','-z','noexecstack',
-                   '-o',str(out/'kernel.elf'),str(out/'kernel.o'),*objects],check=True)
+                   '-o',str(out/'kernel.elf'),str(out/'desktop.o'),*objects],check=True)
     subprocess.run([tool('objcopy'),'-O','binary',str(out/'kernel.elf'),str(out/'kernel.bin')],check=True)
     c=constants();image=bytearray(c['DISK_SECTORS']*512);image[:512]=(build/'boot.bin').read_bytes()
     install_kernel(image,(out/'kernel.bin').read_bytes(),c);boot=out/'boot.img';boot.write_bytes(image)

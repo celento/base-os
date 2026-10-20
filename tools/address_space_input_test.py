@@ -135,10 +135,10 @@ def source_provenance(args, runtime, modules):
     identity = modules['platform_evidence'].provenance(args.build)
     if identity['built_source']['revision'] != args.expected_revision:
         raise ValueError('Built source does not match --expected-revision')
-    if not re.search(r'^#define BASEOS_BEX2_ENABLED\s+1\s*$', (runtime / 'src/program.h').read_text(), re.M):
+    if not re.search(r'^#define BASEOS_BEX2_ENABLED\s+1\s*$', (runtime / 'src/kernel/program.h').read_text(), re.M):
         raise ValueError('Requires tracked source-enabled production runtime')
     log = args.build_log.read_text()
-    if not any(' -c src/process.c ' in line for line in log.splitlines()):
+    if not any(' -c src/kernel/process.c ' in line for line in log.splitlines()):
         raise ValueError('Missing process compilation in supplied build log')
     if re.search(r'-D\s*BASEOS_BEX2_ENABLED', log):
         raise ValueError('Build-log macro override is not clean source enablement')
@@ -434,7 +434,7 @@ def main(args):
     report['status'] = 'running'
     report_path = args.work / 'report.json'
     report_path.write_text(json.dumps(report, indent=2) + '\n')
-    font = VisibleText(runtime / 'src/font.h')
+    font = VisibleText(runtime / 'src/kernel/font.h')
     try:
         for profile in report['profiles']:
             run_profile(args, profile, report, modules, font)

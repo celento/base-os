@@ -2,7 +2,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "native_ui.h"
+#include "kernel/native_ui.h"
 #ifdef UI_TEST_OWNED
 #define native_ui_open native_ui_adopt
 #endif

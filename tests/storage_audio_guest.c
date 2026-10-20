@@ -1,5 +1,5 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 static unsigned char *const sample=(unsigned char *)VIDEO_BASE;
 static void put16(unsigned offset,unsigned v){sample[offset]=v;sample[offset+1]=v>>8;}
 static void put32(unsigned offset,unsigned v){put16(offset,v);put16(offset+2,v>>16);}

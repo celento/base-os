@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "executable.h"
+#include "kernel/executable.h"
 static unsigned char image[BOS_BEX2_FILE_MAX+1];
 int main(int argc,char **argv) {
     if(argc!=2)return 2;

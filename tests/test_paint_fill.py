@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PaintFillTests(unittest.TestCase):
     def test_regions_boundaries_colors_and_undo(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         first = source.index('#define PAINT_W ')
         last = source.index('static void paint_init(void)', first)
         implementation = re.search(r'^#define TITLE_H\s+\d+', source, re.M).group() + '\n'
@@ -30,7 +30,7 @@ class PaintFillTests(unittest.TestCase):
             compiler = shutil.which('clang') or shutil.which('cc')
             subprocess.run([compiler, '-std=gnu11', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
                             '-fsanitize=address,undefined', '-I', str(ROOT / 'src'), '-I', str(directory),
-                            str(ROOT / 'tests/paint_fill_host.c'), str(ROOT / 'src/history.c'),
+                            str(ROOT / 'tests/paint_fill_host.c'), str(ROOT / 'src/lib/history.c'),
                             '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True, env=dict(
                 os.environ, ASAN_OPTIONS='detect_leaks=0', UBSAN_OPTIONS='halt_on_error=1'))

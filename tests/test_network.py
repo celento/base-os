@@ -15,7 +15,7 @@ class NetworkTests(unittest.TestCase):
             exe = pathlib.Path(temp) / name
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra',
                             '-Werror', '-fsanitize=address,undefined', '-I', str(ROOT / 'src'),
-                            str(ROOT / 'tests' / f'{name}.c'), str(ROOT / 'src/net_wire.c'),
+                            str(ROOT / 'tests' / f'{name}.c'), str(ROOT / 'src/kernel/net_wire.c'),
                             '-o', str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
 

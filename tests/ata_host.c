@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #define ATA_HOST_TEST
-#include "../src/ata.c"
+#include "../src/kernel/ata.c"
 
 static unsigned ticks, word, remaining, position, command_count, flush_count;
 static unsigned platform_calls, status_reads, byte_reads, byte_writes, data_words;

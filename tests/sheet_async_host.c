@@ -5,7 +5,7 @@
 #include "sheet_ui_host.c"
 #undef main
 #define SPREADSHEET_HOST_EXTERNAL_CLIPBOARD
-#include "../src/sheet.c"
+#include "../src/apps/sheet.c"
 
 static void fixture_reset(void) {
     storage_busy = 0; native_result = BOS_PENDING; native_begin_result = BOS_OK;

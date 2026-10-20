@@ -18,7 +18,7 @@ class TerminalMoveTests(unittest.TestCase):
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra',
                             '-Werror', '-fsanitize=address,undefined',
                             '-I', str(ROOT / 'src'), str(ROOT / 'tests/term_move_host.c'),
-                            str(ROOT / 'tests/net_stub.c'), str(ROOT / 'src/download.c'),
+                            str(ROOT / 'tests/net_stub.c'), str(ROOT / 'src/kernel/download.c'),
                             '-DDOWNLOAD_HOST_TEST', '-o', str(output)], check=True)
             subprocess.run([str(output)], check=True,
                            env=dict(os.environ, ASAN_OPTIONS='detect_leaks=0',

@@ -57,12 +57,12 @@ def full_volume():
 
 
 def build_variants(build, directory, baseline):
-    before = subprocess.check_output(['git', '-C', str(ROOT), 'show', baseline + ':src/fs.c'])
-    sources = {'before': before, 'after': (ROOT / 'src/fs.c').read_bytes()}
+    before = subprocess.check_output(['git', '-C', str(ROOT), 'show', baseline + ':src/kernel/fs.c'])
+    sources = {'before': before, 'after': (ROOT / 'src/kernel/fs.c').read_bytes()}
     includes = ['-I', str(ROOT), '-I', str(ROOT / 'src'), '-I', str(build)]
     entry, guest = directory / 'entry.o', directory / 'guest.o'
     subprocess.run(['nasm', '-f', 'elf', '-Dkmain=fs_crc_guest', '-p', str(build / 'layout.inc'),
-                    str(ROOT / 'src/kernel_entry.asm'), '-o', str(entry)], check=True)
+                    str(ROOT / 'src/kernel/kernel_entry.asm'), '-o', str(entry)], check=True)
     subprocess.run([tool('gcc'), *FLAGS, *includes, '-c', str(ROOT / 'tests/fs_crc_guest.c'),
                     '-o', str(guest)], check=True)
     objects = [str(p) for p in sorted(build.glob('*.o')) if p.name not in ('kernel_entry.o', 'fs.o')]

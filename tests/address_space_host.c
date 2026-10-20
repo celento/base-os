@@ -2,7 +2,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
-#include "address_space.h"
+#include "kernel/address_space.h"
 int main(void){
     uint32_t table[1024]={0};
     table[1]=0x680005; /* Read-only text; null page stays absent. */

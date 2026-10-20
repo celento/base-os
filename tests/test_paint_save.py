@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PaintSaveTests(unittest.TestCase):
     def test_new_names_capacity_rollback_lease_and_exact_remount(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         implementation = ''.join(function(source, name) for name in
                                  ('paint_init', 'unique_untitled_pbm',
                                   'paint_write_named', 'paint_save'))

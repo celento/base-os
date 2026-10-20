@@ -1,7 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "sheet_codec.h"
+#include "lib/sheet_codec.h"
 
 /* Ordinary named display, editing and file-interchange cases only. */
 static SheetDoc doc, reopened, before;

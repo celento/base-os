@@ -15,7 +15,7 @@ class CanvasViewTests(unittest.TestCase):
             subprocess.run([shutil.which('cc') or 'cc', '-std=gnu11', '-O1',
                             '-Wall', '-Wextra', '-Werror', '-I', str(ROOT / 'src'),
                             str(ROOT / 'tests/canvas_view_host.c'),
-                            str(ROOT / 'src/canvas_view.c'), '-o', str(output)], check=True)
+                            str(ROOT / 'src/lib/canvas_view.c'), '-o', str(output)], check=True)
             result = subprocess.run([str(output)], check=True, capture_output=True, text=True)
             self.assertIn('widened coordinates passed.', result.stdout)
 
@@ -26,7 +26,7 @@ class CanvasViewTests(unittest.TestCase):
                             '-ffreestanding', '-Os', '-Wall', '-Wextra', '-Werror',
                             '-nostdlib', '-fno-pie', '-fno-pic', '-fno-stack-protector',
                             '-fno-builtin', '-mno-sse', '-mno-mmx', '-msoft-float',
-                            '-I', str(ROOT / 'src'), '-c', str(ROOT / 'src/canvas_view.c'),
+                            '-I', str(ROOT / 'src'), '-c', str(ROOT / 'src/lib/canvas_view.c'),
                             '-o', str(output)], check=True)
             undefined = subprocess.check_output(['nm', '-u', str(output)], text=True)
             self.assertEqual(undefined.strip(), '', 'geometry must link without libgcc/libc')

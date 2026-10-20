@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "image_decode.h"
+#include "lib/image_decode.h"
 
 static unsigned progress_calls;
 static void progress(void) { progress_calls++; }

@@ -71,7 +71,7 @@ alongside its actual HTTP status.
 
 ## Kernel integration
 
-`src/browser.h` is the public interface. The app is a singleton and initializes
+`src/apps/browser.h` is the public interface. The app is a singleton and initializes
 lazily. The desktop owns its window, title bar, app menu, file associations and
 input routing.
 

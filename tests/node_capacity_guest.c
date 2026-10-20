@@ -1,7 +1,7 @@
 /* Normal valid-volume expansion checks; linked into disposable images only. */
-#include "platform.h"
-#include "persist.h"
-#include "fs.h"
+#include "kernel/platform.h"
+#include "kernel/persist.h"
+#include "kernel/fs.h"
 #ifndef NODE_TEST_MODE
 #define NODE_TEST_MODE 1
 #endif

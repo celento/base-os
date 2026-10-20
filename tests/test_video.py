@@ -35,7 +35,7 @@ class VideoTests(unittest.TestCase):
         subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra',
                         '-Werror', '-fsanitize=address,undefined', '-DVIDEO_HOST_TEST','-DMEDIA_MP3_HOST_TEST',
                         '-I', str(ROOT / 'src'), str(ROOT / 'tests/video_host.c'),
-                        str(ROOT / 'src/video.c'), str(ROOT / 'src/media_mp3.c'), '-lm', '-o', str(cls.executable)],
+                        str(ROOT / 'src/lib/video.c'), str(ROOT / 'src/lib/media_mp3.c'), '-lm', '-o', str(cls.executable)],
                        check=True)
         cls.environment = dict(os.environ)
         cls.environment['ASAN_OPTIONS'] = 'detect_leaks=0'

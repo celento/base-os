@@ -3,11 +3,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "platform.h"
-#include "history.h"
-#include "writer.h"
-#include "sheet.h"
-#include "file_view.h"
+#include "kernel/platform.h"
+#include "lib/history.h"
+#include "apps/writer.h"
+#include "apps/sheet.h"
+#include "apps/file_view.h"
 static unsigned char node_arena[FS_CAPACITY], image_arena[FS_IMG_CAPACITY], pool_arena[FS_POOL_CAPACITY];
 #undef FS_BASE
 #undef FS_IMG_BASE
@@ -15,7 +15,7 @@ static unsigned char node_arena[FS_CAPACITY], image_arena[FS_IMG_CAPACITY], pool
 #define FS_BASE ((uintptr_t)node_arena)
 #define FS_IMG_BASE ((uintptr_t)image_arena)
 #define FS_POOL_BASE ((uintptr_t)pool_arena)
-#include "../src/fs.c"
+#include "../src/kernel/fs.c"
 #include "ata_async_stub.h"
 static unsigned char floppy[DISK_SECTORS * SECTOR_SIZE], ide[DATA_DISK_SECTORS * SECTOR_SIZE];
 static int ide_present;

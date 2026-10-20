@@ -7,7 +7,7 @@ static int trace_poll(int operation, unsigned lba, unsigned sectors);
 #define main unused_legacy_fs_main
 #include "fs_host.c"
 #undef main
-#include "../src/native_sync.c"
+#include "../src/kernel/native_sync.c"
 
 static unsigned operations, polls, max_sectors, waits;
 static int kinds[8];

@@ -1,5 +1,5 @@
-#include "net.h"
-#include "platform.h"
+#include "kernel/net.h"
+#include "kernel/platform.h"
 static void lookup(const char *name){
     uint32_t ip=0;
     if(net_resolve(name,&ip)||ip!=0x0a000202){platform_log("NETWORK-DNS-FAIL ");platform_log(name);platform_log(" ");platform_log(net_last_error());platform_log("\n");panic("DNS fixture lookup");}

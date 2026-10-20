@@ -2,9 +2,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "media_mp3.h"
-#include "media.h"
-#include "layout.h"
+#include "lib/media_mp3.h"
+#include "lib/media.h"
+#include "kernel/layout.h"
 int main(int argc,char **argv) {
     assert(argc==3);
     FILE *input=fopen(argv[1],"rb");assert(input);

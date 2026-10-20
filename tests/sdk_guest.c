@@ -1,5 +1,5 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 static void sdk_check(int ok,const char *why){if(!ok)panic(why);}
 static void sdk_command(const char *text){while(*text)term_char(*text++);term_enter();}
 void feature_test(void){

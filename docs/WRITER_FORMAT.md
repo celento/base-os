@@ -12,7 +12,7 @@ dump. Caller-owned buffers provide all document and output storage.
 
 ## Text and formatting model
 
-`src/writer_codec.h` defines `WriterDoc`:
+`src/lib/writer_codec.h` defines `WriterDoc`:
 
 ```c
 typedef struct {

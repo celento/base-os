@@ -1,10 +1,10 @@
 /* Ordinary images decoded and drawn inside the real QEMU kernel. */
-#include "app.h"
-#include "audio.h"
-#include "fs.h"
-#include "image_viewer.h"
-#include "platform.h"
-#include "persist.h"
+#include "ui/app.h"
+#include "kernel/audio.h"
+#include "kernel/fs.h"
+#include "apps/image_viewer.h"
+#include "kernel/platform.h"
+#include "kernel/persist.h"
 #include "image_fixtures.h"
 
 /* This client fixture supplies theme values; all hardware, rendering, storage,

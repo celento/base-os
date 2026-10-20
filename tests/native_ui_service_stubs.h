@@ -1,6 +1,6 @@
 #ifndef NATIVE_UI_SERVICE_STUBS_H
 #define NATIVE_UI_SERVICE_STUBS_H
-#include "native_ui.h"
+#include "kernel/native_ui.h"
 #ifndef NATIVE_UI_REAL_SERVICE
 /* Existing dispatcher/lifecycle fixtures do not configure a hosted UI. The
  * dedicated UI dispatcher fixture links the real core and supplies WM hooks. */

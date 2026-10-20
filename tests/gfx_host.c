@@ -2,12 +2,12 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "layout.h"
+#include "kernel/layout.h"
 static uint8_t test_mirror[FB_CAPACITY];
 #undef PRESENT_BASE
 #define PRESENT_BASE ((uintptr_t)test_mirror)
 #define GFX_HOST_TEST
-#include "../src/gfx.c"
+#include "../src/kernel/gfx.c"
 void kmemset(void *d,int v,int n){memset(d,v,(size_t)n);}
 void kmemcpy(void *d,const void *s,int n){memmove(d,s,(size_t)n);}
 static uint8_t back[73*53],linear[73*53*4+53*12],reference[sizeof linear];

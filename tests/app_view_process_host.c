@@ -9,9 +9,9 @@ static void view_slice(void);
 static unsigned char view_arena[0xC0000],published_arena[NATIVE_CANVAS_CAPACITY];
 #define TERM_MEMORY ((uintptr_t)view_arena)
 #define NATIVE_CANVAS_MEMORY ((uintptr_t)published_arena)
-#include "../src/app_storage.c"
-#include "../src/app_canvas.c"
-#include "../src/app_view.c"
+#include "../src/apps/app_storage.c"
+#include "../src/apps/app_canvas.c"
+#include "../src/apps/app_view.c"
 
 static char last_line[PROCESS_TASKS][81];
 static unsigned line_count[PROCESS_TASKS];

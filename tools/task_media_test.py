@@ -34,9 +34,9 @@ def main():
             subprocess.run([sys.executable,str(ROOT/'tools/bin2c.py'),str(d/f'fpu-{label}.bex'),f'task_fpu_{label}'],stdout=out,check=True)
     server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Fixture);threading.Thread(target=server.serve_forever,daemon=True).start()
     try:
-        subprocess.run([tool('gcc'),'-Os','-ffreestanding','-m32','-fno-pie','-fno-stack-protector','-fno-builtin','-mno-sse','-mno-mmx','-msoft-float','-I',str(ROOT),'-I',str(ROOT/'src'),'-I',str(build),'-I',str(d),f'-DHTTP_PORT="{server.server_port}"','-c',str(ROOT/'tests/task_media_guest.c'),'-o',str(d/'kernel.o')],check=True)
-        objects=[str(p) for p in build.glob('*.o') if p.name!='kernel.o']
-        subprocess.run([tool('ld'),'-T',str(build/'linker.ld'),'-nostdlib','-m','elf_i386','-z','noexecstack','-o',str(d/'kernel.elf'),str(d/'kernel.o'),*objects],check=True)
+        subprocess.run([tool('gcc'),'-Os','-ffreestanding','-m32','-fno-pie','-fno-stack-protector','-fno-builtin','-mno-sse','-mno-mmx','-msoft-float','-I',str(ROOT),'-I',str(ROOT/'src'),'-I',str(build),'-I',str(d),f'-DHTTP_PORT="{server.server_port}"','-c',str(ROOT/'tests/task_media_guest.c'),'-o',str(d/'desktop.o')],check=True)
+        objects=[str(p) for p in build.glob('*.o') if p.name!='desktop.o']
+        subprocess.run([tool('ld'),'-T',str(build/'linker.ld'),'-nostdlib','-m','elf_i386','-z','noexecstack','-o',str(d/'kernel.elf'),str(d/'desktop.o'),*objects],check=True)
         subprocess.run([tool('objcopy'),'-O','binary',str(d/'kernel.elf'),str(d/'kernel.bin')],check=True)
         c=constants();image=bytearray(c['DISK_SECTORS']*512);image[:512]=(build/'boot.bin').read_bytes();install_kernel(image,(d/'kernel.bin').read_bytes(),c);(d/'disk.img').write_bytes(image)
         log=d/'serial.log';log.write_text('');capture=d/'capture.wav'

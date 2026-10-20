@@ -30,7 +30,7 @@ class ExecutableTests(unittest.TestCase):
             subprocess.run([shutil.which('clang') or 'cc', '-std=c11', '-O1', '-g',
                 '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
                 '-I', str(ROOT / 'src'), str(ROOT / 'tests' / (name + '.c')),
-                str(ROOT / 'src/executable.c'), '-o', str(cls.directory / name)], check=True)
+                str(ROOT / 'src/kernel/executable.c'), '-o', str(cls.directory / name)], check=True)
 
     @classmethod
     def tearDownClass(cls):

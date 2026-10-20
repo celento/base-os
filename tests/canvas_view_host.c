@@ -2,7 +2,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
-#include "canvas_view.h"
+#include "lib/canvas_view.h"
 
 enum { TITLE_H = 32, TERM_PAD = 12, EDIT_LINE_H = 19 };
 

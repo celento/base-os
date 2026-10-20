@@ -4,7 +4,7 @@
 #define main document_large_fixture_main
 #include "large_volume_host.c"
 #undef main
-#include "../src/native_sync.c"
+#include "../src/kernel/native_sync.c"
 unsigned large_test_polls;
 static void model_setup(void) {
     high_available = 1; mark(); assert(!fs_init() && fs_load_disk() == FS_LOAD_BLANK);
@@ -15,8 +15,8 @@ static void model_setup(void) {
 #include "native_sync_host.c"
 static void model_setup(void) { setup(); }
 #endif
-#include "writer.h"
-#include "sheet.h"
+#include "apps/writer.h"
+#include "apps/sheet.h"
 static unsigned model_polls;
 void platform_poll(void) { ++model_polls; }
 static void model_drain(void) {

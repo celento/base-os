@@ -2,7 +2,7 @@
 #define main legacy_large_main
 #include "large_volume_host.c"
 #undef main
-#include "../src/native_files.c"
+#include "../src/kernel/native_files.c"
 unsigned large_test_polls;
 int main(void) {
     for (unsigned i = 0; i < sizeof(bytes); ++i) bytes[i] = (char)(i * 17 + i / 4096);

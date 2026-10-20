@@ -1,6 +1,6 @@
-#include "program.h"
-#include "platform.h"
-#include "fs.h"
+#include "kernel/program.h"
+#include "kernel/platform.h"
+#include "kernel/fs.h"
 static int messages,pixels,test;
 static void hex(unsigned v){char s[9];for(int i=0;i<8;i++)s[i]="0123456789ABCDEF"[(v>>(28-i*4))&15];s[8]=0;platform_log(s);}
 static void say(const char *s){(void)s;messages++;}

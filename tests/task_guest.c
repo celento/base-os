@@ -1,5 +1,5 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 #include "task_examples.h"
 #include "process_guest_fixture.h"
 static ProcessHandle task_handles[PROCESS_TASKS];

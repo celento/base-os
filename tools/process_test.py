@@ -7,7 +7,7 @@ build=pathlib.Path(sys.argv[1]).resolve();root=pathlib.Path(__file__).resolve().
 d=pathlib.Path(tempfile.mkdtemp(prefix='baseos-process-'));print(d,flush=True)
 def tool(n):return 'x86_64-elf-'+n if shutil.which('x86_64-elf-'+n) else n
 subprocess.run([tool('gcc'),'-Os','-ffreestanding','-m32','-fno-pie','-fno-stack-protector','-fno-builtin','-mno-sse','-mno-mmx','-msoft-float','-I',str(root/'src'),'-c',str(root/'tests/process_guest.c'),'-o',str(d/'guest.o')],check=True)
-subprocess.run(['nasm','-f','elf','-Dkmain=process_guest','-p',str(build/'layout.inc'),str(root/'src/kernel_entry.asm'),'-o',str(d/'entry.o')],check=True)
+subprocess.run(['nasm','-f','elf','-Dkmain=process_guest','-p',str(build/'layout.inc'),str(root/'src/kernel/kernel_entry.asm'),'-o',str(d/'entry.o')],check=True)
 objects=[str(p) for p in build.glob('*.o') if p.name!='kernel_entry.o']
 subprocess.run([tool('ld'),'-T',str(build/'linker.ld'),'-nostdlib','-m','elf_i386','-z','noexecstack','-o',str(d/'kernel.elf'),str(d/'entry.o'),str(d/'guest.o'),*objects],check=True)
 subprocess.run([tool('objcopy'),'-O','binary',str(d/'kernel.elf'),str(d/'kernel.bin')],check=True)

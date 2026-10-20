@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "writer_pdf.h"
+#include "lib/writer_pdf.h"
 
 /* Named valid boundary/capacity cases, not memory-fault or fuzz probing. These
  * large fixture buffers exist only in this host test, never in the exporter. */

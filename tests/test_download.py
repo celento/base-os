@@ -16,7 +16,7 @@ class DownloadTests(unittest.TestCase):
             executable = pathlib.Path(temporary) / 'download'
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-fsanitize=address,undefined', '-I', str(ROOT / 'src'),
-                            str(ROOT / 'tests/download_host.c'), str(ROOT / 'src/net_wire.c'),
+                            str(ROOT / 'tests/download_host.c'), str(ROOT / 'src/kernel/net_wire.c'),
                             '-o', str(executable)], check=True)
             subprocess.run([str(executable)], check=True)
 

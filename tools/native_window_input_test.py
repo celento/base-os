@@ -138,7 +138,7 @@ def point(state, x, y):
 class ShellFont:
     """Source bitmap matcher for known shell text at an observed UI origin."""
     def __init__(self):
-        source = (ROOT / 'src/font.h').read_text()
+        source = (ROOT / 'src/kernel/font.h').read_text()
         metric = lambda name: int(re.search(r'^#define\s+' + name + r'\s+(\d+)\s*$', source, re.M)[1])
         self.glyphs = {}; self.levels = {}; self.height = {}; self.cell = {}
         for kind, prefix in (('edit', 'EDIT'), ('ui', 'UI')):

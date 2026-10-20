@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "platform.h"
+#include "kernel/platform.h"
 
 static unsigned char node_arena[FS_CAPACITY];
 static unsigned char image_arena[FS_IMG_CAPACITY];
@@ -16,9 +16,9 @@ static unsigned char pool_arena[FS_POOL_CAPACITY];
 #define FS_IMG_BASE ((uintptr_t)image_arena)
 #define FS_POOL_BASE ((uintptr_t)pool_arena)
 int platform_memory_range_available(uint32_t base, uint32_t end) { (void)base; (void)end; return 0; }
-#include "../src/fs.c"
+#include "../src/kernel/fs.c"
 #include "ata_async_stub.h"
-#include "file_clipboard.h"
+#include "apps/file_clipboard.h"
 
 static unsigned char floppy_disk[DISK_SECTORS * SECTOR_SIZE];
 static unsigned char ide_disk[DATA_DISK_SECTORS * SECTOR_SIZE];

@@ -5,10 +5,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "program.h"
-#include "platform.h"
-#include "audio.h"
-#include "fs.h"
+#include "kernel/program.h"
+#include "kernel/platform.h"
+#include "kernel/audio.h"
+#include "kernel/fs.h"
 #include "native_platform_service_stubs.h"
 static unsigned root_is_user;
 static void release_check(unsigned owner){assert(owner&&!root_is_user);}

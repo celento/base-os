@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PhysmemTests(unittest.TestCase):
     def test_production_core(self):
-        source = (ROOT / 'src/process.c').read_text()
+        source = (ROOT / 'src/kernel/process.c').read_text()
         start = source.index('static void protect_memory(void)')
         end = source.index('    unsigned cr4,cr0;', start)
         construction = source[start:end] + '}\n'
@@ -25,17 +25,17 @@ class PhysmemTests(unittest.TestCase):
             subprocess.run([shutil.which('clang') or 'cc', '-std=gnu11', '-O1',
                             '-Wall', '-Wextra', '-Werror', '-I', str(ROOT / 'src'),
                             '-I', str(directory), str(ROOT / 'tests/physmem_host.c'),
-                            str(ROOT / 'src/physmem.c'), str(ROOT / 'src/bootinfo.c'),
+                            str(ROOT / 'src/kernel/physmem.c'), str(ROOT / 'src/kernel/bootinfo.c'),
                             '-o', str(executable)], check=True)
             subprocess.run([str(executable)], check=True)
 
     def test_i386_exact_task_layout(self):
         # Use the actual current type declaration, not a separately maintained
         # facsimile or host-pointer layout. Compile only; never execute process.c.
-        source = (ROOT / 'src/process.c').read_text()
+        source = (ROOT / 'src/kernel/process.c').read_text()
         first = source.index('#define TASK_KEYS ')
         types = source[first:source.index('static NativeTask *tasks=', first)]
-        unit = '#include "program.h"\n#include "platform.h"\n#include "../sdk/baseos_abi.h"\n'
+        unit = '#include "kernel/program.h"\n#include "kernel/platform.h"\n#include "../sdk/baseos_abi.h"\n'
         unit += types
         unit += '''
 _Static_assert(sizeof(void *) == 4, "must compile actual i386 layout");
@@ -63,13 +63,13 @@ unsigned char measured_table_bytes[sizeof(NativeTask) * PROCESS_TASKS];
                   'table end:', hex(0x3000000 + measured['measured_table_bytes']))
 
     def test_late_initialization_order(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         main = source[source.index('void kmain(void)'):]
         self.assertLess(main.index('platform_validate_memory();'), main.index('video_init();'))
         self.assertLess(main.index('video_init();'), main.index('physmem_init()'))
         self.assertLess(main.index('physmem_init()'), main.index('audio_init();'))
-        self.assertNotIn('physmem_init', (ROOT / 'src/platform.c').read_text())
-        self.assertNotIn('physmem_init', (ROOT / 'src/process.c').read_text())
+        self.assertNotIn('physmem_init', (ROOT / 'src/kernel/platform.c').read_text())
+        self.assertNotIn('physmem_init', (ROOT / 'src/kernel/process.c').read_text())
 
 
 if __name__ == '__main__':

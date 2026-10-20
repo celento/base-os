@@ -34,7 +34,7 @@ def prepare(args,runtime,modules):
     work.mkdir(parents=True,exist_ok=True)
     report=dict(passed=False,status='prepared',provenance=desktop.source_provenance(args,runtime,modules),
                 capacity_sources=source_identity(),profiles={},plans={})
-    assert CAPACITY_TEXT in (runtime/'src/term.c').read_text(),'Review new production capacity wording'
+    assert CAPACITY_TEXT in (runtime/'src/apps/term.c').read_text(),'Review new production capacity wording'
     frozen=ROOT/'tests/fixtures/bex1-legacy'
     manifest=json.loads((frozen/'manifest.json').read_text());counter=frozen/'counter.bex'
     assert desktop.artifact(counter)==manifest['files']['counter.bex']
@@ -127,7 +127,7 @@ def main(args):
     report['execution_provenance']=current;report['status']='running'
     path=args.work/'report.json';path.write_text(json.dumps(report,indent=2)+'\n')
     try:
-        font=desktop.VisibleText(runtime/'src/font.h')
+        font=desktop.VisibleText(runtime/'src/kernel/font.h')
         for profile in report['profiles']:
             run_profile(args,profile,report,modules,font);path.write_text(json.dumps(report,indent=2)+'\n')
         report.update(passed=True,status='passed')

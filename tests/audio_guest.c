@@ -1,6 +1,6 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
-#include "../src/audio.h"
+#include "../src/shell/desktop/desktop.c"
+#include "../src/kernel/audio.h"
 /* Dedicated fixture scratch in the remaining gap below disk DMA. */
 static uint8_t *const test_wave=(uint8_t *)(NATIVE_CANVAS_BASE+NATIVE_CANVAS_CAPACITY);
 _Static_assert(NATIVE_CANVAS_BASE+NATIVE_CANVAS_CAPACITY+88200*4+44<=DMA_BASE,

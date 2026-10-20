@@ -1,8 +1,8 @@
 /* Real Media Player, decoded video, desktop dispatch, and x87 preservation.
  * Linked only into the disposable QEMU image built by tools/video_test.py. */
 #define FEATURE_TEST
-#include "../src/kernel.c"
-#include "../src/video.h"
+#include "../src/shell/desktop/desktop.c"
+#include "../src/lib/video.h"
 static void require_video(int ok,const char *message){if(!ok)panic(message);}
 static unsigned video_max_poll_ticks;
 static unsigned video_frame_hash(void) {

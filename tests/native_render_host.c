@@ -3,16 +3,16 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "layout.h"
-#include "term.h"
-#include "app_view.h"
-#include "canvas_view.h"
+#include "kernel/layout.h"
+#include "apps/term.h"
+#include "apps/app_view.h"
+#include "lib/canvas_view.h"
 #include "../assets/cursor_art.h"
 static uint8_t test_mirror[FB_CAPACITY];
 #undef PRESENT_BASE
 #define PRESENT_BASE ((uintptr_t)test_mirror)
 #define GFX_HOST_TEST
-#include "../src/gfx.c"
+#include "../src/kernel/gfx.c"
 #define TITLE_BAR 30
 #define WMENU_H 24
 #define TITLE_H 54

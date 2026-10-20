@@ -3,7 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "../src/native_ui.c"
+#include "../src/kernel/native_ui.c"
 static ProcessBinding owner={BOS_HANDLE_TYPE_PROCESS|1,0,1};
 static NativeUiHost host={{100,100,160,100,160,100},BOS_UI_STATE_AVAILABLE|BOS_UI_STATE_FOCUSED,
     BOS_UI_KIND_HOSTED_CANVAS,NATIVE_UI_CAPABILITIES_HOSTED};

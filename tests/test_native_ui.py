@@ -14,12 +14,12 @@ class NativeUiTests(unittest.TestCase):
             output=Path(temporary)/'native-ui'
             subprocess.run([shutil.which('clang') or 'cc','-std=gnu11','-O1','-g',
                 '-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I',str(ROOT/'src'),
-                str(ROOT/'tests/native_ui_host.c'),str(ROOT/'src/native_ui.c'),
-                str(ROOT/'src/canvas_view.c'),'-o',str(output)],check=True)
+                str(ROOT/'tests/native_ui_host.c'),str(ROOT/'src/kernel/native_ui.c'),
+                str(ROOT/'src/lib/canvas_view.c'),'-o',str(output)],check=True)
             subprocess.run([str(output)],check=True,env=dict(os.environ,
                 ASAN_OPTIONS='detect_leaks=0',UBSAN_OPTIONS='halt_on_error=1'))
     def test_production_desktop_route(self):
-        source=(ROOT/'src/kernel.c').read_text()
+        source=(ROOT/'src/shell/desktop/desktop.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-native-ui-desktop-') as temporary:
             directory=Path(temporary)
             names=('input_gesture_ticks','double_click','win_resize_tick','saver_start',
@@ -32,8 +32,8 @@ class NativeUiTests(unittest.TestCase):
             subprocess.run([shutil.which('clang') or 'cc','-std=gnu11','-O1','-g',
                 '-Wall','-Wextra','-Werror','-Wno-unused-function','-fsanitize=address,undefined',
                 '-I',str(ROOT/'src'),'-I',str(directory),
-                str(ROOT/'tests/native_ui_desktop_host.c'),str(ROOT/'src/native_ui.c'),
-                str(ROOT/'src/canvas_view.c'),str(ROOT/'src/input_ingress.c'),
+                str(ROOT/'tests/native_ui_desktop_host.c'),str(ROOT/'src/kernel/native_ui.c'),
+                str(ROOT/'src/lib/canvas_view.c'),str(ROOT/'src/kernel/input_ingress.c'),
                 '-o',str(output)],check=True)
             subprocess.run([str(output)],check=True,env=dict(os.environ,
                 ASAN_OPTIONS='detect_leaks=0',UBSAN_OPTIONS='halt_on_error=1'))
@@ -42,21 +42,21 @@ class NativeUiTests(unittest.TestCase):
             output=Path(temporary)/'limits'
             subprocess.run([shutil.which('clang') or 'cc','-std=gnu11','-O1','-g',
                 '-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I',str(ROOT/'src'),
-                str(ROOT/'tests/native_ui_limits_host.c'),str(ROOT/'src/canvas_view.c'),
+                str(ROOT/'tests/native_ui_limits_host.c'),str(ROOT/'src/lib/canvas_view.c'),
                 '-o',str(output)],check=True)
             subprocess.run([str(output)],check=True,env=dict(os.environ,
                 ASAN_OPTIONS='detect_leaks=0',UBSAN_OPTIONS='halt_on_error=1'))
     def test_production_process_boundary(self):
         with tempfile.TemporaryDirectory(prefix='baseos-native-ui-process-') as temporary:
             directory=Path(temporary)
-            extract((ROOT/'src/process.c').read_text(),directory,'native_platform')
+            extract((ROOT/'src/kernel/process.c').read_text(),directory,'native_platform')
             output=directory/'native-ui-process'
             subprocess.run([shutil.which('clang') or 'cc','-std=gnu11','-O1','-g',
                 '-Wall','-Wextra','-Werror','-Wno-unused-function','-fsanitize=address,undefined',
                 '-I',str(ROOT/'src'),'-I',str(directory),
-                str(ROOT/'tests/native_ui_process_host.c'),str(ROOT/'src/native_ui.c'),
-                str(ROOT/'src/canvas_view.c'),str(ROOT/'src/physmem.c'),str(ROOT/'src/bootinfo.c'),
-                str(ROOT/'src/executable.c'),'-o',str(output)],check=True)
+                str(ROOT/'tests/native_ui_process_host.c'),str(ROOT/'src/kernel/native_ui.c'),
+                str(ROOT/'src/lib/canvas_view.c'),str(ROOT/'src/kernel/physmem.c'),str(ROOT/'src/kernel/bootinfo.c'),
+                str(ROOT/'src/kernel/executable.c'),'-o',str(output)],check=True)
             subprocess.run([str(output)],check=True,env=dict(os.environ,
                 ASAN_OPTIONS='detect_leaks=0',UBSAN_OPTIONS='halt_on_error=1'))
 if __name__=='__main__':unittest.main()

@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "writer_codec.h"
+#include "lib/writer_codec.h"
 
 /* Fixed, named boundary/format cases, not a fuzz or fault-probe harness. */
 static WriterDoc doc, decoded, before;

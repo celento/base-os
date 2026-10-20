@@ -1,5 +1,5 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 static void check_display(int ok, const char *why) { if (!ok) panic(why); }
 void feature_test(void) {
     if (fs_find_child(fs_root(), "display-test") >= 0) {

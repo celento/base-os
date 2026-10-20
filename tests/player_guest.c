@@ -1,7 +1,7 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
-#include "../src/audio.h"
-#include "../src/player.h"
+#include "../src/shell/desktop/desktop.c"
+#include "../src/kernel/audio.h"
+#include "../src/apps/player.h"
 #include "media_fixture.h"
 static void player_check(int ok,const char *message){if(!ok)panic(message);}
 static void show_player(void) {

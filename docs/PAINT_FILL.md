@@ -39,7 +39,7 @@ ASAN_OPTIONS=detect_leaks=0 python3 -m unittest discover -s tests -p test_paint_
 
 The sanitizer-enabled host test extracts the production constants and current
 Paint initialization, drawing, geometry, input, fill and undo helpers from
-`src/kernel.c`, and links the real `src/history.c`. Only screen rendering and
+`src/shell/desktop/desktop.c`, and links the real `src/lib/history.c`. Only screen rendering and
 palette RGB conversion use host seams; expected canvas bytes are specified
 from ordinary drawings. No alternate flood-fill implementation, fuzz inputs
 or intentional memory faults are used.

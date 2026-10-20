@@ -40,8 +40,8 @@ def prepare(args,work):
     identity=provenance(build)
     assert identity['built_source']['revision']==args.expected_revision
     compilation=args.build_log.read_text()
-    assert '#define BASEOS_BEX2_ENABLED 1' in (runtime/'src/program.h').read_text(), 'Require clean source-enabled candidate'
-    assert any('src/process.c' in line and ' -c ' in line for line in compilation.splitlines()), 'Need process object build provenance'
+    assert '#define BASEOS_BEX2_ENABLED 1' in (runtime/'src/kernel/program.h').read_text(), 'Require clean source-enabled candidate'
+    assert any('src/kernel/process.c' in line and ' -c ' in line for line in compilation.splitlines()), 'Need process object build provenance'
     identity['runtime_build_log']=dict(path=str(args.build_log),sha256=sha(args.build_log))
     frozen=json.loads((ROOT/'tests/fixtures/bex1-legacy/manifest.json').read_text())
     files={}
@@ -62,11 +62,11 @@ def prepare(args,work):
     command=[tool('gcc'),'-std=gnu11','-Os','-g','-Wall','-Wextra','-ffreestanding','-m32',
              '-fno-pie','-fno-pic','-fno-stack-protector','-fno-builtin','-mno-sse','-mno-mmx',
              '-msoft-float','-I',str(runtime),'-I',str(runtime/'src'),
-             '-I',str(build),'-c',str(guest),'-o',str(work/'kernel.o')]
+             '-I',str(build),'-c',str(guest),'-o',str(work/'desktop.o')]
     subprocess.run(command,check=True)
-    objects=[p for p in sorted(build.glob('*.o')) if p.name!='kernel.o']
+    objects=[p for p in sorted(build.glob('*.o')) if p.name!='desktop.o']
     subprocess.run([tool('ld'),'-T',str(build/'linker.ld'),'-nostdlib','-m','elf_i386',
-                    '-z','noexecstack','-o',str(work/'kernel.elf'),str(work/'kernel.o'),*map(str,objects)],check=True)
+                    '-z','noexecstack','-o',str(work/'kernel.elf'),str(work/'desktop.o'),*map(str,objects)],check=True)
     subprocess.run([tool('objcopy'),'-O','binary',str(work/'kernel.elf'),str(work/'kernel.bin')],check=True)
     c=constants();image=bytearray(c['DISK_SECTORS']*512);image[:512]=(build/'boot.bin').read_bytes()
     install_kernel(image,(work/'kernel.bin').read_bytes(),c);(work/'boot.img').write_bytes(image)
@@ -88,17 +88,17 @@ def prepare_rollback(args,work):
     old=args.old_build.resolve();runtime=old.parent
     identity=provenance(old)
     assert identity['built_source']['revision']==args.expected_old_revision
-    assert '#define BASEOS_BEX2_ENABLED 1' not in (runtime/'src/program.h').read_text()
+    assert '#define BASEOS_BEX2_ENABLED 1' not in (runtime/'src/kernel/program.h').read_text()
     directory=work/'rollback';directory.mkdir()
     source=ROOT/'tests/address_space_rollback_guest.c'
     command=[tool('gcc'),'-std=gnu11','-Os','-g','-Wall','-Wextra','-ffreestanding','-m32',
         '-fno-pie','-fno-pic','-fno-stack-protector','-fno-builtin','-mno-sse','-mno-mmx','-msoft-float',
         '-DAS_ROLLBACK_EXPECT='+str(args.old_result),'-I',str(runtime),'-I',str(runtime/'src'),
-        '-I',str(old),'-c',str(source),'-o',str(directory/'kernel.o')]
+        '-I',str(old),'-c',str(source),'-o',str(directory/'desktop.o')]
     subprocess.run(command,check=True)
-    objects=[p for p in sorted(old.glob('*.o')) if p.name!='kernel.o']
+    objects=[p for p in sorted(old.glob('*.o')) if p.name!='desktop.o']
     subprocess.run([tool('ld'),'-T',str(old/'linker.ld'),'-nostdlib','-m','elf_i386',
-        '-z','noexecstack','-o',str(directory/'kernel.elf'),str(directory/'kernel.o'),*map(str,objects)],check=True)
+        '-z','noexecstack','-o',str(directory/'kernel.elf'),str(directory/'desktop.o'),*map(str,objects)],check=True)
     subprocess.run([tool('objcopy'),'-O','binary',str(directory/'kernel.elf'),str(directory/'kernel.bin')],check=True)
     spec=importlib.util.spec_from_file_location('rollback_layout',runtime/'tools/layout.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);c=module.constants()

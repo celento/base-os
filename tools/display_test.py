@@ -19,10 +19,10 @@ def tool(name):
 subprocess.run([tool('gcc'), '-Os', '-ffreestanding', '-m32', '-fno-pie', '-fno-stack-protector',
                 '-fno-builtin', '-mno-sse', '-mno-mmx', '-msoft-float', '-I', str(root),
                 '-I', str(root/'src'), '-I', str(build), '-c', str(root/'tests/display_guest.c'),
-                '-o', str(work/'kernel.o')], check=True)
-objects = [str(p) for p in build.glob('*.o') if p.name != 'kernel.o']
+                '-o', str(work/'desktop.o')], check=True)
+objects = [str(p) for p in build.glob('*.o') if p.name != 'desktop.o']
 subprocess.run([tool('ld'), '-T', str(build/'linker.ld'), '-nostdlib', '-m', 'elf_i386',
-                '-z', 'noexecstack', '-o', str(work/'kernel.elf'), str(work/'kernel.o'), *objects], check=True)
+                '-z', 'noexecstack', '-o', str(work/'kernel.elf'), str(work/'desktop.o'), *objects], check=True)
 subprocess.run([tool('objcopy'), '-O', 'binary', str(work/'kernel.elf'), str(work/'kernel.bin')], check=True)
 c = constants(); disk = bytearray(c['DISK_SECTORS'] * 512)
 disk[:512] = (build/'boot.bin').read_bytes(); install_kernel(disk, (work/'kernel.bin').read_bytes(), c)

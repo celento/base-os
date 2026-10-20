@@ -1,4 +1,4 @@
-"""Render the icon set into src/icons.h.
+"""Render the icon set into src/ui/icons.h.
 
 The icons are from Lucide (ISC license, see third_party/lucide/LICENSE). Get the
 font with `npm pack lucide-static@1.57.0` and pass the extracted package folder:
@@ -104,7 +104,7 @@ def main():
     for (name, lucide), image in zip(ICONS, small):
         lines.append(f"    /* {name} ({lucide}) */ {{{packed(image)}}},")
     lines += ["};", "#endif", "", "#endif", ""]
-    (ROOT / "src/icons.h").write_text("\n".join(lines))
+    (ROOT / "src/ui/icons.h").write_text("\n".join(lines))
 
     if args.sheet:
         cols, cell = 12, ICON_SIZE + 6
@@ -113,7 +113,7 @@ def main():
         for i, image in enumerate(small):
             sheet.paste(image, ((i % cols) * cell + 3, (i // cols) * cell + 3))
         sheet.resize((sheet.width * 3, sheet.height * 3), Image.NEAREST).save(args.sheet)
-    print(f"Wrote {len(ICONS)} icons at {ICON_SIZE} px to src/icons.h")
+    print(f"Wrote {len(ICONS)} icons at {ICON_SIZE} px to src/ui/icons.h")
 
 
 if __name__ == "__main__":

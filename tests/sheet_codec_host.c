@@ -2,7 +2,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
-#include "sheet_codec.h"
+#include "lib/sheet_codec.h"
 
 /* Named editing/interchange cases only; no fuzzing or memory-fault probes. */
 static SheetDoc doc, decoded, before;

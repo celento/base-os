@@ -2,7 +2,7 @@
 #define main writer_fixture_main
 #include "writer_host.c"
 #undef main
-#include "app.h"
+#include "ui/app.h"
 #define MAX_WIN 8
 #define MENUBAR_H 0
 #define BTN_H 30

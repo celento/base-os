@@ -161,7 +161,7 @@ class DocumentCollectorTest(unittest.TestCase):
         self.assertEqual(regions, ['footer'])
 
     def test_white_ui_glyph_match_and_one_core_pixel_rejection(self):
-        matcher = WhiteUiText(ROOT / 'src/font.h')
+        matcher = WhiteUiText(ROOT / 'src/kernel/font.h')
         template = matcher.template('Cancel')
         width = sum(matcher.advances[ord(c) - 32] for c in 'Cancel') + matcher.cell
         self.assertEqual(template.shape, (matcher.height, width))
@@ -177,7 +177,7 @@ class DocumentCollectorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             session = Session.__new__(Session)
             session.directory = pathlib.Path(temporary)
-            matcher = WhiteUiText(ROOT / 'src/font.h')
+            matcher = WhiteUiText(ROOT / 'src/kernel/font.h')
             template = matcher.template('Cancel')
             pixels = np.full((80, 150, 3), (40, 92, 177), dtype=np.uint8)
             pixels[21:21 + template.shape[0], 33:33 + template.shape[1]][template] = 255
@@ -193,7 +193,7 @@ class DocumentCollectorTest(unittest.TestCase):
             self.assertFalse(session.has_text(event, 'Discard'))
 
     def test_filename_glyph_positive_and_one_core_pixel_rejection(self):
-        matcher = WhiteUiText(ROOT / 'src/font.h')
+        matcher = WhiteUiText(ROOT / 'src/kernel/font.h')
         template = matcher.template('document.rtf')
         pixels = np.full((80, 376, 3), 246, dtype=np.uint8)
         x, y = 12, 8
@@ -207,7 +207,7 @@ class DocumentCollectorTest(unittest.TestCase):
         self.assertEqual(name_field_bounds(1280, 720), (452, 204, 828, 282))
         with tempfile.TemporaryDirectory() as temporary:
             session = Session.__new__(Session); session.directory = pathlib.Path(temporary)
-            matcher = WhiteUiText(ROOT / 'src/font.h')
+            matcher = WhiteUiText(ROOT / 'src/kernel/font.h')
             for word, x, expected in (('document.rtf', 464, True), ('document.rtfX', 464, False),
                                       ('document.rtf', 40, False), ('Xdocument.rtf', 464, False)):
                 pixels = np.full((720, 1280, 3), 246, dtype=np.uint8)

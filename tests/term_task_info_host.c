@@ -6,10 +6,10 @@ static unsigned char terminal_arena[0x100000];
 static unsigned char published_arena[NATIVE_CANVAS_CAPACITY];
 #define NATIVE_CANVAS_MEMORY ((uintptr_t)published_arena)
 #define TERM_MEMORY ((uintptr_t)terminal_arena)
-#include "../src/app_storage.c"
-#include "../src/app_canvas.c"
-#include "../src/app_view.c"
-#include "../src/term.c"
+#include "../src/apps/app_storage.c"
+#include "../src/apps/app_canvas.c"
+#include "../src/apps/app_view.c"
+#include "../src/apps/term.c"
 #define V (views[selected])
 #include "../sdk/baseos_abi.h"
 /* Exact handles resolve records first. Slot-indexed views keep the Terminal
