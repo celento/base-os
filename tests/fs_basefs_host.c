@@ -402,10 +402,12 @@ int main(void) {
     assert(mount() == 0);
     int batch = fs_mkdir(0, "Batch");
     assert(batch > 0);
-    for (int i = 0; i < 4; ++i) {
+    /* Eight 1 MiB files: the copy passes the changed-data limit and saves
+     * after five, then the eighth no longer fits. */
+    for (int i = 0; i < 8; ++i) {
         cached[5] = (char)('0' + i);
         int id = fs_create(batch, cached);
-        assert(id > 0 && fs_write(id, fill, FS_FILE_MAX) == FS_FILE_MAX);
+        assert(id > 0 && fs_write(id, fill, FS_FILE_MAX / 2) == FS_FILE_MAX / 2);
     }
     assert(fs_sync() == 0);
     int nodes_before = fs_node_count();
