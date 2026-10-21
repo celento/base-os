@@ -69,12 +69,8 @@ def check_runtime(session, names, kernel):
             expected = kernel[offset:offset + end - start]
             assert session.memory(start, len(expected)) == expected, hex(start)
             immutable_bytes += len(expected)
-        # Only the plain prefix is raw at the BIOS stage. Its initial GDT has
-        # CPU-updated Accessed bits, so compare immutable ranges around it.
-        for start, end in ((0, names['gdt_start'] - C['KERNEL_LOAD_ADDR']),
-                           (names['__bootstrap_end'] - C['KERNEL_LOAD_ADDR'],
-                            C['KERNEL_BOOTSTRAP_BYTES'])):
-            assert session.memory(C['KERNEL_STAGE_ADDR'] + start, end - start) == kernel[start:end]
+        # The BIOS staging area is reused for kernel BSS once the kernel is
+        # unpacked (layout.h KERNEL_BSS_BASE), so the staged prefix is gone.
         gdtr = session.memory(C['BOOTINFO_ADDR'] + 0x40, 6)
         assert struct.unpack('<HI', gdtr) == (47, names['gdt_start'])
         # The active TSS uses the existing independent 64 KiB task syscall stack.
@@ -151,9 +147,9 @@ def full_kernel(build, directory):
                         '-z', 'noexecstack', '-o', str(elf), *map(str, objects), str(obj)], check=True)
         subprocess.run([tool('objcopy'), '-O', 'binary', str(elf), str(binary)], check=True)
     link(0)
-    target = 0xA0000  # 640 KiB initialized, beyond the old raw disk ceiling.
+    target = 0xE0000  # 896 KiB initialized, beyond the old raw disk ceiling.
     padding = target - binary.stat().st_size
-    assert padding >= 0, 'normal kernel exceeds the 640 KiB growth fixture'
+    assert padding >= 0, 'normal kernel exceeds the 896 KiB growth fixture'
     link(padding)
     data = binary.read_bytes()
     assert len(data) == target
