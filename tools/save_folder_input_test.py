@@ -40,13 +40,15 @@ def run(build):
         assert check.state(editor)['cwd'] == 2
         session.key('ctrl-end'); session.text(' edited')
         replace_folder('/Documents/TextFolder', '/Documents/ReplacementText')
-        nodes = load(disk.read_bytes())[2]; assert nodes[2]['directory'] and nodes[2]['name'] != 'TextFolder'
+        # The disk names nodes by path: BaseFS 2 does not keep the numeric slots.
+        nodes = load(disk.read_bytes())[2]; assert nodes[resolve(nodes, '/Documents/ReplacementText')]['directory']
         session.key('ctrl-s'); session.wait(lambda: ui.o.integer('name_dlg') == 1, 'Editor Save As')
         assert check.state(editor)['cwd'] == 0
         shots.append(str(session.screenshot('editor-reused-folder-root-fallback.png')))
         ui.name('plain-rescued.txt')
         assert ui.o.integer('name_dlg') and ui.o.integer('name_failed')
-        assert load(disk.read_bytes())[2][10]['data'] == b'Pre-existing root document'
+        nodes = load(disk.read_bytes())[2]
+        assert nodes[resolve(nodes, '/plain-rescued.txt')]['data'] == b'Pre-existing root document'
         ui.name('plain-rescued-2.txt')
         session.wait(lambda: not ui.o.integer('name_dlg'), 'rescued Editor save completed')
         nodes = load(disk.read_bytes())[2]
@@ -58,7 +60,7 @@ def run(build):
         assert check.state(writer)['cwd'] == 4
         session.key('ctrl-end'); session.text(' styled'); rich = ui.content()
         replace_folder('/Documents/RichFolder', '/Documents/ReplacementRich')
-        nodes = load(disk.read_bytes())[2]; assert nodes[4]['directory'] and nodes[4]['name'] != 'RichFolder'
+        nodes = load(disk.read_bytes())[2]; assert nodes[resolve(nodes, '/Documents/ReplacementRich')]['directory']
         session.key('ctrl-s'); session.wait(lambda: ui.o.integer('name_dlg') == 1, 'Writer Save As')
         assert check.state(writer)['cwd'] == 0
         shots.append(str(session.screenshot('writer-reused-folder-root-fallback.png')))

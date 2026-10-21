@@ -1,6 +1,7 @@
 /* Ordinary images decoded and drawn inside the real QEMU kernel. */
 #include "ui/app.h"
 #include "kernel/audio.h"
+#include "kernel/physmem.h"
 #include "kernel/fs.h"
 #include "apps/image_viewer.h"
 #include "kernel/platform.h"
@@ -173,6 +174,8 @@ void image_guest(void) {
     app_accent = gfx_rgb(43, 103, 190); app_text = gfx_gray(30); app_text_dim = gfx_gray(90);
     app_chrome = gfx_gray(239); app_chrome_dk = gfx_gray(190);
     disk_configure(bi->sectors_per_track);
+    /* BaseFS 2 volumes allocate from the kernel heap, as under kmain. */
+    if (physmem_init() != PHYS_OK) platform_log("PANIC: physmem\n");
     fs_init(); fs_load_disk(); check(fs_file_limit() == IMAGE_MAX_FILE_BYTES, "large data volume available");
 #ifdef IMAGE_TEST_AUDIO
     audio_benchmark();

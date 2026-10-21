@@ -6,7 +6,8 @@ python3 tools/volume.py build/baseos-data.img export /Pictures/picture.bmp pictu
 python3 tools/volume.py build/baseos.img ls /docs
 python3 tools/volume.py build/baseos.img mkdir /Projects
 
-Legacy floppy snapshots and explicitly marked 16 MiB or 64 MiB data disks are supported.
+Legacy floppy snapshots, explicitly marked 16 MiB or 64 MiB snapshot data disks
+and BaseFS 2 data disks of any size are supported.
 Create a new data image with init_data.py, then boot BaseOS once before importing.
 """
 import argparse
@@ -21,6 +22,7 @@ import stat
 import struct
 import tempfile
 import zlib
+import basefs
 from layout import constants
 
 C = constants()
@@ -57,6 +59,8 @@ class VolumeLayout:
 
     def capacity(self, count):
         """Preserve the full old v4 capacity; reserve extra records as needed."""
+        if self.kind == 'basefs':
+            return self.total_limit
         if self.kind == 'data':
             return self.payload_limit - max(LEGACY_NODES, count) * 40
         return self.total_limit
@@ -79,6 +83,12 @@ LARGE_DATA_LAYOUT = VolumeLayout('data', C['DATA_LARGE_DISK_SECTORS'], C['DATA_L
 DATA_PROFILES = {'default': DATA_LAYOUT, 'large': LARGE_DATA_LAYOUT}
 
 
+def basefs_layout(sectors):
+    """BaseFS 2 has no slots; file and node limits are the kernel's current ones."""
+    return VolumeLayout('basefs', sectors, 0, (), 0, LARGE_DATA_FILE_LIMIT,
+                        sectors * SECTOR_SIZE, MAX_NODES, basefs.MARKER_VERSION)
+
+
 def data_layout(profile='default'):
     try:
         return DATA_PROFILES[profile]
@@ -96,6 +106,8 @@ def data_marker(profile='default'):
 
 def disk_layout(data):
     """Recognize only exact known geometry and complete checksummed markers."""
+    if basefs.probe(data):
+        return basefs_layout(len(data) // SECTOR_SIZE)
     for profile, layout in DATA_PROFILES.items():
         if len(data) == layout.sectors * SECTOR_SIZE:
             if data[:SECTOR_SIZE] != data_marker(profile):
@@ -118,7 +130,7 @@ def decode(data, slot, layout=None):
         layout = layout or disk_layout(data)
     except ValueError:
         return None
-    if slot not in (0, 1):
+    if slot not in (0, 1) or layout.kind == 'basefs':
         return None
     start = layout.lbas[slot] * SECTOR_SIZE
     if len(data) < start + layout.slot_sectors * SECTOR_SIZE:
@@ -187,8 +199,42 @@ def decode(data, slot, layout=None):
     return (gen if version >= 2 else 0), nodes
 
 
+def basefs_nodes(records):
+    return {i: dict(name=r['name'].decode('latin1'), parent=r['parent'],
+                    directory=int(bool(r['flags'] & basefs.DIRECTORY)),
+                    app=int(bool(r['flags'] & basefs.APP)), data=r['data'], modified=r['modified'])
+            for i, r in enumerate(records)}
+
+
+def basefs_records(nodes):
+    """Records in node order; parents become record indices."""
+    order = sorted(nodes)
+    if not order or order[0] != 0:
+        raise ValueError('Volume has no root')
+    index = {ident: i for i, ident in enumerate(order)}
+    records = []
+    for ident in order:
+        n = nodes[ident]
+        name = n['name'].encode('latin1')
+        if ident and (not 0 < len(name) < 24 or b'\0' in name or b'/' in name):
+            raise ValueError('Invalid file name')
+        if len(n['data']) > LARGE_DATA_FILE_LIMIT:
+            raise ValueError(f'File exceeds {LARGE_DATA_FILE_LIMIT:,} bytes')
+        records.append(dict(parent=index[n['parent']] if ident else -1,
+                            flags=(basefs.DIRECTORY if n['directory'] else 0) | (basefs.APP if n['app'] else 0),
+                            identity=ident + 1, revision=0, modified=n['modified'],
+                            data=bytes(n['data']), name=name if ident else b''))
+    siblings = {(r['parent'], r['name']) for r in records[1:]}
+    if len(siblings) != len(records) - 1:
+        raise ValueError('Duplicate names in a folder')
+    return records
+
+
 def load(data):
     layout = disk_layout(data)
+    if layout.kind == 'basefs':
+        slot, sup, records, _ = basefs.mount(data)
+        return slot, sup['generation'], basefs_nodes(records)
     valid = [(i, result) for i in range(2)
              if (result := decode(data, i, layout)) is not None]
     if not valid:
@@ -286,13 +332,20 @@ def commit(image, data, slot, generation, nodes, *, original=None):
     actual_slot, actual_generation, _ = load(data)
     if (slot, generation) != (actual_slot, actual_generation):
         raise ValueError('Snapshot changed; refusing stale update')
-    header, payload = encode_snapshot(nodes, layout, generation + 1)
-    start = layout.lbas[1 - slot] * SECTOR_SIZE
-    updated = bytearray(data)
-    updated[start:start + SECTOR_SIZE] = header.ljust(SECTOR_SIZE, b'\0')
-    updated[start + SECTOR_SIZE:start + SECTOR_SIZE + len(payload)] = payload
-    if decode(updated, 1 - slot, layout) is None:
-        raise ValueError('Invalid filesystem snapshot; refusing update')
+    if layout.kind == 'basefs':
+        if len(nodes) > layout.node_limit:
+            raise ValueError('No free file slots')
+        updated = basefs.update(data, basefs_records(nodes))
+        if basefs_nodes(basefs.mount(updated)[2]) != basefs_nodes(basefs_records(nodes)):
+            raise ValueError('Invalid filesystem commit; refusing update')
+    else:
+        header, payload = encode_snapshot(nodes, layout, generation + 1)
+        start = layout.lbas[1 - slot] * SECTOR_SIZE
+        updated = bytearray(data)
+        updated[start:start + SECTOR_SIZE] = header.ljust(SECTOR_SIZE, b'\0')
+        updated[start + SECTOR_SIZE:start + SECTOR_SIZE + len(payload)] = payload
+        if decode(updated, 1 - slot, layout) is None:
+            raise ValueError('Invalid filesystem snapshot; refusing update')
     backup = image.with_name(image.name + '.' + hashlib.sha256(data).hexdigest()[:16] + '.bak')
     try:
         with backup.open('xb') as f:
@@ -323,6 +376,12 @@ def commit(image, data, slot, generation, nodes, *, original=None):
 def show_info(data):
     layout = disk_layout(data)
     print(f'Type: {layout.kind} ({len(data):,} bytes)')
+    if layout.kind == 'basefs':
+        slot, sup, records, used = basefs.mount(data)
+        print(f'Format: BaseFS 2; generation {sup["generation"]} in superblock slot {slot}')
+        print(f'Used: {sum(len(r["data"]) for r in records):,} file bytes; {len(records)} nodes')
+        print(f'Free: {(len(data) // basefs.BLOCK - len(used)) * basefs.BLOCK:,} bytes')
+        return
     print(f'Snapshot version: {layout.version}')
     print(f'File limit: {layout.file_limit:,} bytes')
     print(f'Snapshot payload capacity: {layout.payload_limit:,} bytes')

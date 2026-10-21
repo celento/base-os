@@ -1,6 +1,7 @@
 /* Normal valid-volume expansion checks; linked into disposable images only. */
 #include "kernel/platform.h"
 #include "kernel/persist.h"
+#include "kernel/physmem.h"
 #include "kernel/fs.h"
 #ifndef NODE_TEST_MODE
 #define NODE_TEST_MODE 1
@@ -27,6 +28,8 @@ static void name_for(char *name, unsigned number) {
 void node_capacity_guest(void) {
     platform_validate_memory();
     disk_configure(((BootInfo *)BOOTINFO_ADDR)->sectors_per_track);
+    /* BaseFS 2 volumes allocate from the kernel heap, as under kmain. */
+    if (physmem_init() != PHYS_OK) platform_log("PANIC: physmem\n");
     fs_init(); int loaded = fs_load_disk();
     require(fs_node_limit() == 256 && fs_file_limit() == 2097152u, "node test: wrong IDE limits");
 #if NODE_TEST_MODE == 1
@@ -52,7 +55,8 @@ void node_capacity_guest(void) {
         verify(copy, 1213, 188);
         require(fs_create_app(0, "Test App") > 0, "node test: app create failed");
         require(fs_create(0, "empty1") > 0 && fs_create(0, "empty2") > 0, "node test: fill slots failed");
-        require(fs_node_count() == 256 && fs_capacity() == 8377344u, "node test: 256 count/capacity wrong");
+        /* BaseFS 2 keeps at least the snapshot format's 256-node allowance. */
+        require(fs_node_count() == 256 && fs_capacity() >= 8377344u, "node test: 256 count/capacity wrong");
         synced();
         require(fs_create(0, "overflow") == -1 && !fs_needs_sync(), "node test: full slots changed state");
         platform_log("NODE-256-WRITE-PASS\n");

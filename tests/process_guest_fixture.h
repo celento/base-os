@@ -1,12 +1,17 @@
 #ifndef PROCESS_GUEST_FIXTURE_H
 #define PROCESS_GUEST_FIXTURE_H
 #include "kernel/physmem.h"
+#include "kernel/kheap.h"
 /* FEATURE_TEST guests include the real kmain: validated RAM/video and late
  * physmem initialization have already run. Never initialize a ready core twice. */
 static inline PhysmemStats guest_process_memory(void){
     PhysmemStats stats;
     if(physmem_stats(&stats)!=PHYS_OK||stats.free+stats.allocated!=stats.total)
         panic("guest owned-page accounting unavailable");
+    /* The kernel heap grows and shrinks with volume saves that may run while
+     * a process does; count its pages as free so only process pages compare. */
+    unsigned heap=stats.by_kind[PHYS_KERNEL_HEAP];
+    stats.allocated-=heap;stats.free+=heap;stats.by_kind[PHYS_KERNEL_HEAP]=0;
     return stats;
 }
 static inline void guest_process_memory_restored(const PhysmemStats *before){

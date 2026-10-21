@@ -12,6 +12,7 @@ static unsigned char node_arena[FS_CAPACITY], image_arena[FS_IMG_CAPACITY], pool
 #define FS_BASE ((uintptr_t)node_arena)
 #define FS_IMG_BASE ((uintptr_t)image_arena)
 #define FS_POOL_BASE ((uintptr_t)pool_arena)
+#include "fs_basefs_support.h"
 #include "../src/kernel/fs.c"
 #include "ata_async_stub.h"
 static unsigned char floppy[DISK_SECTORS * SECTOR_SIZE], ide[DATA_DISK_SECTORS * SECTOR_SIZE];

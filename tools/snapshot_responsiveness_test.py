@@ -23,16 +23,30 @@ from init_data import initialize
 from large_audio_input_test import verify_complete_capture
 from mp3_test import host_decode
 from qemu_session import DesktopSession
+import basefs
 from volume import data_layout, decode, encode_snapshot, load, resolve
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MAGIC = 0x31505253
 FIELDS = 'phase keys busy ticks iterations max_busy_gap persisted verified'.split()
 COLORS = ((216, 58, 58), (242, 201, 76), (42, 167, 200), (168, 74, 192))
+BULK_BYTES, BULK_FILES = 12288, 20  # rewritten by the probe's T, as in tests/snapshot_responsive_app.c
 
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def bulk_pattern():
+    return bytes((i * 7 + (i >> 9)) & 255 for i in range(BULK_BYTES))
+
+
+def path_of(nodes, ident):
+    names = []
+    while ident:
+        names.append(nodes[ident]['name'])
+        ident = nodes[ident]['parent']
+    return '/' + '/'.join(reversed(names))
 
 
 def fnv(data):
@@ -62,7 +76,8 @@ def fixture(directory, profile, song, app, seed=None):
                (documents, 'report.bin', bytes(1024)),
                (documents, 'manifest.bin', struct.pack('<16I', *manifest)),
                (programs, 'snap-probe.bex', app.read_bytes()),
-               (documents, 'harbor-test.mp3', song.read_bytes())]
+               (documents, 'harbor-test.mp3', song.read_bytes()),
+               *[(documents, f'bulk{i:02}.bin', bytes(BULK_BYTES)) for i in range(BULK_FILES)]]
     entries += [(documents, f'payload{i}.bin', data) for i, data in enumerate(payloads)]
     for parent, name, content in entries:
         ident = next(i for i in range(layout.node_limit) if i not in nodes)
@@ -182,11 +197,19 @@ class Session(DesktopSession):
             values.append(value)
         return dict(zip(FIELDS, values)), pixels, dumped
 
-    def wait_observe(self, predicate, message, seconds=90, keep=None, interval=.05):
+    def wait_observe(self, predicate, message, seconds=90, keep=None, interval=.05, settle=False):
         end = time.monotonic() + seconds
         while time.monotonic() < end:
             self.keep_awake()
-            observed, pixels, wall = self.observe()
+            try:
+                observed, pixels, wall = self.observe()
+            except AssertionError:
+                # While the window first appears it may still move or repaint;
+                # find the canvas again instead of failing on a stale position.
+                if not settle:
+                    raise
+                self.canvas = None
+                observed = None
             if observed is not None and predicate(observed):
                 if keep:
                     observed, pixels, wall = self.observe(keep)
@@ -231,22 +254,23 @@ def make_seed(build, directory):
 def validate_saved(disk, original):
     raw = disk.read_bytes()
     slot, generation, nodes = load(raw)
-    changing = {resolve(original, '/Documents/' + name) for name in ('trigger.bin', 'probe.bin', 'report.bin')}
-    try:
-        session_id = resolve(original, '/prefs/session')
-    except ValueError:
-        session_id = -1
+    changing = {'/Documents/' + name for name in ('trigger.bin', 'probe.bin', 'report.bin',
+                                                  *(f'bulk{i:02}.bin' for i in range(BULK_FILES)))}
     for ident, expected in original.items():
-        actual = nodes[ident]
-        if ident == session_id:
+        # BaseFS 2 does not keep numeric node slots, so match nodes by path.
+        path = path_of(original, ident)
+        actual = nodes[resolve(nodes, path)]
+        if path == '/prefs/session':
             continue  # The desktop legitimately persists its open windows.
-        if ident in changing:
+        if path in changing:
             fields = ('name', 'parent', 'directory', 'app')
             assert {k: actual[k] for k in fields} == {k: expected[k] for k in fields}
         else:
             assert actual == expected, ('Original payload/metadata changed', ident)
     assert nodes[resolve(nodes, '/Documents/trigger.bin')]['data'] == b'B'
     assert nodes[resolve(nodes, '/Documents/probe.bin')]['data'] == b'P'
+    for i in range(BULK_FILES):
+        assert nodes[resolve(nodes, f'/Documents/bulk{i:02}.bin')]['data'] == bulk_pattern()
     report = struct.unpack('<256I', nodes[resolve(nodes, '/Documents/report.bin')]['data'])
     assert report[:3] == (MAGIC, 1, 70)
     assert report[7] > 0 and report[8] > 0 and report[12] == 0 and report[13] == ord('B'), report[:16]
@@ -255,8 +279,12 @@ def validate_saved(disk, original):
                    for i in range(min(report[8], 64))]
     assert sum(sample['busy'] for sample in key_samples) >= 2, key_samples
     assert generation > 1
-    valid = [dict(slot=i, generation=decoded[0]) for i in range(2)
-             if (decoded := decode(raw, i)) is not None]
+    if basefs.probe(raw):
+        valid = [dict(slot=i, generation=sup['generation']) for i in range(2)
+                 if (sup := basefs.read_super(raw, i)) is not None]
+    else:
+        valid = [dict(slot=i, generation=decoded[0]) for i in range(2)
+                 if (decoded := decode(raw, i)) is not None]
     return dict(slot=slot, generation=generation, valid_slots=valid, disk_sha256=sha(raw),
                 report_words=list(report[:16]), key_samples=key_samples,
                 lease_seconds=(report[6] - report[3]) / 70,
@@ -273,6 +301,12 @@ def durable_report(disk, serial):
         return 0
     try:
         raw = disk.read_bytes()
+        if basefs.probe(raw):
+            sup = basefs.mount(raw)[1]
+            generation = sup['generation'] & 0xffffffff
+            nodes = load(raw)[2]
+            data = nodes[resolve(nodes, '/Documents/report.bin')]['data']
+            return generation if generation in completed and data[:4] == struct.pack('<I', MAGIC) else 0
         for slot in range(2):
             decoded = decode(raw, slot)
             if decoded is None or decoded[0] not in completed:
@@ -303,7 +337,8 @@ def run_profile(build, work, profile, song, reference, app, audio_seconds, seed=
         session.launch('harbor-test.mp3')
         audio_start = time.monotonic()
         session.launch('snap-probe.bex')
-        initial, _, _ = session.wait_observe(lambda o: o['phase'] == 0, 'native app visible', keep='ready')
+        initial, _, _ = session.wait_observe(lambda o: o['phase'] == 0, 'native app visible', keep='ready',
+                                            settle=True)
         for _ in range(16):
             session.command('input-send-event', {'events': [
                 {'type': 'rel', 'data': {'axis': 'x', 'value': -80}},

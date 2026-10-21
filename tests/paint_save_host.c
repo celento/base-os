@@ -17,6 +17,7 @@ static unsigned char paint_arena[PAINT_CAPACITY], history_arena[PAINT_HISTORY_CA
 #define FS_POOL_BASE ((uintptr_t)pool_arena)
 #define PAINT_MEM ((uintptr_t)paint_arena)
 #define PAINT_HISTORY_BASE ((uintptr_t)history_arena)
+#include "fs_basefs_support.h"
 #include "../src/kernel/fs.c"
 #include "ata_async_stub.h"
 static unsigned char floppy[DISK_SECTORS * SECTOR_SIZE], ide[DATA_DISK_SECTORS * SECTOR_SIZE];

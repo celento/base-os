@@ -29,9 +29,10 @@ void feature_test(void){
     draft_check(first>=0&&second>=0,"draft files created");
     int fillers[8],count=0;char *bytes=(char *)DOWNLOAD_BASE;kmemset(bytes,'x',FS_FILE_MAX);
     while(fs_used_bytes()<fs_capacity()){
-        unsigned remaining=fs_capacity()-fs_used_bytes();if(remaining>FS_FILE_MAX)remaining=FS_FILE_MAX;
         char name[]="filler0";name[6]+=(char)count;
         int id=fs_create(fs_root(),name);draft_check(id>=0&&count<8,"filler file slot");
+        /* Each node can lower the capacity, so measure after creating it. */
+        unsigned remaining=fs_capacity()-fs_used_bytes();if(remaining>FS_FILE_MAX)remaining=FS_FILE_MAX;
         draft_check(fs_write(id,bytes,(int)remaining)==(int)remaining,"fill exact storage capacity");fillers[count++]=id;
     }
     int before_nodes=fs_node_count();

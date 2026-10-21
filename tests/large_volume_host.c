@@ -21,6 +21,7 @@ int platform_memory_range_available(uint32_t base, uint32_t end) {
 #define FS_POOL_BASE ((uintptr_t)pool_arena)
 #define FS_LARGE_POOL_BASE ((uintptr_t)high_pool)
 #define FS_LARGE_IMG_BASE ((uintptr_t)high_image)
+#include "fs_basefs_support.h"
 #include "../src/kernel/fs.c"
 #include "ata_async_stub.h"
 

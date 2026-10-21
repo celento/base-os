@@ -1,6 +1,8 @@
 #include "kernel/fs.h"
 #include "kernel/persist.h"
 #include "kernel/ata.h"
+#include "kernel/basefs.h"
+#include "kernel/kheap.h"
 
 #include "kernel/platform.h"
 #define FS_SECTOR_SIZE SECTOR_SIZE
@@ -12,6 +14,12 @@
 #define FS_LARGE_DATA_PAYLOAD ((DATA_LARGE_SLOT_SECTORS - 1) * SECTOR_SIZE)
 #define FS_DATA_PAYLOAD ((DATA_SLOT_SECTORS - 1) * SECTOR_SIZE)
 #define FS_DATA_CAPACITY (FS_DATA_PAYLOAD - FS_LEGACY_NODES * 40)
+/* Data disks with the snapshot formats (v4/v5) become BaseFS 2 at mount, and
+ * blank marked disks are formatted as BaseFS 2. Host tests of the snapshot
+ * formats build with 0. */
+#ifndef FS_CONVERT_TO_BASEFS
+#define FS_CONVERT_TO_BASEFS 1
+#endif
 
 typedef struct {
     char name[FS_NAME_LEN];
@@ -73,11 +81,29 @@ static int save_failed;
 static unsigned pool_used;
 /* Backend selects the wire format. Arena selection is deliberately separate:
  * blank-disk migration temporarily reads the floppy into the selected pool. */
-static int data_backend; /* 0 floppy, 1 default IDE, 2 large IDE */
+static int data_backend; /* 0 floppy, 1 default IDE, 2 large IDE, 3 BaseFS 2 */
 static uintptr_t pool_base, image_base;
 static unsigned pool_capacity, image_capacity;
 static int data_problem;
 static int sync_new_incarnation(void);
+
+/* BaseFS 2: the mounted volume and where each node's bytes are on disk.
+ * Node ids are checkpoint record indices at mount. A dirty node's bytes are
+ * not on disk yet; its old extents stay valid until the next commit. */
+static BfsVolume bfs;
+static BfsExtent *node_extents[FS_MAX_NODES];
+static uint32_t node_extent_count[FS_MAX_NODES];
+static unsigned char node_dirty[FS_MAX_NODES];
+static void bfs_forget(int id) {
+    kfree(node_extents[id]);
+    node_extents[id] = 0;
+    node_extent_count[id] = 0;
+    node_dirty[id] = 0;
+}
+static void bfs_release(void) {
+    for (int i = 0; i < FS_MAX_NODES; ++i) bfs_forget(i);
+    if (bfs.used) bfs_unmount(&bfs);
+}
 
 _Static_assert(sizeof(FsNode) * FS_MAX_NODES <= FS_CAPACITY, "FS arena overflow");
 _Static_assert(FS_MAX_NODES <= 32768, "node IDs exceed signed disk parents");
@@ -108,21 +134,68 @@ unsigned fs_modified(int id) { return fs_valid(id) ? nodes[id].modified : 0; }
 int fs_node_limit(void) { return data_backend ? FS_MAX_NODES : FS_LEGACY_NODES; }
 /* Keep the original 64-node reservation even for small volumes. Additional
  * records consume 40 bytes each; no old full v4 snapshot loses capacity. */
+/* BaseFS 2 writes changed files next to their old copies, and the old
+ * copies stay allocated until the commit lands. A change is admitted only
+ * while the next commit still fits in the free blocks: every changed file
+ * rounded up to whole blocks, plus a checkpoint for count nodes. */
+static uint32_t bfs_blocks_for(uint64_t size) { return (uint32_t)((size + BFS_BLOCK - 1) / BFS_BLOCK); }
+/* An upper bound on the next checkpoint for count nodes, in blocks. Each
+ * record is 36 bytes, its name padded to 4, and 12 per extent. A file the
+ * commit writes may get one extent per block when free space is scattered;
+ * node except is about to hold extra blocks. With rewrite_all every file is
+ * written (a conversion). Nodes beyond the current ones get the longest name. */
+static uint32_t bfs_checkpoint_blocks(unsigned count, int except, uint64_t extra, int rewrite_all) {
+    uint64_t bytes = 16, extents = except >= 0 ? extra : 0;
+    unsigned have = 0;
+    for (int i = 0; i < FS_MAX_NODES; ++i) {
+        if (!nodes[i].used) continue;
+        ++have;
+        bytes += 36u + (((unsigned)kstrlen(nodes[i].name) + 3u) & ~3u);
+        if (i == except || nodes[i].is_dir) continue;
+        extents += rewrite_all || node_dirty[i] ? bfs_blocks_for((uint64_t)nodes[i].size) : node_extent_count[i];
+    }
+    if (count > have) bytes += (uint64_t)(count - have) * (36u + ((FS_NAME_LEN - 1u + 3u) & ~3u));
+    return bfs_blocks_for(bytes + 12u * extents);
+}
+/* Blocks the next commit writes for changed files, leaving out node except. */
+static uint64_t bfs_pending_blocks(int except) {
+    uint64_t blocks = 0;
+    for (int i = 0; i < FS_MAX_NODES; ++i)
+        if (i != except && nodes[i].used && node_dirty[i] && !nodes[i].is_dir)
+            blocks += bfs_blocks_for((uint64_t)nodes[i].size);
+    return blocks;
+}
+static int bfs_commit_fits(unsigned count, int except, uint64_t extra) {
+    return bfs_pending_blocks(except) + extra + bfs_checkpoint_blocks(count, except, extra, 0) <= bfs.free_blocks;
+}
+static unsigned basefs_capacity(unsigned count) {
+    unsigned pool = pool_capacity - count;
+    uint64_t need = bfs_pending_blocks(-1) + bfs_checkpoint_blocks(count, -1, 0, 0);
+    uint64_t spare = bfs.free_blocks > need ? (uint64_t)(bfs.free_blocks - need) * BFS_BLOCK : 0;
+    uint64_t total = fs_used_bytes() + spare;
+    return total < pool ? (unsigned)total : pool;
+}
 unsigned fs_capacity_for_nodes(unsigned count) {
     if (!count || count > (unsigned)fs_node_limit()) return 0;
     if (!data_backend) return (FS_LEGACY_NODES - 1) * (FS_MAX_SIZE - 1);
+    if (data_backend == 3) return basefs_capacity(count);
     if (count < FS_LEGACY_NODES) count = FS_LEGACY_NODES;
     return (fs_large_profile() ? FS_LARGE_DATA_PAYLOAD : FS_DATA_PAYLOAD) - count * sizeof(DiskNode);
 }
 unsigned fs_capacity(void) { return fs_capacity_for_nodes(fs_node_count()); }
-int fs_large_profile(void) { return data_backend == 2; }
+int fs_large_profile(void) {
+    return data_backend == 2 || (data_backend == 3 && pool_base == FS_LARGE_POOL_BASE);
+}
 int fs_large_arenas_available(void) {
     return platform_memory_range_available(FS_LARGE_POOL_BASE, RAM_LARGE_REQUIRED_END);
 }
 unsigned fs_file_limit(void) {
     return fs_large_profile() ? FS_LARGE_FILE_MAX : data_backend ? FS_FILE_MAX : FS_MAX_SIZE - 1;
 }
-const char *fs_storage_name(void) { return fs_large_profile() ? "Large IDE data disk" : data_backend ? "IDE data disk" : "Boot floppy"; }
+const char *fs_storage_name(void) {
+    return data_backend == 3 ? "BaseFS 2 data disk" : fs_large_profile() ? "Large IDE data disk" :
+           data_backend ? "IDE data disk" : "Boot floppy";
+}
 unsigned fs_used_bytes(void) {
     unsigned n = 0;
     for (int i = 0; i < FS_MAX_NODES; ++i) if (nodes[i].used) n += nodes[i].size;
@@ -244,6 +317,8 @@ static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
 
     if (!tree_fits(-1, parent, name) ||
         fs_used_bytes() > fs_capacity_for_nodes(fs_node_count() + 1)) return -1;
+    /* A larger node table must still fit the next commit, even with no data. */
+    if (data_backend == 3 && !bfs_commit_fits((unsigned)fs_node_count() + 1, -1, 0)) return -1;
     for (int i = 0; i < fs_node_limit(); i++) {
         if (!nodes[i].used) {
             kmemset(&nodes[i], 0, (int)sizeof(FsNode));
@@ -256,6 +331,8 @@ static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
             identities[i]=new_identity();
             content_revisions[i]=new_content_revision();
             nodes[i].modified = fs_clock();
+            bfs_forget(i);
+            node_dirty[i] = 1;
             fs_touched = 1;
             return i;
         }
@@ -272,6 +349,7 @@ int fs_init(void) {
     save_failed = 0;
     pool_used = 0;
     data_backend = data_problem = 0;
+    bfs_release();
     pool_base = FS_POOL_BASE; image_base = FS_IMG_BASE;
     pool_capacity = FS_POOL_CAPACITY; image_capacity = FS_IMG_CAPACITY;
     nodes = (FsNode *)FS_BASE;
@@ -394,6 +472,7 @@ int fs_write(int id, const char *data, int len) {
     if (!fs_valid(id) || nodes[id].is_dir || nodes[id].is_app || len < 0 ||
         (unsigned)len > fs_file_limit() || (len && !data)) return -1;
     if ((unsigned)len > fs_capacity() - (fs_used_bytes() - nodes[id].size)) return -1;
+    if (data_backend == 3 && !bfs_commit_fits((unsigned)fs_node_count(), id, bfs_blocks_for((uint64_t)len))) return -1;
     unsigned previous = nodes[id].size ? nodes[id].size + 1 : 0;
     unsigned required = len ? (unsigned)len + 1 : 0;
     if (required > pool_capacity - (pool_used - previous)) return -1;
@@ -413,6 +492,7 @@ int fs_write(int id, const char *data, int len) {
         copy_bytes((char *)pool_base + nodes[id].offset, data, len);
         nodes[id].modified = fs_clock();
         content_revisions[id]=new_content_revision();
+        node_dirty[id] = 1;
         fs_touched = 1;
         return len;
     }
@@ -427,6 +507,7 @@ int fs_write(int id, const char *data, int len) {
     nodes[id].size = len;
     nodes[id].modified = fs_clock();
     content_revisions[id]=new_content_revision();
+    node_dirty[id] = 1;
     fs_touched = 1;
     return len;
 }
@@ -606,6 +687,7 @@ int fs_delete(int id) {
     release_data(id);
     nodes[id].used = 0;
     content_revisions[id]=0;
+    bfs_forget(id);
     fs_touched = 1;
     return 0;
 }
@@ -884,11 +966,16 @@ static int volume_flush(void) { return data_backend ? ata_flush() : 0; }
  * A blank generic hard disk is NOT a blank BaseOS volume. */
 /* Read the marker on the required kernel stack, without borrowing either
  * filesystem arena. A 64 MiB guest never touches optional high memory. */
+/* 1 default and 2 large snapshot disks, 3 BaseFS 2 (any size). */
 static int valid_data_marker(void) {
     unsigned sectors = ata_sector_count();
-    if (sectors != DATA_DISK_SECTORS && sectors != DATA_LARGE_DISK_SECTORS) return 0;
     unsigned marker[SECTOR_SIZE / sizeof(unsigned)];
+    if (sectors != DATA_DISK_SECTORS && sectors != DATA_LARGE_DISK_SECTORS) {
+        if (sectors < 5 * BFS_SECTORS_PER_BLOCK || ata_read(0, marker, 1) < 0) return 0;
+        return bfs_marker_matches(marker, sectors) ? 3 : 0;
+    }
     if (ata_read(0, marker, 1) < 0) return 0;
+    if (bfs_marker_matches(marker, sectors)) return 3;
     int large = sectors == DATA_LARGE_DISK_SECTORS;
     if (marker[0] != DATA_MARKER_MAGIC ||
         marker[1] != (large ? DATA_LARGE_MARKER_VERSION : DATA_MARKER_VERSION) ||
@@ -1114,6 +1201,196 @@ static int load_volume(void) {
     return -1;
 }
 
+/* ---------- BaseFS 2 ---------- */
+
+static int bfs_device_read(void *context, uint32_t lba, void *buffer, uint32_t sectors) {
+    (void)context;
+    return ata_read(lba, buffer, (int)sectors);
+}
+static int bfs_device_write(void *context, uint32_t lba, const void *buffer, uint32_t sectors) {
+    (void)context;
+    return ata_write(lba, buffer, (int)sectors);
+}
+static int bfs_device_flush(void *context) {
+    (void)context;
+    return ata_flush();
+}
+static BfsDevice bfs_device(void) {
+    return (BfsDevice){bfs_device_read, bfs_device_write, bfs_device_flush, 0, ata_sector_count()};
+}
+
+/* The volume's nodes are the records, in order. Checks what this backend can
+ * hold (node count, name length, file and total size, path shape) and reads
+ * every file. Takes the records' extents; the caller frees the records. */
+static int import_basefs(BfsRecord *records, uint32_t count) {
+    if (!count || count > FS_MAX_NODES) return -1;
+    /* Refuse a volume larger than the RAM arenas before reading any file. */
+    uint64_t bytes = 0;
+    for (uint32_t i = 0; i < count; ++i) bytes += records[i].size + (records[i].size ? 1 : 0);
+    if (bytes > pool_capacity) return -1;
+    kmemset(nodes, 0, sizeof(FsNode) * FS_MAX_NODES);
+    kmemset(content_revisions, 0, sizeof(content_revisions));
+    pool_used = 0;
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        BfsRecord *r = &records[i];
+        int directory = (r->flags & BFS_DIRECTORY) != 0, app = (r->flags & BFS_APP) != 0;
+        total += r->size;
+        if ((i && !valid_name(r->name)) || (directory && app) || (app && r->size) ||
+            r->size > fs_file_limit() || total > pool_capacity - count ||
+            r->size + 1 > pool_capacity - pool_used) return -1;
+        FsNode *n = &nodes[i];
+        kstrcpy(n->name, r->name);
+        n->parent = i ? (int)r->parent : -1;
+        n->is_dir = directory;
+        n->is_app = app;
+        n->used = 1;
+        n->modified = r->modified;
+        identities[i] = new_identity();
+        content_revisions[i] = new_content_revision();
+        if (r->size) {
+            n->offset = pool_used;
+            char *destination = (char *)pool_base + pool_used;
+            if (bfs_read(&bfs, r, 0, destination, (uint32_t)r->size) != BFS_OK) return -1;
+            destination[r->size] = 0;
+            n->size = (int)r->size;
+            pool_used += (unsigned)r->size + 1;
+        }
+        node_extents[i] = r->extents;
+        node_extent_count[i] = r->extent_count;
+        r->extents = 0;
+        r->extent_count = 0;
+    }
+    for (uint32_t i = 1; i < count; ++i) {
+        int depth, bytes;
+        if (path_shape((int)i, &depth, &bytes) < 0) return -1;
+        for (uint32_t k = 1; k < i; ++k)
+            if (nodes[k].parent == nodes[i].parent && !kstrcmp(nodes[k].name, nodes[i].name)) return -1;
+    }
+    return 0;
+}
+
+/* Prefer the large arenas whenever the machine has them: BaseFS 2 volumes
+ * have no profile of their own. */
+static void basefs_arenas(void) {
+    if (pool_base != FS_LARGE_POOL_BASE && fs_large_arenas_available()) select_large_arenas();
+}
+
+static int load_basefs(void) {
+    BfsDevice device = bfs_device();
+    BfsRecord *records;
+    uint32_t count;
+    bfs_release();
+    writable = 0;
+    if (bfs_mount(&bfs, &device, &records, &count) != BFS_OK) return -1;
+    data_backend = 3;
+    basefs_arenas();
+    int result = import_basefs(records, count);
+    bfs_free_records(records, count);
+    if (result < 0) {
+        bfs_release();
+        data_backend = 0;
+        return -1;
+    }
+    active_slot = -1;
+    generation = (unsigned)bfs.generation;
+    fs_touched = sync_failures = save_failed = 0;
+    writable = 1;
+    return 0;
+}
+
+/* A blank marked disk: format it and keep the files already in RAM (the
+ * boot volume's), all dirty, for the first commit. */
+static int format_basefs(void) {
+    BfsDevice device = bfs_device();
+    BfsRecord *records;
+    uint32_t count;
+    bfs_release();
+    if (bfs_format(&device, next_identity + 1) != BFS_OK ||
+        bfs_mount(&bfs, &device, &records, &count) != BFS_OK) {
+        bfs_release();
+        return -1;
+    }
+    bfs_free_records(records, count);
+    data_backend = 3;
+    basefs_arenas();
+    for (int i = 0; i < FS_MAX_NODES; ++i) node_dirty[i] = nodes[i].used;
+    writable = 1;
+    active_slot = -1;
+    generation = sync_failures = save_failed = 0;
+    fs_touched = 1;
+    return 0;
+}
+
+static int save_snapshot(void);
+/* A snapshot volume (v4/v5) that mounted cleanly becomes BaseFS 2. The live
+ * snapshot moves to the second slot first; BaseFS 2 is then built entirely
+ * in the first half and the marker is written last, so until that one sector
+ * write the old volume is intact. The new volume is mounted and read back;
+ * if that fails the old marker goes back. On any failure the disk stays in
+ * its old format and keeps working. */
+static void convert_to_basefs(int profile) {
+    if (!FS_CONVERT_TO_BASEFS || !writable) return;
+    uint32_t limit = (profile == 2 ? DATA_LARGE_SECOND_LBA : DATA_SECOND_LBA) / BFS_SECTORS_PER_BLOCK;
+    uint64_t needed = BFS_RESERVED_BLOCKS + bfs_checkpoint_blocks((unsigned)fs_node_count(), -1, 0, 1);
+    for (int i = 0; i < FS_MAX_NODES; ++i)
+        if (nodes[i].used) needed += bfs_blocks_for((uint64_t)nodes[i].size);
+    if (needed > limit) {
+        /* Checked before anything is written, so a full disk is not
+         * rewritten on every boot only to fail. */
+        platform_log("FS conversion to BaseFS 2 needs more free space; keeping the snapshot format\n");
+        return;
+    }
+    if (active_slot != 1) {
+        fs_touched = 1;
+        if (save_snapshot() < 0) {
+            platform_log("FS conversion to BaseFS 2 postponed; snapshot could not move\n");
+            return;
+        }
+    }
+    BfsDevice device = bfs_device();
+    unsigned old_marker[SECTOR_SIZE / sizeof(unsigned)];
+    int ids[FS_MAX_NODES], index[FS_MAX_NODES];
+    uint32_t count = 0;
+    for (int i = 0; i < FS_MAX_NODES; ++i)
+        if (nodes[i].used) { index[i] = (int)count; ids[count++] = i; }
+    BfsRecord *records = kmalloc(count * sizeof *records);
+    int result = records && ata_read(0, old_marker, 1) == 0 ? BFS_OK : BFS_ERR_NOMEM;
+    if (!result) result = bfs_create(&bfs, &device, limit);
+    for (uint32_t k = 0; k < count && !result; ++k) {
+        FsNode *n = &nodes[ids[k]];
+        records[k] = (BfsRecord){k ? (uint32_t)index[n->parent] : BFS_ROOT_PARENT,
+                                 (n->is_dir ? BFS_DIRECTORY : 0u) | (n->is_app ? BFS_APP : 0u),
+                                 identities[ids[k]], content_revisions[ids[k]], n->modified,
+                                 (uint64_t)n->size, 0, 0, n->name};
+        result = bfs_write_data(&bfs, fs_data(ids[k]), (uint64_t)n->size, &records[k].extents,
+                                &records[k].extent_count);
+    }
+    if (!result) result = bfs_commit(&bfs, records, count, next_identity + 1, next_content_revision + 1);
+    for (uint32_t k = 0; records && k < count; ++k) kfree(records[k].extents);
+    kfree(records);
+    if (bfs.used) bfs_unmount(&bfs);
+    if (!result) result = bfs_write_marker(&device);
+    if (result) {
+        platform_log("FS conversion to BaseFS 2 failed; keeping the snapshot format\n");
+        return;
+    }
+    if (load_basefs() == 0) {
+        platform_log("FS converted the IDE data disk to BaseFS 2\n");
+        return;
+    }
+    /* The old snapshot is still in the second half: point the disk back. */
+    bfs_release();
+    data_backend = profile;
+    if (ata_write(0, old_marker, 1) < 0 || ata_flush() < 0 || load_volume() != 0) {
+        data_problem = 1;
+        writable = 0;
+        platform_log("FS conversion to BaseFS 2 could not be verified or undone\n");
+        return;
+    }
+    platform_log("FS conversion to BaseFS 2 did not verify; snapshot format restored\n");
+}
+
 int fs_load_disk(void) {
     if (fs_sync_busy()) return FS_ERR_BUSY;
     if (sync_new_incarnation() < 0) return -1;
@@ -1121,6 +1398,14 @@ int fs_load_disk(void) {
     int probe = ata_probe();
     if (probe == 0) return load_volume();
     int profile = probe > 0 ? valid_data_marker() : 0;
+    if (profile == 3) {
+        if (load_basefs() == 0) {
+            platform_log("FS mounted BaseFS 2 data disk\n");
+            return 0;
+        }
+        platform_log("FS BaseFS 2 data disk did not mount\n");
+        profile = 0;
+    }
     if (profile == 2 && !fs_large_arenas_available()) {
         data_problem = 2;
         platform_log("FS large data disk requires usable RAM through 127 MiB; disk untouched\n");
@@ -1130,6 +1415,7 @@ int fs_load_disk(void) {
         int result = load_volume();
         if (result == 0) {
             platform_log(profile == 2 ? "FS mounted large IDE data disk\n" : "FS mounted IDE data disk\n");
+            convert_to_basefs(profile);
             return 0;
         }
         if (result == FS_LOAD_BLANK) {
@@ -1143,6 +1429,17 @@ int fs_load_disk(void) {
                 active_slot = -1;
                 generation = sync_failures = save_failed = 0;
                 fs_touched = 1;
+                if (FS_CONVERT_TO_BASEFS) {
+                    if (format_basefs() < 0) {
+                        data_backend = 0;
+                        data_problem = 1;
+                        writable = 0;
+                        platform_log("FS could not format the new IDE data disk\n");
+                        return -1;
+                    }
+                    platform_log("FS new BaseFS 2 data disk; seed pending\n");
+                    return source;
+                }
                 platform_log(source ? "FS new IDE data disk; seed pending\n"
                                     : "FS boot files migrated to RAM; IDE save pending\n");
                 return source;
@@ -1155,6 +1452,7 @@ int fs_load_disk(void) {
     }
     /* Never initialize unknown media or overwrite a corrupt optional disk.
      * The boot files remain accessible as a read-only recovery view. */
+    bfs_release();
     data_backend = 0;
     int fallback = load_volume();
     if (!data_problem) data_problem = 1;
@@ -1236,9 +1534,187 @@ enum {
     SYNC_CRC_STAGE, SYNC_WRITE_PAYLOAD, SYNC_FLUSH_PAYLOAD,
     SYNC_READ_PAYLOAD, SYNC_CRC_READBACK, SYNC_WRITE_HEADER, SYNC_FLUSH_HEADER,
     SYNC_READ_HEADER, SYNC_CHECK_HEADER, SYNC_READ_COMMITTED,
-    SYNC_CRC_COMMITTED, SYNC_VALIDATE_COMMITTED, SYNC_IO, SYNC_FLOPPY
+    SYNC_CRC_COMMITTED, SYNC_VALIDATE_COMMITTED, SYNC_IO, SYNC_FLOPPY,
+    SYNC_BFS_PLAN, SYNC_BFS_STAGE, SYNC_BFS_BEGIN, SYNC_BFS_WRITE_RUN, SYNC_BFS_READ_RUN,
+    SYNC_BFS_COMPARE, SYNC_BFS_WRITE_SUPER, SYNC_BFS_FLUSH_SUPER, SYNC_BFS_READ_SUPER,
+    SYNC_BFS_CHECK_SUPER
 };
 static SyncJob sync_job;
+/* A BaseFS 2 commit: new extents for every dirty file, written in budgeted
+ * steps, then the checkpoint and superblock through bfs_commit_begin/end.
+ * Records borrow node names and the extents of unchanged files. */
+static struct {
+    BfsRecord *records;
+    unsigned char *fresh;          /* records whose extents this job allocated */
+    unsigned short ids[FS_MAX_NODES];
+    uint32_t count, record, extent, copied, crc, run, offset, compared;
+    uint64_t file_offset;
+    int begun;
+    BfsCommit commit;
+} bfs_job;
+
+static void bfs_job_end(int result) {
+    if (bfs_job.begun)
+        (void)bfs_commit_end(&bfs, &bfs_job.commit, bfs_job.records, bfs_job.count,
+                             sync_job.header_attempted ? BFS_COMMIT_UNCERTAIN : BFS_COMMIT_FAILED);
+    for (uint32_t k = 0; bfs_job.records && k < bfs_job.count; ++k) {
+        int id = bfs_job.ids[k];
+        BfsRecord *r = &bfs_job.records[k];
+        if (!result) node_dirty[id] = 0;
+        if (!bfs_job.fresh[k]) continue;
+        if (!result) {
+            kfree(node_extents[id]);
+            node_extents[id] = r->extents;
+            node_extent_count[id] = r->extent_count;
+            continue;
+        }
+        /* Blocks a possibly committed checkpoint names stay taken until a
+         * later commit settles it. */
+        if (!sync_job.header_attempted) bfs_discard(&bfs, r->extents, r->extent_count);
+        kfree(r->extents);
+    }
+    kfree(bfs_job.records);
+    kfree(bfs_job.fresh);
+    kmemset(&bfs_job, 0, sizeof bfs_job);
+}
+
+static enum FsSyncProgress sync_finish(int result);
+static enum FsSyncProgress sync_io(int operation, unsigned lba, void *buffer, int sectors, unsigned next);
+
+static enum FsSyncProgress bfs_plan(void) {
+    int index[FS_MAX_NODES];
+    uint32_t count = 0;
+    for (int i = 0; i < FS_MAX_NODES; ++i)
+        if (nodes[i].used) { index[i] = (int)count; bfs_job.ids[count++] = (unsigned short)i; }
+    bfs_job.records = kmalloc(count * sizeof *bfs_job.records);
+    bfs_job.fresh = kmalloc(count);
+    if (!bfs_job.records || !bfs_job.fresh) return sync_finish(-1);
+    kmemset(bfs_job.fresh, 0, (int)count);
+    bfs_job.count = count;
+    for (uint32_t k = 0; k < count; ++k) {
+        int id = bfs_job.ids[k];
+        FsNode *n = &nodes[id];
+        bfs_job.records[k] = (BfsRecord){k ? (uint32_t)index[n->parent] : BFS_ROOT_PARENT,
+                                         (n->is_dir ? BFS_DIRECTORY : 0u) | (n->is_app ? BFS_APP : 0u),
+                                         identities[id], content_revisions[id], n->modified,
+                                         (uint64_t)n->size, node_extent_count[id], node_extents[id], n->name};
+    }
+    for (uint32_t k = 0; k < count; ++k) {
+        int id = bfs_job.ids[k];
+        if (!node_dirty[id] || nodes[id].is_dir) continue;
+        BfsRecord *r = &bfs_job.records[k];
+        bfs_job.fresh[k] = 1;
+        if (bfs_allocate(&bfs, r->size, &r->extents, &r->extent_count) != BFS_OK) return sync_finish(-1);
+    }
+    sync_job.phase = SYNC_BFS_STAGE;
+    return FS_SYNC_MORE;
+}
+
+/* Copies and checksums one extent in budgeted slices, then writes it. */
+static enum FsSyncProgress bfs_stage(unsigned char *img) {
+    while (bfs_job.record < bfs_job.count &&
+           (!bfs_job.fresh[bfs_job.record] ||
+            bfs_job.extent >= bfs_job.records[bfs_job.record].extent_count)) {
+        ++bfs_job.record;
+        bfs_job.extent = bfs_job.copied = 0;
+        bfs_job.file_offset = 0;
+    }
+    if (bfs_job.record == bfs_job.count) {
+        sync_job.phase = SYNC_BFS_BEGIN;
+        return FS_SYNC_MORE;
+    }
+    BfsRecord *r = &bfs_job.records[bfs_job.record];
+    BfsExtent *x = &r->extents[bfs_job.extent];
+    uint32_t span = x->blocks * BFS_BLOCK;
+    uint32_t valid = r->size - bfs_job.file_offset < span ? (uint32_t)(r->size - bfs_job.file_offset) : span;
+    if (bfs_job.copied < valid) {
+        uint32_t n = valid - bfs_job.copied;
+        if (n > FS_SYNC_BYTE_BUDGET) n = FS_SYNC_BYTE_BUDGET;
+        if (!bfs_job.copied) bfs_job.crc = 0;
+        kmemcpy(img + bfs_job.copied, fs_data(bfs_job.ids[bfs_job.record]) + bfs_job.file_offset + bfs_job.copied, (int)n);
+        bfs_job.crc = bfs_crc32(bfs_job.crc, img + bfs_job.copied, n);
+        bfs_job.copied += n;
+        return FS_SYNC_MORE;
+    }
+    kmemset(img + valid, 0, (int)(span - valid));
+    x->crc = bfs_job.crc;
+    ++bfs_job.extent;
+    bfs_job.file_offset += valid;
+    bfs_job.copied = 0;
+    return sync_io(1, x->start * BFS_SECTORS_PER_BLOCK, img, (int)(x->blocks * BFS_SECTORS_PER_BLOCK),
+                   SYNC_BFS_STAGE);
+}
+
+static int same_bytes(const unsigned char *a, const unsigned char *b, unsigned length) {
+    for (unsigned i = 0; i < length; ++i)
+        if (a[i] != b[i]) return 0;
+    return 1;
+}
+
+static enum FsSyncProgress bfs_step(unsigned char *img) {
+    BfsCommit *c = &bfs_job.commit;
+    switch (sync_job.phase) {
+    case SYNC_BFS_PLAN: return bfs_plan();
+    case SYNC_BFS_STAGE: return bfs_stage(img);
+    case SYNC_BFS_BEGIN:
+        if (bfs_commit_begin(&bfs, bfs_job.records, bfs_job.count, next_identity + 1,
+                             next_content_revision + 1, c) != BFS_OK) return sync_finish(-1);
+        bfs_job.begun = 1;
+        if ((uint64_t)c->checkpoint_blocks * BFS_BLOCK > image_capacity) return sync_finish(-1);
+        bfs_job.run = bfs_job.offset = 0;
+        sync_job.phase = SYNC_BFS_WRITE_RUN;
+        return FS_SYNC_MORE;
+    case SYNC_BFS_WRITE_RUN: {
+        if (bfs_job.run == bfs_commit_runs(c)) {
+            bfs_job.run = bfs_job.offset = 0;
+            return sync_io(2, 0, 0, 0, SYNC_BFS_READ_RUN);
+        }
+        uint32_t blocks, start = bfs_commit_run(c, bfs_job.run++, &blocks);
+        unsigned char *from = c->checkpoint + bfs_job.offset;
+        bfs_job.offset += blocks * BFS_BLOCK;
+        return sync_io(1, start * BFS_SECTORS_PER_BLOCK, from, (int)(blocks * BFS_SECTORS_PER_BLOCK),
+                       SYNC_BFS_WRITE_RUN);
+    }
+    case SYNC_BFS_READ_RUN: {
+        if (bfs_job.run == bfs_commit_runs(c)) {
+            bfs_job.compared = 0;
+            sync_job.phase = SYNC_BFS_COMPARE;
+            return FS_SYNC_MORE;
+        }
+        uint32_t blocks, start = bfs_commit_run(c, bfs_job.run++, &blocks);
+        unsigned char *to = img + bfs_job.offset;
+        bfs_job.offset += blocks * BFS_BLOCK;
+        return sync_io(0, start * BFS_SECTORS_PER_BLOCK, to, (int)(blocks * BFS_SECTORS_PER_BLOCK),
+                       SYNC_BFS_READ_RUN);
+    }
+    case SYNC_BFS_COMPARE: {
+        uint32_t total = c->checkpoint_blocks * BFS_BLOCK, n = total - bfs_job.compared;
+        if (n > FS_SYNC_BYTE_BUDGET) n = FS_SYNC_BYTE_BUDGET;
+        if (!same_bytes(img + bfs_job.compared, c->checkpoint + bfs_job.compared, n)) return sync_finish(-1);
+        bfs_job.compared += n;
+        if (bfs_job.compared == total) sync_job.phase = SYNC_BFS_WRITE_SUPER;
+        return FS_SYNC_MORE;
+    }
+    case SYNC_BFS_WRITE_SUPER:
+        kmemset(img, 0, BFS_BLOCK);
+        kmemcpy(img, c->super, sizeof c->super);
+        return sync_io(1, c->super_block * BFS_SECTORS_PER_BLOCK, img, BFS_SECTORS_PER_BLOCK,
+                       SYNC_BFS_FLUSH_SUPER);
+    case SYNC_BFS_FLUSH_SUPER:
+        return sync_io(2, 0, 0, 0, SYNC_BFS_READ_SUPER);
+    case SYNC_BFS_READ_SUPER:
+        return sync_io(0, c->super_block * BFS_SECTORS_PER_BLOCK, img + BFS_BLOCK, 1, SYNC_BFS_CHECK_SUPER);
+    case SYNC_BFS_CHECK_SUPER:
+        if (!same_bytes(img + BFS_BLOCK, c->super, sizeof c->super)) return sync_finish(-1);
+        /* Durable now. If the in-memory map could not be rebuilt, later
+         * allocations fail and saves report it; this one succeeded. */
+        (void)bfs_commit_end(&bfs, c, bfs_job.records, bfs_job.count, BFS_COMMIT_DONE);
+        bfs_job.begun = 0;
+        return sync_finish(0);
+    default: return sync_finish(-1);
+    }
+}
+
 static SyncResult sync_results[3];
 static unsigned sync_incarnation, sync_serial;
 static int sync_autosave;
@@ -1302,7 +1778,8 @@ static void sync_log(const char *event, const char *result) {
     platform_log("\n");
 }
 static enum FsSyncProgress sync_finish(int result) {
-    if (result < 0 && sync_job.header_attempted) writable = 0;
+    if (data_backend == 3) bfs_job_end(result);
+    else if (result < 0 && sync_job.header_attempted) writable = 0;
     if (!result) {
         active_slot = sync_job.target;
         generation = sync_job.header.generation;
@@ -1325,8 +1802,8 @@ static void sync_start(unsigned slot) {
     sync_job.pos = FS_SECTOR_SIZE;
     sync_job.header.magic = FS_DISK_MAGIC;
     sync_job.header.version = snapshot_version();
-    sync_job.header.generation = generation + 1;
-    sync_job.phase = data_backend ? SYNC_SERIALIZE_NODE : SYNC_FLOPPY;
+    sync_job.header.generation = data_backend == 3 ? (unsigned)bfs.generation + 1 : generation + 1;
+    sync_job.phase = data_backend == 3 ? SYNC_BFS_PLAN : data_backend ? SYNC_SERIALIZE_NODE : SYNC_FLOPPY;
     last_sync_attempt = timer_ticks();
     sync_log("begin", 0);
 }
@@ -1383,7 +1860,8 @@ static enum FsSyncProgress sync_io(int operation, unsigned lba, void *buffer,
                  operation == 1 ? ata_request_write(lba, buffer, sectors) :
                                   ata_request_flush();
     if (result < 0) return sync_finish(-1);
-    if (sync_job.phase == SYNC_WRITE_HEADER) sync_job.header_attempted = 1;
+    if (sync_job.phase == SYNC_WRITE_HEADER || sync_job.phase == SYNC_BFS_WRITE_SUPER)
+        sync_job.header_attempted = 1;
     sync_job.phase = SYNC_IO; sync_job.next_phase = next;
     return FS_SYNC_MORE;
 }
@@ -1474,6 +1952,10 @@ enum FsSyncProgress fs_sync_step(void) {
         if (progress != ATA_PROGRESS_DONE) return sync_finish(-1);
         j->phase = j->next_phase; return FS_SYNC_MORE;
     }
+    case SYNC_BFS_PLAN: case SYNC_BFS_STAGE: case SYNC_BFS_BEGIN: case SYNC_BFS_WRITE_RUN:
+    case SYNC_BFS_READ_RUN: case SYNC_BFS_COMPARE: case SYNC_BFS_WRITE_SUPER:
+    case SYNC_BFS_FLUSH_SUPER: case SYNC_BFS_READ_SUPER: case SYNC_BFS_CHECK_SUPER:
+        return bfs_step(img);
     case SYNC_FLOPPY: {
         int result = save_snapshot();
         /* Legacy save has already selected its target and generation. */
