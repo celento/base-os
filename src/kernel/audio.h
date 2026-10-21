@@ -19,6 +19,8 @@ typedef struct {
 /* QEMU SB16 at 0x220, IRQ5 masked/polled, high DMA5. No heap or IRQ changes.
  * Initialize once after platform memory validation. Missing hardware is safe. */
 int audio_init(void);
+/* Block-completion interrupt line, or 0 without a device. */
+unsigned audio_irq(void);
 /* After fs_load_disk(), select owned input space using BOTH active backend and
  * verified high-arena availability. Only an active high-arena filesystem frees
  * the legacy 32--48 MiB region. Extra RAM with a default/legacy mount does not.

@@ -1,9 +1,11 @@
-/* Small polled RTL8139 (legacy 8139 mode) driver, written for BaseOS.
+/* Small RTL8139 (legacy 8139 mode) driver, written for BaseOS.
  * Hardware behavior checked against QEMU hw/net/rtl8139.c (MIT); see
- * docs/NETWORK.md. No interrupts, C+ descriptors, or physical-hardware claim. */
+ * docs/NETWORK.md. Receive interrupts only wake the kernel loop, which polls.
+ * No C+ descriptors or physical-hardware claim. */
 #include "kernel/net_driver.h"
 #include "kernel/platform.h"
 static uint16_t io;
+static uint8_t irq_line;
 static unsigned rx_offset, tx_next;
 static uint8_t *rx_buffer, *tx_buffer;
 static inline void out8(uint16_t p,uint8_t v){__asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p):"memory");}
@@ -26,6 +28,7 @@ static void receive_reset(void){
      * Accept broadcasts and our MAC only. No malformed/runt acceptance. */
     out32(io+0x44,(7u<<8)|0x0a);out16(io+0x3e,0xffff);
 }
+unsigned net_driver_irq(void){return io&&irq_line>2&&irq_line<16?irq_line:0;}
 int net_driver_init(uint8_t *rx,uint8_t *tx,uint8_t mac[6]){
     io=0;
     for(unsigned bus=0;bus<256&&!io;bus++)for(unsigned dev=0;dev<32&&!io;dev++){
@@ -34,7 +37,7 @@ int net_driver_init(uint8_t *rx,uint8_t *tx,uint8_t mac[6]){
         for(unsigned fun=0;fun<functions&&!io;fun++){
             if(pci_read(bus,dev,fun,0)!=0x813910ecu)continue;
             uint32_t bar=pci_read(bus,dev,fun,16);if(!(bar&1)||(bar&~3u)>0xff00u||!(bar&~3u))continue;
-            io=(uint16_t)(bar&~3u);pci_command(bus,dev,fun,(uint16_t)pci_read(bus,dev,fun,4)|5);
+            io=(uint16_t)(bar&~3u);irq_line=(uint8_t)pci_read(bus,dev,fun,0x3c);pci_command(bus,dev,fun,(uint16_t)pci_read(bus,dev,fun,4)|5);
         }
     }
     if(!io)return 0;
@@ -45,7 +48,8 @@ int net_driver_init(uint8_t *rx,uint8_t *tx,uint8_t mac[6]){
     unsigned guard=1000000;while((in8(io+0x37)&0x10)&&--guard){}
     if(!guard){io=0;return 0;}
     for(unsigned i=0;i<6;i++)mac[i]=in8(io+i);
-    out16(io+0x3c,0);out16(io+0x3e,0xffff);
+    /* ROK, RER, RXOVW and FOVW; net_driver_recv acknowledges each one. */
+    out16(io+0x3c,net_driver_irq()?0x53:0);out16(io+0x3e,0xffff);
     for(unsigned i=0;i<4;i++)out32(io+0x20+i*4,(uint32_t)(uintptr_t)(tx+i*1536));
     out32(io+0x40,(3u<<24)|(7u<<8));receive_reset();
     return 1;

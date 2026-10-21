@@ -26,7 +26,8 @@ static unsigned build_wave(unsigned frames,unsigned rate,unsigned bits,unsigned 
 static void play_wait(unsigned max_ticks) {
     uint32_t start=timer_ticks();unsigned refresh=0;
     while(audio_status()->state==AUDIO_LOADING||audio_status()->state==AUDIO_PLAYING) {
-        audio_poll();drain_8042();
+        /* Reopen IRQ5 the way the kernel loop does, so each block counts. */
+        unsigned lines=platform_irq_take();audio_poll();platform_irq_rearm(lines);drain_8042();
         if(++refresh%12==0){draw_ui();flip_vga();}
         audio_check(timer_ticks()-start<max_ticks,"audio playback timeout");
         __asm__ volatile("hlt");
@@ -49,5 +50,7 @@ void feature_test(void) {
     audio_check(audio_play_wav(test_wave,size)==0,"stereo open");
     play_wait(6*TIMER_HZ);
     audio_check(audio_status()->played_frames==88200,"exact stereo duration");
+    /* Two seconds of 44.1 kHz stereo cross the 32 KiB half-buffer about 10 times. */
+    audio_check(audio_irq()==5&&platform_irq_count(5)>=6,"SB16 block interrupts");
     platform_log("AUDIO-WAV-PASS\n");
 }

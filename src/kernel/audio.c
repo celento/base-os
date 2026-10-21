@@ -117,12 +117,13 @@ int audio_init(void) {
     int major = dsp_read(), minor = dsp_read();
     if (major < 4 || minor < 0) return MEDIA_NO_DEVICE;
     status.available = 1;
-    mixer_write(0x80, 2); /* IRQ5 stays masked: completion is polled. */
+    mixer_write(0x80, 2); /* IRQ5 only wakes the kernel loop; audio_poll acknowledges. */
     mixer_write(0x81, 0x22); /* Low DMA1, high DMA5 (floppy uses DMA2). */
     hardware_volume();
     acknowledge();
     return MEDIA_OK;
 }
+unsigned audio_irq(void) { return status.available ? 5 : 0; }
 static uint32_t hardware_position(void) {
     /* High DMA5 count is in words. Reset flip-flop for each stable read pair;
      * retries handle a carry between the low/high byte reads. */
