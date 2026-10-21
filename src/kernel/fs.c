@@ -75,6 +75,7 @@ int fs_version_available(int creating) {
 static int writable;
 static int active_slot = -1;
 static unsigned generation;
+static unsigned saves_done; /* successful saves, for rollbacks that span one */
 static unsigned sync_failures;
 static unsigned last_sync_attempt;
 static int save_failed;
@@ -1020,8 +1021,11 @@ int fs_copy(int id, int parent) {
         return -1;
     if (!tree_fits(id, parent, name)) return -1;
     int touched_before = fs_touched;
+    unsigned saves_before = saves_done;
     int result = copy_into(id, parent, name);
-    if (result < 0) fs_touched = touched_before;
+    /* A write may have saved part of the copy; then its removal must be
+     * saved too. */
+    if (result < 0 && saves_done == saves_before) fs_touched = touched_before;
     return result;
 }
 
@@ -1964,6 +1968,7 @@ static enum FsSyncProgress sync_finish(int result) {
     }
     else if (result < 0 && sync_job.header_attempted) writable = 0;
     if (!result) {
+        ++saves_done;
         active_slot = sync_job.target;
         generation = sync_job.header.generation;
         fs_touched = 0;

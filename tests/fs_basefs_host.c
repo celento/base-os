@@ -394,6 +394,26 @@ int main(void) {
     for (unsigned k = 0; k < FS_FILE_MAX; ++k) fill[k] = (char)(k * 31u + 3u * 101u + k / 8192u);
     expect("cache3", fill, FS_FILE_MAX);
 
+    /* A folder copy that fails after saving part of itself on the way
+     * leaves the removal of that part to be saved. */
+    memset(data_disk, 0, sizeof data_disk);
+    device = bfs_device();
+    assert(bfs_format(&device, 5) == BFS_OK);
+    assert(mount() == 0);
+    int batch = fs_mkdir(0, "Batch");
+    assert(batch > 0);
+    for (int i = 0; i < 4; ++i) {
+        cached[5] = (char)('0' + i);
+        int id = fs_create(batch, cached);
+        assert(id > 0 && fs_write(id, fill, FS_FILE_MAX) == FS_FILE_MAX);
+    }
+    assert(fs_sync() == 0);
+    int nodes_before = fs_node_count();
+    unsigned saves = sectors_written;
+    assert(fs_copy(batch, 0) == -1 && fs_node_count() == nodes_before);
+    assert(sectors_written > saves && fs_needs_sync() && fs_sync() == 0);
+    assert(mount() == 0 && fs_node_count() == nodes_before);
+
     printf("basefs volume: format, %u-step incremental save, reuse, %u+%u save cuts, conversion from "
            "both slots, %u+%u conversion cuts, restore after %u read faults, odd sizes, %d full-disk files with %d "
            "refused rewrites, a %d-folder small volume, an unreadable superblock and on-demand loading of %d files "
