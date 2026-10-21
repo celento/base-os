@@ -1,6 +1,10 @@
 // BaseOS system dependencies for mlibc. Calls trap with int $0x81 and return
 // a value or a negated errno; the numbers live in sdk/baseos_sys.h.
 #include <abi-bits/errno.h>
+#include <abi-bits/fcntl.h>
+#include <dirent.h>
+#include <stddef.h>
+#include <sys/stat.h>
 #include <abi-bits/vm-flags.h>
 #include <bits/ensure.h>
 #include <bits/syscall.h>
@@ -144,8 +148,133 @@ void Sysdeps<Yield>::operator()() {
 	call(BOS_SYS_YIELD);
 }
 
-int Sysdeps<Dup2>::operator()(int, int, int) {
-	return ENOSYS;
+// Paths relative to a directory descriptor other than the working directory
+// are not supported yet.
+static int at_cwd(int dirfd, const char *path) {
+	return dirfd == AT_FDCWD || (path && path[0] == '/') ? 0 : ENOSYS;
+}
+
+int Sysdeps<Openat>::operator()(int dirfd, const char *path, int flags, mode_t mode, int *fd) {
+	if (int e = at_cwd(dirfd, path)) return e;
+	return sysdep<Open>(path, flags, mode, fd);
+}
+
+int Sysdeps<Stat>::operator()(fsfd_target target, int fd, const char *path, int flags,
+		struct stat *out) {
+	(void)flags;
+	BosStat info;
+	long result;
+	if (target == fsfd_target::fd || (target == fsfd_target::fd_path && path && !path[0])) {
+		result = call(BOS_SYS_FSTAT, fd, long(&info));
+	} else {
+		if (target == fsfd_target::fd_path)
+			if (int e = at_cwd(fd, path)) return e;
+		result = call(BOS_SYS_STAT, long(path), long(&info));
+	}
+	if (int e = error_of(result)) return e;
+	memset(out, 0, sizeof *out);
+	out->st_ino = info.node;
+	out->st_mode = info.mode;
+	out->st_nlink = info.links;
+	out->st_size = info.size;
+	out->st_blksize = 4096;
+	out->st_blocks = (info.size + 511) / 512;
+	out->st_mtim.tv_sec = time_t(info.modified);
+	out->st_atim = out->st_ctim = out->st_mtim;
+	return 0;
+}
+
+int Sysdeps<OpenDir>::operator()(const char *path, int *handle) {
+	return sysdep<Open>(path, O_RDONLY | O_DIRECTORY, 0, handle);
+}
+
+// BosDirent records become struct dirent records. Names are short, so a
+// quarter of the space holds as many kernel records as will fit converted.
+int Sysdeps<ReadEntries>::operator()(int handle, void *buffer, size_t max_size, size_t *bytes_read) {
+	char records[512];
+	size_t ask = max_size / 4 < sizeof records ? max_size / 4 : sizeof records;
+	long result = call(BOS_SYS_READDIR, handle, long(records), long(ask));
+	if (int e = error_of(result)) return e;
+	size_t done = 0;
+	for (long at = 0; at < result;) {
+		auto *entry = reinterpret_cast<BosDirent *>(records + at);
+		size_t name = strlen(entry->name);
+		size_t size = (offsetof(struct dirent, d_name) + name + 1 + 7) & ~size_t(7);
+		if (done + size > max_size) return EINVAL;
+		auto *out = reinterpret_cast<struct dirent *>(static_cast<char *>(buffer) + done);
+		out->d_ino = entry->node;
+		out->d_off = 0;
+		out->d_reclen = size;
+		out->d_type = entry->type;
+		memcpy(out->d_name, entry->name, name + 1);
+		done += size;
+		at += entry->length;
+	}
+	*bytes_read = done;
+	return 0;
+}
+
+int Sysdeps<Mkdir>::operator()(const char *path, mode_t mode) {
+	return error_of(call(BOS_SYS_MKDIR, long(path), long(mode)));
+}
+
+int Sysdeps<Rmdir>::operator()(const char *path) {
+	return error_of(call(BOS_SYS_UNLINK, long(path), BOS_AT_REMOVEDIR));
+}
+
+int Sysdeps<Unlinkat>::operator()(int dirfd, const char *path, int flags) {
+	if (int e = at_cwd(dirfd, path)) return e;
+	return error_of(call(BOS_SYS_UNLINK, long(path), flags & AT_REMOVEDIR ? BOS_AT_REMOVEDIR : 0));
+}
+
+int Sysdeps<Rename>::operator()(const char *path, const char *new_path) {
+	return error_of(call(BOS_SYS_RENAME, long(path), long(new_path)));
+}
+
+int Sysdeps<Access>::operator()(const char *path, int mode) {
+	(void)mode;
+	BosStat info;
+	return error_of(call(BOS_SYS_STAT, long(path), long(&info)));
+}
+
+int Sysdeps<Faccessat>::operator()(int dirfd, const char *path, int mode, int flags) {
+	(void)flags;
+	if (int e = at_cwd(dirfd, path)) return e;
+	return sysdep<Access>(path, mode);
+}
+
+int Sysdeps<Dup>::operator()(int fd, int flags, int *newfd) {
+	(void)flags;
+	long result = call(BOS_SYS_DUP, fd);
+	if (int e = error_of(result)) return e;
+	*newfd = int(result);
+	return 0;
+}
+
+int Sysdeps<Dup2>::operator()(int fd, int flags, int newfd) {
+	(void)flags;
+	return error_of(call(BOS_SYS_DUP2, fd, newfd));
+}
+
+int Sysdeps<Pipe>::operator()(int *fds, int flags) {
+	(void)flags;
+	return error_of(call(BOS_SYS_PIPE, long(fds)));
+}
+
+int Sysdeps<Chdir>::operator()(const char *path) {
+	return error_of(call(BOS_SYS_CHDIR, long(path)));
+}
+
+int Sysdeps<GetCwd>::operator()(char *buffer, size_t size) {
+	return error_of(call(BOS_SYS_GETCWD, long(buffer), long(size)));
+}
+
+int Sysdeps<Fsync>::operator()(int fd) {
+	return error_of(call(BOS_SYS_FSYNC, fd));
+}
+
+int Sysdeps<Ftruncate>::operator()(int fd, size_t size) {
+	return error_of(call(BOS_SYS_FTRUNCATE, fd, long(size)));
 }
 
 pid_t Sysdeps<GetPid>::operator()() {

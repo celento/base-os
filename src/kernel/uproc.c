@@ -40,6 +40,7 @@ static void unlink_process(Uproc *process) {
 /* Every thread is gone: free the address space, and the record too once the
  * host no longer needs the exit status. */
 static void process_finish(Uproc *process) {
+    ufile_table_close_all(&process->files);
     vm_destroy(&process->space);
     if (process->state == UPROC_UNKNOWN) {
         unlink_process(process);
@@ -90,7 +91,7 @@ static void log_text(const char *text, unsigned length) {
 
 /* ---------- output ---------- */
 
-static int output_write(Uproc *process, uint32_t buffer, uint32_t length) {
+int uproc_console_write(Uproc *process, uint32_t buffer, uint32_t length) {
     if (!length) return 0;
     /* Wait for room first: another thread may unmap the buffer meanwhile,
      * so it is checked only after the last point where this thread blocks. */
@@ -180,13 +181,13 @@ static uint32_t deadline(uint32_t milliseconds) {
 
 /* ---------- system calls ---------- */
 
-static int copy_in(Uproc *process, void *out, uint32_t address, uint32_t length) {
+int uproc_copy_in(Uproc *process, void *out, uint32_t address, uint32_t length) {
     int result = vm_prepare(&process->space, address, length, 0);
     if (!result) kmemcpy(out, (const void *)(uintptr_t)address, (int)length);
     return result;
 }
 
-static int copy_out(Uproc *process, uint32_t address, const void *in, uint32_t length) {
+int uproc_copy_out(Uproc *process, uint32_t address, const void *in, uint32_t length) {
     int result = vm_prepare(&process->space, address, length, 1);
     if (!result) kmemcpy((void *)(uintptr_t)address, in, (int)length);
     return result;
@@ -197,14 +198,14 @@ static int sys_futex_wait(Uproc *process, uint32_t address, int expected, uint32
     uint32_t wake = 0;
     if (timeout) {
         BosTimespec span;
-        int result = copy_in(process, &span, timeout, sizeof span);
+        int result = uproc_copy_in(process, &span, timeout, sizeof span);
         if (result) return result;
         uint32_t wait;
         if ((result = milliseconds_for(&span, &wait))) return result;
         wake = deadline(wait);
     }
     int value;
-    int result = copy_in(process, &value, address, 4);
+    int result = uproc_copy_in(process, &value, address, 4);
     if (result) return result;
     if (value != expected) return -BOS_EAGAIN;
     /* The physical address names the word across threads of this process. */
@@ -236,38 +237,63 @@ static int sys_meminfo(Uproc *process, uint32_t address) {
     info.page_bytes = VM_PAGE;
     info.process_pages = process->space.resident_pages + process->space.table_pages;
     info.mapped_bytes = process->space.reserved_bytes;
-    return copy_out(process, address, &info, sizeof info);
+    return uproc_copy_out(process, address, &info, sizeof info);
 }
 
 static int syscall(Uproc *process, UserFrame *f) {
     uint32_t a = f->ebx, b = f->ecx, c = f->edx, d = f->esi, e = f->edi, g = f->ebp;
     switch (f->eax) {
     case BOS_SYS_EXIT:
+        ufile_table_flush(&process->files);
         process_exit(process, (int)a);
         return 0;
     case BOS_SYS_LOG: {
         char text[LOG_MAX];
         if (b > LOG_MAX) b = LOG_MAX;
-        int result = copy_in(process, text, a, b);
+        int result = uproc_copy_in(process, text, a, b);
         if (result) return result;
         log_text(text, b);
         platform_log("\n");
         return 0;
     }
     case BOS_SYS_WRITE:
-        if (a != 1 && a != 2) return -BOS_EBADF;
-        return output_write(process, b, c);
+        return ufile_write(process, (int)a, b, c);
     case BOS_SYS_READ:
-        if (a != 0) return -BOS_EBADF;
-        return 0;
+        return ufile_read(process, (int)a, b, c);
     case BOS_SYS_OPEN:
-        return -BOS_ENOENT;
+        return ufile_open(process, a, (int)b, (int)c);
     case BOS_SYS_CLOSE:
-        return a <= 2 ? 0 : -BOS_EBADF;
+        return ufile_close(process, (int)a);
     case BOS_SYS_SEEK:
-        return a <= 2 ? -BOS_ESPIPE : -BOS_EBADF;
+        return ufile_seek(process, (int)a, b, c, (int)d, e);
     case BOS_SYS_ISATTY:
-        return a <= 2 ? 0 : -BOS_EBADF;
+        return ufile_isatty(process, (int)a);
+    case BOS_SYS_STAT:
+        return ufile_stat(process, a, b);
+    case BOS_SYS_FSTAT:
+        return ufile_fstat(process, (int)a, b);
+    case BOS_SYS_READDIR:
+        return ufile_readdir(process, (int)a, b, c);
+    case BOS_SYS_MKDIR:
+        return ufile_mkdir(process, a);
+    case BOS_SYS_UNLINK:
+        return ufile_unlink(process, a, (int)b);
+    case BOS_SYS_RENAME:
+        return ufile_rename(process, a, b);
+    case BOS_SYS_DUP:
+        return ufile_dup(process, (int)a);
+    case BOS_SYS_DUP2:
+        return ufile_dup2(process, (int)a, (int)b);
+    case BOS_SYS_PIPE:
+        return ufile_pipe(process, a);
+    case BOS_SYS_CHDIR:
+        return ufile_chdir(process, a);
+    case BOS_SYS_GETCWD:
+        return ufile_getcwd(process, a, b);
+    case BOS_SYS_FSYNC:
+        return ufile_fsync(process, (int)a);
+    case BOS_SYS_FTRUNCATE:
+        return ufile_truncate(process, (int)a, b);
     case BOS_SYS_VM_MAP: {
         (void)e;
         (void)g;
@@ -289,15 +315,15 @@ static int syscall(Uproc *process, UserFrame *f) {
         if (a == BOS_CLOCK_REALTIME) realtime(&now);
         else if (a == BOS_CLOCK_MONOTONIC) monotonic(&now);
         else return -BOS_EINVAL;
-        return copy_out(process, b, &now, sizeof now);
+        return uproc_copy_out(process, b, &now, sizeof now);
     }
     case BOS_SYS_SLEEP: {
         BosTimespec span, none = {0, 0};
         uint32_t wait;
-        int result = copy_in(process, &span, a, sizeof span);
+        int result = uproc_copy_in(process, &span, a, sizeof span);
         if (result || (result = milliseconds_for(&span, &wait))) return result;
         thread_wait(0, deadline(wait));
-        return b ? copy_out(process, b, &none, sizeof none) : 0;
+        return b ? uproc_copy_out(process, b, &none, sizeof none) : 0;
     }
     case BOS_SYS_YIELD:
         thread_yield();
@@ -313,7 +339,10 @@ static int syscall(Uproc *process, UserFrame *f) {
         return sys_thread_create(process, a, b, c, d);
     case BOS_SYS_THREAD_EXIT:
         /* The last live thread ends the process with status 0. */
-        if (thread_live_count(process) == 1) process_exit(process, 0);
+        if (thread_live_count(process) == 1) {
+            ufile_table_flush(&process->files);
+            process_exit(process, 0);
+        }
         thread_kill(thread_current());
         return 0;
     case BOS_SYS_GETPID:
@@ -447,6 +476,11 @@ int uproc_spawn(const void *image, uint32_t size, const char *const *argv, unsig
         kfree(process);
         return result;
     }
+    if ((result = ufile_table_init(&process->files))) {
+        vm_destroy(&process->space);
+        kfree(process);
+        return result;
+    }
     ElfImage loaded;
     uint32_t sp = 0;
     result = elf_load(&process->space, image, size, &loaded);
@@ -457,6 +491,7 @@ int uproc_spawn(const void *image, uint32_t size, const char *const *argv, unsig
     }
     Thread *thread = result ? 0 : thread_create_user(process, loaded.entry, sp, 0, 0);
     if (!thread) {
+        ufile_table_close_all(&process->files);
         vm_destroy(&process->space);
         kfree(process);
         return result ? result : -BOS_ENOMEM;

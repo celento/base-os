@@ -30,10 +30,13 @@ can reuse its definitions.
 | Call | Behavior now |
 | --- | --- |
 | `EXIT`, `THREAD_EXIT` | End the process, or one thread (the last thread ends the process with status 0) |
-| `WRITE` | Descriptors 1 and 2 go to the host's output buffer (a Terminal), or the serial log when no host drains it. A full buffer blocks the writer |
-| `READ` | Descriptor 0 returns end of file |
-| `CLOSE`, `ISATTY`, `SEEK` | Console descriptors only |
-| `OPEN`, `STAT`, `FSTAT` | Not yet (`ENOENT` or `ENOSYS`); file descriptors arrive with the file system work |
+| `READ`, `WRITE` | On any descriptor. The console (0, 1 and 2 at start) writes to the host's output buffer (a Terminal), or the serial log when no host drains it; a full buffer blocks the writer. Console reads return end of file |
+| `OPEN`, `CLOSE`, `SEEK`, `FTRUNCATE`, `FSYNC` | Files and directories on the native volume. `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_DIRECTORY` (Linux values) |
+| `STAT`, `FSTAT`, `ISATTY` | `BosStat`: type and permission bits, a stable node number, size and modification time |
+| `READDIR` | `BosDirent` records: `.`, `..`, then the directory's entries |
+| `MKDIR`, `UNLINK`, `RENAME` | `UNLINK` with `BOS_AT_REMOVEDIR` removes an empty directory; `RENAME` replaces an existing file |
+| `DUP`, `DUP2`, `PIPE` | Shared open files; 4 KiB pipes that block, report end of file once writers close and `EPIPE` once readers do |
+| `CHDIR`, `GETCWD` | Per-process working directory for relative paths |
 | `VM_MAP`, `VM_UNMAP`, `VM_PROTECT` | Anonymous private mappings; file mappings return `ENOSYS` |
 | `TCB_SET` | Points this thread's TLS segment at the TCB and loads `%gs` |
 | `CLOCK_GET` | `REALTIME` (CMOS clock at first use plus uptime) and `MONOTONIC`, with sub-microsecond resolution (PIT counter) |
@@ -42,6 +45,24 @@ can reuse its definitions.
 | `THREAD_CREATE` | `(entry, stack, argument, tcb)`; the thread starts as `entry(argument)` with a zero return address |
 | `THREAD_PRIORITY` | `(thread id or 0, priority)` with -1 low, 0 normal, 1 high; `ESRCH` for a thread outside the process |
 | `GETPID`, `GETTID`, `MEMINFO`, `LOG` | As named |
+
+## Files
+
+`kernel/ufile.c` gives each process a descriptor table that grows as needed.
+Descriptors name shared, reference-counted open files, so `DUP`, `DUP2` and
+threads see one offset. Native volume files are replaced atomically as a whole,
+so a file opened for writing keeps its contents in a kernel buffer: writes,
+seeks and `FTRUNCATE` change the buffer, and `FSYNC`, the last close or the
+process's exit writes it back with one `fs_write`. While a volume snapshot is
+in progress the writer waits and retries; a process that is killed instead
+leaves its unsaved files to the kernel loop, which writes them once the volume
+accepts writes again. Two descriptors that open the same file for writing each
+keep their own copy, and the last one written back wins. Volume limits apply
+(names up to 23 bytes, the per-file size limit, `ENOSPC` when the node table is
+full) until the block-based volume format replaces them. The C library maps
+`stdio`, `opendir`/`readdir`, `stat`, `mkdir`, `rename`, `remove`, `pipe`, `dup`,
+`chdir` and `getcwd` onto these calls; `*at` calls support `AT_FDCWD` and
+absolute paths only.
 
 ## Memory
 
@@ -149,12 +170,16 @@ Terminal that started it reports the exit status.
   object comes back. The scheduler check runs 24 low-priority spinners, a
   high-priority sleeper that must wake on time, and four producers and four
   consumers on a futex mutex and condition; the desktop must keep turning at
-  least 30 times a second throughout.
+  least 30 times a second throughout. The files check creates, reads, appends,
+  renames, lists and removes files and directories, uses a pipe and `DUP2`, and
+  leaves a file open at exit that must reach the volume.
+- `tools/elf_libc_test.py` builds `examples/elf/hello.c`, `hello.cpp` and
+  `files.c` with the cross toolchain and runs them from an IDE data volume.
 - `tools/elf_terminal_input_test.py` drives the real desktop with PS/2 input:
   it starts the program twice from Terminal and checks the scrollback.
 
 ## Not yet
 
-File descriptors beyond the console, `mmap` of files, signals and `fork`/`exec`
-belong to the later phases of the roadmap (IRQ-driven
-drivers, file system limits, window and input APIs).
+`mmap` of files, signals, environment variables, `fork`/`exec` and console
+input belong to the later phases of the roadmap (the block-based volume, window
+and input APIs).
