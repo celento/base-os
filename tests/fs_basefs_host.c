@@ -331,9 +331,68 @@ int main(void) {
     assert(mount() == 0 && data_backend == 3 && bfs.slot == newest);
     expect("first.txt", "two", 3);
 
+    /* Files load on demand: a volume holding more than the RAM arena
+     * mounts, every file reads back, and the arena never overflows. Writes
+     * past the changed-data limit save first instead of failing. */
+    memset(data_disk, 0, sizeof data_disk);
+    device = bfs_device();
+    assert(bfs_format(&device, 5) == BFS_OK);
+    assert(mount() == 0);
+    enum { CACHED_FILES = 6 };
+    char cached[] = "cache0";
+    unsigned saves_before = sectors_written;
+    for (int i = 0; i < CACHED_FILES; ++i) {
+        for (unsigned k = 0; k < FS_FILE_MAX; ++k) fill[k] = (char)(k * 31u + (unsigned)i * 101u + k / 8192u);
+        cached[5] = (char)('0' + i);
+        assert(put(cached, fill, FS_FILE_MAX) == FS_FILE_MAX);
+        assert(pool_used <= pool_capacity && dirty_bytes(-1) <= dirty_limit());
+    }
+    assert(sectors_written > saves_before && fs_used_bytes() > FS_POOL_CAPACITY);
+    assert(fs_sync() == 0 && mount() == 0 && pool_used == 0);
+    for (int round = 0; round < 3; ++round)
+        for (int i = 0; i < CACHED_FILES; ++i) {
+            int at = round == 1 ? CACHED_FILES - 1 - i : i;
+            for (unsigned k = 0; k < FS_FILE_MAX; ++k) fill[k] = (char)(k * 31u + (unsigned)at * 101u + k / 8192u);
+            cached[5] = (char)('0' + at);
+            expect(cached, fill, FS_FILE_MAX);
+            assert(pool_used <= pool_capacity);
+        }
+    /* A copy from one file to another reads the source on demand. */
+    int first = fs_find_child(0, "cache0");
+    int twin = fs_copy(first, 0);
+    assert(twin >= 0 && fs_size(twin) == FS_FILE_MAX && pool_used <= pool_capacity);
+    for (unsigned k = 0; k < FS_FILE_MAX; ++k) fill[k] = (char)(k * 31u + k / 8192u);
+    assert(!memcmp(fs_data(twin), fill, FS_FILE_MAX) && fs_delete(twin) == 0 && fs_sync() == 0);
+    /* A read during a save finishes the save first. */
+    assert(put("pending.txt", "pending", 7) == 7);
+    assert(fs_sync_request(&ticket) == 0 && fs_sync_busy());
+    (void)fs_sync_step();
+    for (int i = 0; i < CACHED_FILES; ++i) {
+        cached[5] = (char)('0' + i);
+        (void)fs_data(fs_find_child(0, cached));
+    }
+    assert(!fs_sync_busy() && fs_sync_result(ticket) == 0 && fs_sync_release(ticket) == 0);
+    assert(mount() == 0);
+    expect("pending.txt", "pending", 7);
+    /* A file that cannot be read shows zeros at its size, stays unchanged
+     * on disk, and reads correctly once the disk answers again. */
+    int victim = fs_find_child(0, "cache3");
+    read_errors_after = 0;
+    const char *zeros = fs_data(victim);
+    for (unsigned k = 0; k < FS_FILE_MAX; ++k) assert(!zeros[k]);
+    read_errors_after = -1;
+    for (int i = 0; i < CACHED_FILES; ++i) {
+        cached[5] = (char)('0' + i);
+        (void)fs_data(fs_find_child(0, cached));
+    }
+    assert(!fs_needs_sync() && mount() == 0);
+    for (unsigned k = 0; k < FS_FILE_MAX; ++k) fill[k] = (char)(k * 31u + 3u * 101u + k / 8192u);
+    expect("cache3", fill, FS_FILE_MAX);
+
     printf("basefs volume: format, %u-step incremental save, reuse, %u+%u save cuts, conversion from "
            "both slots, %u+%u conversion cuts, restore after %u read faults, odd sizes, %d full-disk files with %d "
-           "refused rewrites, a %d-folder small volume and an unreadable superblock passed\n", steps, outcomes[0], outcomes[1], kept, converted, attempts, files, refused,
-           folders);
+           "refused rewrites, a %d-folder small volume, an unreadable superblock and on-demand loading of %d files "
+           "passed\n", steps, outcomes[0], outcomes[1], kept, converted, attempts, files, refused, folders,
+           (int)CACHED_FILES);
     return 0;
 }

@@ -59,7 +59,8 @@ int fs_node_limit(void);
 int fs_parent(int id);
 int fs_size(int id);
 const char *fs_name(int id);
-/* Borrowed bytes, followed by a convenience NUL; any mutation can move them. */
+/* Borrowed bytes, followed by a convenience NUL. Any mutation, and on BaseFS 2
+ * any fs_data call for another file, can move them: files load on demand. */
 const char *fs_data(int id);
 
 int fs_find_child(int parent, const char *name);
