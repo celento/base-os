@@ -122,6 +122,37 @@ static int fault(void) {
     return *(volatile int *)0x40000000 + 1;   /* below the image: unmapped */
 }
 
+static long long nanoseconds(void) {
+    BosTimespec now;
+    sys(BOS_SYS_CLOCK_GET, BOS_CLOCK_MONOTONIC, (long)&now, 0, 0, 0, 0);
+    return now.seconds * 1000000000LL + now.nanoseconds;
+}
+
+/* The monotonic clock resolves below a millisecond and never steps back,
+ * and short sleeps last about as long as asked (not a 70 Hz tick). */
+static int clock(void) {
+    long long previous = nanoseconds(), step = 1000000000LL;
+    for (int i = 0; i < 2000; ++i) {
+        long long now = nanoseconds();
+        if (now < previous) return 2;
+        if (now > previous && now - previous < step) step = now - previous;
+        previous = now;
+    }
+    number("ELF clock step ns ", (u32)step);
+    if (step >= 1000000) return 3;
+    long long begin = nanoseconds();
+    BosTimespec nap = {0, 2000000};
+    for (int i = 0; i < 50; ++i)
+        if (sys(BOS_SYS_SLEEP, (long)&nap, 0, 0, 0, 0, 0)) return 4;
+    long long spent = nanoseconds() - begin;
+    if (spent > 4000000000LL) return 5;
+    u32 elapsed = (u32)spent / 1000000u;
+    number("ELF 50 sleeps of 2 ms took ms ", elapsed);
+    if (elapsed < 100 || elapsed > 400) return 5;
+    say("ELF clock ok\n");
+    return 0;
+}
+
 static int gate(void) {
     __asm__ volatile("int $0x80");   /* the BEX call gate is not for ELF programs */
     return 0;
@@ -137,6 +168,7 @@ int start(int argc, char **argv) {
     if (same(argv[1], "threads")) return threads();
     if (same(argv[1], "fault")) return fault();
     if (same(argv[1], "gate")) return gate();
+    if (same(argv[1], "clock")) return clock();
     return 1;
 }
 

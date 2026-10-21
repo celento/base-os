@@ -43,6 +43,15 @@ typedef struct __attribute__((packed)) {
 static Gate idt[256];
 extern void *isr_table[256];
 static volatile uint32_t ticks;
+/* The PIT interrupts at about 1 kHz. Legacy ticks (TIMER_HZ) are counted
+ * from the same interrupt, so code written for 70 Hz keeps its timing. */
+#define PIT_HZ 1193182u
+#define PIT_DIVISOR ((PIT_HZ + TIMER_IRQ_HZ / 2) / TIMER_IRQ_HZ)
+#define PIT_PERIOD_NS 999847u           /* PIT_DIVISOR / PIT_HZ seconds */
+#define PIT_TICK_NS_X1024 858209u       /* 1e9 / PIT_HZ, times 1024 */
+#define USER_QUANTUM_MS 10u
+static volatile uint32_t milliseconds, clock_seconds, clock_nanoseconds;
+static uint32_t legacy_phase, millisecond_phase, quantum;
 
 /* pushad, normalized vector/error, then the processor's ring-0 frame. */
 typedef struct {
@@ -52,10 +61,21 @@ typedef struct {
 } InterruptFrame;
 void interrupt_dispatch(InterruptFrame *f) {
     if (f->vector == 32) {
-        ticks++;
+        int legacy = 0;
+        clock_nanoseconds += PIT_PERIOD_NS;
+        if (clock_nanoseconds >= 1000000000u) { clock_nanoseconds -= 1000000000u; ++clock_seconds; }
+        millisecond_phase += PIT_PERIOD_NS;
+        while (millisecond_phase >= 1000000u) { millisecond_phase -= 1000000u; ++milliseconds; }
+        legacy_phase += TIMER_HZ;
+        if (legacy_phase >= TIMER_IRQ_HZ) { legacy_phase -= TIMER_IRQ_HZ; ++ticks; legacy = 1; }
         outb(0x20, 0x20);
-        process_interrupt((uint32_t *)f);
-        uproc_interrupt((uint32_t *)f);
+        /* BEX tasks keep their per-tick scheduling; ELF threads get a
+         * fixed quantum. */
+        if (legacy) process_interrupt((uint32_t *)f);
+        if (++quantum >= USER_QUANTUM_MS) {
+            quantum = 0;
+            uproc_interrupt((uint32_t *)f);
+        }
         return;
     }
     if (process_interrupt((uint32_t *)f)) return;
@@ -100,12 +120,37 @@ void platform_init(void) {
     outb(0x21, 4); io_wait(); outb(0xa1, 2); io_wait();
     outb(0x21, 1); io_wait(); outb(0xa1, 1); io_wait();
     outb(0x21, 0xfe); outb(0xa1, 0xff);
-    unsigned divisor = (1193182u + TIMER_HZ / 2) / TIMER_HZ;
     outb(0x43, 0x34);  /* PIT channel 0, low/high bytes, rate generator. */
-    outb(0x40, divisor & 255); outb(0x40, divisor >> 8);
+    outb(0x40, PIT_DIVISOR & 255); outb(0x40, PIT_DIVISOR >> 8);
     __asm__ volatile("sti" ::: "memory");
 }
 uint32_t timer_ticks(void) { return ticks; }
+uint32_t timer_milliseconds(void) { return milliseconds; }
+void timer_clock(uint32_t *seconds, uint32_t *nanoseconds) {
+    static uint32_t last_seconds, last_nanoseconds;
+    unsigned flags;
+    __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
+    uint32_t s = clock_seconds, ns = clock_nanoseconds;
+    outb(0x43, 0x00);  /* latch channel 0 */
+    uint32_t count = inb(0x40);
+    count |= (uint32_t)inb(0x40) << 8;
+    outb(0x20, 0x0a);  /* read IRR: an undelivered IRQ0 means the period ended */
+    int pending = inb(0x20) & 1;
+    uint32_t elapsed = count && count <= PIT_DIVISOR ? PIT_DIVISOR - count : 0;
+    if (pending && elapsed < PIT_DIVISOR / 2) elapsed += PIT_DIVISOR;
+    ns += (elapsed * PIT_TICK_NS_X1024) >> 10;
+    while (ns >= 1000000000u) { ns -= 1000000000u; ++s; }
+    /* Never step backwards across the latch and interrupt races. */
+    if (s < last_seconds || (s == last_seconds && ns < last_nanoseconds)) {
+        s = last_seconds;
+        ns = last_nanoseconds;
+    }
+    last_seconds = s;
+    last_nanoseconds = ns;
+    __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
+    *seconds = s;
+    *nanoseconds = ns;
+}
 __attribute__((weak)) void platform_poll(void) {}
 void timer_delay(unsigned delay) {
     uint32_t start = ticks;

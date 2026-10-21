@@ -29,6 +29,7 @@ PROGRAM_STEPS = (
     ('hello', 7, 'argc 3\\nlast-argument\\n'),
     ('memory', 0, 'ELF memory 128 MiB ok'),
     ('threads', 0, 'ELF threads ok'),
+    ('clock', 0, 'ELF clock ok'),
     ('fault', 139, 'ELF fault next'),
     ('gate', 159, None),
     ('hello', 7, None),

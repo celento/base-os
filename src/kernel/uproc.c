@@ -15,7 +15,8 @@
 #define AT_ENTRY 9
 #define AT_RANDOM 25
 #define LOG_MAX 256u
-/* Sleeps and timeouts are capped at about 3 days so tick math stays 32-bit. */
+/* Sleeps and timeouts are capped at about 3 days so millisecond deadlines
+ * stay well inside the wrap-safe 32-bit range. */
 #define WAIT_SECONDS_MAX 262144u
 
 static Uproc *processes;
@@ -142,9 +143,10 @@ static uint32_t days_from_civil(int year, int month, int day) {
 static uint32_t boot_epoch, boot_epoch_ready;
 
 static void monotonic(BosTimespec *out) {
-    uint32_t ticks = timer_ticks();
-    out->seconds = ticks / TIMER_HZ;
-    out->nanoseconds = (long)((ticks % TIMER_HZ) * (1000000000u / TIMER_HZ));
+    uint32_t seconds, nanoseconds;
+    timer_clock(&seconds, &nanoseconds);
+    out->seconds = seconds;
+    out->nanoseconds = (long)nanoseconds;
 }
 
 static void realtime(BosTimespec *out) {
@@ -160,19 +162,20 @@ static void realtime(BosTimespec *out) {
     out->seconds += boot_epoch;
 }
 
-/* Ticks to wait for a relative timespec, at least one; 0 if invalid. */
-static int ticks_for(const BosTimespec *span, uint32_t *ticks) {
+/* Milliseconds to wait for a relative timespec, rounded up. A wait ends
+ * after at least that long: the next millisecond boundary counts as one. */
+static int milliseconds_for(const BosTimespec *span, uint32_t *milliseconds) {
     if (span->seconds < 0 || span->nanoseconds < 0 || span->nanoseconds >= 1000000000L) return -BOS_EINVAL;
     uint32_t seconds = span->seconds > WAIT_SECONDS_MAX ? WAIT_SECONDS_MAX : (uint32_t)span->seconds;
-    uint32_t milliseconds = (uint32_t)span->nanoseconds / 1000000u + ((uint32_t)span->nanoseconds % 1000000u != 0);
-    uint32_t count = seconds * TIMER_HZ + (milliseconds * TIMER_HZ + 999u) / 1000u;
-    *ticks = count ? count : 1;
+    uint32_t part = (uint32_t)span->nanoseconds / 1000000u + ((uint32_t)span->nanoseconds % 1000000u != 0);
+    *milliseconds = seconds * 1000u + part;
     return 0;
 }
 
-static uint32_t deadline(uint32_t ticks) {
-    uint32_t tick = timer_ticks() + ticks;
-    return tick ? tick : 1;
+static uint32_t deadline(uint32_t milliseconds) {
+    /* +1: the current millisecond is already partly over. */
+    uint32_t at = timer_milliseconds() + milliseconds + 1;
+    return at ? at : 1;
 }
 
 /* ---------- system calls ---------- */
@@ -196,9 +199,9 @@ static int sys_futex_wait(Uproc *process, uint32_t address, int expected, uint32
         BosTimespec span;
         int result = copy_in(process, &span, timeout, sizeof span);
         if (result) return result;
-        uint32_t ticks;
-        if ((result = ticks_for(&span, &ticks))) return result;
-        wake = deadline(ticks);
+        uint32_t wait;
+        if ((result = milliseconds_for(&span, &wait))) return result;
+        wake = deadline(wait);
     }
     int value;
     int result = copy_in(process, &value, address, 4);
@@ -290,10 +293,10 @@ static int syscall(Uproc *process, UserFrame *f) {
     }
     case BOS_SYS_SLEEP: {
         BosTimespec span, none = {0, 0};
-        uint32_t ticks;
+        uint32_t wait;
         int result = copy_in(process, &span, a, sizeof span);
-        if (result || (result = ticks_for(&span, &ticks))) return result;
-        thread_wait(0, deadline(ticks));
+        if (result || (result = milliseconds_for(&span, &wait))) return result;
+        thread_wait(0, deadline(wait));
         return b ? copy_out(process, b, &none, sizeof none) : 0;
     }
     case BOS_SYS_YIELD:

@@ -97,8 +97,15 @@ def run(build):
                 assert contents(test_disk, '/Documents/report.bwr') == before
                 check.name('recovered.bwr')
                 session.wait(lambda: check.o.integer('name_dlg') == 0, 'recovered copy saved')
+                # The dialog closes once Save As is accepted; the write may
+                # still be pending, so wait for it to reach the disk.
+                def recovered_saved():
+                    try:
+                        return decode_native(contents(test_disk, '/Documents/recovered.bwr')) == draft
+                    except ValueError:
+                        return False
+                session.wait(recovered_saved, 'recovered copy on disk')
                 assert contents(test_disk, '/Documents/report.bwr') == before
-                assert decode_native(contents(test_disk, '/Documents/recovered.bwr')) == draft
             shots.append(str(session.screenshot('writer-recovery-' + mode + '.png')))
             results.append(mode)
     result = {'passed': True, 'checks': ['live same-ID same-size content conflict', *results], 'screenshots': shots}
