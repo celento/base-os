@@ -162,8 +162,15 @@ int ufile_table_init(UFileTable *table) {
 }
 
 void ufile_table_flush(UFileTable *table) {
-    for (unsigned fd = 0; fd < table->capacity; ++fd)
-        if (table->slots[fd] && table->slots[fd]->kind == UFILE_NODE) write_back(table->slots[fd], 1);
+    for (unsigned fd = 0; fd < table->capacity; ++fd) {
+        UFile *file = table->slots[fd];
+        if (!file || file->kind != UFILE_NODE) continue;
+        /* Sibling threads still run while this waits for the volume and may
+         * close the descriptor; the extra reference keeps the file alive. */
+        ++file->refs;
+        write_back(file, 1);
+        release(file, 1);
+    }
 }
 
 void ufile_table_close_all(UFileTable *table) {
@@ -589,11 +596,11 @@ int ufile_rename(Uproc *process, uint32_t from, uint32_t to) {
     if (existing >= 0) {
         if (fs_is_dir(node) != fs_is_dir(existing)) return fs_is_dir(existing) ? -BOS_EISDIR : -BOS_ENOTDIR;
         if (fs_is_dir(existing) && fs_child_count(existing)) return -BOS_ENOTEMPTY;
-        if (MUTATE(fs_delete(existing)) < 0) return -BOS_EIO;
     }
-    if (fs_parent(node) != parent && MUTATE(fs_move(node, parent)) < 0) return -BOS_EIO;
-    if (kstrcmp(fs_name(node), name) && MUTATE(fs_rename(node, name)) < 0) return -BOS_EIO;
-    return 0;
+    /* Check the whole placement before the destination is deleted. */
+    if (!fs_can_place(node, parent, name)) return -BOS_EINVAL;
+    if (existing >= 0 && MUTATE(fs_delete(existing)) < 0) return -BOS_EIO;
+    return MUTATE(fs_place(node, parent, name)) < 0 ? -BOS_EIO : 0;
 }
 
 int ufile_chdir(Uproc *process, uint32_t path) {

@@ -776,6 +776,30 @@ int fs_rename(int id, const char *name) {
     return 0;
 }
 
+/* Whether id could become parent/name, apart from a sibling already using
+ * the name. Changes nothing. */
+int fs_can_place(int id, int parent, const char *name) {
+    if (!fs_valid(id) || id == 0 || !fs_is_dir(parent) || !valid_name(name)) return 0;
+    int len = kstrlen(name);
+    if (len <= 0 || len >= FS_NAME_LEN) return 0;
+    for (int walk = parent; walk >= 0; walk = nodes[walk].parent)
+        if (walk == id) return 0;
+    return tree_fits(id, parent, name);
+}
+/* Moves and renames id in one step: either both happen or nothing does. */
+int fs_place(int id, int parent, const char *name) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
+    if (!fs_can_place(id, parent, name)) return -1;
+    int clash = fs_find_child(parent, name);
+    if (clash >= 0 && clash != id) return -1;
+    if (nodes[id].parent == parent && !kstrcmp(nodes[id].name, name)) return 0;
+    nodes[id].parent = parent;
+    kstrcpy(nodes[id].name, name);
+    nodes[id].modified = fs_clock();
+    fs_touched = 1;
+    return 0;
+}
+
 /* ---------- Disk image ---------- */
 
 static unsigned int checksum(const unsigned char *p, unsigned int n) {
