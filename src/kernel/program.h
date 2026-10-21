@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "kernel/address_space.h"
 #include "kernel/executable.h"
+#include "../sdk/baseos_abi.h"
 /* Source-identified enabled verification candidate. Release support requires
  * ordinary private-space/mixed-format gates; see docs/ADDRESS_SPACES.md. */
 #ifndef BASEOS_BEX2_ENABLED
@@ -31,6 +32,13 @@ typedef struct {
 } ProgramIO;
 int basic_run(const char *source, int length, const ProgramIO *io);
 void process_init(void);
+/* Shared with the ELF runtime (kernel/uproc.c): owner identities come from one
+ * never-reused serial domain; paging is enabled once; the TSS ring-0 stack
+ * follows the running thread. */
+BosHandle process_owner_allocate(void);
+void process_paging_init(void);
+void process_set_kernel_stack(uint32_t top);
+uint32_t process_legacy_kernel_stack(void);
 int process_run(const void *file, unsigned bytes, const ProgramIO *io);
 int process_interrupt(uint32_t *registers);
 /* Internal process identity is the existing opaque owner handle, never a

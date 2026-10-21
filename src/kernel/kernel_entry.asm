@@ -598,10 +598,28 @@ gdt_data:
     db 0x92
     db 0xCF
     db 0x00
-global gdt_user_code, gdt_user_data, gdt_tss
+global gdt_user_code, gdt_user_data, gdt_tss, gdt_user_tls
 gdt_user_code: dq 0
 gdt_user_data: dq 0
 gdt_tss: dq 0
+; Flat ring-3 code and data for ELF programs (0x33, 0x3B); the 4 GiB limit
+; is safe because paging keeps everything outside the user window
+; supervisor-only. The TLS segment (0x43) follows the running thread.
+gdt_flat_code:
+    dw 0xFFFF
+    dw 0x0000
+    db 0x00
+    db 0xFA
+    db 0xCF
+    db 0x00
+gdt_flat_data:
+    dw 0xFFFF
+    dw 0x0000
+    db 0x00
+    db 0xF2
+    db 0xCF
+    db 0x00
+gdt_user_tls: dq 0
 gdt_end:
 
 CODE_SEG equ gdt_code - gdt_start

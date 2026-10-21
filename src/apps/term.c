@@ -6,6 +6,7 @@
 #include "kernel/download.h"
 #include "kernel/platform.h"
 #include "apps/app_storage.h"
+#include "kernel/uproc.h"
 typedef TerminalText Terminal;
 static Terminal *terms=((AppStorage *)TERM_MEMORY)->terminals;
 static int selected;
@@ -169,8 +170,63 @@ int term_task_start_file_with_arg(int slot,int file,unsigned identity,const char
 int term_task_info(int slot,TermTaskInfo *out){return app_view_info(slot,out);}
 int term_task_title(int slot,char *out,int capacity){return app_view_title(slot,out,capacity);}
 int term_task_key(int slot,int key){return app_view_key(slot,key);}
-int term_task_close(int slot){return app_view_close(slot);}
-void term_task_stop(int slot){app_view_stop(slot);}
+/* ELF programs: output arrives as bytes and is cut into Terminal lines. */
+static uint32_t elf_pids[PROCESS_TASKS];
+static char elf_line[PROCESS_TASKS][TERM_COLS+1];
+static unsigned elf_line_length[PROCESS_TASKS];
+static void elf_flush(int slot){
+    elf_line[slot][elf_line_length[slot]]=0;term_write_at(slot,elf_line[slot]);elf_line_length[slot]=0;
+}
+static void elf_text(int slot,const char *text,unsigned length){
+    for(unsigned i=0;i<length;i++){
+        char ch=text[i];
+        if(ch=='\r')continue;
+        if(ch=='\n'){elf_flush(slot);continue;}
+        if(ch=='\t')ch=' ';
+        elf_line[slot][elf_line_length[slot]++]=(ch>=32&&ch<=126)?ch:'.';
+        if(elf_line_length[slot]==TERM_COLS)elf_flush(slot);
+    }
+}
+int term_elf_running(int slot){return slot>=0&&slot<PROCESS_TASKS&&elf_pids[slot]!=0;}
+int term_elf_poll(void){
+    int changed=0;
+    for(int slot=0;slot<PROCESS_TASKS;slot++){
+        if(!elf_pids[slot])continue;
+        char chunk[256];unsigned count;
+        while((count=uproc_take_output(elf_pids[slot],chunk,sizeof chunk))){elf_text(slot,chunk,count);changed=1;}
+        int status=0,state=uproc_status(elf_pids[slot],&status);
+        if(state==UPROC_RUNNING)continue;
+        if(elf_line_length[slot])elf_flush(slot);
+        char line[48];kstrcpy(line,"Program exited with status ");
+        char digits[12];int n=0;unsigned value=status<0?(unsigned)-status:(unsigned)status;
+        do{digits[n++]=(char)('0'+value%10);value/=10;}while(value);
+        int at=kstrlen(line);if(status<0)line[at++]='-';
+        while(n)line[at++]=digits[--n];
+        line[at++]='.';line[at]=0;
+        term_write_at(slot,line);
+        uproc_release(elf_pids[slot]);elf_pids[slot]=0;changed=1;
+    }
+    return changed;
+}
+static void elf_release(int slot){
+    if(!elf_pids[slot])return;
+    uproc_release(elf_pids[slot]);elf_pids[slot]=0;elf_line_length[slot]=0;
+}
+static int elf_start(int slot,int file,const char *argument){
+    if(elf_pids[slot]||term_task_running(slot)){push("Stop this terminal's program first.");return TERM_COMMAND_REPORTED;}
+    char path[FS_PATH_LEN];fs_path(file,path,sizeof path);
+    const char *argv[2]={path,argument};
+    uint32_t pid;
+    if(uproc_spawn(fs_data(file),(uint32_t)fs_size(file),argv,argument?2u:1u,(uint32_t)slot+1,&pid)){
+        push("Cannot start: not a valid BaseOS ELF program, or memory is short.");return TERM_COMMAND_REPORTED;
+    }
+    elf_pids[slot]=pid;elf_line_length[slot]=0;terms[slot].scroll=0;return 0;
+}
+int term_task_close(int slot){if(slot>=0&&slot<PROCESS_TASKS)elf_release(slot);return app_view_close(slot);}
+void term_task_stop(int slot){
+    if(term_elf_running(slot)){uproc_kill(elf_pids[slot]);return;}
+    app_view_stop(slot);
+}
 TermTaskUpdate term_task_poll_update(void){return app_view_poll_update();}
 int term_task_poll(void){return app_view_poll();}
 static void (*program_input_hook)(int active);
@@ -246,6 +302,9 @@ usage:
 }
 static int start_dispatch(int file,const char *argument,unsigned length){
     int owner=selected;
+    const unsigned char *image=(const unsigned char *)fs_data(file);
+    if(fs_size(file)>=4&&image[0]==0x7F&&image[1]=='E'&&image[2]=='L'&&image[3]=='F')
+        return elf_start(owner,file,argument);
     int result=native_launch_hook?native_launch_hook(owner,file,fs_identity(file),argument,length):
         term_task_start_file_with_arg(owner,file,fs_identity(file),argument,length);
     /* Focus may now belong to a GUI, but the remainder of this shell command
@@ -328,13 +387,15 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"run"))return script(id,depth,budget);
     else if(!kstrcmp(cmd,"tasks")){
         int found=0;TermTaskInfo info;
-        for(int slot=0;slot<PROCESS_TASKS;slot++)if(term_task_running(slot)){
+        for(int slot=0;slot<PROCESS_TASKS;slot++)if(term_elf_running(slot)){
+            print_number("ELF program, window slot ",(unsigned)slot+1);found=1;
+        }else if(term_task_running(slot)){
             print_number((term_task_info(slot,&info)&&info.state==PROCESS_TASK_SLEEPING)?"Sleeping, window slot ":"Running, window slot ",(unsigned)slot+1);found=1;
             char title[TERM_TASK_TITLE_LEN];term_task_title(slot,title,sizeof title);push(title);
         }
         if(!found)push("No native tasks are running.");
     }
-    else if(!kstrcmp(cmd,"stop")){if(!term_task_running(selected))push("No native task in this terminal.");else term_task_stop(selected);}
+    else if(!kstrcmp(cmd,"stop")){if(!term_task_running(selected)&&!term_elf_running(selected))push("No native task in this terminal.");else term_task_stop(selected);}
     else if(!kstrcmp(cmd,"start")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
         return start_command(id,p,quote!=0);

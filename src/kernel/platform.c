@@ -1,5 +1,7 @@
 #include "kernel/platform.h"
 #include "kernel/program.h"
+#include "kernel/uproc.h"
+#include "../sdk/baseos_sys.h"
 
 static inline void outb(uint16_t p, uint8_t v) {
     __asm__ volatile("outb %0,%1" :: "a"(v), "Nd"(p) : "memory");
@@ -53,9 +55,11 @@ void interrupt_dispatch(InterruptFrame *f) {
         ticks++;
         outb(0x20, 0x20);
         process_interrupt((uint32_t *)f);
+        uproc_interrupt((uint32_t *)f);
         return;
     }
     if (process_interrupt((uint32_t *)f)) return;
+    if (uproc_interrupt((uint32_t *)f)) return;
     /* PIC IRQ7/15 can be spurious even when masked. */
     if (f->vector == 39 || f->vector == 47) {
         uint16_t pic = f->vector == 39 ? 0x20 : 0xa0;
@@ -82,6 +86,7 @@ void platform_init(void) {
         idt[i] = (Gate){address & 0xffff, 8, 0, 0x8e, address >> 16};
     }
     idt[128].attributes=0xee;
+    idt[BOS_SYS_VECTOR].attributes = 0xee;
     process_init();
     struct __attribute__((packed)) { uint16_t limit; uint32_t base; } descriptor = {
         sizeof(idt) - 1, (uintptr_t)idt

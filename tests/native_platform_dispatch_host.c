@@ -185,9 +185,10 @@ static void lifetimes(void){
     assert(current_task->state==PROCESS_TASK_EXITING&&current_task->owner_id==old&&stub_release_files==f);
     active=0;task_finalize(current_task);
     assert(current_task->state==PROCESS_TASK_DONE&&stub_last_released==old);
-    /* Direct allocator boundary, no runtime fault or malformed app involved. */
-    owner_serial=BOS_HANDLE_SERIAL_MAX-1;
-    assert(allocate_owner()==(BOS_HANDLE_TYPE_PROCESS|BOS_HANDLE_SERIAL_MAX));
+    /* Direct allocator boundary, no runtime fault or malformed app involved.
+     * The last serial stays reserved for the kernel heap's frames. */
+    owner_serial=BOS_HANDLE_SERIAL_MAX-2;
+    assert(allocate_owner()==(BOS_HANDLE_TYPE_PROCESS|(BOS_HANDLE_SERIAL_MAX-1)));
     assert(allocate_owner()==BOS_HANDLE_INVALID&&allocate_owner()==BOS_HANDLE_INVALID);
     ProcessHandle untouched=77;
     assert(process_create(program,sizeof program,0,0,&untouched)==-2&&untouched==77);

@@ -10,6 +10,7 @@ static unsigned char published_arena[NATIVE_CANVAS_CAPACITY];
 #include "../src/apps/app_canvas.c"
 #include "../src/apps/app_view.c"
 #include "../src/apps/term.c"
+#include "uproc_stub.h"
 #define V (views[selected])
 #include "../sdk/baseos_abi.h"
 /* Exact handles resolve records first. Slot-indexed views keep the Terminal

@@ -2,7 +2,7 @@
 
 A small hobby operating system written from scratch in C and x86 assembly. It boots directly into a graphical desktop with persistent files, document editing, HTTP browsing, media playback, and small protected native applications.
 
-BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased Geist type. Windows have rounded corners, a light gradient title bar with the app icon and title on the left and minimize, maximize and close buttons on the right, and a File / Edit / Window menu strip under the title. Buttons and scrollbar thumbs are glossy, the taskbar is light glass with the BaseOS mark, the app launcher opens in the middle of the screen, and every application has a hand-drawn color icon. Each of the three themes is a bundled wallpaper with its own accent. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
+BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. ELF programs can use every frame above the fixed kernel areas, up to 4 GiB. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased Geist type. Windows have rounded corners, a light gradient title bar with the app icon and title on the left and minimize, maximize and close buttons on the right, and a File / Edit / Window menu strip under the title. Buttons and scrollbar thumbs are glossy, the taskbar is light glass with the BaseOS mark, the app launcher opens in the middle of the screen, and every application has a hand-drawn color icon. Each of the three themes is a bundled wallpaper with its own accent. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
 
 ![Files and Editor running side by side in BaseOS](screenshots/gallery/desktop.png)
 
@@ -119,7 +119,7 @@ sudo apt install build-essential gcc-multilib nasm qemu-system-x86 qemu-system-g
 make run
 ```
 
-`make run` builds `build/baseos.img`, a 2.88 MB boot floppy, and creates `build/baseos-data.img`, a separate 16 MiB IDE data disk, only if it does not already exist. QEMU starts with 64 MiB RAM. Use `make headless` for a serial-console run without a graphical window. The data volume holds up to 8,385,024 file bytes, with 2 MiB per file and up to 256 total file/folder/app nodes. Metadata for nodes beyond 64 slightly reduces the byte allowance; see the technical reference.
+`make run` builds `build/baseos.img`, a 2.88 MB boot floppy, and creates `build/baseos-data.img`, a separate 16 MiB IDE data disk, only if it does not already exist. QEMU starts with 64 MiB RAM; pass a larger `QEMU_MEMORY`, such as `QEMU_MEMORY=512M`, to give ELF programs more room. Use `make headless` for a serial-console run without a graphical window. The data volume holds up to 8,385,024 file bytes, with 2 MiB per file and up to 256 total file/folder/app nodes. Metadata for nodes beyond 64 slightly reduces the byte allowance; see the technical reference.
 
 ### In a web browser
 

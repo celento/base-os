@@ -8219,6 +8219,7 @@ static int desktop_turn(void) {
     int player_update=player_tick();
     int player_slot=find_open_kind(WK_PLAYER);
     if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
+    term_elf_poll();
     TermTaskUpdate term_update=app_view_poll_update();
     native_window_complete(term_update);
     /* Publication/clear changes become visible to input before the next

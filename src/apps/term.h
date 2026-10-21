@@ -87,4 +87,10 @@ int term_task_close(int slot);
 /* Fixed trusted text sink for hosted views. Copies bytes immediately into the
  * explicit Terminal's scrollback; never changes selection or retains text. */
 void term_write_at(int slot,const char *text);
+
+/* ELF programs started from a Terminal (one per Terminal). Moves their output
+ * into the owning Terminal and reports exits; returns nonzero on any change.
+ * Call once per shell turn. */
+int term_elf_poll(void);
+int term_elf_running(int slot);
 #endif

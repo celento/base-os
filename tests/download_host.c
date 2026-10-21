@@ -12,6 +12,7 @@ static unsigned char terminal_arena[0x100000];
 #include "../src/apps/app_canvas.c"
 #include "../src/apps/app_view.c"
 #include "../src/apps/term.c"
+#include "uproc_stub.h"
 #define V (views[selected])
 
 static NetHttpResult response;
