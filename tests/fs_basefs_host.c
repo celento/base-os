@@ -269,8 +269,9 @@ int main(void) {
     expect("odd.txt", "size", 4);
 
     /* Changes are admitted only while their save still fits: a small disk
-     * fills well past half, every accepted change saves, and a refused
-     * rewrite leaves the file as it was. */
+     * fills well past half and every accepted change saves. Room to rewrite
+     * the largest file is held back, so rewrites of a full disk still save,
+     * and a refused write leaves the file as it was. */
     data_sectors = 8192;
     memset(data_disk, 0, sizeof data_disk);
     device = bfs_device();
@@ -284,6 +285,9 @@ int main(void) {
         assert(fs_used_bytes() <= fs_capacity() && fs_sync() == 0);
     }
     assert(files >= 10 && fs_used_bytes() > 3u * 1024 * 1024);
+    name[4] = (char)('A' + files);
+    int last = fs_find_child(0, name);
+    assert(last > 0 && fs_size(last) == 0 && fs_write(last, other, sizeof other) == -1 && fs_size(last) == 0);
     for (int round = 0; round < 24; ++round) {
         name[4] = (char)('A' + round % files);
         int length = round % 3 ? 4096 * (round % 5) + 7 : (int)sizeof other;
@@ -292,7 +296,8 @@ int main(void) {
         if (fs_write(id, big + round, length) == length) assert(fs_sync() == 0);
         else { ++refused; assert(fs_size(id) == before && !memcmp(fs_data(id), copy, (size_t)before)); }
     }
-    assert(refused >= 1 && mount() == 0);
+    assert(refused == 0);
+    assert(mount() == 0);
 
     /* A volume too small for a larger node table refuses the new node
      * instead of accepting a change that cannot be saved. */
@@ -338,7 +343,7 @@ int main(void) {
     device = bfs_device();
     assert(bfs_format(&device, 5) == BFS_OK);
     assert(mount() == 0);
-    enum { CACHED_FILES = 6 };
+    enum { CACHED_FILES = 5 };
     char cached[] = "cache0";
     unsigned saves_before = sectors_written;
     for (int i = 0; i < CACHED_FILES; ++i) {

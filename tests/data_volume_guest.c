@@ -14,15 +14,14 @@
 #endif
 
 #define LARGE_SIZE 2097152u
+/* A shrink frees whole blocks less the new checkpoint, so the refill is a
+ * little under LARGE_SIZE. */
+#define RECLAIM_SIZE (LARGE_SIZE - 16384u)
 #define HOST_SIZE 262177u
 #define LEGACY_SIZE 12017u
 #define FLOPPY_SIZE 13001u
 #define CONVERTED_SIZE 1500000u
 #define DATA_NAME "BaseFS 2 data disk"
-/* Mode 5 fills the volume exactly: its capacity with eight nodes. */
-#define FULL_NODES 8u
-#define TOTAL_SIZE fs_capacity_for_nodes(FULL_NODES)
-
 /* Audio is never started in this fixture. Keep scratch outside the FS arenas. */
 #define scratch ((char *)AUDIO_WORK_BASE)
 _Static_assert(LARGE_SIZE <= AUDIO_WORK_CAPACITY, "test scratch is too small");
@@ -65,23 +64,68 @@ static void synced(void) {
 }
 
 #if DATA_VOLUME_MODE == 5
+/* Mode 5 fills the volume exactly with full<i>.bin files of up to LARGE_SIZE
+ * bytes each, the last ones holding what is left. */
+static void full_name(char *name, unsigned i) {
+    char digits[12];
+    unsigned n = 0;
+    do { digits[n++] = (char)('0' + i % 10); i /= 10; } while (i);
+    kstrcpy(name, "full");
+    for (unsigned k = 0; k < n; ++k) name[4 + k] = digits[n - 1 - k];
+    kstrcpy(name + 4 + n, ".bin");
+}
+
+static void log_total(void) {
+    platform_log("DATA-FULL-TOTAL=");
+    char digits[12];
+    unsigned value = fs_used_bytes(), n = 0;
+    do { digits[n++] = (char)('0' + value % 10); value /= 10; } while (value);
+    char text[13];
+    for (unsigned i = 0; i < n; ++i) text[i] = digits[n - 1 - i];
+    text[n] = '\n'; text[n + 1] = 0;
+    platform_log(text);
+}
+
+/* Adds full files until no byte is left. A save can free checkpoint room,
+ * so the volume counts as full only once it is saved. */
+static void fill_volume(void) {
+    unsigned i = 0;
+    char name[24];
+    for (;;) {
+        full_name(name, i);
+        if (fs_find_child(0, name) > 0) { ++i; continue; }
+        synced();
+        if (fs_capacity() == fs_used_bytes()) break;
+        int id = fs_create(0, name);
+        require(id > 0, "data test: full-volume create failed");
+        unsigned room = fs_capacity() - fs_used_bytes();
+        unsigned length = room < LARGE_SIZE ? room : LARGE_SIZE;
+        fill(length, 101 + i * 7, 0);
+        require(fs_write(id, scratch, length) == (int)length, "data test: full-volume write failed");
+    }
+    require(i >= 4 && fs_capacity() == fs_used_bytes(), "data test: full-volume fill wrong");
+    log_total();
+}
+
 static void verify_full(int refilled) {
-    require(fs_capacity() == TOTAL_SIZE && fs_used_bytes() == TOTAL_SIZE,
-            "data test: full-volume capacity mismatch");
-    for (unsigned i = 0; i < 4; ++i) {
-        char name[] = "full0.bin";
-        name[4] += i;
+    require(fs_capacity() == fs_used_bytes(), "data test: full-volume capacity mismatch");
+    char name[24];
+    unsigned i = 0;
+    for (;; ++i) {
+        full_name(name, i);
         int id = fs_find_child(0, name);
+        if (id <= 0) break;
         if (refilled && i == 0) {
-            require(id > 0 && fs_size(id) == 5 && !kstrcmp(fs_data(id), "small"),
+            require(fs_size(id) == 5 && !kstrcmp(fs_data(id), "small"),
                     "data test: shrunken file mismatch");
         } else {
-            unsigned length = i < 3 ? LARGE_SIZE : TOTAL_SIZE - 3 * LARGE_SIZE;
-            verify(id, length, 101 + i * 7, 0);
+            require(i >= 3 || fs_size(id) == (int)LARGE_SIZE, "data test: full file too small");
+            verify(id, (unsigned)fs_size(id), 101 + i * 7, 0);
         }
     }
+    require(i >= 4, "data test: full files missing");
     int reclaimed = fs_find_child(0, "reclaimed.bin");
-    if (refilled) verify(reclaimed, LARGE_SIZE - 5, 211, 0);
+    if (refilled) verify(reclaimed, RECLAIM_SIZE, 211, 0);
     else require(reclaimed > 0 && fs_size(reclaimed) == 0,
                  "data test: unexpected reclaimed data");
 }
@@ -91,13 +135,14 @@ static void reject_full_writes(void) {
     require(empty > 0 && fs_size(empty) == 0, "data test: empty full-volume file missing");
     require(!fs_needs_sync(), "data test: rejection baseline not clean");
     int count = fs_node_count();
+    unsigned used = fs_used_bytes();
     require(fs_write(empty, "!", 1) == -1 && fs_size(empty) == 0,
             "data test: full-volume write did not reject atomically");
     require(fs_copy(fs_find_child(0, "full1.bin"), 0) == -1,
             "data test: full-volume copy did not reject");
     require(fs_node_count() == count && !fs_needs_sync(),
             "data test: rejected full-volume operation changed metadata");
-    require(fs_used_bytes() == TOTAL_SIZE, "data test: rejected operation changed usage");
+    require(fs_used_bytes() == used, "data test: rejected operation changed usage");
 }
 #endif
 
@@ -195,28 +240,16 @@ void data_volume_guest(void) {
     platform_log("DATA-UNMARKED-PROTECTED-PASS\n");
 #elif DATA_VOLUME_MODE == 5
     require(!kstrcmp(fs_storage_name(), DATA_NAME), "data test: full-volume IDE not selected");
-    require(fs_file_limit() == LARGE_SIZE && TOTAL_SIZE > 3 * LARGE_SIZE &&
-            TOTAL_SIZE - 3 * LARGE_SIZE <= LARGE_SIZE, "data test: full-volume limits wrong");
+    require(fs_file_limit() == LARGE_SIZE && fs_capacity() > 4 * LARGE_SIZE,
+            "data test: full-volume limits wrong");
     if (loaded == FS_LOAD_BLANK) {
         fs_empty_dir(0);
-        platform_log("DATA-FULL-TOTAL=");
-        char digits[12];
-        unsigned value = TOTAL_SIZE, n = 0;
-        do { digits[n++] = (char)('0' + value % 10); value /= 10; } while (value);
-        char text[13];
-        for (unsigned i = 0; i < n; ++i) text[i] = digits[n - 1 - i];
-        text[n] = '\n'; text[n + 1] = 0;
-        platform_log(text);
         require(fs_create(0, "full-written") > 0, "data test: full-volume stage failed");
         require(fs_create(0, "blocked.bin") > 0, "data test: empty file create failed");
         require(fs_create(0, "reclaimed.bin") > 0, "data test: reclaim file create failed");
-        for (unsigned i = 0; i < 4; ++i) {
-            char name[] = "full0.bin";
-            name[4] += i;
-            unsigned length = i < 3 ? LARGE_SIZE : TOTAL_SIZE - 3 * LARGE_SIZE;
-            create_pattern(name, length, 101 + i * 7);
-        }
-        /* Equal-size overwrite needs no free capacity, including an aliased
+        fill_volume();
+        /* Room to rewrite the largest file is held back, so equal-size
+         * overwrites still save on a full volume, including an aliased
          * source borrowed from the FS arena. Verify every file afterward. */
         fill(LARGE_SIZE, 101, 0);
         require(fs_write(fs_find_child(0, "full0.bin"), scratch, LARGE_SIZE) == (int)LARGE_SIZE,
@@ -224,7 +257,7 @@ void data_volume_guest(void) {
         int alias = fs_find_child(0, "full1.bin");
         require(fs_write(alias, fs_data(alias), LARGE_SIZE) == (int)LARGE_SIZE,
                 "data test: full-volume aliased overwrite failed");
-        synced();
+        fill_volume();
         reject_full_writes();
         verify_full(0);
         platform_log("DATA-FULL-WRITE-PASS\n");
@@ -235,15 +268,16 @@ void data_volume_guest(void) {
             reject_full_writes();
             verify_full(0);
             platform_log("DATA-FULL-RESTART-PASS\n");
+            unsigned total = fs_used_bytes();
             int first = fs_find_child(0, "full0.bin");
             require(fs_write(first, "small", 5) == 5, "data test: full-volume shrink failed");
-            require(fs_used_bytes() == TOTAL_SIZE - LARGE_SIZE + 5,
+            require(fs_used_bytes() == total - LARGE_SIZE + 5,
                     "data test: shrink did not reclaim capacity");
-            fill(LARGE_SIZE - 5, 211, 0);
-            require(fs_write(fs_find_child(0, "reclaimed.bin"), scratch, LARGE_SIZE - 5)
-                    == (int)LARGE_SIZE - 5, "data test: reclaimed refill failed");
+            fill(RECLAIM_SIZE, 211, 0);
+            require(fs_write(fs_find_child(0, "reclaimed.bin"), scratch, RECLAIM_SIZE)
+                    == (int)RECLAIM_SIZE, "data test: reclaimed refill failed");
             require(fs_rename(stage, "refilled") == 0, "data test: refill stage failed");
-            synced();
+            fill_volume();
             reject_full_writes();
             verify_full(1);
             platform_log("DATA-FULL-REFILL-PASS\n");

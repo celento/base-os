@@ -119,12 +119,18 @@ A changed file is written to new blocks while its old copy stays allocated
 until the commit lands, so the kernel admits a change only while the next
 commit still fits in the free blocks: every changed file rounded up to whole
 blocks, plus a checkpoint for the node count. A refused write returns an
-error and leaves the file as it was. The capacity shown to programs is the
-bytes in use plus the blocks still free after that reservation, so it grows
-with the disk (reported up to 2 GiB). On the 16 MiB default disk that is
-close to 16 MiB, against 8,385,024 bytes in the snapshot format.
-Near a full disk, rewriting a file that is already saved needs room for both
-copies until the save completes, as on other copy-on-write file systems.
+error and leaves the file as it was.
+
+The capacity shown to programs is the bytes in use plus what a new file could
+still take, so it grows with the disk (reported up to 2 GiB). Room to rewrite
+the largest file is held back from it, so a full volume can still save a
+change to any one file; when the next save would not fit, a write saves the
+pending changes first, which frees their old copies. On the 16 MiB default
+disk with 2 MiB files that leaves about 14 MiB, against 8,385,024 bytes in
+the snapshot format. Growth counts in whole blocks: a file can grow into the
+rest of its last block on a full volume, and a write that needs a new block
+is refused. A new node is refused once its record would eat into the held-back
+room. A deleted file's blocks count as free once the delete is saved.
 
 ### Conversion of snapshot disks
 

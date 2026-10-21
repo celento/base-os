@@ -90,15 +90,15 @@ void feature_test(void){
     /* Valid full-volume replacement failures retain old data and node count. */
     int capacity=fs_create(docs,"capacity.txt");check(capacity>=0&&fs_write(capacity,"keep",4)==4,"SDK capacity fixture");
     done=fs_create(docs,"sdk-done.txt");check(done>=0&&fs_write(done,"done",4)==4,"SDK completion fixture");
-    int fillers[4];for(int i=0;i<4;i++){
-        char name[]="sdk-fill-0.bin";name[9]+=(char)i;
-        fillers[i]=fs_create(docs,name);check(fillers[i]>=0,"SDK fill create");
-    }
-    for(int i=0;i<4;i++){
+    /* Fill with files of up to FS_FILE_MAX bytes; a save can free checkpoint
+     * room, so the volume counts as full once it is saved. */
+    for(int i=0;;i++){
+        check(fs_sync()==0,"SDK fill sync");if(fs_used_bytes()==fs_capacity())break;
+        char name[]="sdk-fill-00.bin";name[9]+=(char)(i/10);name[10]+=(char)(i%10);check(i<100,"SDK fill count");
+        int filler=fs_create(docs,name);check(filler>=0,"SDK fill create");
         unsigned remaining=fs_capacity()-fs_used_bytes();if(remaining>FS_FILE_MAX)remaining=FS_FILE_MAX;
-        check(fs_write(fillers[i],fs_data(file("/Documents/native-input.bin")),remaining)==(int)remaining,"SDK fill capacity");
+        check(fs_write(filler,fs_data(file("/Documents/native-input.bin")),remaining)==(int)remaining,"SDK fill capacity");
     }
-    check(fs_used_bytes()==fs_capacity(),"SDK full capacity mismatch");
     int nodes=fs_node_count();term_select(0);term_reset();command("exec /Programs/capacity.bex");
     check(has_line("Program finished.")&&fs_node_count()==nodes&&!kstrcmp(fs_data(capacity),"keep"),"SDK failed write changed original");
     check(fs_sync()==0,"SDK final durable snapshot");

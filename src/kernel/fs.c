@@ -107,7 +107,23 @@ static void bfs_forget(int id) {
     node_absent[id] = 0;
     node_touch[id] = 0;
 }
+/* Blocks of files deleted since the last commit, freed once it lands. */
+static uint64_t bfs_released;
+static uint64_t extent_blocks(int id) {
+    uint64_t blocks = 0;
+    for (uint32_t k = 0; k < node_extent_count[id]; ++k) blocks += node_extents[id][k].blocks;
+    return blocks;
+}
+/* Whether the next commit frees blocks: a deleted file, or the old copy of
+ * a changed one. */
+static int bfs_save_frees(void) {
+    if (bfs_released) return 1;
+    for (int i = 0; i < FS_MAX_NODES; ++i)
+        if (nodes[i].used && node_dirty[i] && node_extent_count[i]) return 1;
+    return 0;
+}
 static void bfs_release(void) {
+    bfs_released = 0;
     for (int i = 0; i < FS_MAX_NODES; ++i) bfs_forget(i);
     if (bfs.used) bfs_unmount(&bfs);
 }
@@ -151,7 +167,7 @@ static uint32_t bfs_blocks_for(uint64_t size) { return (uint32_t)((size + BFS_BL
  * commit writes may get one extent per block when free space is scattered;
  * node except is about to hold extra blocks. With rewrite_all every file is
  * written (a conversion). Nodes beyond the current ones get the longest name. */
-static uint32_t bfs_checkpoint_blocks(unsigned count, int except, uint64_t extra, int rewrite_all) {
+static uint64_t bfs_checkpoint_bytes(unsigned count, int except, uint64_t extra, int rewrite_all) {
     uint64_t bytes = 16, extents = except >= 0 ? extra : 0;
     unsigned have = 0;
     for (int i = 0; i < FS_MAX_NODES; ++i) {
@@ -162,7 +178,10 @@ static uint32_t bfs_checkpoint_blocks(unsigned count, int except, uint64_t extra
         extents += rewrite_all || node_dirty[i] ? bfs_blocks_for((uint64_t)nodes[i].size) : node_extent_count[i];
     }
     if (count > have) bytes += (uint64_t)(count - have) * (36u + ((FS_NAME_LEN - 1u + 3u) & ~3u));
-    return bfs_blocks_for(bytes + 12u * extents);
+    return bytes + 12u * extents;
+}
+static uint32_t bfs_checkpoint_blocks(unsigned count, int except, uint64_t extra, int rewrite_all) {
+    return bfs_blocks_for(bfs_checkpoint_bytes(count, except, extra, rewrite_all));
 }
 /* Blocks the next commit writes for changed files, leaving out node except. */
 static uint64_t bfs_pending_blocks(int except) {
@@ -178,10 +197,37 @@ static int bfs_commit_fits(unsigned count, int except, uint64_t extra) {
 /* Files load on demand, so the disk bounds capacity, not the arena. Very
  * large volumes report at most 2 GiB, which stays positive as an int. */
 #define BFS_CAPACITY_REPORT_MAX 0x7FFFFFFFu
+/* The largest file, in blocks. */
+static uint64_t bfs_largest_blocks(void) {
+    uint64_t largest = 0;
+    for (int i = 0; i < FS_MAX_NODES; ++i)
+        if (nodes[i].used && !nodes[i].is_dir && bfs_blocks_for((uint64_t)nodes[i].size) > largest)
+            largest = bfs_blocks_for((uint64_t)nodes[i].size);
+    return largest;
+}
+/* Bytes a new file could still take: its blocks plus the checkpoint growing
+ * by one extent per block, as bfs_commit_fits counts it. Reserve blocks are
+ * held back so that a full volume can still save a rewrite of its largest
+ * file; the old copy is freed once that save lands. */
+static uint64_t basefs_spare(unsigned count, uint64_t reserve) {
+    uint64_t pending = bfs_pending_blocks(-1), bytes = bfs_checkpoint_bytes(count, -1, 0, 0) + 12u * reserve;
+    uint64_t available = bfs.free_blocks > pending + reserve ? bfs.free_blocks - pending - reserve : 0;
+    uint64_t blocks = available;
+    for (int round = 0; round < 3; ++round) {
+        uint64_t checkpoint = bfs_blocks_for(bytes + 12u * blocks);
+        blocks = available > checkpoint ? available - checkpoint : 0;
+    }
+    while (blocks && blocks + bfs_blocks_for(bytes + 12u * blocks) > available) --blocks;
+    return blocks * BFS_BLOCK;
+}
+/* A new node fits while the volume keeps its reserve. */
+static int bfs_node_fits(unsigned count) {
+    uint64_t reserve = bfs_largest_blocks();
+    return bfs_pending_blocks(-1) + reserve +
+           bfs_blocks_for(bfs_checkpoint_bytes(count, -1, 0, 0) + 12u * reserve) <= bfs.free_blocks;
+}
 static unsigned basefs_capacity(unsigned count) {
-    uint64_t need = bfs_pending_blocks(-1) + bfs_checkpoint_blocks(count, -1, 0, 0);
-    uint64_t spare = bfs.free_blocks > need ? (uint64_t)(bfs.free_blocks - need) * BFS_BLOCK : 0;
-    uint64_t total = fs_used_bytes() + spare;
+    uint64_t total = fs_used_bytes() + basefs_spare(count, bfs_largest_blocks());
     return total < BFS_CAPACITY_REPORT_MAX ? (unsigned)total : BFS_CAPACITY_REPORT_MAX;
 }
 unsigned fs_capacity_for_nodes(unsigned count) {
@@ -327,7 +373,7 @@ static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
     if (!tree_fits(-1, parent, name) ||
         fs_used_bytes() > fs_capacity_for_nodes(fs_node_count() + 1)) return -1;
     /* A larger node table must still fit the next commit, even with no data. */
-    if (data_backend == 3 && !bfs_commit_fits((unsigned)fs_node_count() + 1, -1, 0)) return -1;
+    if (data_backend == 3 && !bfs_node_fits((unsigned)fs_node_count() + 1)) return -1;
     for (int i = 0; i < fs_node_limit(); i++) {
         if (!nodes[i].used) {
             kmemset(&nodes[i], 0, (int)sizeof(FsNode));
@@ -576,6 +622,18 @@ static int load_data(int id) {
     /* A failed read stays clean, so it is evicted and read again later. */
     return result;
 }
+/* Growth must fit the spare capacity. BaseFS 2 counts growth in whole
+ * blocks, so a file can grow into the rest of its last block on a full
+ * volume; the reserve also covers this file at its new size, and the save
+ * itself must fit. */
+static int write_fits(int id, int len) {
+    if (data_backend != 3) return (unsigned)len <= fs_capacity() - (fs_used_bytes() - nodes[id].size);
+    uint64_t blocks = bfs_blocks_for((uint64_t)len), had = bfs_blocks_for((uint64_t)nodes[id].size);
+    uint64_t reserve = bfs_largest_blocks();
+    if (blocks > reserve) reserve = blocks;
+    if (blocks > had && (blocks - had) * BFS_BLOCK > basefs_spare((unsigned)fs_node_count(), reserve)) return 0;
+    return bfs_commit_fits((unsigned)fs_node_count(), id, blocks);
+}
 int fs_write(int id, const char *data, int len) {
     if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(id) || nodes[id].is_dir || nodes[id].is_app || len < 0 ||
@@ -585,12 +643,18 @@ int fs_write(int id, const char *data, int len) {
     if (data_backend == 3 && required > dirty_limit() - (dirty_bytes(id) < dirty_limit() ?
                                                          dirty_bytes(id) : dirty_limit())) {
         /* Too much is changed to keep in memory: save it first. A source in
-         * staging would be overwritten by the save. */
+         * staging would be overwritten by the save. Once saved, nothing else
+         * is changed, so even a largest file fits; loading another file
+         * while it is changed saves it first. */
         if (len && source >= image_base && source - image_base < image_capacity) return -1;
-        if (fs_sync() < 0 || required > dirty_limit() - dirty_bytes(id)) return -1;
+        if (fs_sync() < 0) return -1;
     }
-    if ((unsigned)len > fs_capacity() - (fs_used_bytes() - nodes[id].size)) return -1;
-    if (data_backend == 3 && !bfs_commit_fits((unsigned)fs_node_count(), id, bfs_blocks_for((uint64_t)len))) return -1;
+    if (data_backend == 3 && !write_fits(id, len) && bfs_save_frees()) {
+        /* Old copies of changed files free their blocks once saved. */
+        if (len && source >= image_base && source - image_base < image_capacity) return -1;
+        if (fs_sync() < 0) return -1;
+    }
+    if (!write_fits(id, len)) return -1;
     unsigned previous = nodes[id].size && !node_absent[id] ? nodes[id].size + 1 : 0;
     if (required > room(id) + previous) return -1;
     /* fs_write(dst, fs_data(src), n), self-overwrite, and fs_copy all work even
@@ -806,6 +870,7 @@ int fs_delete(int id) {
     release_data(id);
     nodes[id].used = 0;
     content_revisions[id]=0;
+    if (data_backend == 3) bfs_released += extent_blocks(id);
     bfs_forget(id);
     fs_touched = 1;
     return 0;
@@ -1893,7 +1958,10 @@ static void sync_log(const char *event, const char *result) {
     platform_log("\n");
 }
 static enum FsSyncProgress sync_finish(int result) {
-    if (data_backend == 3) bfs_job_end(result);
+    if (data_backend == 3) {
+        bfs_job_end(result);
+        if (!result) bfs_released = 0;
+    }
     else if (result < 0 && sync_job.header_attempted) writable = 0;
     if (!result) {
         active_slot = sync_job.target;

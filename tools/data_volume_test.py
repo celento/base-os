@@ -6,6 +6,7 @@ Never opens build/baseos.img or build/baseos-data.img. No CPU fault injection.
 import argparse
 import hashlib
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -162,6 +163,24 @@ def basefs_state(image):
     return volume.basefs_nodes(records), both
 
 
+def check_full(data, directory, text, label, refilled):
+    """The full volume holds exactly the last logged total in full<i>.bin files."""
+    total = int(text.split('DATA-FULL-TOTAL=')[-1].split()[0])
+    nodes, both = basefs_state(data)
+    assert sum(len(n['data']) for n in nodes.values()) == total
+    assert all(len(n['data']) <= LARGE_SIZE for n in nodes.values())
+    full = {int(n['name'][4:-4]): n['data'] for n in nodes.values()
+            if n['parent'] == 0 and re.fullmatch(r'full\d+\.bin', n['name'])}
+    assert len(full) >= 4 and sorted(full) == list(range(len(full))), 'full files missing'
+    for i, content in full.items():
+        if refilled and i == 0:
+            continue
+        assert i >= 3 or len(content) == LARGE_SIZE, f'full{i}.bin too small'
+        assert content == pattern(len(content), 101 + i * 7), f'full{i}.bin content wrong'
+    export_equals(data, '/full1.bin', directory / f'full-{label}-1.bin', pattern(LARGE_SIZE, 108))
+    return both
+
+
 def snapshot_disk(path, nodes, slot, generation):
     """A marked data disk holding one v4 snapshot, written by the host codec."""
     layout = volume.DATA_LAYOUT
@@ -210,22 +229,14 @@ def main(build, keep):
         data = directory / 'full-data.img'
         assert initialize(data)
         text = run(floppy, data, directory, 'full-write', 'DATA-FULL-WRITE-PASS')
-        total = int(text.split('DATA-FULL-TOTAL=')[1].split()[0])
-        nodes, _ = basefs_state(data)
-        assert sum(len(n['data']) for n in nodes.values()) == total
-        for i in range(4):
-            length = LARGE_SIZE if i < 3 else total - 3 * LARGE_SIZE
-            export_equals(data, f'/full{i}.bin', directory / f'full-first-{i}.bin',
-                          pattern(length, 101 + i * 7))
+        check_full(data, directory, text, 'first', refilled=False)
         text = run(floppy, data, directory, 'full-restart-refill', 'DATA-FULL-REFILL-PASS')
         assert 'DATA-FULL-RESTART-PASS' in text
-        nodes, both = basefs_state(data)
+        both = check_full(data, directory, text, 'refilled', refilled=True)
         assert both, 'full-capacity commits did not reach both superblocks'
-        assert sum(len(n['data']) for n in nodes.values()) == total
-        assert all(len(n['data']) <= LARGE_SIZE for n in nodes.values())
         export_equals(data, '/full0.bin', directory / 'full-shrunken.bin', b'small')
         export_equals(data, '/reclaimed.bin', directory / 'full-refilled.bin',
-                      pattern(LARGE_SIZE - 5, 211))
+                      pattern(LARGE_SIZE - 16384, 211))
         data_before = digest(data)
         run(floppy, data, directory, 'full-refill-restart', 'DATA-FULL-REFILL-RESTART-PASS')
         assert digest(data) == data_before, 'full-volume read/rejections changed image'
