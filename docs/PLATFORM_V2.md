@@ -74,6 +74,16 @@ BEX tasks use is derived from the same interrupt, so their timing is
 unchanged. When idle, the desktop loop still turns once per legacy tick, and
 sooner when a sleeping user thread is due.
 
+## Device interrupts
+
+`platform_irq_attach(line, handler)` opens a PIC line. With a handler, the
+handler runs inside the interrupt; the PS/2 keyboard and mouse use this to
+move controller bytes into a ring. Without one, the line is masked when it
+fires and reported by `platform_irq_take()`; the kernel loop services the
+device and reopens the line with `platform_irq_rearm()`. Device interrupts
+are dispatched before the BEX and ELF runtimes see the vector, so a device
+interrupt during a program never ends it.
+
 ## Threads and scheduling
 
 `kernel/thread.c` adds kernel threads with their own 32 KiB kernel stacks.

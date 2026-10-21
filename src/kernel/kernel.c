@@ -123,7 +123,7 @@ static void mouse_init(void) {
     if (!mouse_wait_read())
         return;
     uint8_t status = inb(0x60);
-    status &= (uint8_t)~0x03; /* Both PS/2 IRQs stay masked; input is polled. */
+    status &= (uint8_t)~0x03; /* IRQs stay off during setup; ps2_irq_enable turns them on. */
     status &= (uint8_t)~0x20;
     if (!mouse_wait_write())
         return;
@@ -150,26 +150,85 @@ static void mouse_init(void) {
 
 int kernel_pointer_ready(void) { return mouse_ok; }
 
-/* ---------- Keyboard and device polling ---------- */
+/* ---------- Keyboard and device input ---------- */
 
 static int input_ready;
 void platform_poll(void){if(input_ready)drain_8042();audio_poll();net_poll();}
 void fs_background_poll(void){platform_poll();}
 
+/* Once IRQ1/IRQ12 are on, the interrupt moves 8042 bytes (with their status)
+ * into this ring as they arrive, so none wait behind a busy desktop turn. */
+#define PS2_RING 512u
+static uint16_t ps2_ring[PS2_RING];
+static volatile unsigned ps2_head, ps2_count;
+static int ps2_irq_mode;
+static void ps2_collect(void) {
+    for (unsigned i = 0; i < 16; i++) {
+        uint8_t status = inb(KEYBOARD_STATUS_PORT);
+        if (!(status & 1)) break;
+        uint8_t data = inb(KEYBOARD_DATA_PORT);
+        if (ps2_count == PS2_RING) status |= 0x40;  /* report the overflow as loss */
+        else ++ps2_count;
+        ps2_ring[(ps2_head + ps2_count - 1) % PS2_RING] = (uint16_t)(status << 8 | data);
+    }
+}
+static int ps2_pending(void) { return ps2_count != 0; }
+
+static void input_byte(uint8_t status, uint8_t data) {
+    uint32_t ticks = timer_ticks();
+    if (status & 0xc0) input_device_loss(&device_input, ticks);
+    else if (status & 0x20) input_mouse_byte(&device_input, data, ticks);
+    else input_keyboard_byte(&device_input, data, ticks);
+}
+
 unsigned input_acquire(unsigned budget) {
     unsigned acquired=0;
     /* Acquisition only, including when rendering/storage/syscalls poll us. */
+    if (ps2_irq_mode) {
+        for (; acquired < budget; ++acquired) {
+            unsigned flags;
+            __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
+            /* A byte that raised no interrupt would block the 8042. */
+            if (!ps2_count) ps2_collect();
+            int have = ps2_count != 0;
+            uint16_t entry = ps2_ring[ps2_head];
+            if (have) {
+                ps2_head = (ps2_head + 1) % PS2_RING;
+                --ps2_count;
+            }
+            __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
+            if (!have) break;
+            input_byte((uint8_t)(entry >> 8), (uint8_t)entry);
+        }
+        return acquired;
+    }
     for (unsigned i = 0; i < budget; i++) {
         uint8_t status = inb(KEYBOARD_STATUS_PORT);
         if (!(status & 1)) break;
         uint8_t data = inb(KEYBOARD_DATA_PORT);
         ++acquired;
-        uint32_t ticks = timer_ticks();
-        if (status & 0xc0) input_device_loss(&device_input, ticks);
-        else if (status & 0x20) input_mouse_byte(&device_input, data, ticks);
-        else input_keyboard_byte(&device_input, data, ticks);
+        input_byte(status, data);
     }
     return acquired;
+}
+
+/* Turns on the controller's keyboard (and mouse) interrupts after the polled
+ * setup. Input keeps working by polling if the controller does not answer. */
+static void ps2_irq_enable(void) {
+    if (!mouse_wait_write()) return;
+    outb(0x64, 0x20);
+    if (!mouse_wait_read()) return;
+    uint8_t config = inb(0x60);
+    config |= 1;
+    if (mouse_ok) config |= 2;
+    if (!mouse_wait_write()) return;
+    outb(0x64, 0x60);
+    if (!mouse_wait_write()) return;
+    outb(0x60, config);
+    ps2_irq_mode = 1;
+    platform_irq_attach(1, ps2_collect);
+    if (mouse_ok) platform_irq_attach(12, ps2_collect);
+    kprint_debug("PS/2 interrupts on\n");
 }
 void drain_8042(void) { (void)input_acquire(32); }
 
@@ -285,6 +344,7 @@ void kmain(void) {
         kprint_debug("Mouse init failed\n");
 
     drain_8042();
+    ps2_irq_enable();
 
     input_ready=1;
     baseos_shell.start();
@@ -298,11 +358,12 @@ void kmain(void) {
         busy |= thread_run_users();
         /* ATA uses polling, not IRQ14: do not sleep once per sector wait.
          * The timer interrupts every millisecond; the desktop still turns
-         * once per TIMER_HZ tick when idle, or sooner for a sleeping thread. */
+         * once per TIMER_HZ tick when idle, or sooner for input, a device
+         * interrupt or a sleeping thread. */
         if(!busy&&!fs_sync_busy()&&!input_pending(&device_input)){
             uint32_t tick=timer_ticks();
             do __asm__ volatile("hlt");
-            while(timer_ticks()==tick&&!thread_wake_due());
+            while(timer_ticks()==tick&&!thread_wake_due()&&!ps2_pending()&&!platform_irq_pending());
         }
     }
 }
