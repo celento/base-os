@@ -5,7 +5,7 @@
 
 /* Block 0 holds the data-disk marker in its first sector; blocks 1 and 2 hold
  * superblock slots 0 and 1. Everything else is data or checkpoint. */
-#define RESERVED_BLOCKS 3u
+#define RESERVED_BLOCKS BFS_RESERVED_BLOCKS
 #define SUPER_MAGIC 0x32534642u        /* "BFS2" */
 #define CHECKPOINT_MAGIC 0x43534642u   /* "BFSC" */
 #define FORMAT_VERSION 1u
@@ -45,27 +45,27 @@ uint32_t bfs_crc32(uint32_t crc, const void *data, uint32_t length) {
     return ~crc;
 }
 
-static int bit(const uint8_t *map, uint32_t block) { return map[block >> 3] >> (block & 7) & 1; }
-static void set_bit(uint8_t *map, uint32_t block) { map[block >> 3] |= (uint8_t)(1u << (block & 7)); }
-static void clear_bit(uint8_t *map, uint32_t block) { map[block >> 3] &= (uint8_t)~(1u << (block & 7)); }
+static int bfsi_bit(const uint8_t *map, uint32_t block) { return map[block >> 3] >> (block & 7) & 1; }
+static void bfsi_set_bit(uint8_t *map, uint32_t block) { map[block >> 3] |= (uint8_t)(1u << (block & 7)); }
+static void bfsi_clear_bit(uint8_t *map, uint32_t block) { map[block >> 3] &= (uint8_t)~(1u << (block & 7)); }
 
-static int read_blocks(const BfsDevice *device, uint32_t block, void *buffer, uint32_t count) {
+static int bfsi_read_blocks(const BfsDevice *device, uint32_t block, void *buffer, uint32_t count) {
     return device->read(device->context, block * BFS_SECTORS_PER_BLOCK, buffer,
                         count * BFS_SECTORS_PER_BLOCK) < 0 ? BFS_ERR_IO : BFS_OK;
 }
 
-static int write_blocks(const BfsDevice *device, uint32_t block, const void *buffer, uint32_t count) {
+static int bfsi_write_blocks(const BfsDevice *device, uint32_t block, const void *buffer, uint32_t count) {
     return device->write(device->context, block * BFS_SECTORS_PER_BLOCK, buffer,
                          count * BFS_SECTORS_PER_BLOCK) < 0 ? BFS_ERR_IO : BFS_OK;
 }
 
-static int flush(const BfsDevice *device) {
+static int bfsi_flush(const BfsDevice *device) {
     return device->flush(device->context) < 0 ? BFS_ERR_IO : BFS_OK;
 }
 
-static uint32_t device_blocks(const BfsDevice *device) { return device->sectors / BFS_SECTORS_PER_BLOCK; }
+static uint32_t bfsi_device_blocks(const BfsDevice *device) { return device->sectors / BFS_SECTORS_PER_BLOCK; }
 
-static void marker(uint32_t *sector, uint32_t sectors) {
+static void bfsi_marker(uint32_t *sector, uint32_t sectors) {
     kmemset(sector, 0, 512);
     sector[0] = DATA_MARKER_MAGIC;
     sector[1] = BFS_MARKER_VERSION;
@@ -75,12 +75,12 @@ static void marker(uint32_t *sector, uint32_t sectors) {
 
 /* ---------- superblocks ---------- */
 
-static int read_super(const BfsDevice *device, int slot, Super *super) {
+static int bfsi_read_super(const BfsDevice *device, int slot, Super *super) {
     if (device->read(device->context, (1u + (uint32_t)slot) * BFS_SECTORS_PER_BLOCK, super, 1) < 0)
         return BFS_ERR_IO;
     if (super->magic != SUPER_MAGIC || super->version != FORMAT_VERSION ||
         super->block_size != BFS_BLOCK || super->crc != bfs_crc32(0, super, sizeof *super - 4) ||
-        super->blocks != device_blocks(device) || !super->checkpoint_extents ||
+        super->blocks != bfsi_device_blocks(device) || !super->checkpoint_extents ||
         super->checkpoint_extents > SUPER_EXTENTS || !super->node_count)
         return BFS_ERR_CORRUPT;
     return BFS_OK;
@@ -88,40 +88,40 @@ static int read_super(const BfsDevice *device, int slot, Super *super) {
 
 /* ---------- checkpoints ---------- */
 
-static uint32_t name_length(const char *name) {
+static uint32_t bfsi_name_length(const char *name) {
     uint32_t n = 0;
     while (name && name[n]) ++n;
     return n;
 }
 
-static uint32_t record_bytes(const BfsRecord *record) {
-    return RECORD_HEADER + record->extent_count * EXTENT_BYTES + ((name_length(record->name) + 3u) & ~3u);
+static uint32_t bfsi_record_bytes(const BfsRecord *record) {
+    return RECORD_HEADER + record->extent_count * EXTENT_BYTES + ((bfsi_name_length(record->name) + 3u) & ~3u);
 }
 
-static void put32(uint8_t *p, uint32_t value) {
+static void bfsi_put32(uint8_t *p, uint32_t value) {
     p[0] = (uint8_t)value; p[1] = (uint8_t)(value >> 8); p[2] = (uint8_t)(value >> 16); p[3] = (uint8_t)(value >> 24);
 }
-static uint32_t get32(const uint8_t *p) {
+static uint32_t bfsi_get32(const uint8_t *p) {
     return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-static uint32_t encode(const BfsRecord *records, uint32_t count, uint8_t *out) {
-    put32(out, CHECKPOINT_MAGIC);
-    put32(out + 4, FORMAT_VERSION);
-    put32(out + 8, count);
-    put32(out + 12, 0);
+static uint32_t bfsi_encode(const BfsRecord *records, uint32_t count, uint8_t *out) {
+    bfsi_put32(out, CHECKPOINT_MAGIC);
+    bfsi_put32(out + 4, FORMAT_VERSION);
+    bfsi_put32(out + 8, count);
+    bfsi_put32(out + 12, 0);
     uint32_t at = 16;
     for (uint32_t i = 0; i < count; ++i) {
         const BfsRecord *r = &records[i];
-        uint32_t length = name_length(r->name);
+        uint32_t length = bfsi_name_length(r->name);
         uint32_t fields[9] = {r->parent, r->flags, r->identity, r->revision, r->modified,
                               (uint32_t)r->size, (uint32_t)(r->size >> 32), r->extent_count, length};
-        for (int k = 0; k < 9; ++k) put32(out + at + 4u * (uint32_t)k, fields[k]);
+        for (int k = 0; k < 9; ++k) bfsi_put32(out + at + 4u * (uint32_t)k, fields[k]);
         at += RECORD_HEADER;
         for (uint32_t e = 0; e < r->extent_count; ++e) {
-            put32(out + at, r->extents[e].start);
-            put32(out + at + 4, r->extents[e].blocks);
-            put32(out + at + 8, r->extents[e].crc);
+            bfsi_put32(out + at, r->extents[e].start);
+            bfsi_put32(out + at + 4, r->extents[e].blocks);
+            bfsi_put32(out + at + 8, r->extents[e].crc);
             at += EXTENT_BYTES;
         }
         kmemset(out + at, 0, (int)((length + 3u) & ~3u));
@@ -140,15 +140,15 @@ void bfs_free_records(BfsRecord *records, uint32_t count) {
     kfree(records);
 }
 
-static uint32_t blocks_for(uint64_t size) { return (uint32_t)((size + BFS_BLOCK - 1) / BFS_BLOCK); }
+static uint32_t bfsi_blocks_for(uint64_t size) { return (uint32_t)((size + BFS_BLOCK - 1) / BFS_BLOCK); }
 
 /* Parses and checks a checkpoint: structure, the tree, and that every extent
  * lies on the device without overlapping another or the reserved blocks.
  * Marks the extents in used. */
-static int decode(const uint8_t *data, uint32_t bytes, uint32_t blocks, uint8_t *used,
+static int bfsi_decode(const uint8_t *data, uint32_t bytes, uint32_t blocks, uint8_t *used,
                   BfsRecord **out, uint32_t *out_count) {
-    if (bytes < 16 || get32(data) != CHECKPOINT_MAGIC || get32(data + 4) != FORMAT_VERSION) return BFS_ERR_CORRUPT;
-    uint32_t count = get32(data + 8);
+    if (bytes < 16 || bfsi_get32(data) != CHECKPOINT_MAGIC || bfsi_get32(data + 4) != FORMAT_VERSION) return BFS_ERR_CORRUPT;
+    uint32_t count = bfsi_get32(data + 8);
     if (!count || count > bytes / RECORD_HEADER) return BFS_ERR_CORRUPT;
     BfsRecord *records = kmalloc(count * sizeof *records);
     if (!records) return BFS_ERR_NOMEM;
@@ -159,11 +159,11 @@ static int decode(const uint8_t *data, uint32_t bytes, uint32_t blocks, uint8_t 
         BfsRecord *r = &records[i];
         if (bytes - at < RECORD_HEADER) { result = BFS_ERR_CORRUPT; break; }
         const uint8_t *p = data + at;
-        r->parent = get32(p); r->flags = get32(p + 4); r->identity = get32(p + 8);
-        r->revision = get32(p + 12); r->modified = get32(p + 16);
-        r->size = get32(p + 20) | (uint64_t)get32(p + 24) << 32;
-        r->extent_count = get32(p + 28);
-        uint32_t length = get32(p + 32);
+        r->parent = bfsi_get32(p); r->flags = bfsi_get32(p + 4); r->identity = bfsi_get32(p + 8);
+        r->revision = bfsi_get32(p + 12); r->modified = bfsi_get32(p + 16);
+        r->size = bfsi_get32(p + 20) | (uint64_t)bfsi_get32(p + 24) << 32;
+        r->extent_count = bfsi_get32(p + 28);
+        uint32_t length = bfsi_get32(p + 32);
         at += RECORD_HEADER;
         if (length > BFS_NAME_MAX || r->extent_count > (bytes - at) / EXTENT_BYTES ||
             (r->flags & ~(BFS_DIRECTORY | BFS_APP)) ||
@@ -177,20 +177,20 @@ static int decode(const uint8_t *data, uint32_t bytes, uint32_t blocks, uint8_t 
         uint32_t covered = 0;
         for (uint32_t e = 0; e < r->extent_count; ++e, at += EXTENT_BYTES) {
             BfsExtent *x = &r->extents[e];
-            x->start = get32(data + at);
-            uint32_t n = get32(data + at + 4);
+            x->start = bfsi_get32(data + at);
+            uint32_t n = bfsi_get32(data + at + 4);
             x->blocks = (uint16_t)n;
-            x->crc = get32(data + at + 8);
+            x->crc = bfsi_get32(data + at + 8);
             if (!n || n > BFS_EXTENT_BLOCKS || x->start < RESERVED_BLOCKS || x->start >= blocks ||
                 n > blocks - x->start) { result = BFS_ERR_CORRUPT; break; }
             for (uint32_t b = x->start; b < x->start + n; ++b) {
-                if (bit(used, b)) { result = BFS_ERR_CORRUPT; break; }
-                set_bit(used, b);
+                if (bfsi_bit(used, b)) { result = BFS_ERR_CORRUPT; break; }
+                bfsi_set_bit(used, b);
             }
             covered += n;
         }
         if (result) break;
-        if (covered != blocks_for(r->size)) { result = BFS_ERR_CORRUPT; break; }
+        if (covered != bfsi_blocks_for(r->size)) { result = BFS_ERR_CORRUPT; break; }
         uint32_t padded = (length + 3u) & ~3u;
         if (bytes - at < padded) { result = BFS_ERR_CORRUPT; break; }
         kmemcpy(r->name, data + at, (int)length);
@@ -222,17 +222,17 @@ static int decode(const uint8_t *data, uint32_t bytes, uint32_t blocks, uint8_t 
 
 /* ---------- allocation ---------- */
 
-static int free_block(const BfsVolume *volume, uint32_t block) {
-    return !bit(volume->used, block) && !bit(volume->taken, block);
+static int bfsi_free_block(const BfsVolume *volume, uint32_t block) {
+    return !bfsi_bit(volume->used, block) && !bfsi_bit(volume->taken, block);
 }
 
 /* A run of up to want free blocks; returns its length, 0 when full. */
-static uint32_t allocate_run(BfsVolume *volume, uint32_t want, uint32_t *start) {
+static uint32_t bfsi_allocate_run(BfsVolume *volume, uint32_t want, uint32_t *start) {
     for (uint32_t block = RESERVED_BLOCKS; block < volume->limit; ++block) {
-        if (!free_block(volume, block)) continue;
+        if (!bfsi_free_block(volume, block)) continue;
         uint32_t n = 0;
-        while (n < want && block + n < volume->limit && free_block(volume, block + n)) ++n;
-        for (uint32_t k = 0; k < n; ++k) set_bit(volume->taken, block + k);
+        while (n < want && block + n < volume->limit && bfsi_free_block(volume, block + n)) ++n;
+        for (uint32_t k = 0; k < n; ++k) bfsi_set_bit(volume->taken, block + k);
         volume->free_blocks -= n;
         *start = block;
         return n;
@@ -243,8 +243,8 @@ static uint32_t allocate_run(BfsVolume *volume, uint32_t want, uint32_t *start) 
 void bfs_discard(BfsVolume *volume, const BfsExtent *extents, uint32_t count) {
     for (uint32_t e = 0; e < count; ++e)
         for (uint32_t b = extents[e].start; b < extents[e].start + extents[e].blocks; ++b)
-            if (b < volume->blocks && bit(volume->taken, b) && !bit(volume->used, b)) {
-                clear_bit(volume->taken, b);
+            if (b < volume->blocks && bfsi_bit(volume->taken, b) && !bfsi_bit(volume->used, b)) {
+                bfsi_clear_bit(volume->taken, b);
                 ++volume->free_blocks;
             }
 }
@@ -253,7 +253,7 @@ int bfs_allocate(BfsVolume *volume, uint64_t size, BfsExtent **extents, uint32_t
     *extents = 0;
     *count = 0;
     if (size > (uint64_t)0xFFFFFFFFu * BFS_BLOCK) return BFS_ERR_NOSPACE;
-    uint32_t total = blocks_for(size);
+    uint32_t total = bfsi_blocks_for(size);
     if (!total) return BFS_OK;
     if (total > volume->free_blocks) return BFS_ERR_NOSPACE;
     BfsExtent *list = kmalloc((total + BFS_EXTENT_BLOCKS - 1) / BFS_EXTENT_BLOCKS * sizeof *list + total * sizeof *list);
@@ -261,7 +261,7 @@ int bfs_allocate(BfsVolume *volume, uint64_t size, BfsExtent **extents, uint32_t
     uint32_t placed = 0, n = 0;
     while (placed < total) {
         uint32_t want = total - placed > BFS_EXTENT_BLOCKS ? BFS_EXTENT_BLOCKS : total - placed;
-        uint32_t start, got = allocate_run(volume, want, &start);
+        uint32_t start, got = bfsi_allocate_run(volume, want, &start);
         if (!got) {
             bfs_discard(volume, list, n);
             kfree(list);
@@ -296,7 +296,7 @@ int bfs_write_data(BfsVolume *volume, const void *data, uint64_t size, BfsExtent
         kmemcpy(staging, bytes + offset, (int)length);
         kmemset(staging + length, 0, (int)(span - length));
         list[e].crc = bfs_crc32(0, staging, length);
-        result = write_blocks(&volume->device, list[e].start, staging, list[e].blocks);
+        result = bfsi_write_blocks(&volume->device, list[e].start, staging, list[e].blocks);
         offset += length;
     }
     kfree(staging);
@@ -325,7 +325,7 @@ int bfs_read(BfsVolume *volume, const BfsRecord *record, uint64_t offset, void *
         uint64_t span = (uint64_t)x->blocks * BFS_BLOCK;
         if (offset >= base + span) { base += span; continue; }
         if (!staging && !(staging = kmalloc(BFS_EXTENT_BLOCKS * BFS_BLOCK))) return BFS_ERR_NOMEM;
-        if ((result = read_blocks(&volume->device, x->start, staging, x->blocks))) break;
+        if ((result = bfsi_read_blocks(&volume->device, x->start, staging, x->blocks))) break;
         uint32_t valid = record->size - base < span ? (uint32_t)(record->size - base) : (uint32_t)span;
         if (bfs_crc32(0, staging, valid) != x->crc) { result = BFS_ERR_CORRUPT; break; }
         uint32_t from = (uint32_t)(offset - base), take = valid - from;
@@ -343,11 +343,11 @@ int bfs_read(BfsVolume *volume, const BfsRecord *record, uint64_t offset, void *
 /* ---------- format, mount, commit ---------- */
 /* Reserves blocks for a checkpoint of bytes in at most SUPER_EXTENTS runs and
  * records them in super. No I/O. */
-static int plan_checkpoint(BfsVolume *volume, uint32_t bytes, Super *super) {
-    uint32_t need = blocks_for(bytes), placed = 0, extents = 0;
+static int bfsi_plan_checkpoint(BfsVolume *volume, uint32_t bytes, Super *super) {
+    uint32_t need = bfsi_blocks_for(bytes), placed = 0, extents = 0;
     while (placed < need) {
         uint32_t want = need - placed > 0xFFFFu ? 0xFFFFu : need - placed;
-        uint32_t start, got = extents < SUPER_EXTENTS ? allocate_run(volume, want, &start) : 0;
+        uint32_t start, got = extents < SUPER_EXTENTS ? bfsi_allocate_run(volume, want, &start) : 0;
         if (!got) {
             for (uint32_t e = 0; e < extents; ++e) {
                 BfsExtent x = {super->extents[e].start, (uint16_t)super->extents[e].blocks, 0, 0};
@@ -363,8 +363,8 @@ static int plan_checkpoint(BfsVolume *volume, uint32_t bytes, Super *super) {
     return BFS_OK;
 }
 
-static int read_checkpoint(const BfsDevice *device, const Super *super, uint8_t **out) {
-    uint32_t need = blocks_for(super->checkpoint_bytes), have = 0;
+static int bfsi_read_checkpoint(const BfsDevice *device, const Super *super, uint8_t **out) {
+    uint32_t need = bfsi_blocks_for(super->checkpoint_bytes), have = 0;
     for (uint32_t e = 0; e < super->checkpoint_extents; ++e) {
         const SuperExtent *x = &super->extents[e];
         if (x->start < RESERVED_BLOCKS || x->start >= super->blocks || !x->blocks ||
@@ -376,7 +376,7 @@ static int read_checkpoint(const BfsDevice *device, const Super *super, uint8_t 
     if (!payload) return BFS_ERR_NOMEM;
     uint32_t at = 0;
     for (uint32_t e = 0; e < super->checkpoint_extents; ++e) {
-        if (read_blocks(device, super->extents[e].start, payload + at, super->extents[e].blocks)) {
+        if (bfsi_read_blocks(device, super->extents[e].start, payload + at, super->extents[e].blocks)) {
             kfree(payload);
             return BFS_ERR_IO;
         }
@@ -390,14 +390,21 @@ static int read_checkpoint(const BfsDevice *device, const Super *super, uint8_t 
     return BFS_OK;
 }
 
+int bfs_marker_matches(const void *sector, uint32_t sectors) {
+    uint32_t expected[128];
+    const uint32_t *words = sector;
+    if (sectors < (RESERVED_BLOCKS + 2) * BFS_SECTORS_PER_BLOCK) return 0;
+    bfsi_marker(expected, sectors);
+    for (int i = 0; i < 128; ++i)
+        if (words[i] != expected[i]) return 0;
+    return 1;
+}
+
 int bfs_probe(const BfsDevice *device) {
-    uint32_t sector[128], expected[128];
+    uint32_t sector[128];
     if (device->sectors < (RESERVED_BLOCKS + 2) * BFS_SECTORS_PER_BLOCK) return 0;
     if (device->read(device->context, 0, sector, 1) < 0) return 0;
-    marker(expected, device->sectors);
-    for (int i = 0; i < 128; ++i)
-        if (sector[i] != expected[i]) return 0;
-    return 1;
+    return bfs_marker_matches(sector, device->sectors);
 }
 
 
@@ -410,31 +417,31 @@ void bfs_unmount(BfsVolume *volume) {
 
 /* Marks the reserved blocks, the checkpoint's blocks and every record's
  * extents. Returns nonzero on an overlap. */
-static int mark_owned(uint8_t *map, uint32_t blocks, const Super *super,
+static int bfsi_mark_owned(uint8_t *map, uint32_t blocks, const Super *super,
                       const BfsRecord *records, uint32_t count) {
     kmemset(map, 0, (int)((blocks + 7) / 8));
-    for (uint32_t b = 0; b < RESERVED_BLOCKS; ++b) set_bit(map, b);
+    for (uint32_t b = 0; b < RESERVED_BLOCKS; ++b) bfsi_set_bit(map, b);
     for (uint32_t e = 0; e < super->checkpoint_extents; ++e)
         for (uint32_t b = super->extents[e].start; b < super->extents[e].start + super->extents[e].blocks; ++b) {
-            if (bit(map, b)) return 1;
-            set_bit(map, b);
+            if (bfsi_bit(map, b)) return 1;
+            bfsi_set_bit(map, b);
         }
     for (uint32_t i = 0; i < count; ++i)
         for (uint32_t e = 0; e < records[i].extent_count; ++e)
             for (uint32_t b = records[i].extents[e].start;
                  b < records[i].extents[e].start + records[i].extents[e].blocks; ++b) {
-                if (b >= blocks || bit(map, b)) return 1;
-                set_bit(map, b);
+                if (b >= blocks || bfsi_bit(map, b)) return 1;
+                bfsi_set_bit(map, b);
             }
     return 0;
 }
 
-static void count_free(BfsVolume *volume) {
+static void bfsi_count_free(BfsVolume *volume) {
     volume->free_blocks = 0;
-    for (uint32_t b = 0; b < volume->limit; ++b) volume->free_blocks += free_block(volume, b);
+    for (uint32_t b = 0; b < volume->limit; ++b) volume->free_blocks += bfsi_free_block(volume, b);
 }
 
-static int remember_checkpoint(BfsVolume *volume, const Super *super) {
+static int bfsi_remember_checkpoint(BfsVolume *volume, const Super *super) {
     BfsExtent *list = kmalloc(super->checkpoint_extents * sizeof *list);
     if (!list) return BFS_ERR_NOMEM;
     for (uint32_t e = 0; e < super->checkpoint_extents; ++e)
@@ -448,10 +455,10 @@ static int remember_checkpoint(BfsVolume *volume, const Super *super) {
 int bfs_mount(BfsVolume *volume, const BfsDevice *device, BfsRecord **records, uint32_t *count) {
     kmemset(volume, 0, sizeof *volume);
     if (!bfs_probe(device)) return BFS_ERR_FORMAT;
-    uint32_t blocks = device_blocks(device);
+    uint32_t blocks = bfsi_device_blocks(device);
     Super supers[2];
     int valid[2];
-    for (int s = 0; s < 2; ++s) valid[s] = read_super(device, s, &supers[s]) == BFS_OK;
+    for (int s = 0; s < 2; ++s) valid[s] = bfsi_read_super(device, s, &supers[s]) == BFS_OK;
     int order[2] = {0, 1};
     uint64_t g0 = supers[0].generation_low | (uint64_t)supers[0].generation_high << 32;
     uint64_t g1 = supers[1].generation_low | (uint64_t)supers[1].generation_high << 32;
@@ -470,15 +477,15 @@ int bfs_mount(BfsVolume *volume, const BfsDevice *device, BfsRecord **records, u
         int s = order[k];
         if (!valid[s]) continue;
         uint8_t *payload;
-        if ((result = read_checkpoint(device, &supers[s], &payload))) continue;
+        if ((result = bfsi_read_checkpoint(device, &supers[s], &payload))) continue;
         kmemset(volume->used, 0, (int)((blocks + 7) / 8));
         BfsRecord *list;
         uint32_t n;
-        result = decode(payload, supers[s].checkpoint_bytes, blocks, volume->used, &list, &n);
+        result = bfsi_decode(payload, supers[s].checkpoint_bytes, blocks, volume->used, &list, &n);
         kfree(payload);
         if (result) continue;
-        if (n != supers[s].node_count || mark_owned(volume->used, blocks, &supers[s], list, n) ||
-            remember_checkpoint(volume, &supers[s])) {
+        if (n != supers[s].node_count || bfsi_mark_owned(volume->used, blocks, &supers[s], list, n) ||
+            bfsi_remember_checkpoint(volume, &supers[s])) {
             bfs_free_records(list, n);
             result = BFS_ERR_CORRUPT;
             continue;
@@ -488,7 +495,7 @@ int bfs_mount(BfsVolume *volume, const BfsDevice *device, BfsRecord **records, u
         volume->generation = s ? g1 : g0;
         volume->next_identity = supers[s].next_identity;
         volume->next_revision = supers[s].next_revision;
-        count_free(volume);
+        bfsi_count_free(volume);
         *records = list;
         *count = n;
         return BFS_OK;
@@ -498,7 +505,7 @@ int bfs_mount(BfsVolume *volume, const BfsDevice *device, BfsRecord **records, u
 }
 int bfs_create(BfsVolume *volume, const BfsDevice *device, uint32_t limit) {
     kmemset(volume, 0, sizeof *volume);
-    uint32_t blocks = device_blocks(device);
+    uint32_t blocks = bfsi_device_blocks(device);
     if (blocks < RESERVED_BLOCKS + 2 || limit > blocks || (limit && limit < RESERVED_BLOCKS + 2))
         return BFS_ERR_INVALID;
     volume->device = *device;
@@ -511,13 +518,13 @@ int bfs_create(BfsVolume *volume, const BfsDevice *device, uint32_t limit) {
     if (!result) {
         kmemset(volume->used, 0, (int)((blocks + 7) / 8));
         kmemset(volume->taken, 0, (int)((blocks + 7) / 8));
-        for (uint32_t b = 0; b < RESERVED_BLOCKS; ++b) set_bit(volume->used, b);
-        count_free(volume);
+        for (uint32_t b = 0; b < RESERVED_BLOCKS; ++b) bfsi_set_bit(volume->used, b);
+        bfsi_count_free(volume);
         volume->slot = 1;   /* the first commit goes to slot 0 */
         /* Old superblocks must not outlive the new volume's first commit. */
         kmemset(zero, 0, BFS_BLOCK);
-        for (uint32_t b = 1; b < RESERVED_BLOCKS && !result; ++b) result = write_blocks(device, b, zero, 1);
-        if (!result) result = flush(device);
+        for (uint32_t b = 1; b < RESERVED_BLOCKS && !result; ++b) result = bfsi_write_blocks(device, b, zero, 1);
+        if (!result) result = bfsi_flush(device);
     }
     kfree(zero);
     if (result) bfs_unmount(volume);
@@ -526,7 +533,7 @@ int bfs_create(BfsVolume *volume, const BfsDevice *device, uint32_t limit) {
 
 int bfs_write_marker(const BfsDevice *device) {
     uint32_t sector[128];
-    marker(sector, device->sectors);
+    bfsi_marker(sector, device->sectors);
     if (device->write(device->context, 0, sector, 1) < 0 || device->flush(device->context) < 0)
         return BFS_ERR_IO;
     return BFS_OK;
@@ -537,7 +544,7 @@ int bfs_format(const BfsDevice *device, uint32_t identity_seed) {
      * for a volume. */
     uint32_t zero[128];
     kmemset(zero, 0, sizeof zero);
-    if (device_blocks(device) < RESERVED_BLOCKS + 2) return BFS_ERR_INVALID;
+    if (bfsi_device_blocks(device) < RESERVED_BLOCKS + 2) return BFS_ERR_INVALID;
     if (device->write(device->context, 0, zero, 1) < 0 || device->flush(device->context) < 0)
         return BFS_ERR_IO;
     BfsVolume volume;
@@ -556,8 +563,8 @@ int bfs_commit_begin(BfsVolume *volume, const BfsRecord *records, uint32_t count
     kmemset(commit, 0, sizeof *commit);
     if (!count || records[0].parent != BFS_ROOT_PARENT) return BFS_ERR_INVALID;
     uint32_t bytes = 16;
-    for (uint32_t i = 0; i < count; ++i) bytes += record_bytes(&records[i]);
-    uint32_t blocks = blocks_for(bytes);
+    for (uint32_t i = 0; i < count; ++i) bytes += bfsi_record_bytes(&records[i]);
+    uint32_t blocks = bfsi_blocks_for(bytes);
     uint8_t *payload = kmalloc(blocks * BFS_BLOCK);
     uint8_t *check_map = kmalloc((volume->blocks + 7) / 8);
     if (!payload || !check_map) {
@@ -566,13 +573,13 @@ int bfs_commit_begin(BfsVolume *volume, const BfsRecord *records, uint32_t count
         return BFS_ERR_NOMEM;
     }
     kmemset(payload, 0, (int)(blocks * BFS_BLOCK));
-    encode(records, count, payload);
+    bfsi_encode(records, count, payload);
     /* Refuse a table that mount would reject: check it the same way. */
     kmemset(check_map, 0, (int)((volume->blocks + 7) / 8));
-    for (uint32_t b = 0; b < RESERVED_BLOCKS; ++b) set_bit(check_map, b);
+    for (uint32_t b = 0; b < RESERVED_BLOCKS; ++b) bfsi_set_bit(check_map, b);
     BfsRecord *decoded;
     uint32_t decoded_count;
-    int valid = decode(payload, bytes, volume->blocks, check_map, &decoded, &decoded_count);
+    int valid = bfsi_decode(payload, bytes, volume->blocks, check_map, &decoded, &decoded_count);
     kfree(check_map);
     if (valid) {
         kfree(payload);
@@ -591,7 +598,7 @@ int bfs_commit_begin(BfsVolume *volume, const BfsRecord *records, uint32_t count
     super->next_revision = next_revision;
     super->node_count = count;
     super->checkpoint_crc = bfs_crc32(0, payload, bytes);
-    int result = plan_checkpoint(volume, bytes, super);
+    int result = bfsi_plan_checkpoint(volume, bytes, super);
     if (result) {
         kfree(payload);
         return result;
@@ -643,8 +650,8 @@ int bfs_commit_end(BfsVolume *volume, BfsCommit *commit, const BfsRecord *record
     /* The new commit is current: only its blocks stay owned. Blocks still
      * taken but not referenced (abandoned writes) become free too. */
     uint8_t *owned = kmalloc((volume->blocks + 7) / 8);
-    if (!owned || mark_owned(owned, volume->blocks, super, records, count) ||
-        remember_checkpoint(volume, super)) {
+    if (!owned || bfsi_mark_owned(owned, volume->blocks, super, records, count) ||
+        bfsi_remember_checkpoint(volume, super)) {
         /* Durable, but the in-memory map is unusable: refuse further work. */
         kfree(owned);
         volume->free_blocks = 0;
@@ -659,12 +666,12 @@ int bfs_commit_end(BfsVolume *volume, BfsCommit *commit, const BfsRecord *record
     volume->generation = super->generation_low | (uint64_t)super->generation_high << 32;
     volume->next_identity = super->next_identity;
     volume->next_revision = super->next_revision;
-    count_free(volume);
+    bfsi_count_free(volume);
     kmemset(commit, 0, sizeof *commit);
     return BFS_OK;
 }
 
-static int same(const uint8_t *a, const uint8_t *b, uint32_t length) {
+static int bfsi_same(const uint8_t *a, const uint8_t *b, uint32_t length) {
     for (uint32_t i = 0; i < length; ++i)
         if (a[i] != b[i]) return 0;
     return 1;
@@ -685,17 +692,17 @@ int bfs_commit(BfsVolume *volume, const BfsRecord *records, uint32_t count,
     uint32_t at = 0, runs = bfs_commit_runs(&commit);
     for (uint32_t e = 0; e < runs && !result; ++e) {
         uint32_t blocks, start = bfs_commit_run(&commit, e, &blocks);
-        result = write_blocks(device, start, commit.checkpoint + at, blocks);
+        result = bfsi_write_blocks(device, start, commit.checkpoint + at, blocks);
         at += blocks * BFS_BLOCK;
     }
-    if (!result) result = flush(device);
+    if (!result) result = bfsi_flush(device);
     at = 0;
     for (uint32_t e = 0; e < runs && !result; ++e) {
         uint32_t blocks, start = bfs_commit_run(&commit, e, &blocks);
-        result = read_blocks(device, start, check + at, blocks);
+        result = bfsi_read_blocks(device, start, check + at, blocks);
         at += blocks * BFS_BLOCK;
     }
-    if (!result && !same(check, commit.checkpoint, commit.checkpoint_blocks * BFS_BLOCK))
+    if (!result && !bfsi_same(check, commit.checkpoint, commit.checkpoint_blocks * BFS_BLOCK))
         result = BFS_ERR_IO;
     kfree(check);
     if (result) {
@@ -706,11 +713,11 @@ int bfs_commit(BfsVolume *volume, const BfsRecord *records, uint32_t count,
     uint8_t block[BFS_BLOCK];
     kmemset(block, 0, sizeof block);
     kmemcpy(block, commit.super, sizeof commit.super);
-    result = write_blocks(device, commit.super_block, block, 1);
-    if (!result) result = flush(device);
+    result = bfsi_write_blocks(device, commit.super_block, block, 1);
+    if (!result) result = bfsi_flush(device);
     if (!result && device->read(device->context, commit.super_block * BFS_SECTORS_PER_BLOCK, block, 1) < 0)
         result = BFS_ERR_IO;
-    if (!result && !same(block, commit.super, sizeof commit.super)) result = BFS_ERR_IO;
+    if (!result && !bfsi_same(block, commit.super, sizeof commit.super)) result = BFS_ERR_IO;
     if (result) {
         bfs_commit_end(volume, &commit, records, count, BFS_COMMIT_UNCERTAIN);
         return result;

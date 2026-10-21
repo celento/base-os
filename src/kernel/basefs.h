@@ -15,6 +15,7 @@
 
 #define BFS_BLOCK 4096u
 #define BFS_SECTORS_PER_BLOCK (BFS_BLOCK / 512u)
+#define BFS_RESERVED_BLOCKS 3u         /* marker and the two superblocks */
 #define BFS_EXTENT_BLOCKS 16u          /* at most 64 KiB per extent, one CRC each */
 #define BFS_NAME_MAX 255u
 #define BFS_MARKER_VERSION 3u          /* data-disk marker version for BaseFS 2 */
@@ -85,6 +86,8 @@ int bfs_create(BfsVolume *volume, const BfsDevice *device, uint32_t limit);
 int bfs_write_marker(const BfsDevice *device);
 /* Nonzero when sector 0 holds a BaseFS 2 marker for this device size. */
 int bfs_probe(const BfsDevice *device);
+/* The same check on a sector already read. */
+int bfs_marker_matches(const void *sector, uint32_t sectors);
 /* Loads the newest valid commit. *records (count *count) and their extents
  * and names belong to the caller: free with bfs_free_records. */
 int bfs_mount(BfsVolume *volume, const BfsDevice *device, BfsRecord **records, uint32_t *count);

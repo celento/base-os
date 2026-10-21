@@ -1,12 +1,15 @@
 /* Linked only into a disposable QEMU test image. */
 #include "kernel/platform.h"
 #include "kernel/persist.h"
+#include "kernel/physmem.h"
 #include "kernel/fs.h"
 static char data[FS_MAX_SIZE - 1];
 static void require(int ok) { if (!ok) panic("storage self-test failed"); }
 void storage_guest(void) {
     platform_validate_memory();
     disk_configure(((BootInfo *)BOOTINFO_ADDR)->sectors_per_track);
+    /* BaseFS 2 volumes allocate from the kernel heap, as under kmain. */
+    if (physmem_init() != PHYS_OK) platform_log("PANIC: physmem\n");
     fs_init();
     require(fs_load_disk() == FS_LOAD_BLANK);
     fs_empty_dir(0);

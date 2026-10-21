@@ -59,7 +59,8 @@ leaves its unsaved files to the kernel loop, which writes them once the volume
 accepts writes again. Two descriptors that open the same file for writing each
 keep their own copy, and the last one written back wins. Volume limits apply
 (names up to 23 bytes, the per-file size limit, `ENOSPC` when the node table is
-full) until the block-based volume format replaces them. The C library maps
+full). The data disk now uses BaseFS 2 (docs/BASEFS2.md), and these limits go
+when files load on demand. The C library maps
 `stdio`, `opendir`/`readdir`, `stat`, `mkdir`, `rename`, `remove`, `pipe`, `dup`,
 `chdir` and `getcwd` onto these calls; `*at` calls support `AT_FDCWD` and
 absolute paths only.

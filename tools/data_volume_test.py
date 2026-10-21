@@ -14,6 +14,8 @@ import tempfile
 import time
 import zlib
 
+import basefs
+
 from init_data import initialize
 from layout import constants
 from update_image import install_kernel
@@ -25,7 +27,7 @@ LARGE_SIZE = 2097152
 HOST_SIZE = 262177
 LEGACY_SIZE = 12017
 FLOPPY_SIZE = 13001
-TOTAL_SIZE = 8385024
+CONVERTED_SIZE = 1500000
 
 
 def pattern(length, seed):
@@ -151,6 +153,28 @@ def snapshots(image, version):
     return valid
 
 
+def basefs_state(image):
+    """Nodes of the newest BaseFS 2 commit, and whether both superblocks are valid."""
+    raw = image.read_bytes()
+    assert raw[:512] == basefs.marker(len(raw) // 512), 'data disk is not BaseFS 2'
+    _, _, records, _ = basefs.mount(raw)
+    both = all(basefs.read_super(raw, slot) for slot in (0, 1))
+    return volume.basefs_nodes(records), both
+
+
+def snapshot_disk(path, nodes, slot, generation):
+    """A marked data disk holding one v4 snapshot, written by the host codec."""
+    layout = volume.DATA_LAYOUT
+    header, payload = volume.encode_snapshot(nodes, layout, generation)
+    disk = bytearray(layout.sectors * 512)
+    disk[:512] = volume.data_marker()
+    start = layout.lbas[slot] * 512
+    disk[start:start + 512] = header.ljust(512, b'\0')
+    disk[start + 512:start + 512 + len(payload)] = payload
+    assert volume.load(disk)[0] == slot
+    path.write_bytes(disk)
+
+
 def main(build, keep):
     directory = Path(tempfile.mkdtemp(prefix='baseos-data-volume-'))
     print(f'QEMU logs and disposable test disks: {directory}', flush=True)
@@ -165,7 +189,7 @@ def main(build, keep):
         run(floppy, data, directory, 'large-write', 'DATA-LARGE-WRITE-PASS')
         export_equals(data, '/large.bin', directory / 'large-first.bin', pattern(LARGE_SIZE, 17))
         run(floppy, data, directory, 'large-restart', 'DATA-LARGE-RESTART-PASS')
-        assert all(snapshots(data, 4)), 'large save did not alternate snapshots'
+        assert basefs_state(data)[1], 'large saves did not reach both superblocks'
         host = directory / 'host-input.bin'
         host.write_bytes(pattern(HOST_SIZE, 93))
         cli(data, 'import', host, '/host.bin')
@@ -178,29 +202,27 @@ def main(build, keep):
         run(floppy, data, directory, 'host-edit-restart', 'DATA-HOST-RESTART-PASS')
         assert digest(data) == data_before, 'read-only verification changed data disk'
         assert digest(floppy) == floppy_before, 'data-volume work changed boot floppy'
-        assert data.read_bytes()[:512] == marker
-        assert data.read_bytes()[-512:] == bytes(512), 'reserved final data sector changed'
+        assert marker == volume.data_marker()
 
         floppy = directory / 'full-boot.img'
         floppy.write_bytes(build_fixture(build, directory, 5))
         floppy_before = digest(floppy)
         data = directory / 'full-data.img'
         assert initialize(data)
-        run(floppy, data, directory, 'full-write', 'DATA-FULL-WRITE-PASS')
-        original_slot = snapshots(data, 4)[0]
-        assert original_slot and sum(len(n['data']) for n in original_slot[1].values()) == TOTAL_SIZE
+        text = run(floppy, data, directory, 'full-write', 'DATA-FULL-WRITE-PASS')
+        total = int(text.split('DATA-FULL-TOTAL=')[1].split()[0])
+        nodes, _ = basefs_state(data)
+        assert sum(len(n['data']) for n in nodes.values()) == total
         for i in range(4):
-            length = LARGE_SIZE if i < 3 else TOTAL_SIZE - 3 * LARGE_SIZE
+            length = LARGE_SIZE if i < 3 else total - 3 * LARGE_SIZE
             export_equals(data, f'/full{i}.bin', directory / f'full-first-{i}.bin',
                           pattern(length, 101 + i * 7))
         text = run(floppy, data, directory, 'full-restart-refill', 'DATA-FULL-REFILL-PASS')
         assert 'DATA-FULL-RESTART-PASS' in text
-        full_slots = snapshots(data, 4)
-        assert all(full_slots), 'full-capacity commits did not reach both slots'
-        assert full_slots[0] == original_slot, 'refill changed previous full snapshot'
-        for generation, nodes in full_slots:
-            assert sum(len(n['data']) for n in nodes.values()) == TOTAL_SIZE
-            assert all(len(n['data']) <= LARGE_SIZE for n in nodes.values())
+        nodes, both = basefs_state(data)
+        assert both, 'full-capacity commits did not reach both superblocks'
+        assert sum(len(n['data']) for n in nodes.values()) == total
+        assert all(len(n['data']) <= LARGE_SIZE for n in nodes.values())
         export_equals(data, '/full0.bin', directory / 'full-shrunken.bin', b'small')
         export_equals(data, '/reclaimed.bin', directory / 'full-refilled.bin',
                       pattern(LARGE_SIZE - 5, 211))
@@ -208,8 +230,6 @@ def main(build, keep):
         run(floppy, data, directory, 'full-refill-restart', 'DATA-FULL-REFILL-RESTART-PASS')
         assert digest(data) == data_before, 'full-volume read/rejections changed image'
         assert digest(floppy) == floppy_before, 'full-volume work changed boot floppy'
-        assert data.read_bytes()[:512] == volume.data_marker()
-        assert data.read_bytes()[-512:] == bytes(512), 'full-volume writes reached reserved sector'
 
         floppy = directory / 'migration-boot.img'
         floppy.write_bytes(legacy_snapshot(build_fixture(build, directory, 2)))
@@ -218,12 +238,29 @@ def main(build, keep):
         assert initialize(data)
         run(floppy, data, directory, 'migration-write', 'DATA-MIGRATION-WRITE-PASS')
         assert digest(floppy) == floppy_before, 'migration changed original floppy bytes'
-        snapshots(data, 4)
+        basefs_state(data)
         export_equals(data, '/old.bin', directory / 'migrated.bin', pattern(LEGACY_SIZE, 41))
         data_before = digest(data)
         run(floppy, data, directory, 'migration-restart', 'DATA-MIGRATION-RESTART-PASS')
         assert digest(floppy) == floppy_before, 'migration reboot changed original floppy bytes'
         assert digest(data) == data_before, 'migration verification changed data disk'
+
+        # A data disk in the old snapshot format, current in its second slot,
+        # converts to BaseFS 2 on the first boot with every file kept.
+        floppy = directory / 'converted-boot.img'
+        floppy.write_bytes(build_fixture(build, directory, 6))
+        data = directory / 'converted-data.img'
+        old = dict(name='', parent=-1, directory=1, app=0, data=b'', modified=0)
+        snapshot_disk(data, {0: old,
+                             1: dict(name='Kept', parent=0, directory=1, app=0, data=b'', modified=5),
+                             2: dict(name='kept.bin', parent=1, directory=0, app=0,
+                                     data=pattern(CONVERTED_SIZE, 59), modified=6),
+                             3: dict(name='old.bin', parent=0, directory=0, app=0,
+                                     data=pattern(LEGACY_SIZE, 41), modified=7)}, 1, 9)
+        run(floppy, data, directory, 'converted', 'DATA-CONVERTED-PASS')
+        basefs_state(data)
+        export_equals(data, '/Kept/kept.bin', directory / 'converted-kept.bin', pattern(CONVERTED_SIZE, 59))
+        export_equals(data, '/old.bin', directory / 'converted-old.bin', b'after')
 
         floppy = directory / 'fallback-boot.img'
         floppy.write_bytes(build_fixture(build, directory, 3))
@@ -249,7 +286,7 @@ def main(build, keep):
             assert digest(data) == data_before, f'{label}: unknown IDE changed'
         succeeded = True
         print('All real-QEMU data-volume checks passed: 2 MiB, full capacity/reclaim, restart, host exchange, '
-              'v3 migration, floppy fallback, and protected unmarked media.', flush=True)
+              'v3 migration, snapshot-disk conversion, floppy fallback, and protected unmarked media.', flush=True)
     finally:
         # Failed runs retain exact evidence without risking persistent images.
         if not keep and succeeded:

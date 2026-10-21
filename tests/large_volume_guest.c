@@ -1,6 +1,7 @@
 /* Ordinary data-volume entry for disposable 128 MiB (or protected 64 MiB) boots. */
 #include "kernel/platform.h"
 #include "kernel/persist.h"
+#include "kernel/physmem.h"
 #include "kernel/fs.h"
 #ifndef LARGE_VOLUME_MODE
 #define LARGE_VOLUME_MODE 1
@@ -28,6 +29,8 @@ static void sync_disk(void) {
 void large_volume_guest(void) {
     platform_validate_memory();
     disk_configure(((BootInfo *)BOOTINFO_ADDR)->sectors_per_track);
+    /* BaseFS 2 volumes allocate from the kernel heap, as under kmain. */
+    if (physmem_init() != PHYS_OK) platform_log("PANIC: physmem\n");
     fs_init(); int loaded = fs_load_disk();
     platform_log("LARGE-VOLUME-TEST-START\n");
 #if LARGE_VOLUME_MODE == 2
@@ -60,22 +63,26 @@ void large_volume_guest(void) {
         maximum = create("maximum", FS_LARGE_FILE_MAX);
         check(fs_write(maximum, scratch, FS_LARGE_FILE_MAX + 1) < 0, "large: oversized file admitted");
         verify(maximum, FS_LARGE_FILE_MAX, 0);
-        create("remainder", 33543168 - FS_LARGE_FILE_MAX);
+        /* The volume holds at least the snapshot format's 33,543,168 bytes. */
+        unsigned total = fs_capacity_for_nodes(256);
+        check(total >= 33543168u, "large: capacity below the snapshot format");
+        create("remainder", total - FS_LARGE_FILE_MAX);
         while (fs_node_count() < 256) {
             char name[FS_NAME_LEN]; check(fs_unique_file(0, name) == 0 && fs_create(0, name) > 0,
                                           "large: node creation failed");
         }
-        check(fs_used_bytes() == 33543168 && fs_capacity() == 33543168, "large: full capacity mismatch");
+        check(fs_used_bytes() == total && fs_capacity() == total, "large: full capacity mismatch");
         sync_disk(); platform_log("LARGE-FULL-WRITE-PASS\n");
     } else {
         int remainder = fs_find_child(0, "remainder");
         verify(maximum, FS_LARGE_FILE_MAX, 0);
-        verify(remainder, 33543168 - FS_LARGE_FILE_MAX, 0);
+        verify(remainder, fs_size(remainder), 0);
         check(fs_node_count() == 256 && fs_used_bytes() == fs_capacity(), "large: persisted capacity mismatch");
         check(fs_write(3, "x", 1) < 0 && fs_copy(maximum, 0) < 0 && !fs_needs_sync(),
               "large: rejected operation mutated state");
         if (!fs_is_app(255)) {
-            check(fs_delete(255) == 0 && fs_capacity() == 33543208, "large: metadata reclaim failed");
+            unsigned before = fs_capacity();
+            check(fs_delete(255) == 0 && fs_capacity() > before, "large: metadata reclaim failed");
             check(fs_create_app(0, "last-app") == 255, "large: slot reclaim failed");
             fill(FS_LARGE_FILE_MAX);
             check(fs_write(maximum, scratch, FS_LARGE_FILE_MAX) == FS_LARGE_FILE_MAX,

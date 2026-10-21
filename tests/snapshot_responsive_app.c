@@ -14,6 +14,12 @@ static const char trigger[]="/Documents/trigger.bin";
 static const char probe[]="/Documents/probe.bin";
 static const char report_path[]="/Documents/report.bin";
 static char payload_path[]="/Documents/payload0.bin";
+/* When present, T also rewrites these files, so the save it starts has real
+ * data to write even on a volume that saves only changed files. */
+#define BULK_BYTES 12288u /* bos_replace_file moves at most 32 KiB */
+#define BULK_FILES 20u
+static char bulk_path[]="/Documents/bulk00.bin";
+static unsigned char bulk[BULK_BYTES];
 static void row(unsigned y,unsigned value){
     for(unsigned bit=0;bit<32;bit++)bos_rect((int)(bit*5),(int)y,4,5,(value&(1u<<bit))?15:0);
 }
@@ -60,7 +66,15 @@ int main(void){
                 keys++;
             }
             if(key=='t'&&phase==0){
-                byte='B';int result=bos_write_file(trigger,&byte,1);
+                int result=1;
+                for(unsigned i=0;i<BULK_BYTES;i++)bulk[i]=(unsigned char)(i*7u+(i>>9));
+                for(unsigned f=0;f<BULK_FILES&&result==1;f++){
+                    bulk_path[15]=(char)('0'+f/10);bulk_path[16]=(char)('0'+f%10);
+                    if(bos_file_size(bulk_path)!=(int)BULK_BYTES)continue;
+                    int written=bos_replace_file(bulk_path,bulk,BULK_BYTES);
+                    result=written==(int)BULK_BYTES?1:written<0?written:-1;
+                }
+                byte='B';if(result==1)result=bos_write_file(trigger,&byte,1);
                 if(result==1){phase=1;trigger_value=byte;start_tick=bos_ticks();max_gap=max_busy_gap=0;previous=start_tick;}
                 else if(result!=BOS_ERR_BUSY)errors++;
             }

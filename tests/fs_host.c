@@ -13,6 +13,7 @@ static unsigned char pool_arena[FS_POOL_CAPACITY];
 #define FS_IMG_BASE ((uintptr_t)image_arena)
 #define FS_POOL_BASE ((uintptr_t)pool_arena)
 int platform_memory_range_available(uint32_t base, uint32_t end) { (void)base; (void)end; return 0; }
+#include "fs_basefs_support.h"
 #include "../src/kernel/fs.c"
 #include "ata_async_stub.h"
 

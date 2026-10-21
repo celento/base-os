@@ -13,6 +13,7 @@ import zlib
 from data_volume_test import C, ROOT, tool, run, pattern, cli, export_equals, digest
 from init_data import initialize
 from update_image import install_kernel
+import basefs
 import volume
 
 
@@ -90,10 +91,10 @@ def main(build, keep):
         before_data = digest(data)
         run(floppy, data, directory, 'nodes-host-restart', 'NODE-HOST-EXCHANGE-RESTART-PASS')
         assert digest(data) == before_data and digest(floppy) == before_floppy
-        assert all(volume.decode(data.read_bytes(), slot) for slot in (0, 1))
-        assert data.read_bytes()[:512] == volume.data_marker()
-        assert data.read_bytes()[-512:] == bytes(512)
+        raw = data.read_bytes()
+        assert raw[:512] == basefs.marker(len(raw) // 512), 'new data disk is not BaseFS 2'
 
+        # A full old v4 disk has no room to convert and keeps its format.
         floppy, data = directory / 'old-full-boot.img', directory / 'old-full-data.img'
         floppy.write_bytes(build_fixture(build, directory, 2))
         before_floppy = digest(floppy)

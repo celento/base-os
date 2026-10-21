@@ -2,6 +2,7 @@
  * tools/fs_crc_benchmark.py links this entry with otherwise normal objects. */
 #include "kernel/platform.h"
 #include "kernel/persist.h"
+#include "kernel/physmem.h"
 #include "kernel/fs.h"
 
 /* Fixed document modification time makes independently saved images comparable. */
@@ -40,6 +41,8 @@ static void verify(void) {
 void fs_crc_guest(void) {
     platform_validate_memory();
     disk_configure(((BootInfo *)BOOTINFO_ADDR)->sectors_per_track);
+    /* BaseFS 2 volumes allocate from the kernel heap, as under kmain. */
+    if (physmem_init() != PHYS_OK) platform_log("PANIC: physmem\n");
     fs_init();
     unsigned started = begin("MOUNT");
     require(fs_load_disk() == 0, "crc benchmark: mount failed");

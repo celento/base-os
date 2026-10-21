@@ -5,9 +5,9 @@ the snapshot formats (v4/v5), which hold the whole volume in memory and limit
 the node count, name length and file size. In BaseFS 2 the node table is the
 only thing loaded at mount; file contents stay on disk until read.
 
-This page covers the on-disk format and the core in `kernel/basefs.c`. The
-`kernel/fs.c` backend and the one-time migration of old volumes come in later
-steps.
+This page covers the on-disk format, the core in `kernel/basefs.c`, and how
+`kernel/fs.c` uses it for the data disk, including the one-time conversion of
+old volumes.
 
 ## Goals
 
@@ -81,6 +81,56 @@ last. Until that final sector write the disk still carries its old marker
 and its old contents above the limit, so a crash leaves the old volume as it
 was.
 
+## In the kernel
+
+`kernel/fs.c` uses BaseFS 2 as data backend 3. A marked blank data disk (the
+v1 or v2 marker that `tools/init_data.py` writes) is formatted as BaseFS 2 on
+first boot, and a BaseFS 2 disk of any size mounts. For now the backend keeps
+the existing in-memory model: mount reads the node table and every file into
+the RAM arenas, and the node count (256) and name length (23 bytes) stay as
+they were. Loading files on demand and lifting those limits is the next step.
+
+Each node remembers its extents and whether it changed since the last commit.
+A save writes only changed files, then the checkpoint and a superblock, so
+changing one small file costs a few blocks however full the volume is. The
+save runs in the background sync job like the snapshot formats did: the job
+plans the commit, writes and reads back each run of at most eight sectors,
+compares, and then writes, flushes and checks the superblock. Files stay
+locked while it runs. A save that fails before the superblock is written
+returns its blocks, and the next save tries again.
+
+A changed file is written to new blocks while its old copy stays allocated
+until the commit lands, so the kernel admits a change only while the next
+commit still fits in the free blocks: every changed file rounded up to whole
+blocks, plus a checkpoint for the node count. A refused write returns an
+error and leaves the file as it was. The capacity shown to programs is the
+smaller of the RAM pool and the bytes in use plus the blocks still free after
+that reservation. On the 16 MiB default disk that is the 8 MiB pool for most
+volumes, a little more than the 8,385,024 bytes the snapshot format allowed.
+Near a full disk, rewriting a file that is already saved needs room for both
+copies until the save completes, as on other copy-on-write file systems.
+
+### Conversion of snapshot disks
+
+A data disk in the v4 or v5 snapshot format converts to BaseFS 2 when it is
+mounted, once:
+
+1. If the current snapshot is in the second slot, the volume is saved to the
+   first slot with the normal snapshot commit, so everything from the second
+   slot onward is free.
+2. `bfs_create` sets up an empty volume limited to the blocks below the second
+   slot, every file is written there and committed, and the BaseFS 2 marker is
+   written last.
+3. The new volume is mounted again from disk and every file is compared with
+   memory. If any read or check fails, the old marker is written back and the
+   snapshot is loaded again, so the disk stays in the snapshot format and the
+   next boot tries again.
+
+A power cut before the marker write leaves the snapshot disk as it was, and a
+cut after it leaves a complete BaseFS 2 volume. Floppy volumes keep the
+snapshot format. `FS_CONVERT_TO_BASEFS` (on by default) turns conversion off
+for host tests of the snapshot formats.
+
 ## Host tools
 
 `tools/basefs.py` reads and writes the same format in Python, and
@@ -113,3 +163,12 @@ in the newest checkpoint (mount falls back one generation), fills the volume,
 converts a disk in place below a block limit, and checks that every heap
 object comes back. It also cross-checks `tools/basefs.py`: the C code mounts
 images the host wrote and the host mounts images the C code wrote.
+
+`tests/fs_basefs_host.c` runs `kernel/fs.c` on BaseFS 2: formatting a blank
+marked disk, a one-file save done in bounded background steps, repeated
+rewrites of a 1 MiB file, a power cut at every third write of a save,
+conversion from either snapshot slot, a power cut at every seventh write of
+a conversion, a failed read at each point of a conversion (the old marker
+comes back), and a disk of an odd size. `tools/data_volume_test.py` checks
+the same in QEMU on real disk images, including a v4 disk with a folder that
+converts on first boot and can be read by the host tools afterwards.

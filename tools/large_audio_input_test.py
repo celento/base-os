@@ -96,13 +96,15 @@ def run_profile(build, work, profile, song, reference):
             '-device', 'sb16,audiodev=out']) as session:
         print('QEMU evidence: ' + str(session.directory), flush=True)
         session.boot(); observed = Observations(session, build / 'kernel.elf')
-        expected_capacity = 16777216 if profile == 'large' else 2097152
-        expected_base = 0x2000000 if profile == 'large' else 0x1700000
+        # Both disks convert to BaseFS 2 on first boot, which takes the large
+        # arenas whenever the RAM allows, whatever profile the disk had.
+        expected_capacity = 16777216
+        expected_base = 0x2000000
         assert observed.integer('source_capacity') == expected_capacity
         assert observed.integer('source_buffer') == expected_base
-        assert observed.integer('data_backend') == (2 if profile == 'large' else 1)
-        assert observed.integer('pool_base') == (0x3F00000 if profile == 'large' else 0x2000000)
-        assert observed.integer('image_base') == (0x5F00000 if profile == 'large' else 0x2800000)
+        assert observed.integer('data_backend') == 3
+        assert observed.integer('pool_base') == 0x3F00000
+        assert observed.integer('image_base') == 0x5F00000
         assert load(disk.read_bytes())[2][4]['data'] == bulk
         session.launch('media player')
         for _ in range(5):

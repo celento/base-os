@@ -36,7 +36,7 @@ static void dl_absent(const char *path){dl_check(fs_resolve(0,path)<0,"failed re
 static void dl_wait_browser(void){unsigned start=timer_ticks();while(browser_loading()&&timer_ticks()-start<18*TIMER_HZ){dl_turn();__asm__ volatile("hlt");}dl_check(!browser_loading()&&browser_can_save(),"complete browser page");}
 static void dl_verify_page(const char *path){int id=fs_resolve(0,path);dl_check(id>0&&fs_size(id)==sizeof DL_PAGE-1&&!kstrcmp(fs_data(id),DL_PAGE),"saved original page bytes");}
 void feature_test(void){
-    dl_check(fs_file_limit()==FS_FILE_MAX&&!kstrcmp(fs_storage_name(),"IDE data disk"),"data volume required");
+    dl_check(fs_file_limit()==FS_FILE_MAX&&!kstrcmp(fs_storage_name(),"BaseFS 2 data disk"),"data volume required");
     if(fs_resolve(0,"/download-pass")>=0){
         dl_verify("/binary.bin",FS_FILE_MAX);dl_verify("/medium.bin",20037);
         dl_verify_page("/Downloads/page.html");dl_verify_page("/Downloads/page-2.html");

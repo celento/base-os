@@ -25,6 +25,9 @@ class IncrementalFilesystemTests(unittest.TestCase):
     def test_large_capacity_incremental_commit_and_arena_ownership(self):
         self.run_host('fs_sync_large_host.c')
 
+    def test_basefs_volume_saves_cuts_and_conversion(self):
+        self.run_host('fs_basefs_host.c')
+
 
 if __name__ == '__main__':
     unittest.main()

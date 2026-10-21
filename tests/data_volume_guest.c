@@ -1,10 +1,12 @@
 /* Linked only into disposable images by tools/data_volume_test.py.
  * No desktop/audio startup or autosave: all media writes below are explicit.
  * Modes: 1 large binary roundtrip, 2 v3 migration, 3 floppy, 4 protected IDE,
- *        5 full-capacity save/restart/reclaim/refill.
+ *        5 full-capacity save/restart/reclaim/refill, 6 snapshot disk converted
+ *        to BaseFS 2.
  */
 #include "kernel/platform.h"
 #include "kernel/persist.h"
+#include "kernel/physmem.h"
 #include "kernel/fs.h"
 
 #ifndef DATA_VOLUME_MODE
@@ -15,7 +17,11 @@
 #define HOST_SIZE 262177u
 #define LEGACY_SIZE 12017u
 #define FLOPPY_SIZE 13001u
-#define TOTAL_SIZE 8385024u
+#define CONVERTED_SIZE 1500000u
+#define DATA_NAME "BaseFS 2 data disk"
+/* Mode 5 fills the volume exactly: its capacity with eight nodes. */
+#define FULL_NODES 8u
+#define TOTAL_SIZE fs_capacity_for_nodes(FULL_NODES)
 
 /* Audio is never started in this fixture. Keep scratch outside the FS arenas. */
 #define scratch ((char *)AUDIO_WORK_BASE)
@@ -98,14 +104,16 @@ static void reject_full_writes(void) {
 void data_volume_guest(void) {
     platform_validate_memory();
     disk_configure(((BootInfo *)BOOTINFO_ADDR)->sectors_per_track);
+    /* BaseFS 2 volumes allocate from the kernel heap, as under kmain. */
+    if (physmem_init() != PHYS_OK) platform_log("PANIC: physmem\n");
     fs_init();
     platform_log("DATA-VOLUME-TEST-START\n");
     int loaded = fs_load_disk();
 
 #if DATA_VOLUME_MODE == 1
-    require(!kstrcmp(fs_storage_name(), "IDE data disk"), "data test: IDE not selected");
+    require(!kstrcmp(fs_storage_name(), DATA_NAME), "data test: IDE not selected");
     require(fs_file_limit() == LARGE_SIZE, "data test: wrong per-file limit");
-    require(fs_capacity() == 8385024u, "data test: wrong total capacity");
+    require(fs_capacity() >= 3 * LARGE_SIZE, "data test: wrong total capacity");
     if (loaded == FS_LOAD_BLANK) {
         fs_empty_dir(0);
         create_pattern("large.bin", LARGE_SIZE, 17);
@@ -156,7 +164,7 @@ void data_volume_guest(void) {
     }
 #elif DATA_VOLUME_MODE == 2
     require(loaded == 0, "data test: migration mount failed");
-    require(!kstrcmp(fs_storage_name(), "IDE data disk"), "data test: migration backend wrong");
+    require(!kstrcmp(fs_storage_name(), DATA_NAME), "data test: migration backend wrong");
     require(fs_file_limit() == LARGE_SIZE, "data test: migration limit wrong");
     verify(fs_find_child(0, "old.bin"), LEGACY_SIZE, 41, 0);
     int pending = fs_needs_sync();
@@ -186,11 +194,19 @@ void data_volume_guest(void) {
     require(fs_sync() < 0, "data test: protected sync succeeded");
     platform_log("DATA-UNMARKED-PROTECTED-PASS\n");
 #elif DATA_VOLUME_MODE == 5
-    require(!kstrcmp(fs_storage_name(), "IDE data disk"), "data test: full-volume IDE not selected");
-    require(fs_file_limit() == LARGE_SIZE && fs_capacity() == TOTAL_SIZE,
-            "data test: full-volume limits wrong");
+    require(!kstrcmp(fs_storage_name(), DATA_NAME), "data test: full-volume IDE not selected");
+    require(fs_file_limit() == LARGE_SIZE && TOTAL_SIZE > 3 * LARGE_SIZE &&
+            TOTAL_SIZE - 3 * LARGE_SIZE <= LARGE_SIZE, "data test: full-volume limits wrong");
     if (loaded == FS_LOAD_BLANK) {
         fs_empty_dir(0);
+        platform_log("DATA-FULL-TOTAL=");
+        char digits[12];
+        unsigned value = TOTAL_SIZE, n = 0;
+        do { digits[n++] = (char)('0' + value % 10); value /= 10; } while (value);
+        char text[13];
+        for (unsigned i = 0; i < n; ++i) text[i] = digits[n - 1 - i];
+        text[n] = '\n'; text[n + 1] = 0;
+        platform_log(text);
         require(fs_create(0, "full-written") > 0, "data test: full-volume stage failed");
         require(fs_create(0, "blocked.bin") > 0, "data test: empty file create failed");
         require(fs_create(0, "reclaimed.bin") > 0, "data test: reclaim file create failed");
@@ -238,6 +254,17 @@ void data_volume_guest(void) {
             platform_log("DATA-FULL-REFILL-RESTART-PASS\n");
         }
     }
+#elif DATA_VOLUME_MODE == 6
+    require(loaded == 0, "data test: converted mount failed");
+    require(!kstrcmp(fs_storage_name(), DATA_NAME), "data test: snapshot disk not converted");
+    require(!fs_needs_sync() && !fs_storage_status(), "data test: conversion left work");
+    int folder = fs_find_child(0, "Kept");
+    require(folder > 0 && fs_is_dir(folder), "data test: converted folder missing");
+    verify(fs_find_child(folder, "kept.bin"), CONVERTED_SIZE, 59, 0);
+    verify(fs_find_child(0, "old.bin"), LEGACY_SIZE, 41, 0);
+    require(fs_write(fs_find_child(0, "old.bin"), "after", 5) == 5, "data test: converted write failed");
+    synced();
+    platform_log("DATA-CONVERTED-PASS\n");
 #else
 #error Unsupported DATA_VOLUME_MODE
 #endif
