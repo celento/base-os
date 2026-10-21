@@ -64,6 +64,8 @@ def run(build):
         shots.append(str(session.screenshot('writer-reused-folder-root-fallback.png')))
         ui.name('rich-rescued.bwr')
         session.wait(lambda: not ui.o.integer('name_dlg'), 'rescued Writer save completed')
+        # Writer keeps saving after the dialog closes; wait for the disk.
+        session.wait(lambda: exists('/rich-rescued.bwr'), 'rescued Writer file synchronized', 30)
         nodes = load(disk.read_bytes())[2]
         assert decode_native(nodes[resolve(nodes, '/rich-rescued.bwr')]['data']) == rich
         assert not any(n['parent'] == 4 for n in nodes.values())
