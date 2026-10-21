@@ -181,7 +181,9 @@ void thread_tick(void) {
     if (current == &desktop) return;
     uint32_t now = timer_milliseconds();
     current->last_run = now;
-    if (now - slice_start >= THREAD_QUANTUM_MS) {
+    /* The round's deadline also bounds a thread that took over late in it
+     * after another blocked or yielded. */
+    if (now - slice_start >= THREAD_QUANTUM_MS || now - round_start >= THREAD_QUANTUM_MS) {
         unsigned flags;
         __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
         switch_to(&desktop);
