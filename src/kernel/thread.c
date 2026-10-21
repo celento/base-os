@@ -57,7 +57,10 @@ Thread *thread_create_user(Uproc *process, uint32_t eip, uint32_t esp, uint32_t 
         /* Save the live state, capture a clean one, put the live one back. */
         uint8_t live[108] __attribute__((aligned(16)));
         __asm__ volatile("fnsave %0" : "=m"(live) :: "memory");
-        __asm__ volatile("fninit; fnsave %0" : "=m"(thread->fpu) :: "memory");
+        /* FNINIT keeps the register contents, so overwrite all eight before
+         * capturing; no other program's values reach the new thread. */
+        __asm__ volatile("fninit\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\t"
+                         "fninit\n\tfnsave %0" : "=m"(thread->fpu) :: "memory");
         __asm__ volatile("frstor %0" :: "m"(live) : "memory");
         __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
     }

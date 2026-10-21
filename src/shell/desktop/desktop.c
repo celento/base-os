@@ -6600,8 +6600,10 @@ static void launcher_key(void);
  * accelerators/modal routing run first; GUI Escape belongs to the app. */
 static int native_task_key_dispatch(int slot,int owned){
     int running=app_view_running(slot);
-    if(!running&&!owned)return 0;
-    if(ctrl_down&&key_sc==0x2e){if(running)app_view_stop(slot);dirty=1;return 1;}
+    /* ELF programs take no keyboard input yet, but Ctrl+C stops them. */
+    int elf=!owned&&term_elf_running(slot);
+    if(!running&&!owned&&!elf)return 0;
+    if(ctrl_down&&key_sc==0x2e){if(running||elf)term_task_stop(slot);dirty=1;return 1;}
     if(key_sc==0x49||key_sc==0x51){
         if(owned)native_output_scroll_by(slot,key_sc==0x49?8:-8);
         else {term_scroll(key_sc==0x49?8:-8);dirty=1;}
