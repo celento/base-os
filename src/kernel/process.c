@@ -96,9 +96,11 @@ static int task_private_create(NativeTask *task,const void *file) {
 }
 /* Allocation domains never wrap or reset, even when a display slot is reused. */
 static BosHandle allocate_owner(void) {
-    if(owner_serial==BOS_HANDLE_SERIAL_MAX)return BOS_HANDLE_INVALID;
+    /* The last serial is PHYS_KERNEL_OWNER, the kernel heap's frame owner. */
+    if(owner_serial>=BOS_HANDLE_SERIAL_MAX-1)return BOS_HANDLE_INVALID;
     return BOS_HANDLE_TYPE_PROCESS | ++owner_serial;
 }
+BosHandle process_owner_allocate(void){return allocate_owner();}
 static BosHandle current_owner(void) {
     return current_task?current_task->owner_id:synchronous_owner;
 }
@@ -215,6 +217,7 @@ static void protect_memory(void){
     __asm__ volatile("mov %0,%%cr0"::"r"(cr0):"memory");
     paging_ready=1;
 }
+void process_paging_init(void){protect_memory();}
 static void descriptor(unsigned char *p,unsigned base,unsigned limit,unsigned access,unsigned flags){
     p[0]=limit;p[1]=limit>>8;p[2]=base;p[3]=base>>8;p[4]=base>>16;
     p[5]=access;p[6]=((limit>>16)&15)|flags;p[7]=base>>24;
@@ -249,6 +252,11 @@ static void process_user_context(const NativeTask *task) {
     unsigned root=process_user_root(task);
     __asm__ volatile("mov %0,%%cr3"::"r"(root):"memory");
     __asm__ volatile("pushl %0; popfl"::"r"(flags):"memory","cc");
+}
+/* Ring-0 stack used by the next privilege transition from ring 3. */
+void process_set_kernel_stack(uint32_t top){*(uint32_t *)(tss+4)=top;}
+uint32_t process_legacy_kernel_stack(void){
+    return (uintptr_t)(kernel_stack+TASK_INTERRUPT_STACK_CAPACITY);
 }
 void process_init(void){
     if(active)return;

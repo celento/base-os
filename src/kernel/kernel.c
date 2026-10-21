@@ -8,6 +8,7 @@
 #include "kernel/shell.h"
 #include "kernel/platform.h"
 #include "kernel/physmem.h"
+#include "kernel/thread.h"
 #include "kernel/persist.h"
 #include "kernel/native_sync.h"
 #include "kernel/gfx.h"
@@ -292,6 +293,9 @@ void kmain(void) {
         kernel_storage_poll();
         kernel_services_poll();
         int busy = baseos_shell.turn();
+        /* ELF program threads run until the next timer tick, then the
+         * desktop gets its turn again. */
+        busy |= thread_run_users();
         /* ATA uses polling, not IRQ14: do not sleep once per sector wait. */
         if(!busy&&!fs_sync_busy()&&!input_pending(&device_input))__asm__ volatile("hlt");
     }

@@ -31,6 +31,9 @@ interrupt_common:
     push ebx
     call interrupt_dispatch
     mov esp, ebx
+; New threads start here with a ring-3 frame built by thread.c.
+global interrupt_return
+interrupt_return:
     popad
     pop gs
     pop fs

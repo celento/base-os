@@ -24,7 +24,7 @@ static int native_output_scroll[MAX_WIN],dirty,ctrl_down,alt_down,key_sc;
 static char key_char;
 static struct {unsigned buttons;} device_input;
 static unsigned clock_now=42;
-static int live[8],visible[8],stopped,key_slot=-1,last_key,term_scrolled,closed=-1,refreshes;
+static int live[8],visible[8],elf[8],stopped,elf_stopped,key_slot=-1,last_key,term_scrolled,closed=-1,refreshes;
 static const char *output_lines[]={"01234567890123456789012345678901234567890123456789012345678901234567890123456789","","Final output row"};
 static int kstrlen(const char *s){return (int)strlen(s);}
 int app_view_running(int slot){return live[slot];}
@@ -35,6 +35,8 @@ void app_view_output_show(int slot,int value){visible[slot]=value;}
 int app_view_output_count(int slot){(void)slot;return 3;}
 const char *app_view_output_line(int slot,int row){(void)slot;return output_lines[row];}
 static void term_scroll(int delta){term_scrolled=delta;}
+static int term_elf_running(int slot){return elf[slot];}
+static void term_task_stop(int slot){if(elf[slot]){elf[slot]=0;elf_stopped=slot+1;return;}app_view_stop(slot);}
 static unsigned timer_ticks(void){return clock_now;}
 void native_ui_refresh(unsigned ticks,unsigned buttons){assert(ticks==42&&buttons==3);refreshes++;}
 static void win_close(int slot){closed=slot;wins[slot].open=0;}
@@ -62,6 +64,11 @@ int main(void){
     native_task_key_dispatch(2,0);assert(term_scrolled==8);
     live[2]=0;key_sc=KEY_ESC;last_key=0;
     assert(native_task_key_dispatch(2,1)&&!last_key&&closed==-1);assert(!native_task_key_dispatch(2,0));
+    /* An ELF program in a Terminal swallows keys; Ctrl+C stops it. */
+    elf[2]=1;key_sc=30;key_char='c';last_key=0;
+    assert(native_task_key_dispatch(2,0)&&!last_key);
+    ctrl_down=1;key_sc=0x2e;assert(native_task_key_dispatch(2,0)&&elf_stopped==3&&!elf[2]);ctrl_down=0;
+    assert(!native_task_key_dispatch(2,0));
     native_window_complete((AppViewUpdate){2,APP_VIEW_LIFECYCLE});assert(closed==-1);
     native_window_complete((AppViewUpdate){2,APP_VIEW_AUTO_CLOSE});assert(closed==2&&!wins[2].open);
     closed=-1;wins[2].kind=WK_TERM;wins[2].open=1;native_window_complete((AppViewUpdate){2,APP_VIEW_AUTO_CLOSE});assert(closed==-1);

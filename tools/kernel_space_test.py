@@ -72,7 +72,7 @@ def check_runtime(session, names, kernel):
         # The BIOS staging area is reused for kernel BSS once the kernel is
         # unpacked (layout.h KERNEL_BSS_BASE), so the staged prefix is gone.
         gdtr = session.memory(C['BOOTINFO_ADDR'] + 0x40, 6)
-        assert struct.unpack('<HI', gdtr) == (47, names['gdt_start'])
+        assert struct.unpack('<HI', gdtr) == (71, names['gdt_start'])
         # The active TSS uses the existing independent 64 KiB task syscall stack.
         descriptor = session.memory(names['gdt_tss'], 8)
         tss = descriptor[2] | descriptor[3] << 8 | descriptor[4] << 16 | descriptor[7] << 24

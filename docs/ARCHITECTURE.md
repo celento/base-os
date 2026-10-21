@@ -25,7 +25,7 @@ above it in this table, never a layer below it.
 
 | Layer | Directory | Owns |
 | --- | --- | --- |
-| Core | `src/kernel/`, `src/lib/` | Boot, memory, storage, devices, input stream, framebuffer and drawing primitives, processes, network, audio, downloads; pure models and codecs (sheet, writer, media, BASIC) |
+| Core | `src/kernel/`, `src/lib/` | Boot, memory, storage, devices, input stream, framebuffer and drawing primitives, processes (BEX and ELF, see PLATFORM_V2.md), network, audio, downloads; pure models and codecs (sheet, writer, media, BASIC) |
 | UI kit | `src/ui/` | Icon art and drawing, shared theme tokens (`app_*` colors), toolbar helpers |
 | Apps | `src/apps/` | App components: model plus drawing and input handlers, with no knowledge of windows |
 | Shell | `src/shell/<name>/` | Screens or windows, launching, input routing, app hosting, preferences, boot UI |

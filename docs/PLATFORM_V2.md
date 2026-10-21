@@ -1,0 +1,118 @@
+# Platform ABI v2: ELF processes
+
+BaseOS runs ordinary static ELF32 programs next to the existing BEX1/BEX2
+runtime. Each program gets a private address space of up to 2 GiB, any number
+of threads, and system calls through `int $0x81`. The BEX runtime, its ABI and
+its tests are unchanged.
+
+This page covers the kernel side. The cross compiler and C library are in
+[TOOLCHAIN.md](TOOLCHAIN.md); the call numbers and structures are in
+`sdk/baseos_sys.h`.
+
+## What a program sees
+
+| Item | Value |
+| --- | --- |
+| Format | ELF32, i386, `ET_EXEC`, static, `PT_LOAD` segments page-aligned in file and memory |
+| User window | `0x40000000` to `0xC0000000` (2 GiB) |
+| Usual text address | `0x40100000` |
+| Stack | 8 MiB reserved below `0xBFFF0000`, demand-zero; the page below is unmapped |
+| Anonymous mappings | Grow down from `0xBF000000` unless a hint or `MAP_FIXED` says otherwise |
+| Initial stack | System V: `argc`, `argv`, empty `envp`, auxv with `AT_PHDR`, `AT_PHENT`, `AT_PHNUM`, `AT_PAGESZ`, `AT_ENTRY`, `AT_RANDOM` |
+| Segments | Code `0x33`, data `0x3B`, TLS `0x43` (`%gs`, base set by `TCB_SET`) |
+| System calls | `int $0x81`, number in EAX, arguments in EBX, ECX, EDX, ESI, EDI, EBP, result or negated errno in EAX |
+
+Error, `mmap` flag and clock numbers use the Linux i386 values so the C library
+can reuse its definitions.
+
+## System calls in this release
+
+| Call | Behavior now |
+| --- | --- |
+| `EXIT`, `THREAD_EXIT` | End the process, or one thread (the last thread ends the process with status 0) |
+| `WRITE` | Descriptors 1 and 2 go to the host's output buffer (a Terminal), or the serial log when no host drains it. A full buffer blocks the writer |
+| `READ` | Descriptor 0 returns end of file |
+| `CLOSE`, `ISATTY`, `SEEK` | Console descriptors only |
+| `OPEN`, `STAT`, `FSTAT` | Not yet (`ENOENT` or `ENOSYS`); file descriptors arrive with the file system work |
+| `VM_MAP`, `VM_UNMAP`, `VM_PROTECT` | Anonymous private mappings; file mappings return `ENOSYS` |
+| `TCB_SET` | Points this thread's TLS segment at the TCB and loads `%gs` |
+| `CLOCK_GET` | `REALTIME` (CMOS clock at first use plus uptime) and `MONOTONIC`, at timer-tick resolution |
+| `SLEEP`, `YIELD` | Tick resolution (70 Hz) for now |
+| `FUTEX_WAIT`, `FUTEX_WAKE` | Keyed by physical address, with optional relative timeout |
+| `THREAD_CREATE` | `(entry, stack, argument, tcb)`; the thread starts as `entry(argument)` with a zero return address |
+| `GETPID`, `GETTID`, `MEMINFO`, `LOG` | As named |
+
+## Memory
+
+`kernel/physmem.c` now manages two zones. The compatibility pool below 256 MiB
+keeps its exact behavior for BEX programs. A second zone covers every usable
+E820 frame from 256 MiB to the top of RAM below 4 GiB. Its metadata (five
+bytes per frame) takes the first usable run above 256 MiB. ELF programs and the
+kernel heap allocate from the high zone first, so BEX capacity does not change.
+There is no per-process page cap: a program can use whatever RAM is free.
+
+`kernel/kheap.c` is a small kernel heap for objects whose count is not fixed
+at build time (processes, threads, address-space areas, kernel stacks). It
+takes frames below 1 GiB so they stay identity-mapped under every root.
+
+`kernel/vm.c` gives each process its own page directory. Outside the user
+window it copies the kernel's supervisor identity mappings; inside it holds
+only the process's 4 KiB pages. Areas reserve ranges, frames arrive on first
+touch, and `PROT_NONE` keeps contents by clearing only the user bit. Kernel
+code reads or writes user memory only after `vm_prepare` has checked the area
+and made the pages present, so a bad pointer returns `EFAULT` instead of
+faulting in the kernel. Frames the kernel itself touches stay below 1 GiB;
+user frames between 1 and 3 GiB are cleared through a brief switch to the
+kernel root.
+
+## Threads and scheduling
+
+`kernel/thread.c` adds kernel threads with their own 32 KiB kernel stacks.
+Thread 0 is the desktop: `kmain`'s loop, the shell and the BEX runtime keep
+running on the legacy stacks exactly as before.
+
+The kernel stays non-preemptive. A user thread loses the CPU when the timer
+fires while it runs in ring 3, or when a system call blocks or yields. The
+desktop loop calls `thread_run_users()` once per turn, which runs the user
+threads in round-robin order until the turn comes back to thread 0. The
+desktop halts only when no user thread is runnable, so a busy program gets the
+CPU between desktop turns and an idle one costs nothing. x87 state is saved
+and restored eagerly for user threads.
+
+Each thread switch loads the next thread's kernel stack into the TSS, its
+address space into CR3 (when the process changes) and its TLS base into the
+`0x43` descriptor.
+
+## Faults
+
+A page fault in ring 3 first tries the address space (demand-zero pages). An
+invalid access, or any other CPU exception in ring 3, ends that process with a
+shell-style status (139 for a segmentation fault, 132 for an invalid opcode,
+136 for arithmetic errors) and logs the vector and EIP to serial. The desktop
+and other processes keep running. A fault in ring 0 is still a kernel panic.
+
+## Starting programs
+
+From Terminal, `start FILE [DOCUMENT]` checks for the ELF magic. ELF programs
+receive the program path as `argv[0]` and the document path as `argv[1]`.
+Their output appears in that Terminal, cut into lines, followed by
+`Program exited with status N.` `stop` ends the program and closing the
+Terminal releases it. BEX files go through the existing launcher unchanged.
+
+## Tests
+
+- `tools/elf_runtime_test.py` builds `tests/elf_program.c` as a freestanding
+  static ELF, links `tests/elf_guest.c` in place of the desktop against the
+  production kernel objects, and boots it with 512 MiB. It checks argument
+  passing, `.bss`, the real-time clock, a 128 MiB anonymous mapping touched
+  page by page, threads with futexes while one thread spins (the desktop loop
+  must keep running), fault isolation, and that every process frame and heap
+  object comes back.
+- `tools/elf_terminal_input_test.py` drives the real desktop with PS/2 input:
+  it starts the program twice from Terminal and checks the scrollback.
+
+## Not yet
+
+File descriptors beyond the console, `mmap` of files, signals, `fork`/`exec`,
+and sub-tick timers belong to the later phases of the roadmap (IRQ-driven
+drivers, file system limits, window and input APIs).
