@@ -8,6 +8,7 @@ Serial output only. Logs and images stay in the printed temporary directory.
 """
 import pathlib
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,7 @@ PROGRAM_STEPS = (
     ('fault', 139, 'ELF fault next'),
     ('gate', 159, None),
     ('hello', 7, None),
+    ('empty-segment', -22, None),
 )
 
 
@@ -42,6 +44,23 @@ def freestanding_program(work):
                     '-Wl,--build-id=none', '-o', str(program), str(ROOT / 'tests/elf_program.c')],
                    check=True)
     return program
+
+
+def empty_segment_program(program, work):
+    """The program with its GNU_STACK header turned into a PT_LOAD whose
+    memory size is zero but whose file bytes run past the end of the image.
+    The loader must refuse it rather than copy from beyond the file."""
+    data = bytearray(program.read_bytes())
+    phoff, = struct.unpack_from('<I', data, 28)
+    phentsize, phnum = struct.unpack_from('<HH', data, 42)
+    headers = [struct.unpack_from('<8I', data, phoff + i * phentsize) for i in range(phnum)]
+    stack = next(i for i, h in enumerate(headers) if h[0] == 0x6474E551)
+    first = next(h for h in headers if h[0] == 1)
+    struct.pack_into('<8I', data, phoff + stack * phentsize,
+                     1, len(data) - 16, first[2], first[3], 0x10000, 0, 4, 0x1000)
+    crafted = work / 'elf_empty_segment'
+    crafted.write_bytes(bytes(data))
+    return crafted
 
 
 def c_string(value):
@@ -68,7 +87,8 @@ def write_steps(work, steps):
 def build_fixture(build, work, steps=None):
     if steps is None:
         program = freestanding_program(work)
-        steps = [(program, *row) for row in PROGRAM_STEPS]
+        crafted = empty_segment_program(program, work)
+        steps = [(crafted if row[0] == 'empty-segment' else program, *row) for row in PROGRAM_STEPS]
     write_steps(work, steps)
     subprocess.run([tool('gcc'), '-std=gnu11', '-Os', '-g', '-Wall', '-Wextra', '-ffreestanding', '-m32',
                     '-fno-pie', '-fno-pic', '-fno-stack-protector', '-fno-builtin', '-mno-sse',

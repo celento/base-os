@@ -91,6 +91,12 @@ static void log_text(const char *text, unsigned length) {
 
 static int output_write(Uproc *process, uint32_t buffer, uint32_t length) {
     if (!length) return 0;
+    /* Wait for room first: another thread may unmap the buffer meanwhile,
+     * so it is checked only after the last point where this thread blocks. */
+    while (process->host && process->output_count == UPROC_OUTPUT_BYTES) {
+        thread_wait((uintptr_t)process->output, 0);
+        if (process->state != UPROC_RUNNING) return -BOS_EIO;
+    }
     int result = vm_prepare(&process->space, buffer, length, 0);
     if (result) return result;
     const char *source = (const char *)(uintptr_t)buffer;
@@ -99,10 +105,6 @@ static int output_write(Uproc *process, uint32_t buffer, uint32_t length) {
         for (uint32_t done = 0; done < length; done += LOG_MAX)
             log_text(source + done, length - done < LOG_MAX ? length - done : LOG_MAX);
         return (int)length;
-    }
-    while (process->output_count == UPROC_OUTPUT_BYTES) {
-        thread_wait((uintptr_t)process->output, 0);
-        if (process->state != UPROC_RUNNING) return -BOS_EIO;
     }
     uint32_t written = 0;
     while (written < length && process->output_count < UPROC_OUTPUT_BYTES) {

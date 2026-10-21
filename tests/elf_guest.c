@@ -55,21 +55,31 @@ static void fail(const char *why) {
     for (;;) __asm__ volatile("cli; hlt");
 }
 
+/* Starts the current step. A negative expected status means the loader
+ * must refuse the image with that error; such steps finish at once. */
 static void spawn(void) {
-    const char *argv[] = {"/Programs/elf-check", steps[step].check, "last-argument"};
-    output_length = 0;
-    const void *image = steps[step].image;
-    unsigned size = steps[step].size;
-    if (!image) {
-        int file = fs_resolve(fs_root(), steps[step].path);
-        if (!fs_valid(file) || fs_is_dir(file)) fail("program file");
-        image = fs_data(file);
-        size = (unsigned)fs_size(file);
+    for (; step < STEPS; ++step) {
+        const char *argv[] = {"/Programs/elf-check", steps[step].check, "last-argument"};
+        output_length = 0;
+        const void *image = steps[step].image;
+        unsigned size = steps[step].size;
+        if (!image) {
+            int file = fs_resolve(fs_root(), steps[step].path);
+            if (!fs_valid(file) || fs_is_dir(file)) fail("program file");
+            image = fs_data(file);
+            size = (unsigned)fs_size(file);
+        }
+        int result = uproc_spawn(image, size, argv, 3, 1, &pid);
+        if (steps[step].status < 0) {
+            if (result != steps[step].status) fail(steps[step].check);
+            say_number("ELF refused ", (unsigned)-result);
+            continue;
+        }
+        if (result) fail("spawn");
+        started_turns = turns;
+        began = timer_ticks();
+        return;
     }
-    int result = uproc_spawn(image, size, argv, 3, 1, &pid);
-    if (result) fail("spawn");
-    started_turns = turns;
-    began = timer_ticks();
 }
 
 static void prepare(void) {}
@@ -105,10 +115,7 @@ static int turn(void) {
     }
     if (uproc_release(pid)) fail("release");
     ++step;
-    if (step < STEPS) {
-        spawn();
-        return 1;
-    }
+    spawn();
     return 1;
 }
 

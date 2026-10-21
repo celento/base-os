@@ -47,9 +47,11 @@ int elf_load(VmSpace *space, const void *image, uint32_t size, ElfImage *out) {
     for (unsigned i = 0; i < header.phnum; ++i) {
         const ElfSegment *s = &segments[i];
         if (s->type == PT_PHDR) phdr = s->vaddr;
-        if (s->type != PT_LOAD || !s->memsz) continue;
-        if (s->filesz > s->memsz || s->offset > size || s->filesz > size - s->offset ||
-            (s->vaddr & (VM_PAGE - 1)) != (s->offset & (VM_PAGE - 1)) ||
+        if (s->type != PT_LOAD) continue;
+        /* Every load segment, empty ones included, must stay inside the file. */
+        if (s->filesz > s->memsz || s->offset > size || s->filesz > size - s->offset) return -BOS_EINVAL;
+        if (!s->memsz) continue;
+        if ((s->vaddr & (VM_PAGE - 1)) != (s->offset & (VM_PAGE - 1)) ||
             s->vaddr < BOS_USER_BASE || s->vaddr >= VM_MMAP_TOP || s->memsz > VM_MMAP_TOP - s->vaddr)
             return -BOS_EINVAL;
         uint32_t start = s->vaddr & ~(VM_PAGE - 1);
