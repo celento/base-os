@@ -75,6 +75,7 @@ int fs_version_available(int creating) {
 static int writable;
 static int active_slot = -1;
 static unsigned generation;
+static unsigned saves_done; /* successful saves, for rollbacks that span one */
 static unsigned sync_failures;
 static unsigned last_sync_attempt;
 static int save_failed;
@@ -94,13 +95,36 @@ static BfsVolume bfs;
 static BfsExtent *node_extents[FS_MAX_NODES];
 static uint32_t node_extent_count[FS_MAX_NODES];
 static unsigned char node_dirty[FS_MAX_NODES];
+/* Files load on demand: the arena is a cache of the volume. An absent node
+ * keeps its size but has no bytes in the arena; fs_data reads it back. Only
+ * clean files are ever absent. node_touch orders residents for eviction. */
+static unsigned char node_absent[FS_MAX_NODES];
+static unsigned node_touch[FS_MAX_NODES], touch_clock;
 static void bfs_forget(int id) {
     kfree(node_extents[id]);
     node_extents[id] = 0;
     node_extent_count[id] = 0;
     node_dirty[id] = 0;
+    node_absent[id] = 0;
+    node_touch[id] = 0;
+}
+/* Blocks of files deleted since the last commit, freed once it lands. */
+static uint64_t bfs_released;
+static uint64_t extent_blocks(int id) {
+    uint64_t blocks = 0;
+    for (uint32_t k = 0; k < node_extent_count[id]; ++k) blocks += node_extents[id][k].blocks;
+    return blocks;
+}
+/* Whether the next commit frees blocks: a deleted file, or the old copy of
+ * a changed one. */
+static int bfs_save_frees(void) {
+    if (bfs_released) return 1;
+    for (int i = 0; i < FS_MAX_NODES; ++i)
+        if (nodes[i].used && node_dirty[i] && node_extent_count[i]) return 1;
+    return 0;
 }
 static void bfs_release(void) {
+    bfs_released = 0;
     for (int i = 0; i < FS_MAX_NODES; ++i) bfs_forget(i);
     if (bfs.used) bfs_unmount(&bfs);
 }
@@ -144,7 +168,7 @@ static uint32_t bfs_blocks_for(uint64_t size) { return (uint32_t)((size + BFS_BL
  * commit writes may get one extent per block when free space is scattered;
  * node except is about to hold extra blocks. With rewrite_all every file is
  * written (a conversion). Nodes beyond the current ones get the longest name. */
-static uint32_t bfs_checkpoint_blocks(unsigned count, int except, uint64_t extra, int rewrite_all) {
+static uint64_t bfs_checkpoint_bytes(unsigned count, int except, uint64_t extra, int rewrite_all) {
     uint64_t bytes = 16, extents = except >= 0 ? extra : 0;
     unsigned have = 0;
     for (int i = 0; i < FS_MAX_NODES; ++i) {
@@ -155,7 +179,10 @@ static uint32_t bfs_checkpoint_blocks(unsigned count, int except, uint64_t extra
         extents += rewrite_all || node_dirty[i] ? bfs_blocks_for((uint64_t)nodes[i].size) : node_extent_count[i];
     }
     if (count > have) bytes += (uint64_t)(count - have) * (36u + ((FS_NAME_LEN - 1u + 3u) & ~3u));
-    return bfs_blocks_for(bytes + 12u * extents);
+    return bytes + 12u * extents;
+}
+static uint32_t bfs_checkpoint_blocks(unsigned count, int except, uint64_t extra, int rewrite_all) {
+    return bfs_blocks_for(bfs_checkpoint_bytes(count, except, extra, rewrite_all));
 }
 /* Blocks the next commit writes for changed files, leaving out node except. */
 static uint64_t bfs_pending_blocks(int except) {
@@ -168,12 +195,41 @@ static uint64_t bfs_pending_blocks(int except) {
 static int bfs_commit_fits(unsigned count, int except, uint64_t extra) {
     return bfs_pending_blocks(except) + extra + bfs_checkpoint_blocks(count, except, extra, 0) <= bfs.free_blocks;
 }
+/* Files load on demand, so the disk bounds capacity, not the arena. Very
+ * large volumes report at most 2 GiB, which stays positive as an int. */
+#define BFS_CAPACITY_REPORT_MAX 0x7FFFFFFFu
+/* The largest file, in blocks. */
+static uint64_t bfs_largest_blocks(void) {
+    uint64_t largest = 0;
+    for (int i = 0; i < FS_MAX_NODES; ++i)
+        if (nodes[i].used && !nodes[i].is_dir && bfs_blocks_for((uint64_t)nodes[i].size) > largest)
+            largest = bfs_blocks_for((uint64_t)nodes[i].size);
+    return largest;
+}
+/* Bytes a new file could still take: its blocks plus the checkpoint growing
+ * by one extent per block, as bfs_commit_fits counts it. Reserve blocks are
+ * held back so that a full volume can still save a rewrite of its largest
+ * file; the old copy is freed once that save lands. */
+static uint64_t basefs_spare(unsigned count, uint64_t reserve) {
+    uint64_t pending = bfs_pending_blocks(-1), bytes = bfs_checkpoint_bytes(count, -1, 0, 0) + 12u * reserve;
+    uint64_t available = bfs.free_blocks > pending + reserve ? bfs.free_blocks - pending - reserve : 0;
+    uint64_t blocks = available;
+    for (int round = 0; round < 3; ++round) {
+        uint64_t checkpoint = bfs_blocks_for(bytes + 12u * blocks);
+        blocks = available > checkpoint ? available - checkpoint : 0;
+    }
+    while (blocks && blocks + bfs_blocks_for(bytes + 12u * blocks) > available) --blocks;
+    return blocks * BFS_BLOCK;
+}
+/* A new node fits while the volume keeps its reserve. */
+static int bfs_node_fits(unsigned count) {
+    uint64_t reserve = bfs_largest_blocks();
+    return bfs_pending_blocks(-1) + reserve +
+           bfs_blocks_for(bfs_checkpoint_bytes(count, -1, 0, 0) + 12u * reserve) <= bfs.free_blocks;
+}
 static unsigned basefs_capacity(unsigned count) {
-    unsigned pool = pool_capacity - count;
-    uint64_t need = bfs_pending_blocks(-1) + bfs_checkpoint_blocks(count, -1, 0, 0);
-    uint64_t spare = bfs.free_blocks > need ? (uint64_t)(bfs.free_blocks - need) * BFS_BLOCK : 0;
-    uint64_t total = fs_used_bytes() + spare;
-    return total < pool ? (unsigned)total : pool;
+    uint64_t total = fs_used_bytes() + basefs_spare(count, bfs_largest_blocks());
+    return total < BFS_CAPACITY_REPORT_MAX ? (unsigned)total : BFS_CAPACITY_REPORT_MAX;
 }
 unsigned fs_capacity_for_nodes(unsigned count) {
     if (!count || count > (unsigned)fs_node_limit()) return 0;
@@ -197,9 +253,9 @@ const char *fs_storage_name(void) {
            data_backend ? "IDE data disk" : "Boot floppy";
 }
 unsigned fs_used_bytes(void) {
-    unsigned n = 0;
-    for (int i = 0; i < FS_MAX_NODES; ++i) if (nodes[i].used) n += nodes[i].size;
-    return n;
+    uint64_t n = 0;
+    for (int i = 0; i < FS_MAX_NODES; ++i) if (nodes[i].used) n += (unsigned)nodes[i].size;
+    return n < BFS_CAPACITY_REPORT_MAX ? (unsigned)n : BFS_CAPACITY_REPORT_MAX;
 }
 
 int kstrlen(const char *s) {
@@ -318,7 +374,7 @@ static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
     if (!tree_fits(-1, parent, name) ||
         fs_used_bytes() > fs_capacity_for_nodes(fs_node_count() + 1)) return -1;
     /* A larger node table must still fit the next commit, even with no data. */
-    if (data_backend == 3 && !bfs_commit_fits((unsigned)fs_node_count() + 1, -1, 0)) return -1;
+    if (data_backend == 3 && !bfs_node_fits((unsigned)fs_node_count() + 1)) return -1;
     for (int i = 0; i < fs_node_limit(); i++) {
         if (!nodes[i].used) {
             kmemset(&nodes[i], 0, (int)sizeof(FsNode));
@@ -426,8 +482,20 @@ int fs_node_count(void) {
 int fs_parent(int id) { return fs_valid(id) ? nodes[id].parent : -1; }
 int fs_size(int id) { return fs_valid(id) ? nodes[id].size : 0; }
 const char *fs_name(int id) { return fs_valid(id) ? nodes[id].name : ""; }
+static int load_data(int id);
+/* Zeros for a file that could not be placed in the arena: staging is idle
+ * outside saves, and a save never runs while a caller reads this. */
+static const char *absent_bytes(int id) {
+    unsigned bytes = (unsigned)nodes[id].size + 1;
+    if (bytes > image_capacity) return "";
+    kmemset((void *)image_base, 0, (int)bytes);
+    return (const char *)image_base;
+}
 const char *fs_data(int id) {
-    return fs_valid(id) && nodes[id].size ? (const char *)pool_base + nodes[id].offset : "";
+    if (!fs_valid(id) || !nodes[id].size) return "";
+    if (node_absent[id] && load_data(id) < 0 && node_absent[id]) return absent_bytes(id);
+    node_touch[id] = ++touch_clock;
+    return (const char *)pool_base + nodes[id].offset;
 }
 
 int fs_find_child(int parent, const char *name) {
@@ -454,6 +522,12 @@ int fs_create_app(int parent, const char *name) {
 /* Remove a data block and compact in place. Since the destination is lower,
  * a forward byte copy is overlap-safe. No allocation or fragmentation remains. */
 static void release_data(int id) {
+    if (node_absent[id]) {
+        node_absent[id] = 0;
+        nodes[id].size = 0;
+        nodes[id].offset = 0;
+        return;
+    }
     if (!nodes[id].size) return;
     unsigned offset = nodes[id].offset, bytes = nodes[id].size + 1;
     unsigned char *pool = (unsigned char *)pool_base;
@@ -462,23 +536,130 @@ static void release_data(int id) {
         if((i & 4095u)==4095u)fs_background_poll();
     }
     for (int i = 0; i < FS_MAX_NODES; ++i)
-        if (nodes[i].used && nodes[i].size && nodes[i].offset > offset) nodes[i].offset -= bytes;
+        if (nodes[i].used && nodes[i].size && !node_absent[i] && nodes[i].offset > offset)
+            nodes[i].offset -= bytes;
     pool_used -= bytes;
     nodes[id].size = 0;
     nodes[id].offset = 0;
+}
+
+/* The on-demand cache (BaseFS 2 only). Dirty files always stay resident:
+ * the next commit writes them from the arena. Clean files leave the arena
+ * least recently used first and fs_data reads them back. */
+static unsigned dirty_bytes(int except) {
+    unsigned bytes = 0;
+    for (int i = 0; i < FS_MAX_NODES; ++i)
+        if (i != except && nodes[i].used && nodes[i].size && !node_absent[i] && node_dirty[i])
+            bytes += (unsigned)nodes[i].size + 1;
+    return bytes;
+}
+/* Changed files may fill the arena only up to room for one more file of the
+ * largest size, so any file can still be loaded before the next save. */
+static unsigned dirty_limit(void) {
+    unsigned reserve = fs_file_limit() + 1;
+    return pool_capacity > reserve ? pool_capacity - reserve : 0;
+}
+static int evictable(int i, int keep) {
+    return i != keep && nodes[i].used && nodes[i].size && !node_absent[i] && !node_dirty[i] &&
+           !nodes[i].is_dir;
+}
+/* Arena bytes free now or after evicting every clean file but keep. */
+static unsigned room(int keep) {
+    unsigned bytes = pool_capacity - pool_used;
+    if (data_backend == 3)
+        for (int i = 0; i < FS_MAX_NODES; ++i)
+            if (evictable(i, keep)) bytes += (unsigned)nodes[i].size + 1;
+    return bytes;
+}
+static void evict(int id) {
+    int size = nodes[id].size;
+    release_data(id);
+    nodes[id].size = size;
+    node_absent[id] = 1;
+}
+/* Frees arena space until bytes fit, least recently used files first and
+ * never keep. Compaction moves the files that stay. */
+static int make_room(unsigned bytes, int keep) {
+    if (room(keep) < bytes) return -1;
+    while (pool_capacity - pool_used < bytes) {
+        int oldest = -1;
+        for (int i = 0; i < FS_MAX_NODES; ++i)
+            if (evictable(i, keep) && (oldest < 0 || node_touch[i] < node_touch[oldest])) oldest = i;
+        if (oldest < 0) return -1;
+        evict(oldest);
+    }
+    return 0;
+}
+/* Reads an absent file into the arena. A save in progress finishes first,
+ * because its device requests cannot interleave with these reads. If the
+ * bytes cannot be read the file reads as zeros, at its size, until a later
+ * load succeeds; callers rely on fs_size bytes being there. */
+static int load_data(int id) {
+    if (data_backend != 3 || !node_absent[id]) return 0;
+    if (fs_sync_busy()) (void)fs_sync();
+    unsigned bytes = (unsigned)nodes[id].size + 1;
+    int result = make_room(bytes, id);
+    /* Changed files stay below dirty_limit, so this needs a save only after
+     * a format or conversion left more changed than that. */
+    if (result < 0 && fs_sync() == 0) result = make_room(bytes, id);
+    if (result < 0) {
+        platform_log("FS file does not fit in memory\n");
+        return -1;
+    }
+    char *destination = (char *)pool_base + pool_used;
+    BfsRecord record = {0};
+    record.size = (uint64_t)nodes[id].size;
+    record.extent_count = node_extent_count[id];
+    record.extents = node_extents[id];
+    result = bfs_read(&bfs, &record, 0, destination, (uint32_t)nodes[id].size) == BFS_OK ? 0 : -1;
+    if (result < 0) {
+        kmemset(destination, 0, nodes[id].size);
+        platform_log("FS could not read a file from the data disk\n");
+    }
+    destination[nodes[id].size] = 0;
+    nodes[id].offset = pool_used;
+    pool_used += bytes;
+    node_absent[id] = 0;
+    /* A failed read stays clean, so it is evicted and read again later. */
+    return result;
+}
+/* Growth must fit the spare capacity. BaseFS 2 counts growth in whole
+ * blocks, so a file can grow into the rest of its last block on a full
+ * volume; the reserve also covers this file at its new size, and the save
+ * itself must fit. */
+static int write_fits(int id, int len) {
+    if (data_backend != 3) return (unsigned)len <= fs_capacity() - (fs_used_bytes() - nodes[id].size);
+    uint64_t blocks = bfs_blocks_for((uint64_t)len), had = bfs_blocks_for((uint64_t)nodes[id].size);
+    uint64_t reserve = bfs_largest_blocks();
+    if (blocks > reserve) reserve = blocks;
+    if (blocks > had && (blocks - had) * BFS_BLOCK > basefs_spare((unsigned)fs_node_count(), reserve)) return 0;
+    return bfs_commit_fits((unsigned)fs_node_count(), id, blocks);
 }
 int fs_write(int id, const char *data, int len) {
     if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(id) || nodes[id].is_dir || nodes[id].is_app || len < 0 ||
         (unsigned)len > fs_file_limit() || (len && !data)) return -1;
-    if ((unsigned)len > fs_capacity() - (fs_used_bytes() - nodes[id].size)) return -1;
-    if (data_backend == 3 && !bfs_commit_fits((unsigned)fs_node_count(), id, bfs_blocks_for((uint64_t)len))) return -1;
-    unsigned previous = nodes[id].size ? nodes[id].size + 1 : 0;
+    uintptr_t source = (uintptr_t)data;
     unsigned required = len ? (unsigned)len + 1 : 0;
-    if (required > pool_capacity - (pool_used - previous)) return -1;
+    if (data_backend == 3 && required > dirty_limit() - (dirty_bytes(id) < dirty_limit() ?
+                                                         dirty_bytes(id) : dirty_limit())) {
+        /* Too much is changed to keep in memory: save it first. A source in
+         * staging would be overwritten by the save. Once saved, nothing else
+         * is changed, so even a largest file fits; loading another file
+         * while it is changed saves it first. */
+        if (len && source >= image_base && source - image_base < image_capacity) return -1;
+        if (fs_sync() < 0) return -1;
+    }
+    if (data_backend == 3 && !write_fits(id, len) && bfs_save_frees()) {
+        /* Old copies of changed files free their blocks once saved. */
+        if (len && source >= image_base && source - image_base < image_capacity) return -1;
+        if (fs_sync() < 0) return -1;
+    }
+    if (!write_fits(id, len)) return -1;
+    unsigned previous = nodes[id].size && !node_absent[id] ? nodes[id].size + 1 : 0;
+    if (required > room(id) + previous) return -1;
     /* fs_write(dst, fs_data(src), n), self-overwrite, and fs_copy all work even
      * when compaction moves the source. Staging is idle outside disk commits. */
-    uintptr_t source = (uintptr_t)data;
     if (len && source >= pool_base && source - pool_base < pool_capacity) {
         unsigned offset = source - pool_base;
         if (offset > pool_used || (unsigned)len > pool_used - offset) return -1;
@@ -487,7 +668,7 @@ int fs_write(int id, const char *data, int len) {
     }
     if (len && source >= image_base && source - image_base < image_capacity &&
         (unsigned)len > image_capacity - (source - image_base)) return -1;
-    if (len && len == nodes[id].size) {
+    if (len && len == nodes[id].size && !node_absent[id]) {
         /* Common autosaves and media overwrites need no arena movement. */
         copy_bytes((char *)pool_base + nodes[id].offset, data, len);
         nodes[id].modified = fs_clock();
@@ -497,7 +678,10 @@ int fs_write(int id, const char *data, int len) {
         return len;
     }
     release_data(id);
+    /* Checked above: evicting clean files frees enough. */
+    if (required) (void)make_room(required, id);
     if (len) {
+        node_touch[id] = ++touch_clock;
         nodes[id].offset = pool_used;
         char *destination = (char *)pool_base + pool_used;
         copy_bytes(destination, data, len);
@@ -687,6 +871,7 @@ int fs_delete(int id) {
     release_data(id);
     nodes[id].used = 0;
     content_revisions[id]=0;
+    if (data_backend == 3) bfs_released += extent_blocks(id);
     bfs_forget(id);
     fs_touched = 1;
     return 0;
@@ -836,8 +1021,11 @@ int fs_copy(int id, int parent) {
         return -1;
     if (!tree_fits(id, parent, name)) return -1;
     int touched_before = fs_touched;
+    unsigned saves_before = saves_done;
     int result = copy_into(id, parent, name);
-    if (result < 0) fs_touched = touched_before;
+    /* A write may have saved part of the copy; then its removal must be
+     * saved too. */
+    if (result < 0 && saves_done == saves_before) fs_touched = touched_before;
     return result;
 }
 
@@ -1220,25 +1408,19 @@ static BfsDevice bfs_device(void) {
 }
 
 /* The volume's nodes are the records, in order. Checks what this backend can
- * hold (node count, name length, file and total size, path shape) and reads
- * every file. Takes the records' extents; the caller frees the records. */
+ * hold (node count, name length, file size, path shape). File bytes stay on
+ * disk until fs_data needs them. Takes the records' extents; the caller
+ * frees the records. */
 static int import_basefs(BfsRecord *records, uint32_t count) {
     if (!count || count > FS_MAX_NODES) return -1;
-    /* Refuse a volume larger than the RAM arenas before reading any file. */
-    uint64_t bytes = 0;
-    for (uint32_t i = 0; i < count; ++i) bytes += records[i].size + (records[i].size ? 1 : 0);
-    if (bytes > pool_capacity) return -1;
     kmemset(nodes, 0, sizeof(FsNode) * FS_MAX_NODES);
     kmemset(content_revisions, 0, sizeof(content_revisions));
     pool_used = 0;
-    uint64_t total = 0;
     for (uint32_t i = 0; i < count; ++i) {
         BfsRecord *r = &records[i];
         int directory = (r->flags & BFS_DIRECTORY) != 0, app = (r->flags & BFS_APP) != 0;
-        total += r->size;
         if ((i && !valid_name(r->name)) || (directory && app) || (app && r->size) ||
-            r->size > fs_file_limit() || total > pool_capacity - count ||
-            r->size + 1 > pool_capacity - pool_used) return -1;
+            (directory && r->size) || r->size > fs_file_limit()) return -1;
         FsNode *n = &nodes[i];
         kstrcpy(n->name, r->name);
         n->parent = i ? (int)r->parent : -1;
@@ -1248,14 +1430,8 @@ static int import_basefs(BfsRecord *records, uint32_t count) {
         n->modified = r->modified;
         identities[i] = new_identity();
         content_revisions[i] = new_content_revision();
-        if (r->size) {
-            n->offset = pool_used;
-            char *destination = (char *)pool_base + pool_used;
-            if (bfs_read(&bfs, r, 0, destination, (uint32_t)r->size) != BFS_OK) return -1;
-            destination[r->size] = 0;
-            n->size = (int)r->size;
-            pool_used += (unsigned)r->size + 1;
-        }
+        n->size = (int)r->size;
+        node_absent[i] = r->size != 0;
         node_extents[i] = r->extents;
         node_extent_count[i] = r->extent_count;
         r->extents = 0;
@@ -1322,6 +1498,14 @@ static int format_basefs(void) {
     return 0;
 }
 
+/* Reads every file once, checking each extent; for verifying a conversion
+ * while the old snapshot can still be restored. */
+static int read_all_files(void) {
+    for (int i = 0; i < FS_MAX_NODES; ++i)
+        if (nodes[i].used && node_absent[i] && load_data(i) < 0) return -1;
+    return 0;
+}
+
 static int save_snapshot(void);
 /* A snapshot volume (v4/v5) that mounted cleanly becomes BaseFS 2. The live
  * snapshot moves to the second slot first; BaseFS 2 is then built entirely
@@ -1375,7 +1559,7 @@ static void convert_to_basefs(int profile) {
         platform_log("FS conversion to BaseFS 2 failed; keeping the snapshot format\n");
         return;
     }
-    if (load_basefs() == 0) {
+    if (load_basefs() == 0 && read_all_files() == 0) {
         platform_log("FS converted the IDE data disk to BaseFS 2\n");
         return;
     }
@@ -1778,9 +1962,13 @@ static void sync_log(const char *event, const char *result) {
     platform_log("\n");
 }
 static enum FsSyncProgress sync_finish(int result) {
-    if (data_backend == 3) bfs_job_end(result);
+    if (data_backend == 3) {
+        bfs_job_end(result);
+        if (!result) bfs_released = 0;
+    }
     else if (result < 0 && sync_job.header_attempted) writable = 0;
     if (!result) {
+        ++saves_done;
         active_slot = sync_job.target;
         generation = sync_job.header.generation;
         fs_touched = 0;

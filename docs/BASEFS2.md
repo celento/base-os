@@ -85,10 +85,26 @@ was.
 
 `kernel/fs.c` uses BaseFS 2 as data backend 3. A marked blank data disk (the
 v1 or v2 marker that `tools/init_data.py` writes) is formatted as BaseFS 2 on
-first boot, and a BaseFS 2 disk of any size mounts. For now the backend keeps
-the existing in-memory model: mount reads the node table and every file into
-the RAM arenas, and the node count (256) and name length (23 bytes) stay as
-they were. Loading files on demand and lifting those limits is the next step.
+first boot, and a BaseFS 2 disk of any size mounts. Mount reads only the node
+table. The node count (256) and name length (23 bytes) stay as they were for
+now; lifting them is the next step.
+
+### Files load on demand
+
+The RAM file pool (8 MiB, or 32 MiB with the large arenas) is a cache of the
+volume. A file's bytes are read the first time `fs_data` asks for them, with
+each extent's CRC checked, and stay until the pool needs the room. Then clean
+files leave least recently used first; the pool compacts, so a pointer from
+`fs_data` is good only until the next mutation or the next `fs_data` call for
+another file. Changed files always stay in memory until a save writes them.
+
+Changed files may fill the pool only up to room for one more file of the
+largest allowed size, so any file can still be loaded. A write that would go
+past that saves first and then proceeds. A read that needs the disk while a
+save is running finishes the save first, since the two cannot share the
+device. If a file cannot be read, it reads as zeros at its size and is read
+again the next time it has to load; it is not marked changed, so nothing is
+written over the good copy on disk.
 
 Each node remembers its extents and whether it changed since the last commit.
 A save writes only changed files, then the checkpoint and a superblock, so
@@ -103,12 +119,18 @@ A changed file is written to new blocks while its old copy stays allocated
 until the commit lands, so the kernel admits a change only while the next
 commit still fits in the free blocks: every changed file rounded up to whole
 blocks, plus a checkpoint for the node count. A refused write returns an
-error and leaves the file as it was. The capacity shown to programs is the
-smaller of the RAM pool and the bytes in use plus the blocks still free after
-that reservation. On the 16 MiB default disk that is the 8 MiB pool for most
-volumes, a little more than the 8,385,024 bytes the snapshot format allowed.
-Near a full disk, rewriting a file that is already saved needs room for both
-copies until the save completes, as on other copy-on-write file systems.
+error and leaves the file as it was.
+
+The capacity shown to programs is the bytes in use plus what a new file could
+still take, so it grows with the disk (reported up to 2 GiB). Room to rewrite
+the largest file is held back from it, so a full volume can still save a
+change to any one file; when the next save would not fit, a write saves the
+pending changes first, which frees their old copies. On the 16 MiB default
+disk with 2 MiB files that leaves about 14 MiB, against 8,385,024 bytes in
+the snapshot format. Growth counts in whole blocks: a file can grow into the
+rest of its last block on a full volume, and a write that needs a new block
+is refused. A new node is refused once its record would eat into the held-back
+room. A deleted file's blocks count as free once the delete is saved.
 
 ### Conversion of snapshot disks
 
@@ -121,8 +143,8 @@ mounted, once:
 2. `bfs_create` sets up an empty volume limited to the blocks below the second
    slot, every file is written there and committed, and the BaseFS 2 marker is
    written last.
-3. The new volume is mounted again from disk and every file is compared with
-   memory. If any read or check fails, the old marker is written back and the
+3. The new volume is mounted again from disk and every file is read back with
+   its CRCs checked. If any read or check fails, the old marker is written back and the
    snapshot is loaded again, so the disk stays in the snapshot format and the
    next boot tries again.
 

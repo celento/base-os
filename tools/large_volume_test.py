@@ -170,8 +170,9 @@ def main(build, keep=False, compile_only=False):
         run(boot[1], full, directory, 'full-create', 'LARGE-FULL-WRITE-PASS')
         nodes = validate_data(full)
         assert len(nodes) == 256 and sum(len(n['data']) for n in nodes.values()) >= 33543168
-        for name in ('maximum', 'remainder'):
-            content = nodes[volume.resolve(nodes, '/' + name)]['data']; assert content == pattern(len(content))
+        assert len(nodes[volume.resolve(nodes, '/maximum')]['data']) == 16777216
+        for content in (n['data'] for n in nodes.values() if not n['directory']):
+            assert content == pattern(len(content))
         run(boot[1], full, directory, 'full-reboot-save', 'LARGE-FULL-REBOOT-SAVE-PASS')
         nodes = validate_data(full)
         assert nodes[255]['app'] == 1

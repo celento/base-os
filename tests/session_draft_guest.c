@@ -37,7 +37,8 @@ void feature_test(void){
     }
     int before_nodes=fs_node_count();
     context_set(0);kstrcpy(edit_buf,"changed now");edit_len=11;
-    context_set(1);kmemset(edit_buf,'b',100);edit_len=100;edit_buf[100]=0;
+    /* Growing past its last block needs a block the full volume lacks. */
+    context_set(1);kmemset(edit_buf,'b',5000);edit_len=5000;edit_buf[5000]=0;
     session_save();draft_check(session_status[0],"full volume reports session failure");
     draft_check(fs_node_count()==before_nodes,"failed session adds no nodes");
     draft_check(fs_size(first)==11&&same_bytes(fs_data(first),"first draft",11),"first draft unchanged after preflight failure");

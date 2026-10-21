@@ -119,7 +119,7 @@ sudo apt install build-essential gcc-multilib nasm qemu-system-x86 qemu-system-g
 make run
 ```
 
-`make run` builds `build/baseos.img`, a 2.88 MB boot floppy, and creates `build/baseos-data.img`, a separate 16 MiB IDE data disk, only if it does not already exist. QEMU starts with 64 MiB RAM; pass a larger `QEMU_MEMORY`, such as `QEMU_MEMORY=512M`, to give ELF programs more room. Use `make headless` for a serial-console run without a graphical window. On first boot BaseOS formats the data disk as BaseFS 2 (see docs/BASEFS2.md); a disk from an older release converts once and keeps its files. On the 16 MiB disk the volume holds up to 8 MiB of files, with 2 MiB per file and up to 256 total file/folder/app nodes.
+`make run` builds `build/baseos.img`, a 2.88 MB boot floppy, and creates `build/baseos-data.img`, a separate 16 MiB IDE data disk, only if it does not already exist. QEMU starts with 64 MiB RAM; pass a larger `QEMU_MEMORY`, such as `QEMU_MEMORY=512M`, to give ELF programs more room. Use `make headless` for a serial-console run without a graphical window. On first boot BaseOS formats the data disk as BaseFS 2 (see docs/BASEFS2.md); a disk from an older release converts once and keeps its files. Files load from disk when they are opened, so the volume holds as much as the disk does, less room held back to rewrite the largest file (about 14 MiB on the default disk), with 2 MiB per file and up to 256 total file/folder/app nodes.
 
 ### In a web browser
 

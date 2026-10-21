@@ -26,6 +26,19 @@ static int create(const char *name, unsigned length) {
 static void sync_disk(void) {
     check(fs_sync() == 0 && !fs_needs_sync() && !fs_storage_status(), "large: sync failed");
 }
+/* Fills empty files from node id on, stepping by step, until no byte is
+ * left. A save can free checkpoint room, so the volume is full once saved. */
+static void fill_volume(int id, int step) {
+    for (;; id += step) {
+        sync_disk();
+        if (fs_used_bytes() == fs_capacity()) break;
+        while (id > 3 && id < 256 && (fs_is_app(id) || fs_size(id))) id += step;
+        check(id > 3 && id < 256, "large: ran out of nodes to fill");
+        unsigned room = fs_capacity() - fs_used_bytes();
+        if (room > FS_LARGE_FILE_MAX) room = FS_LARGE_FILE_MAX;
+        fill(room); check(fs_write(id, scratch, room) == (int)room, "large: fill write failed");
+    }
+}
 void large_volume_guest(void) {
     platform_validate_memory();
     disk_configure(((BootInfo *)BOOTINFO_ADDR)->sectors_per_track);
@@ -64,30 +77,30 @@ void large_volume_guest(void) {
         check(fs_write(maximum, scratch, FS_LARGE_FILE_MAX + 1) < 0, "large: oversized file admitted");
         verify(maximum, FS_LARGE_FILE_MAX, 0);
         /* The volume holds at least the snapshot format's 33,543,168 bytes. */
-        unsigned total = fs_capacity_for_nodes(256);
-        check(total >= 33543168u, "large: capacity below the snapshot format");
-        create("remainder", total - FS_LARGE_FILE_MAX);
+        check(fs_capacity_for_nodes(256) >= 33543168u, "large: capacity below the snapshot format");
         while (fs_node_count() < 256) {
             char name[FS_NAME_LEN]; check(fs_unique_file(0, name) == 0 && fs_create(0, name) > 0,
                                           "large: node creation failed");
         }
-        check(fs_used_bytes() == total && fs_capacity() == total, "large: full capacity mismatch");
+        fill_volume(255, -1);
+        check(fs_used_bytes() > 33543168u, "large: full volume below the snapshot format");
         sync_disk(); platform_log("LARGE-FULL-WRITE-PASS\n");
     } else {
-        int remainder = fs_find_child(0, "remainder");
         verify(maximum, FS_LARGE_FILE_MAX, 0);
-        verify(remainder, fs_size(remainder), 0);
+        for (int id = 2; id < 256; ++id)
+            if (!fs_is_app(id) && fs_size(id) > 0) verify(id, fs_size(id), 0);
         check(fs_node_count() == 256 && fs_used_bytes() == fs_capacity(), "large: persisted capacity mismatch");
         check(fs_write(3, "x", 1) < 0 && fs_copy(maximum, 0) < 0 && !fs_needs_sync(),
               "large: rejected operation mutated state");
         if (!fs_is_app(255)) {
-            unsigned before = fs_capacity();
-            check(fs_delete(255) == 0 && fs_capacity() > before, "large: metadata reclaim failed");
+            /* A deleted file's blocks are free once the delete is saved. */
+            check(fs_delete(255) == 0, "large: delete failed"); sync_disk();
+            check(fs_capacity() > fs_used_bytes(), "large: delete reclaimed no room");
             check(fs_create_app(0, "last-app") == 255, "large: slot reclaim failed");
             fill(FS_LARGE_FILE_MAX);
             check(fs_write(maximum, scratch, FS_LARGE_FILE_MAX) == FS_LARGE_FILE_MAX,
                   "large: full volume overwrite failed");
-            sync_disk(); platform_log("LARGE-FULL-REBOOT-SAVE-PASS\n");
+            fill_volume(4, 1); platform_log("LARGE-FULL-REBOOT-SAVE-PASS\n");
         } else {
             sync_disk(); platform_log("LARGE-FULL-READONLY-REBOOT-PASS\n");
         }
