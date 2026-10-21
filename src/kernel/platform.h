@@ -47,6 +47,8 @@ void platform_irq_attach(unsigned irq, PlatformIrqHandler handler);
 unsigned platform_irq_take(void);
 int platform_irq_pending(void);
 void platform_irq_rearm(unsigned lines);
+/* Interrupts taken on an attached line since boot. */
+uint32_t platform_irq_count(unsigned irq);
 /* Collect input while blocking; never dispatch application actions here. */
 void platform_poll(void);
 int video_info_valid(const BootInfo *bi);

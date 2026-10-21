@@ -4,6 +4,7 @@
 #include "../src/shell/desktop/desktop.c"
 #include "audio_example.h"
 #include "../src/kernel/download.h"
+#include "../src/kernel/net_driver.h"
 #ifndef HTTP_PORT
 #define HTTP_PORT "18080"
 #endif
@@ -16,7 +17,9 @@ static void dl_command(const char *text){while(*text)term_char(*text++);term_ent
 static int dl_terminal_has(const char *text){for(int i=0;i<term_count();i++)if(!kstrcmp(term_get(i),text))return 1;return 0;}
 static void dl_draw(void){render_scene();flip_vga();draws++;last_draw=timer_ticks();}
 static void dl_turn(void){
+    unsigned lines=platform_irq_take();
     poll_time();platform_poll();net_poll();download_tick();browser_tick();term_task_poll();audio_poll();
+    platform_irq_rearm(lines);
     if(timer_ticks()-last_draw>=7)dl_draw();
 }
 static void dl_wait(int expected){
@@ -89,6 +92,9 @@ void feature_test(void){
     dl_check(download_status()->state==DOWNLOAD_DONE,"2 MiB download completed");dl_verify("/binary.bin",FS_FILE_MAX);
     char metric[24];fmt_uint(metric,changed);platform_log("DL concurrent changed=");platform_log(metric);fmt_uint(metric,audio_progress);platform_log(" audio_updates=");platform_log(metric);fmt_uint(metric,draws-draws_before);platform_log(" draws=");platform_log(metric);platform_log("\n");
     dl_check(changed&&audio_progress>3&&draws>draws_before+2,"Editor, audio and redraw progressed alongside download");
+    unsigned net_line=net_driver_irq();fmt_uint(metric,net_line?platform_irq_count(net_line):0);
+    platform_log("DL receive interrupts=");platform_log(metric);platform_log("\n");
+    dl_check(net_line&&platform_irq_count(net_line)>=16,"RTL8139 receive interrupts");
     int note=fs_resolve(0,"/download-notes.txt");dl_check(note>=0&&fs_size(note)>70,"Editor content survived download");
     char counter_path[]="/Documents/counter-1.txt";counter_path[19]=(char)('1'+native_slot);
     dl_check(fs_resolve(0,counter_path)>=0&&term_task_running(native_slot),"native counter progressed and saved");

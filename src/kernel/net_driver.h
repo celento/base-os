@@ -8,6 +8,8 @@
 #define NET_TX_MEMORY (4u*1536u)
 int net_driver_init(uint8_t *rx, uint8_t *tx, uint8_t mac[6]);
 int net_driver_link(void);
+/* PIC line of the receive interrupt, or 0 when there is none. */
+unsigned net_driver_irq(void);
 /* recv: length, 0 when empty, -1 after discarding/recovering a bad frame. */
 int net_driver_recv(uint8_t *frame, unsigned capacity);
 /* send: 1 sent, 0 all descriptors busy, -1 invalid / hardware error. */

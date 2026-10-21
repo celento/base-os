@@ -56,6 +56,7 @@ static uint32_t legacy_phase, millisecond_phase, quantum;
  * other attached line is masked until the kernel loop has serviced it. */
 static PlatformIrqHandler irq_handlers[16];
 static volatile uint16_t irq_attached, irq_deferred_pending;
+static volatile uint32_t irq_counts[16];
 static uint16_t irq_mask = 0xfffe;   /* only IRQ0 (PIT) at start */
 
 static void irq_mask_write(void) {
@@ -84,6 +85,7 @@ static void irq_dispatch(unsigned irq) {
         irq_eoi(irq);
         return;
     }
+    ++irq_counts[irq];
     if (irq_handlers[irq]) {
         irq_handlers[irq]();
     } else {
@@ -94,7 +96,8 @@ static void irq_dispatch(unsigned irq) {
     irq_eoi(irq);
 }
 void platform_irq_attach(unsigned irq, PlatformIrqHandler handler) {
-    if (irq == 0 || irq > 15) return;
+    /* IRQ2 is the cascade; a line already in use keeps its first owner. */
+    if (irq == 0 || irq == 2 || irq > 15 || (irq_attached & (1u << irq))) return;
     unsigned flags;
     __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
     irq_handlers[irq] = handler;
@@ -112,6 +115,7 @@ unsigned platform_irq_take(void) {
     return pending;
 }
 int platform_irq_pending(void) { return irq_deferred_pending != 0; }
+uint32_t platform_irq_count(unsigned irq) { return irq < 16 ? irq_counts[irq] : 0; }
 void platform_irq_rearm(unsigned lines) {
     lines &= irq_attached;
     if (!lines) return;

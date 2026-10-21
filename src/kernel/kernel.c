@@ -14,6 +14,7 @@
 #include "kernel/gfx.h"
 #include "kernel/audio.h"
 #include "kernel/net.h"
+#include "kernel/net_driver.h"
 #include "kernel/download.h"
 #include "build_info.h"
 
@@ -320,6 +321,9 @@ void kmain(void) {
     kprint_debug(" high_water="); kprint_uint(pages.high_water); serial_write('\n');
     audio_init();
     net_init();
+    /* Device lines only end an idle wait; the services poll does the work. */
+    platform_irq_attach(audio_irq(), 0);
+    platform_irq_attach(net_driver_irq(), 0);
 
     fs_init();
     int mounted = fs_load_disk();
@@ -352,8 +356,11 @@ void kmain(void) {
     baseos_shell.start();
 
     while (1) {
+        /* Lines that fire during the polls stay pending for the next turn. */
+        unsigned lines = platform_irq_take();
         kernel_storage_poll();
         kernel_services_poll();
+        platform_irq_rearm(lines);
         int busy = baseos_shell.turn();
         /* ELF program threads run until the next timer tick, then the
          * desktop gets its turn again. */

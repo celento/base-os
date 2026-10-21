@@ -80,7 +80,11 @@ sooner when a sleeping user thread is due.
 handler runs inside the interrupt; the PS/2 keyboard and mouse use this to
 move controller bytes into a ring. Without one, the line is masked when it
 fires and reported by `platform_irq_take()`; the kernel loop services the
-device and reopens the line with `platform_irq_rearm()`. Device interrupts
+device and reopens the line with `platform_irq_rearm()`. The SB16 (IRQ5) and
+RTL8139 (its PCI line) work this way, so an idle desktop wakes when an audio
+block completes or a frame arrives instead of at the next 70 Hz tick. ATA
+stays polled, with nIEN set, because its waits are short and bounded. A
+line already attached keeps its first owner. Device interrupts
 are dispatched before the BEX and ELF runtimes see the vector, so a device
 interrupt during a program never ends it.
 

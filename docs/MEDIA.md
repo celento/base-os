@@ -2,7 +2,7 @@
 
 BaseOS has an original, allocation-free Sound Blaster 16 driver and PCM WAVE
 reader, plus the CC0-licensed minimp3 decoder. It targets QEMU's SB16 at port `0x220`, IRQ5, low DMA1/high DMA5. IRQ5
-remains masked: the cooperative main loop reads the high-DMA position, refills a
+only wakes an idle kernel loop: the cooperative main loop reads the high-DMA position, refills a
 64 KiB double buffer and acknowledges the DSP's interrupt latch. The floppy
 controller continues using its independent DMA2 channel.
 

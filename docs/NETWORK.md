@@ -29,7 +29,9 @@ bounded request is in progress; download returns immediately.
 
 PCI configuration mechanism 1 discovers vendor/device `10ec:8139`, enables I/O
 and bus mastering, and initializes the RTL8139 legacy 8 KB receive ring and four
-transmit buffers. Hardware interrupts remain masked. Each `net_poll()` processes
+transmit buffers. The receive interrupt (the PCI line from configuration
+register `0x3c`) only wakes an idle kernel loop; `net_poll()` still does the
+work and acknowledges the card. Each `net_poll()` processes
 at most 32 frames, checks link state, and advances one client operation. Invalid
 lengths/checksums and fragmented IPv4 packets are dropped. Receive overflow
 resets the receive engine. Ethernet, ARP, IPv4, ICMP echo, DNS A/CNAME responses,
