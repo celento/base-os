@@ -3,8 +3,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "input_ingress.h"
-#include "native_ui.h"
+#include "kernel/input_ingress.h"
+#include "kernel/native_ui.h"
 #define MAX_WIN 8
 /* Fixture chrome metrics: the routing under test is parameterized by these,
  * and the pointer coordinates below are tuned to them. */

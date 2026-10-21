@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include "sheet_model.h"
+#include "lib/sheet_model.h"
 static SheetDoc doc;
 static unsigned polls;
 void platform_poll(void) { ++polls; }

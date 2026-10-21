@@ -31,11 +31,11 @@ with tempfile.TemporaryDirectory(prefix="baseos-gallery-") as temp:
                     "-fno-stack-protector", "-fno-builtin", "-mno-sse", "-mno-mmx",
                     "-msoft-float", "-I", str(ROOT), "-I", str(ROOT / "src"),
                     "-I", str(BUILD), "-c", str(ROOT / "tools/gallery_guest.c"),
-                    "-o", str(work / "kernel.o")], check=True)
-    objects = [str(p) for p in BUILD.glob("*.o") if p.name != "kernel.o"]
+                    "-o", str(work / "desktop.o")], check=True)
+    objects = [str(p) for p in BUILD.glob("*.o") if p.name != "desktop.o"]
     subprocess.run([tool("ld"), "-T", str(BUILD / "linker.ld"), "-nostdlib", "-m",
                     "elf_i386", "-z", "noexecstack", "-o", str(work / "kernel.elf"),
-                    str(work / "kernel.o"), *objects], check=True)
+                    str(work / "desktop.o"), *objects], check=True)
     subprocess.run([tool("objcopy"), "-O", "binary", str(work / "kernel.elf"),
                     str(work / "kernel.bin")], check=True)
     layout = constants()

@@ -4,15 +4,15 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "program.h"
-#include "platform.h"
-#include "layout.h"
+#include "kernel/program.h"
+#include "kernel/platform.h"
+#include "kernel/layout.h"
 static unsigned char arena[0xC0000],published[NATIVE_CANVAS_CAPACITY];
 #define TERM_MEMORY ((uintptr_t)arena)
 #define NATIVE_CANVAS_MEMORY ((uintptr_t)published)
-#include "../src/app_storage.c"
-#include "../src/app_canvas.c"
-#include "../src/app_view.c"
+#include "../src/apps/app_storage.c"
+#include "../src/apps/app_canvas.c"
+#include "../src/apps/app_view.c"
 
 typedef struct {
     ProcessHandle handle;

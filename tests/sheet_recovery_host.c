@@ -4,8 +4,8 @@
 #define main editor_harness_main
 #include "editor_binding_host.c"
 #undef main
-#include "example_sheet.h"
-#include "native_sync.h"
+#include "lib/example_sheet.h"
+#include "kernel/native_sync.h"
 /* sheet.c's toolbar geometry measures labels to pick one or two rows; this
  * host links no font, so a fixed advance stands in. */
 int ui_string_w(const char *s) { int n = 0; while (s && s[n]) n++; return n * 8; }

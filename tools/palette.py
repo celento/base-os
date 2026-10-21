@@ -18,7 +18,7 @@ PAL_CUBE = 128
 CUBE_LEVELS = (0, 64, 128, 192, 255)
 
 # Ink ramp of the light theme: INK(0) is the brightest surface, INK(31) the
-# darkest text. Two segments, exactly as src/kernel.c theme_apply sets them.
+# darkest text. Two segments, exactly as src/shell/desktop/desktop.c theme_apply sets them.
 INK_SEGMENTS = ((PAL_GRAY, 17, 0xF7F8FA, 0x8A9099), (PAL_GRAY + 16, 16, 0x8A9099, 0x14161B))
 
 
@@ -32,7 +32,7 @@ def lerp_rgb(a, b, t, n):
 
 
 def base_colors():
-    source = (ROOT / "src/gfx.c").read_text()
+    source = (ROOT / "src/kernel/gfx.c").read_text()
     body = re.search(r"pal_base\[16\]\s*=\s*\{(.*?)\};", source, re.S)[1]
     return [int(v, 16) for v in re.findall(r"0x([0-9A-Fa-f]{6})", body)]
 

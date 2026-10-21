@@ -41,7 +41,7 @@ make -j3 build/boot.bin build/kernel.bin
 python3 tools/fs_crc_benchmark.py build --baseline-ref <git-ref> --runs 3 --keep
 ```
 
-`--baseline-ref` names the git revision whose `src/fs.c` is used as the
+`--baseline-ref` names the git revision whose `src/kernel/fs.c` is used as the
 baseline (for example, the last revision with the bitwise CRC). The runner
 compiles the baseline and current filesystem sources with identical
 production flags and links them against the same ordinary build objects. It

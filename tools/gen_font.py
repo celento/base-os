@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rasterize the UI and editor fonts into 4-bit anti-aliased bitmaps (src/font.h).
+"""Rasterize the UI and editor fonts into 4-bit anti-aliased bitmaps (src/kernel/font.h).
 
 Geist (UI, regular + medium) and Geist Mono (editor/terminal) come from the
 Google Fonts repository into assets/fonts. Both are OFL licensed.

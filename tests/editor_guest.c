@@ -1,5 +1,5 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 static void editor_check(int ok,const char *why){if(!ok)panic(why);}
 static void editor_type(const char *s){while(*s){key_sc=0;key_char=*s++;handle_key();}}
 void feature_test(void){

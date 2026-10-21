@@ -30,7 +30,7 @@ class LargeAudioTests(unittest.TestCase):
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra',
                             '-Werror', '-fsanitize=address,undefined', '-DMEDIA_MP3_HOST_TEST',
                             '-I', str(ROOT / 'src'), str(ROOT / 'tests/audio_large_host.c'),
-                            str(ROOT / 'src/media.c'), str(ROOT / 'src/media_mp3.c'),
+                            str(ROOT / 'src/lib/media.c'), str(ROOT / 'src/lib/media_mp3.c'),
                             '-o', str(exe)], check=True)
             subprocess.run([str(exe), str(song), str(mono)], check=True,
                            env=dict(os.environ, UBSAN_OPTIONS='halt_on_error=1'))

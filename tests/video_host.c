@@ -5,9 +5,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "video.h"
-#include "audio.h"
-#include "platform.h"
+#include "lib/video.h"
+#include "kernel/audio.h"
+#include "kernel/platform.h"
 
 uint8_t video_test_arena[VIDEO_CAPACITY];
 static uint32_t now;

@@ -9,8 +9,8 @@ SDK ABI, image size, or change to the compatibility page tables and the separate
 
 ## Eligibility and fixed reservations
 
-`src/physmem.c:STATIC_RESERVATIONS` is the allocator's explicit reservation
-inventory. Each named entry uses the owning `src/layout.h` base/capacity rather
+`src/kernel/physmem.c:STATIC_RESERVATIONS` is the allocator's explicit reservation
+inventory. Each named entry uses the owning `src/kernel/layout.h` base/capacity rather
 than a hand-maintained free-hole list. Entire arenas and their slack stay
 reserved: low boot/kernel/stacks, software framebuffer, filesystem nodes,
 Writer, Paint, published native canvases, disk/audio DMA, Sheet, desktop cache,
@@ -31,7 +31,7 @@ arithmetic, rejects an end beyond the 32-bit physical address space, and rounds
 both ends outwards to 4 KiB. It therefore covers subsequent supported 32-bit
 display modes. A conflict with a usable E820 descriptor never makes it allocable.
 
-The shared `platform_memory_map_available` predicate in `src/bootinfo.c` admits a
+The shared `platform_memory_map_available` predicate in `src/kernel/bootinfo.c` admits a
 whole page only when enabled type-1 descriptors jointly cover it with no enabled
 non-type-1 overlap. Adjacent, overlapping and unsorted usable ranges are allowed;
 disabled and empty descriptors do not contribute. A zero/excessive count or an

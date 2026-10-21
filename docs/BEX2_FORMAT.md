@@ -74,7 +74,7 @@ that arbitrary untrusted programs are safe.
 
 ## Pure planning contract
 
-`executable_plan_bex2(image, bytes, policy, out)` in `src/executable.c` reads no
+`executable_plan_bex2(image, bytes, policy, out)` in `src/kernel/executable.c` reads no
 live ABI, page allocator, filesystem or paging state and allocates nothing.
 Input may be byte-unaligned. The caller supplies exact available input length,
 supported ABI major/minor, mounted-backend file cap and fixed policy owned

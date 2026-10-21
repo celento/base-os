@@ -1,7 +1,7 @@
 /* Valid BEX2 files are ordinary unsupported input to an older BEX1 kernel.
  * This fixture checks clean refusal without attempting BEX2 execution. */
 #define FEATURE_TEST
-#include "kernel.c"
+#include "shell/desktop/desktop.c"
 #ifndef AS_ROLLBACK_EXPECT
 #define AS_ROLLBACK_EXPECT (-2)
 #endif

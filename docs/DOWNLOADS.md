@@ -112,7 +112,7 @@ bar. The built-in home/error documents are not saved as fetched page sources.
 
 ## Integration
 
-`src/download.h` exposes the singleton `download_start(cwd, url, path)`,
+`src/kernel/download.h` exposes the singleton `download_start(cwd, url, path)`,
 `download_tick()`, `download_cancel()`, `download_active()`, `download_status()`,
 and `download_last_error()` APIs. Initialize lazily or call `download_init()`.
 A zero start result means accepted; minus one means rejected, with a reason in

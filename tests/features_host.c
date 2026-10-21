@@ -3,13 +3,13 @@
 #undef main
 static unsigned char terminal_arena[0x100000];
 #define TERM_MEMORY ((uintptr_t)terminal_arena)
-#include "../src/app_storage.c"
-#include "../src/app_canvas.c"
-#include "../src/app_view.c"
-#include "../src/term.c"
+#include "../src/apps/app_storage.c"
+#include "../src/apps/app_canvas.c"
+#include "../src/apps/app_view.c"
+#include "../src/apps/term.c"
 #define V (views[selected])
-#include "../src/basic.c"
-#include "../src/history.c"
+#include "../src/lib/basic.c"
+#include "../src/lib/history.c"
 void timer_delay(unsigned t){now+=t;}
 int program_key(void){return 65;}
 void program_present(void){}

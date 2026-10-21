@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "net_wire.h"
+#include "kernel/net_wire.h"
 
 static void response(const char *wire,const char *expected,unsigned stride,int eof){
     NetHttpParser parser;NetHttpResult result={0};char body[512];

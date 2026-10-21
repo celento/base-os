@@ -18,7 +18,7 @@ class FileClipboardTests(unittest.TestCase):
             subprocess.run([
                 compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                 '-fsanitize=address,undefined', '-I', str(ROOT / 'src'),
-                str(ROOT / 'tests/file_clipboard_host.c'), str(ROOT / 'src/file_clipboard.c'),
+                str(ROOT / 'tests/file_clipboard_host.c'), str(ROOT / 'src/apps/file_clipboard.c'),
                 '-o', str(executable),
             ], check=True)
             environment = dict(os.environ,

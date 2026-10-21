@@ -30,7 +30,7 @@ def function(source, name):
 
 class SheetRecoveryTests(unittest.TestCase):
     def test_session_recovery_admission_and_examples(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-sheet-recovery-host-') as temporary:
             directory = pathlib.Path(temporary)
             first = source.index('typedef struct {\n    char buf[EDIT_BUF_SIZE];')
@@ -53,11 +53,11 @@ class SheetRecoveryTests(unittest.TestCase):
                             '-Wno-unused-function', '-fsanitize=address,undefined', '-DSPREADSHEET_HOST_TEST',
                             '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
                             '-I', str(ROOT / 'src'), '-I', str(directory),
-                            str(ROOT / 'tests/sheet_recovery_host.c'), str(ROOT / 'src/history.c'),
-                            str(ROOT / 'src/sheet.c'), str(ROOT / 'src/sheet_model.c'),
-                            str(ROOT / 'src/sheet_codec.c'), str(ROOT / 'src/decimal.c'),
-                            str(ROOT / 'src/example_sheet.c'), str(ROOT / 'src/native_sync.c'),
-                            str(ROOT / 'src/document_save.c'), str(ROOT / 'src/kernel_owner.c'),
+                            str(ROOT / 'tests/sheet_recovery_host.c'), str(ROOT / 'src/lib/history.c'),
+                            str(ROOT / 'src/apps/sheet.c'), str(ROOT / 'src/lib/sheet_model.c'),
+                            str(ROOT / 'src/lib/sheet_codec.c'), str(ROOT / 'src/lib/decimal.c'),
+                            str(ROOT / 'src/lib/example_sheet.c'), str(ROOT / 'src/kernel/native_sync.c'),
+                            str(ROOT / 'src/lib/document_save.c'), str(ROOT / 'src/kernel/kernel_owner.c'),
                             '-o', str(output)], check=True)
             env = dict(os.environ, ASAN_OPTIONS=os.environ.get('ASAN_OPTIONS', 'detect_leaks=0'),
                        UBSAN_OPTIONS='halt_on_error=1')

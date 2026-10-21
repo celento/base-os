@@ -19,7 +19,22 @@ QEMU_DISPLAY = gtk
 endif
 
 SRC = src
+# The shell linked into the image (src/shell/<name>). Every shell implements
+# kernel/shell.h; any other shell builds into its own output directory.
+BASEOS_SHELL ?= desktop
+SHELL_DIR = $(SRC)/shell/$(BASEOS_SHELL)
+ifeq ($(wildcard $(SHELL_DIR)/*.c),)
+$(error unknown shell '$(BASEOS_SHELL)': no sources in $(SHELL_DIR))
+endif
+# Each layer is a directory; objects stay flat in $(OUT). See docs/ARCHITECTURE.md.
+SRC_DIRS = $(SRC)/kernel $(SRC)/lib $(SRC)/ui $(SRC)/apps $(SHELL_DIR)
+vpath %.c $(SRC_DIRS)
+vpath %.asm $(SRC)/kernel
+ifeq ($(BASEOS_SHELL),desktop)
 OUT = build
+else
+OUT = build/$(BASEOS_SHELL)
+endif
 PYTHON ?= python3
 QEMU_AUDIO ?= -device sb16
 
@@ -29,9 +44,10 @@ CFLAGS = -std=gnu11 -ffreestanding -Os -g -Wall -Wextra -m32 \
 ASFLAGS = -f elf
 LDFLAGS = -T $(OUT)/linker.ld -nostdlib -m elf_i386 -z noexecstack
 
-CSRC = example_sheet.c sheet.c sheet_model.c sheet_codec.c file_clipboard.c file_view.c example_docs.c writer.c writer_codec.c writer_pdf.c download.c video.c video_draw.c image_decode.c image_viewer.c text_search.c ata.c player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c executable.c app_storage.c app_canvas.c app_view.c canvas_view.c native_ui.c native_files.c native_sync.c kernel_owner.c document_save.c history.c platform.c bootinfo.c physmem.c input_ingress.c kernel.c gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c calendar_agenda.c mines.c game2048.c breakout.c sysmon.c
+CSRC = example_sheet.c sheet.c sheet_model.c sheet_codec.c file_clipboard.c file_view.c example_docs.c writer.c writer_codec.c writer_pdf.c download.c video.c video_draw.c image_decode.c image_viewer.c text_search.c ata.c player.c browser.c net.c net_wire.c net_rtl8139.c audio.c media.c media_mp3.c display.c decimal.c basic.c process.c executable.c app_storage.c app_canvas.c app_view.c canvas_view.c native_ui.c native_files.c native_sync.c kernel_owner.c document_save.c history.c platform.c bootinfo.c physmem.c input_ingress.c kernel.c provision.c theme.c icons.c $(SHELL_SRC) gfx.c fs.c persist.c wordle.c term.c todo.c rtc.c clock.c calendar.c calendar_agenda.c mines.c game2048.c breakout.c sysmon.c
+SHELL_SRC = $(notdir $(wildcard $(SHELL_DIR)/*.c))
 OBJS = $(OUT)/kernel_entry.o $(OUT)/interrupts.o $(OUT)/process_entry.o $(addprefix $(OUT)/,$(CSRC:.c=.o))
-HDRS = $(wildcard $(SRC)/*.h) $(wildcard assets/*.h) $(wildcard sdk/*.h)
+HDRS = $(foreach d,$(SRC_DIRS),$(wildcard $(d)/*.h)) $(wildcard assets/*.h) $(wildcard sdk/*.h)
 IMG = $(OUT)/baseos.img
 DATA_IMG = $(OUT)/baseos-data.img
 DATA_PROFILE ?= default
@@ -43,22 +59,22 @@ all: $(IMG) $(DATA_IMG)
 $(OUT):
 	mkdir -p $(OUT)
 
-$(OUT)/layout.inc: $(SRC)/layout.h tools/layout.py | $(OUT)
+$(OUT)/layout.inc: $(SRC)/kernel/layout.h tools/layout.py | $(OUT)
 	$(PYTHON) tools/layout.py > $@
 
-$(OUT)/linker.ld: $(SRC)/linker.ld $(SRC)/layout.h | $(OUT)
+$(OUT)/linker.ld: $(SRC)/kernel/linker.ld $(SRC)/kernel/layout.h | $(OUT)
 	$(CC) -E -P -x c -I$(SRC) $< -o $@
 
-$(OUT)/boot.bin: $(SRC)/boot.asm $(OUT)/layout.inc Makefile | $(OUT)
+$(OUT)/boot.bin: $(SRC)/kernel/boot.asm $(OUT)/layout.inc Makefile | $(OUT)
 	$(AS) -f bin -p $(OUT)/layout.inc $< -o $@
 
-$(OUT)/process_entry.o: $(SRC)/process_entry.asm $(OUT)/layout.inc Makefile | $(OUT)
+$(OUT)/process_entry.o: $(SRC)/kernel/process_entry.asm $(OUT)/layout.inc Makefile | $(OUT)
 	$(AS) $(ASFLAGS) -p $(OUT)/layout.inc $< -o $@
 
-$(OUT)/%.o: $(SRC)/%.asm $(OUT)/layout.inc Makefile | $(OUT)
+$(OUT)/%.o: %.asm $(OUT)/layout.inc Makefile | $(OUT)
 	$(AS) $(ASFLAGS) -p $(OUT)/layout.inc $< -o $@
 
-$(OUT)/%.o: $(SRC)/%.c $(HDRS) Makefile | $(OUT)
+$(OUT)/%.o: %.c $(HDRS) Makefile | $(OUT)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(OUT)/hello.bex: examples/hello.asm | $(OUT)
@@ -105,7 +121,9 @@ $(OUT)/build_info.h: FORCE tools/build_info.py | $(OUT)
 FORCE:
 .PHONY: FORCE
 
-$(OUT)/kernel.o: $(OUT)/build_info.h $(OUT)/native_example.h $(OUT)/sdk_examples.h $(OUT)/audio_example.h
+$(OUT)/kernel.o: $(OUT)/build_info.h
+$(OUT)/provision.o: $(OUT)/native_example.h $(OUT)/sdk_examples.h $(OUT)/audio_example.h
+$(addprefix $(OUT)/,$(SHELL_SRC:.c=.o)): $(OUT)/build_info.h
 
 # Rendering is the hot path; retain size optimization for the rest of the kernel.
 $(OUT)/gfx.o: CFLAGS := $(filter-out -Os,$(CFLAGS)) -O2
@@ -126,13 +144,13 @@ $(OUT)/kernel.elf: $(OBJS) $(OUT)/linker.ld
 $(OUT)/kernel.bin: $(OUT)/kernel.elf
 	$(OBJCOPY) -O binary $< $@
 
-$(OUT)/kernel.packed: $(OUT)/kernel.bin tools/kernel_pack.py tools/layout.py $(SRC)/layout.h
+$(OUT)/kernel.packed: $(OUT)/kernel.bin tools/kernel_pack.py tools/layout.py $(SRC)/kernel/layout.h
 	$(PYTHON) tools/kernel_pack.py $< $@
 
-$(IMG): $(OUT)/boot.bin $(OUT)/kernel.packed tools/update_image.py tools/kernel_pack.py tools/layout.py $(SRC)/layout.h
+$(IMG): $(OUT)/boot.bin $(OUT)/kernel.packed tools/update_image.py tools/kernel_pack.py tools/layout.py $(SRC)/kernel/layout.h
 	$(PYTHON) tools/update_image.py --packed $@ $(OUT)/boot.bin $(OUT)/kernel.packed
 
-$(DATA_IMG): FORCE tools/init_data.py tools/layout.py $(SRC)/layout.h | $(OUT)
+$(DATA_IMG): FORCE tools/init_data.py tools/layout.py $(SRC)/kernel/layout.h | $(OUT)
 	$(PYTHON) tools/init_data.py $@ --profile $(DATA_PROFILE)
 
 run: $(IMG) $(DATA_IMG)
@@ -152,10 +170,20 @@ run-large:
 headless-large:
 	$(MAKE) headless DATA_IMG=$(OUT)/baseos-large-data.img DATA_PROFILE=large QEMU_MEMORY=128M
 
+# The handheld shell: same kernel, apps and disk format, different shell.
+pocket:
+	$(MAKE) BASEOS_SHELL=pocket all
+
+run-pocket:
+	$(MAKE) BASEOS_SHELL=pocket run
+
+headless-pocket:
+	$(MAKE) BASEOS_SHELL=pocket headless
+
 clean:
 	rm -f $(OBJS) $(OUT)/boot.bin $(OUT)/kernel.bin $(OUT)/kernel.packed $(OUT)/kernel.elf $(OUT)/linker.ld $(OUT)/layout.inc
 
-.PHONY: all run headless run-large headless-large clean
+.PHONY: all run headless run-large headless-large pocket run-pocket headless-pocket clean
 
 # Image and its backups intentionally survive clean.
 test:

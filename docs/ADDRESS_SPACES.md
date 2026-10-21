@@ -55,7 +55,7 @@ These host checks do not replace guest testing of BEX1 and BEX2 programs.
 
 ## Private address spaces
 
-`BASEOS_BEX2_ENABLED` in `src/program.h` is an explicit source gate for the
+`BASEOS_BEX2_ENABLED` in `src/kernel/program.h` is an explicit source gate for the
 BEX2 loader and is set to 1. With it set to 0, process creation refuses BEX2
 files as unsupported. The SDK defaults to BEX1, and no seeded app
 is replaced or automatically converted.

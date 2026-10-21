@@ -421,7 +421,7 @@ def main(args):
         raise
     report['execution_provenance'] = current;report['status'] = 'running';write_report(path, report)
     try:
-        font = desktop.VisibleText(runtime / 'src/font.h')
+        font = desktop.VisibleText(runtime / 'src/kernel/font.h')
         for profile in report['profiles']:
             run_profile(args, profile, report, modules, font);write_report(path, report)
         report.update(passed=True, status='passed')

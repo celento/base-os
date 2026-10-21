@@ -1,6 +1,7 @@
 /* Ordinary file dispatch/lifecycle in the real kernel, with valid SDK programs. */
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
+#include "sdk_examples.h"
 static void launch_check(int ok,const char *why){if(!ok)panic(why);}
 static void launch_round(unsigned ticks){
     unsigned start=timer_ticks();

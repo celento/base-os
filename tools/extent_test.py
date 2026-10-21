@@ -16,7 +16,7 @@ print(work, flush=True)
 def tool(name):
     return 'x86_64-elf-' + name if shutil.which('x86_64-elf-' + name) else name
 subprocess.run(['nasm', '-f', 'elf', '-Dkmain=extent_guest', '-p', str(build / 'layout.inc'),
-                str(root / 'src/kernel_entry.asm'), '-o', str(work / 'entry.o')], check=True)
+                str(root / 'src/kernel/kernel_entry.asm'), '-o', str(work / 'entry.o')], check=True)
 c = constants()
 sections = subprocess.check_output([tool('size'), '-A', str(build / 'kernel.elf')], text=True)
 text_size = next(int(line.split()[1]) for line in sections.splitlines() if line.startswith('.text '))

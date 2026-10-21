@@ -2,16 +2,17 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
-#include "audio.h"
-#include "video.h"
-#include "app.h"
-#include "fs.h"
-#include "layout.h"
+#include "kernel/audio.h"
+#include "lib/video.h"
+#include "ui/app.h"
+#include "kernel/fs.h"
+#include "kernel/layout.h"
 static uint8_t test_mirror[FB_CAPACITY];
 #undef PRESENT_BASE
 #define PRESENT_BASE ((uintptr_t)test_mirror)
 #define GFX_HOST_TEST
-#include "../src/gfx.c"
+#include "../src/kernel/gfx.c"
+#include "../src/ui/icons.c"
 
 static char names[FS_MAX_NODES][FS_NAME_LEN];
 static unsigned generations[FS_MAX_NODES];
@@ -60,7 +61,7 @@ uint8_t app_body=COLOR_WHITE,app_field=COLOR_WHITE,app_paper=COLOR_WHITE,app_bor
 void video_draw(int x,int y,int w,int h){draw_rect(x,y,w,h,COLOR_BLACK);}
 void fmt_uint(char *s,unsigned n){sprintf(s,"%u",n);}
 void fmt_pad2(char *s,int n){sprintf(s,"%02d",n);}
-#include "../src/player.c"
+#include "../src/apps/player.c"
 /* Click the centre of a transport control in the current audio/video layout. */
 static int click_transport(int w,int h,int index){
     int viewport_h,buttons_y,library_y;video_geometry(h,&viewport_h,&buttons_y,&library_y);

@@ -1,0 +1,156 @@
+#include "kernel/platform.h"
+
+static const MemoryRange *memory_map = (const MemoryRange *)E820_BASE;
+static const BootInfo *boot_info = (const BootInfo *)BOOTINFO_ADDR;
+
+int platform_memory_map_valid(const MemoryRange *map, unsigned count) {
+    if (!map || !count || count > E820_MAX) return 0;
+    for (unsigned i = 0; i < count; ++i) {
+        const MemoryRange *r = &map[i];
+        if ((r->attributes & 1) && r->length &&
+            r->base + r->length < r->base) return 0;
+    }
+    return 1;
+}
+int platform_memory_map_available(const MemoryRange *map, unsigned count,
+                                  uint64_t base, uint64_t end) {
+    if (base >= end || !platform_memory_map_valid(map, count)) return 0;
+    uint64_t cursor = base;
+    /* Reject overlap with firmware reservations even if a usable descriptor
+     * also covers it. Then allow adjacent usable descriptors to form a range. */
+    for (unsigned i = 0; i < count; ++i) {
+        const MemoryRange *r = &map[i];
+        if (!(r->attributes & 1) || !r->length) continue;
+        uint64_t top = r->base + r->length;
+        if (r->type != 1 && r->base < end && top > base) return 0;
+    }
+    while (cursor < end) {
+        uint64_t next = cursor;
+        for (unsigned i = 0; i < count; ++i) {
+            const MemoryRange *r = &map[i];
+            if (r->type == 1 && (r->attributes & 1) && r->base <= cursor &&
+                r->base + r->length > next) next = r->base + r->length;
+        }
+        if (next == cursor) return 0;
+        cursor = next;
+    }
+    return 1;
+}
+static int available(uint32_t base, uint32_t end) {
+    return platform_memory_map_available(memory_map, boot_info->map_count, base, end);
+}
+int platform_memory_range_available(uint32_t base, uint32_t end) {
+    if (base >= end || !boot_info->map_count || boot_info->map_count > E820_MAX)
+        return 0;
+    return available(base, end);
+}
+void platform_validate_memory(void) {
+    extern char __kernel_end[];
+    if (!boot_info->map_count || boot_info->map_count > E820_MAX)
+        panic("BIOS memory map unavailable");
+    if (!available(KERNEL_LOAD_ADDR, (uintptr_t)__kernel_end) ||
+        !available(STACK_BOTTOM, STACK_TOP) ||
+        !available(FB_BASE, RAM_REQUIRED_END))
+        panic("required RAM is unavailable or reserved");
+    if (boot_info->boot_drive != 0 ||
+        (boot_info->sectors_per_track != 18 && boot_info->sectors_per_track != 36))
+        panic("unsupported boot floppy geometry");
+}
+unsigned platform_memory_mb(void) {
+    uint64_t bytes = 0;
+    for (unsigned i = 0; i < boot_info->map_count; ++i) {
+        const MemoryRange *r = &memory_map[i];
+        if (r->type == 1 && (r->attributes & 1) && r->base < 0x100000000ULL) {
+            uint64_t end = r->base + r->length;
+            if (end > 0x100000000ULL) end = 0x100000000ULL;
+            bytes += end - r->base;
+        }
+    }
+    return (unsigned)(bytes >> 20);
+}
+int video_info_valid(const BootInfo *b) {
+    if (b->magic != BOOTINFO_MAGIC || b->flags != 1 || !b->lfb ||
+        b->width < 640 || b->height < 400 ||
+        (uint32_t)b->width * b->height > FB_CAPACITY ||
+        (b->bpp != 16 && b->bpp != 24 && b->bpp != 32)) return 0;
+    uint32_t bytes = b->bpp / 8;
+    uint32_t span = (uint32_t)b->pitch * b->height;
+    if (b->pitch < b->width * bytes || b->lfb < RAM_REQUIRED_END ||
+        span > UINT32_MAX - b->lfb) return 0;
+    for (unsigned i = 0; i < boot_info->map_count && i < E820_MAX; ++i) {
+        const MemoryRange *r = &memory_map[i];
+        if (r->type == 1 && (r->attributes & 1) &&
+            r->base < (uint64_t)b->lfb + span && r->base + r->length > b->lfb)
+            return 0; /* A framebuffer must not alias ordinary usable RAM. */
+    }
+    if (b->bpp == 16)
+        return b->red_size == 5 && b->red_pos == 11 &&
+               b->green_size == 6 && b->green_pos == 5 &&
+               b->blue_size == 5 && b->blue_pos == 0;
+    return b->red_size == 8 && b->red_pos == 16 &&
+           b->green_size == 8 && b->green_pos == 8 &&
+           b->blue_size == 8 && b->blue_pos == 0;
+}
+
+_Static_assert(KERNEL_STAGE_ADDR + KERNEL_SECTORS * SECTOR_SIZE <= KERNEL_STAGE_LIMIT &&
+               KERNEL_STAGE_LIMIT <= 0xA0000, "invalid BIOS kernel staging area");
+_Static_assert(KERNEL_LOAD_ADDR >= 0x100000 && KERNEL_LOAD_ADDR < STACK_BOTTOM,
+               "invalid relocated kernel range");
+_Static_assert(STACK_TOP - STACK_BOTTOM == 0x10000 && STACK_TOP <= FB_BASE,
+               "kernel stack overlaps framebuffer or has changed size");
+_Static_assert(FB_BASE + FB_CAPACITY <= FS_BASE, "backbuffer overlaps FS");
+_Static_assert(FS_BASE + FS_CAPACITY <= WRITER_BASE, "FS metadata overlaps Writer");
+_Static_assert(WRITER_BASE + WRITER_CAPACITY <= PAINT_MEM, "Writer overlaps Paint");
+_Static_assert(PAINT_MEM + PAINT_CAPACITY <= NATIVE_CANVAS_BASE, "paint overlaps published canvases");
+_Static_assert(NATIVE_CANVAS_BASE + NATIVE_CANVAS_CAPACITY <= DMA_BASE, "published canvases overlap DMA");
+_Static_assert(NATIVE_CANVAS_BASE >= FB_BASE &&
+               NATIVE_CANVAS_BASE + NATIVE_CANVAS_CAPACITY <= RAM_REQUIRED_END,
+               "published canvases must be covered by the boot E820 validation");
+_Static_assert(DMA_BASE % 65536 == 0 && DMA_CAPACITY <= 65536 &&
+               DMA_BASE + DMA_CAPACITY <= 0x1000000, "invalid ISA DMA arena");
+_Static_assert(DMA_BASE + DMA_CAPACITY <= DESK_CACHE, "DMA overlaps cache");
+_Static_assert(AUDIO_DMA_BASE + AUDIO_DMA_CAPACITY == SHEET_BASE, "audio DMA overlaps spreadsheet");
+_Static_assert(SHEET_BASE + SHEET_CAPACITY == DESK_CACHE, "spreadsheet overlaps desktop cache");
+_Static_assert(SHEET_CAPACITY >= 2824636, "spreadsheet arena too small");
+_Static_assert(DESK_CACHE + DESK_CAPACITY <= APPS_BASE, "cache overlaps apps");
+_Static_assert(APPS_BASE+APPS_CAPACITY<=PAGING_BASE,"apps overlap paging");
+_Static_assert(PAGING_BASE+PAGING_CAPACITY<=USER_BASE,"paging overlaps user");
+_Static_assert(USER_BASE+USER_CAPACITY<=RAM_REQUIRED_END,"user beyond RAM");
+
+_Static_assert(sizeof(MemoryRange) == 24 && __builtin_offsetof(BootInfo, map_count) == 16 &&
+               __builtin_offsetof(BootInfo, red_size) == 20, "assembly boot ABI mismatch");
+
+_Static_assert(USER_BASE+USER_CAPACITY<=DRAG_CACHE,"user overlaps compositor");
+_Static_assert(DRAG_CACHE+DRAG_CAPACITY<=PRESENT_BASE,"drag overlaps presentation");
+_Static_assert(PRESENT_BASE+PRESENT_CAPACITY<=RAM_REQUIRED_END,"presentation beyond RAM");
+
+_Static_assert(DMA_BASE + DMA_CAPACITY <= AUDIO_DMA_BASE, "disk DMA overlaps audio");
+_Static_assert(AUDIO_DMA_BASE % 65536 == 0 && AUDIO_DMA_CAPACITY == 65536 &&
+               AUDIO_DMA_BASE + AUDIO_DMA_CAPACITY <= AUDIO_WORK_BASE &&
+               AUDIO_DMA_BASE + AUDIO_DMA_CAPACITY <= 0x1000000, "invalid audio DMA arena");
+_Static_assert(BROWSER_BASE + BROWSER_CAPACITY <= AUDIO_WORK_BASE, "browser overlaps audio");
+_Static_assert(AUDIO_WORK_BASE + AUDIO_WORK_CAPACITY <= IMAGE_BASE, "audio overlaps images");
+_Static_assert(IMAGE_BASE + IMAGE_CAPACITY <= FS_POOL_BASE, "images overlap file pool");
+_Static_assert(FS_POOL_BASE + FS_POOL_CAPACITY <= FS_IMG_BASE, "file pool overlaps staging");
+_Static_assert(FS_IMG_BASE + FS_IMG_CAPACITY <= TASK_BASE, "staging overlaps native task saves");
+_Static_assert(TASK_BASE + TASK_CAPACITY <= RAM_REQUIRED_END, "native task saves exceed RAM");
+_Static_assert(GFX_CACHE_BASE >= APPS_BASE && GFX_CACHE_BASE + GFX_CACHE_CAPACITY <= APPS_BASE + APPS_CAPACITY, "graphics cache outside app arena");
+_Static_assert(PRESENT_BASE + PRESENT_CAPACITY <= NET_BASE, "presenter overlaps network");
+_Static_assert(NET_BASE + NET_CAPACITY <= BROWSER_BASE, "network overlaps browser");
+_Static_assert(BROWSER_BASE + BROWSER_CAPACITY <= RAM_REQUIRED_END, "browser exceeds RAM");
+
+_Static_assert(TASK_BASE + TASK_CAPACITY <= EDITOR_BASE, "task state overlaps editor");
+_Static_assert(EDITOR_BASE + EDITOR_CAPACITY <= VIDEO_BASE, "editor overlaps video");
+_Static_assert(VIDEO_BASE + VIDEO_CAPACITY <= RAM_REQUIRED_END, "video exceeds RAM");
+
+_Static_assert(DOWNLOAD_BASE >= APPS_BASE && DOWNLOAD_BASE + DOWNLOAD_CAPACITY <= GFX_CACHE_BASE, "download arena overlaps application cache");
+
+_Static_assert(PAINT_HISTORY_BASE >= APPS_BASE && PAINT_HISTORY_BASE + PAINT_HISTORY_CAPACITY <= DOWNLOAD_BASE, "paint history overlaps downloads");
+_Static_assert(GFX_CACHE_BASE + GFX_CACHE_CAPACITY <= APPS_BASE + 0x300000, "graphics cache overlaps terminals");
+
+_Static_assert(TASK_INTERRUPT_STACK_BASE >= TASK_BASE && TASK_INTERRUPT_STACK_BASE + TASK_INTERRUPT_STACK_CAPACITY <= TASK_BASE + TASK_CAPACITY, "invalid task syscall stack");
+
+_Static_assert(RAM_REQUIRED_END <= FS_LARGE_POOL_BASE &&
+               FS_LARGE_POOL_BASE + FS_LARGE_POOL_CAPACITY <= FS_LARGE_IMG_BASE &&
+               FS_LARGE_IMG_BASE + FS_LARGE_IMG_CAPACITY == RAM_LARGE_REQUIRED_END,
+               "optional filesystem arenas overlap existing reservations");

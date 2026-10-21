@@ -1,5 +1,5 @@
 /* Compile only: symbol sizes give actual freestanding i386 layout measurements. */
-#include "app_storage.h"
+#include "apps/app_storage.h"
 char measured_terminal_text[sizeof(TerminalText)];
 char measured_app_canvas[sizeof(AppCanvas)];
 char measured_view_metadata[offsetof(AppView,canvas)];

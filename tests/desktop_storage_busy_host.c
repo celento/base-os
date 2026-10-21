@@ -2,7 +2,7 @@
 #define main filesystem_fixture_main
 #include "fs_host.c"
 #undef main
-#include "file_view.h"
+#include "apps/file_view.h"
 static int dirty,files_action_busy,fm_cwd,fm_selected;
 static unsigned frame_count,files_message_until;
 static int fm_renaming,fm_rename_id,fm_rename_len,open_dlg;

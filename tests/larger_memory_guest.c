@@ -2,10 +2,10 @@
  * No memory observation, fault probes, forced low-memory knobs or debugger.
  * kernel.c is resolved from the explicitly supplied clean runtime checkout. */
 #define FEATURE_TEST
-#include "kernel.c"
-#include "native_files.h"
-#include "native_sync.h"
-#include "executable.h"
+#include "shell/desktop/desktop.c"
+#include "kernel/native_files.h"
+#include "kernel/native_sync.h"
+#include "kernel/executable.h"
 static ProcessHandle as_handles[PROCESS_TASKS];
 static unsigned as_reports[PROCESS_TASKS][16],as_pending[PROCESS_TASKS][8],as_generation[PROCESS_TASKS];
 static unsigned as_pages[PROCESS_TASKS],as_mapped[PROCESS_TASKS];
@@ -138,7 +138,7 @@ static void lm_counter_save(unsigned wanted){
         as_check(timer_ticks()-began<120*TIMER_HZ,"LM frozen save deadline");as_step(3);
         int id=as_file("/Documents/counter-4.txt");
         if(id>=0&&fs_size(id)==3&&fs_data(id)[0]==(char)('0'+wanted/10)&&fs_data(id)[1]=='0'&&fs_data(id)[2]=='\n')break;
-        storage_poll();platform_poll();
+        kernel_storage_poll();platform_poll();
     }
     as_check(!fs_sync(),"LM frozen save durable");
 }

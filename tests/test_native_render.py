@@ -27,15 +27,15 @@ class NativeRenderTests(unittest.TestCase):
 
     def test_update_classification(self):
         self.run_host('native_dirty_host', extra=(str(ROOT / 'tests/net_stub.c'),
-                      str(ROOT / 'src/download.c'), '-DDOWNLOAD_HOST_TEST'))
+                      str(ROOT / 'src/kernel/download.c'), '-DDOWNLOAD_HOST_TEST'))
 
     def test_explicit_owner_canvas_size(self):
         self.run_host('native_canvas_size_host', extra=(str(ROOT / 'tests/net_stub.c'),
-                      str(ROOT / 'src/download.c'), '-DDOWNLOAD_HOST_TEST'))
+                      str(ROOT / 'src/kernel/download.c'), '-DDOWNLOAD_HOST_TEST'))
 
     def test_render_equivalence_and_guards(self):
         def prepare(directory):
-            source = (ROOT / 'src/kernel.c').read_text()
+            source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
             for name in ('gui_draw_window', 'cursor_restore', 'cursor_save_draw', 'draw_ui'):
                 source = source.replace('void ' + name + '(', 'static void ' + name + '(')
             names = ('close_box_pos', 'close_box_x', 'max_box_x', 'min_box_x', 'draw_win_control',
@@ -48,7 +48,7 @@ class NativeRenderTests(unittest.TestCase):
             code += 'enum { TERM_RENDER_NONE, TERM_RENDER_FULL, TERM_RENDER_CANVAS };\n'
             code += function(source, 'term_task_render_action')
             (directory / 'native_render_kernel.inc').write_text(code)
-        self.run_host('native_render_host', prepare, extra=(str(ROOT / 'src/canvas_view.c'),))
+        self.run_host('native_render_host', prepare, extra=(str(ROOT / 'src/lib/canvas_view.c'),))
 
 
 if __name__ == '__main__':

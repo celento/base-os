@@ -1,4 +1,4 @@
-"""Exact production storage_poll bounds; does not replace normal QEMU evidence."""
+"""Exact production kernel_storage_poll bounds; does not replace normal QEMU evidence."""
 import os
 from pathlib import Path
 import shutil
@@ -13,11 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class StoragePumpTests(unittest.TestCase):
     def test_actual_production_pump_contract(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/kernel/kernel.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-storage-pump-') as temporary:
             folder = Path(temporary)
             # Compile the actual function body, never a copied scheduling loop.
-            (folder / 'storage_pump.inc').write_text(function(source, 'storage_poll'))
+            start = source.index('enum FsSyncProgress kernel_storage_poll(void) {')
+            pump = function('static ' + source[start:], 'kernel_storage_poll')[len('static '):]
+            (folder / 'storage_pump.inc').write_text(pump)
             executable = folder / 'storage-pump'
             compiler = shutil.which('clang') or shutil.which('cc')
             self.assertIsNotNone(compiler, 'C compiler required')

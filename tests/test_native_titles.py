@@ -12,12 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class NativeTitleTests(unittest.TestCase):
     def test_title_selection_and_lifetime(self):
-        implementation = function((ROOT / 'src/kernel.c').read_text(), 'win_display_title')
+        implementation = function((ROOT / 'src/shell/desktop/desktop.c').read_text(), 'win_display_title')
         with tempfile.TemporaryDirectory(prefix='baseos-native-title-') as temporary:
             source = Path(temporary) / 'test.c'
             source.write_text('''#include <assert.h>
 #include <string.h>
-#include "term.h"
+#include "apps/term.h"
 #define MAX_WIN 8
 #define WK_TERM 11
 #define WK_NATIVE 24

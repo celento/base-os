@@ -14,7 +14,7 @@ class AddressSpaceTests(unittest.TestCase):
                 '-fsanitize=address,undefined','-I',str(ROOT/'src'),str(ROOT/'tests/address_space_host.c'),'-o',str(exe)],check=True)
             subprocess.run([str(exe)],check=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0',UBSAN_OPTIONS='halt_on_error=1'))
     def test_copy_audit_and_restore_order(self):
-        source=(ROOT/'src/process.c').read_text()
+        source=(ROOT/'src/kernel/process.c').read_text()
         self.assertNotIn('user_range(',source)
         self.assertNotIn('b>USER_CAPACITY-a',source)
         self.assertIn('user_span(b,c,USER_READ)||e<sizeof(info)||!user_span(d,e,USER_WRITE)',source)

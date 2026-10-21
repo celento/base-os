@@ -1,5 +1,5 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 void feature_test(void) {
     open_files(fs_root());open_calc();open_wordle();open_term();
     term_char('h');term_char('e');term_char('l');term_char('p');term_enter();

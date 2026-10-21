@@ -17,20 +17,20 @@ class AppViewTests(unittest.TestCase):
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-fsanitize=address,undefined', '-I', str(ROOT / 'src'),
                             str(ROOT / 'tests/app_view_host.c'), str(ROOT / 'tests/net_stub.c'),
-                            str(ROOT / 'src/download.c'), '-DDOWNLOAD_HOST_TEST', '-o', str(exe)], check=True)
+                            str(ROOT / 'src/kernel/download.c'), '-DDOWNLOAD_HOST_TEST', '-o', str(exe)], check=True)
             subprocess.run([str(exe)], env=dict(os.environ, ASAN_OPTIONS='detect_leaks=0'), check=True)
 
     def test_real_process_publication_lifetime(self):
         compiler = shutil.which('clang') or shutil.which('cc')
         with tempfile.TemporaryDirectory(prefix='baseos-view-process-') as temporary:
             directory = Path(temporary)
-            extract((ROOT / 'src/process.c').read_text(), directory, 'process_lifetime', scheduler=True)
+            extract((ROOT / 'src/kernel/process.c').read_text(), directory, 'process_lifetime', scheduler=True)
             executable = directory / 'view-process'
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-Wno-unused-function', '-fsanitize=address,undefined',
                             '-I', str(ROOT / 'src'), '-I', str(directory),
-                            str(ROOT / 'tests/app_view_process_host.c'), str(ROOT / 'src/physmem.c'),
-                            str(ROOT / 'src/bootinfo.c'), str(ROOT / 'src/executable.c'),
+                            str(ROOT / 'tests/app_view_process_host.c'), str(ROOT / 'src/kernel/physmem.c'),
+                            str(ROOT / 'src/kernel/bootinfo.c'), str(ROOT / 'src/kernel/executable.c'),
                             '-o', str(executable)], check=True)
             for ram in (64, 128):
                 subprocess.run([str(executable), str(ram)], check=True, env=dict(os.environ,

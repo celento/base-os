@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "executable.h"
+#include "kernel/executable.h"
 static unsigned char file[BOS_BEX2_FILE_MAX+1];
 static void put(unsigned index,uint32_t value) {
     for(unsigned b=0;b<4;b++)file[index*4+b]=(unsigned char)(value>>(b*8));

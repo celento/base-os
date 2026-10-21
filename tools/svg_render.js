@@ -1,5 +1,5 @@
 // Rasterize SVG icons with headless Chromium (Playwright). Used only by
-// tools/gen_app_icons.py; normal builds use the committed src/app_icons.h.
+// tools/gen_app_icons.py; normal builds use the committed src/ui/app_icons.h.
 //   node tools/svg_render.js <outdir> <size> <file.svg>...
 // Writes <outdir>/<name>-<size>.png with straight (unpremultiplied) alpha.
 const fs = require('fs');

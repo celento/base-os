@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class SettingsPreferenceTests(unittest.TestCase):
     def test_pending_preferences_durability_destinations_and_retry(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         first = source.index('enum { PREF_THEME, PREF_SAVER, PREF_DISPLAY, PREF_COUNT };')
         last = source.index('static void theme_set(int id) {', first)
         implementation = source[first:last]

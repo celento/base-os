@@ -5,15 +5,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "fs.h"
-#include "layout.h"
+#include "kernel/fs.h"
+#include "kernel/layout.h"
 static unsigned char presented[FB_CAPACITY];
 #undef PRESENT_BASE
 #define PRESENT_BASE ((uintptr_t)presented)
 #define GFX_HOST_TEST
-#include "../src/gfx.c"
-#include "../src/calendar_agenda.c"
-#include "../src/calendar.c"
+#include "../src/kernel/gfx.c"
+#include "../src/ui/icons.c"
+#include "../src/apps/calendar_agenda.c"
+#include "../src/apps/calendar.c"
 
 static unsigned char back[800 * 600], linear[800 * 600 * 4];
 static char store[CAL_AGENDA_FILE_MAX], durable[CAL_AGENDA_FILE_MAX];

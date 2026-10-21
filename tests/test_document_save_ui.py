@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class DocumentSaveUITests(unittest.TestCase):
     def test_exact_pending_dispatch_and_continuations(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         names = ('edit_close_cancel', 'edit_close_valid', 'document_finish', 'document_request',
                  'document_save_info', 'document_destination_valid', 'document_wait_for_save',
                  'document_persistence_poll', 'namedlg_open', 'namedlg_hide', 'namedlg_close',
@@ -24,8 +24,8 @@ class DocumentSaveUITests(unittest.TestCase):
                        '-DWRITER_HOST_TEST', '-DSPREADSHEET_HOST_TEST', '-fsanitize=address,undefined',
                        '-I', str(ROOT / 'src'), '-I', str(directory), str(ROOT / 'tests/document_save_ui_host.c')]
             command += [str(ROOT / 'src' / name) for name in
-                        ('writer.c', 'writer_codec.c', 'writer_pdf.c', 'sheet.c', 'sheet_model.c',
-                         'sheet_codec.c', 'decimal.c', 'document_save.c', 'kernel_owner.c')]
+                        ('apps/writer.c', 'lib/writer_codec.c', 'lib/writer_pdf.c', 'apps/sheet.c', 'lib/sheet_model.c',
+                         'lib/sheet_codec.c', 'lib/decimal.c', 'lib/document_save.c', 'kernel/kernel_owner.c')]
             subprocess.run(command + ['-o', str(output)], check=True)
             subprocess.run([str(output)], check=True, env=dict(os.environ, ASAN_OPTIONS='detect_leaks=0',
                                                               UBSAN_OPTIONS='halt_on_error=1'))

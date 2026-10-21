@@ -144,7 +144,7 @@ def main():
                     '-c', str(ROOT / 'tests/image_guest.c'),
                     '-o', str(directory / 'guest.o')], check=True)
     subprocess.run(['nasm', '-f', 'elf', '-Dkmain=image_guest', '-p', str(build / 'layout.inc'),
-                    str(ROOT / 'src/kernel_entry.asm'), '-o', str(directory / 'entry.o')], check=True)
+                    str(ROOT / 'src/kernel/kernel_entry.asm'), '-o', str(directory / 'entry.o')], check=True)
     # Link production image/platform objects without the unrelated desktop apps.
     # Otherwise artwork fixtures compete with the whole desktop's stack budget.
     names = ('interrupts', 'process_entry', 'platform', 'bootinfo', 'process',

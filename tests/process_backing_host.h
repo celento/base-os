@@ -5,7 +5,7 @@
  * dereferenced. Only the kernel wrapper and kmemcpy address translation are
  * host adapters; process creation, scatter copying and teardown stay unchanged. */
 #include <stdlib.h>
-#include "physmem.h"
+#include "kernel/physmem.h"
 #ifndef PROCESS_BACKING_RELEASE_HOOK
 #define PROCESS_BACKING_RELEASE_HOOK(owner) ((void)(owner))
 #endif

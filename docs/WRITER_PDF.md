@@ -1,6 +1,6 @@
 # Writer paginated PDF export
 
-`src/writer_pdf.c` is an original, small freestanding-C PDF 1.4 exporter for
+`src/lib/writer_pdf.c` is an original, small freestanding-C PDF 1.4 exporter for
 `WriterDoc`. It produces ordinary PDF bytes for viewing or printing with a host
 PDF application. It does not implement a guest PDF viewer, guest printer driver,
 PDF import, or paginated editing. The standalone module does not create files or

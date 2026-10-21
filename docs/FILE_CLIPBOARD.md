@@ -1,6 +1,6 @@
 # Files clipboard
 
-`src/file_clipboard.c` provides the identity-safe file/folder clipboard used by
+`src/apps/file_clipboard.c` provides the identity-safe file/folder clipboard used by
 the desktop. It has no rendering dependency and uses the existing filesystem
 copy, move and dual-snapshot synchronization paths.
 

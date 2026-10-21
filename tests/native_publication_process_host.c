@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "program.h"
-#include "platform.h"
-#include "fs.h"
+#include "kernel/program.h"
+#include "kernel/platform.h"
+#include "kernel/fs.h"
 #include "native_platform_service_stubs.h"
 #include "process_backing_host.h"
 #include "native_publication_process_types.inc"

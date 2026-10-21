@@ -1,4 +1,4 @@
-"""Bundle the wallpapers into src/wallpapers.h.
+"""Bundle the wallpapers into src/shell/desktop/wallpapers.h.
 
     python3 tools/gen_wallpapers.py
 
@@ -48,7 +48,7 @@ def main():
                      + ", ".join(f"0x{(r << 16) | (g << 8) | b:06X}" for r, g, b in colors) + "}},")
         print(f"{stem}: {len(data)} bytes, {im.size} thumbnail, {len(colors)} colors")
     lines += ["static const Wallpaper wallpapers[WALLPAPER_N] = {", *table, "};", "#endif", "", "#endif", ""]
-    (ROOT / "src/wallpapers.h").write_text("\n".join(lines))
+    (ROOT / "src/shell/desktop/wallpapers.h").write_text("\n".join(lines))
 
 
 if __name__ == "__main__":

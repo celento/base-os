@@ -1,7 +1,7 @@
 /* Sample content for documentation screenshots. Only linked by gallery.py;
  * the normal kernel and the user's disk are never modified. */
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 
 static void gallery_clear(void) {
     for(int i=0;i<MAX_WIN;i++)win_close(i);

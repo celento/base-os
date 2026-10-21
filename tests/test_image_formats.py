@@ -27,7 +27,7 @@ class ImageFormatTests(unittest.TestCase):
         for name in ('image_decode_host', 'image_viewer_host'):
             subprocess.run([cls.compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-fsanitize=address,undefined', '-I', str(ROOT / 'src'),
-                            str(ROOT / 'tests' / f'{name}.c'), str(ROOT / 'src/image_decode.c'),
+                            str(ROOT / 'tests' / f'{name}.c'), str(ROOT / 'src/lib/image_decode.c'),
                             '-o', str(cls.directory / name)], check=True)
 
     @classmethod

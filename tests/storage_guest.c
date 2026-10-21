@@ -1,7 +1,7 @@
 /* Linked only into a disposable QEMU test image. */
-#include "platform.h"
-#include "persist.h"
-#include "fs.h"
+#include "kernel/platform.h"
+#include "kernel/persist.h"
+#include "kernel/fs.h"
 static char data[FS_MAX_SIZE - 1];
 static void require(int ok) { if (!ok) panic("storage self-test failed"); }
 void storage_guest(void) {

@@ -1,7 +1,7 @@
 /* Ordinary finite ingress overflow must not execute a partial shell draft. */
 #define TERM_TASK_FIXTURE_ONLY
 #include "term_task_info_host.c"
-#include "input_ingress.h"
+#include "kernel/input_ingress.h"
 static InputIngress ingress;
 static void type(const char *text){while(*text)term_char(*text++);}
 int main(void){

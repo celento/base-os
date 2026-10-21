@@ -15,16 +15,16 @@ class InputIngressTests(unittest.TestCase):
             subprocess.run([shutil.which('cc'), '-std=gnu11', '-Wall', '-Wextra',
                             '-Werror', '-O1', '-I', str(ROOT / 'src'),
                             str(ROOT / 'tests/input_ingress_host.c'),
-                            str(ROOT / 'src/input_ingress.c'), '-o', str(output)], check=True)
+                            str(ROOT / 'src/kernel/input_ingress.c'), '-o', str(output)], check=True)
             result = subprocess.run([str(output)], check=True, capture_output=True, text=True)
             self.assertIn('All ordered ingress checks passed.', result.stdout)
 
     def test_production_desktop_adapter(self):
-        source = (ROOT / 'src/kernel.c').read_text()
+        source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-desktop-input-') as temporary:
             directory = Path(temporary)
             start = source.index('/* Desktop-only compatibility adapter')
-            end = source.index('void kmain(void)', start)
+            end = source.index('/* ---------- Shell contract (kernel/shell.h)', start)
             functions = function(source, 'input_gesture_ticks') + function(source, 'double_click')
             functions += function(source, 'win_resize_tick') + function(source, 'saver_start')
             (directory / 'desktop_input_kernel.inc').write_text(functions + source[start:end])
@@ -32,7 +32,7 @@ class InputIngressTests(unittest.TestCase):
             subprocess.run([shutil.which('cc'), '-std=gnu11', '-Wall', '-Wextra',
                             '-Werror', '-Wno-unused-function', '-O1', '-I', str(ROOT / 'src'),
                             '-I', str(directory), str(ROOT / 'tests/desktop_input_host.c'),
-                            str(ROOT / 'src/input_ingress.c'), '-o', str(output)], check=True)
+                            str(ROOT / 'src/kernel/input_ingress.c'), '-o', str(output)], check=True)
             subprocess.run([str(output)], check=True)
 
     def test_terminal_draft_survives_input_loss(self):
@@ -40,8 +40,8 @@ class InputIngressTests(unittest.TestCase):
             output = Path(temporary) / 'terminal-input-loss'
             subprocess.run([shutil.which('cc'), '-std=gnu11', '-Wall', '-Wextra',
                             '-Werror', '-Wno-unused-function', '-O1', '-I', str(ROOT / 'src'),
-                            str(ROOT / 'tests/term_input_loss_host.c'), str(ROOT / 'src/input_ingress.c'),
-                            str(ROOT / 'tests/net_stub.c'), str(ROOT / 'src/download.c'),
+                            str(ROOT / 'tests/term_input_loss_host.c'), str(ROOT / 'src/kernel/input_ingress.c'),
+                            str(ROOT / 'tests/net_stub.c'), str(ROOT / 'src/kernel/download.c'),
                             '-DDOWNLOAD_HOST_TEST', '-o', str(output)], check=True)
             subprocess.run([str(output)], check=True)
 

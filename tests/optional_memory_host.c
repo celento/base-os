@@ -1,14 +1,14 @@
 /* Exact optional E820 range queries. No physical-memory accesses or probes. */
 #include <assert.h>
 #include <stdio.h>
-#include "platform.h"
+#include "kernel/platform.h"
 static BootInfo test_boot;
 static MemoryRange test_map[E820_MAX];
 #undef BOOTINFO_ADDR
 #undef E820_BASE
 #define BOOTINFO_ADDR ((uintptr_t)&test_boot)
 #define E820_BASE ((uintptr_t)test_map)
-#include "../src/bootinfo.c"
+#include "../src/kernel/bootinfo.c"
 char __kernel_end[1];
 void panic(const char *message) { fprintf(stderr, "%s\n", message); __builtin_trap(); }
 int main(void) {

@@ -1,5 +1,5 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 static void draft_check(int ok,const char *why){if(!ok)panic(why);}
 static int same_bytes(const char *a,const char *b,int length){for(int i=0;i<length;i++)if(a[i]!=b[i])return 0;return 1;}
 static void fill_doc(int slot,int length,int alphabet){

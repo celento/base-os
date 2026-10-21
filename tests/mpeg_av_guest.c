@@ -2,9 +2,9 @@
  * Linked into disposable test disks only; metadata comes from independent
  * FFmpeg probing of an original generated fixture. */
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 #include "process_guest_fixture.h"
-#include "../src/video.h"
+#include "../src/lib/video.h"
 #include "mpeg_av_metadata.h"
 #ifndef MPEG_NATIVE_TASKS
 #define MPEG_NATIVE_TASKS 0

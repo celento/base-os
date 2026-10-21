@@ -2,8 +2,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "video.h"
-#include "gfx.h"
+#include "lib/video.h"
+#include "kernel/gfx.h"
 static uint8_t screen[640*480],pixels[320*240];
 uint8_t *fb=screen;
 int fb_w=640,fb_h=480;
@@ -16,7 +16,7 @@ void draw_rect(int x,int y,int w,int h,uint8_t color){
     for(int dy=y;dy<y+h;++dy)for(int dx=x;dx<x+w;++dx)
         if(dx>=0&&dy>=0&&dx<fb_w&&dy<fb_h)fb[dy*fb_w+dx]=color;
 }
-#include "../src/video_draw.c"
+#include "../src/apps/video_draw.c"
 static void check(int x,int y,int w,int h){
     memset(screen,253,sizeof screen);video_draw(x,y,w,h);
     unsigned sw=frame.width*status.aspect_num/1000,sh=frame.height*status.aspect_den/1000;

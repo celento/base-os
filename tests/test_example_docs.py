@@ -21,7 +21,7 @@ class ExampleDocumentTests(unittest.TestCase):
             source.write_text('''#include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "example_docs.h"
+#include "lib/example_docs.h"
 static unsigned polls;
 void platform_poll(void){polls++;}
 int main(void){
@@ -37,7 +37,7 @@ int main(void){
 ''')
             binary = directory / 'sample'
             subprocess.run([compiler, '-std=c11', '-Wall', '-Wextra', '-Werror',
-                            '-I', str(ROOT / 'src'), str(ROOT / 'src/example_docs.c'),
+                            '-I', str(ROOT / 'src'), str(ROOT / 'src/lib/example_docs.c'),
                             str(source), '-o', str(binary)], check=True)
             self.assertEqual(subprocess.check_output([str(binary)]), document())
 

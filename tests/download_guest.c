@@ -1,8 +1,9 @@
 /* Normal desktop/file-download flows using real RTL8139, SB16 and data disk.
  * This fixture only runs with disposable images from download_test.py. */
 #define FEATURE_TEST
-#include "../src/kernel.c"
-#include "../src/download.h"
+#include "../src/shell/desktop/desktop.c"
+#include "audio_example.h"
+#include "../src/kernel/download.h"
 #ifndef HTTP_PORT
 #define HTTP_PORT "18080"
 #endif

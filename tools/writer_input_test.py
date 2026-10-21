@@ -78,10 +78,10 @@ class WriterCheck:
         self.s = session
         self.o = Observations(session, pathlib.Path(build) / 'kernel.elf')
         debug = DebugInfo(pathlib.Path(build) / 'kernel.elf')
-        self.state_address, (self.state_size, self.state_fields) = debug.variable('state', 'src/writer.c')
-        self.snapshot_size, self.snapshot_fields = debug.structure('Snapshot', 'src/writer.c')
-        self.doc_size, self.doc_fields = debug.structure('WriterDoc', 'src/writer.c')
-        arena_size, self.arena_fields = debug.structure('WriterArena', 'src/writer.c')
+        self.state_address, (self.state_size, self.state_fields) = debug.variable('state', 'src/apps/writer.c')
+        self.snapshot_size, self.snapshot_fields = debug.structure('Snapshot', 'src/apps/writer.c')
+        self.doc_size, self.doc_fields = debug.structure('WriterDoc', 'src/apps/writer.c')
+        arena_size, self.arena_fields = debug.structure('WriterArena', 'src/apps/writer.c')
         assert self.state_size < 4096 and self.doc_size < 100000
         assert arena_size <= session.layout['WRITER_CAPACITY']
         assert self.snapshot_size * 9 <= arena_size

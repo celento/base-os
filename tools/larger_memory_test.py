@@ -104,7 +104,7 @@ def prepare(args, runtime, modules):
         inspector = work / 'inspect-executable'
         command(work, 'build-inspector', [tool('gcc'), '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
                 '-I', runtime / 'src', ROOT / 'tests/executable_inspect_host.c',
-                runtime / 'src/executable.c', '-o', inspector])
+                runtime / 'src/kernel/executable.c', '-o', inspector])
         for name in ('memory-a', 'memory-b'):
             app = work / (name + '.bex')
             command(work, 'build-' + name, [sys.executable, runtime / 'tools/build_app.py',
@@ -121,10 +121,10 @@ def prepare(args, runtime, modules):
         command(work, 'compile-fixture', [tool('gcc'), '-std=gnu11', '-Os', '-g', '-Wall', '-Wextra', '-Werror',
                 '-ffreestanding', '-m32', '-fno-pie', '-fno-pic', '-fno-stack-protector', '-fno-builtin',
                 '-mno-sse', '-mno-mmx', '-msoft-float', '-I', runtime, '-I', runtime / 'src',
-                '-I', args.build, '-c', source, '-o', work / 'kernel.o'])
-        objects = [p for p in sorted(args.build.glob('*.o')) if p.name != 'kernel.o']
+                '-I', args.build, '-c', source, '-o', work / 'desktop.o'])
+        objects = [p for p in sorted(args.build.glob('*.o')) if p.name != 'desktop.o']
         command(work, 'link-fixture', [tool('ld'), '-T', args.build / 'linker.ld', '-nostdlib', '-m', 'elf_i386',
-                '-z', 'noexecstack', '-o', work / 'kernel.elf', work / 'kernel.o', *objects])
+                '-z', 'noexecstack', '-o', work / 'kernel.elf', work / 'desktop.o', *objects])
         command(work, 'binary-fixture', [tool('objcopy'), '-O', 'binary', work / 'kernel.elf', work / 'kernel.bin'])
         report['linked_production_objects'] = {p.name: desktop.digest(p) for p in objects}
         c = modules['layout'].constants()

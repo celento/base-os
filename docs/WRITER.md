@@ -114,7 +114,7 @@ pixel-identical layout in every external word processor.
 
 ## Paginated PDF export
 
-`writer_pdf_export` in `src/writer_pdf.c/.h` serializes the current rich model into
+`writer_pdf_export` in `src/lib/writer_pdf.c/.h` serializes the current rich model into
 ordinary letter or A4 portrait PDF pages, using standard Times fonts, 12/18-point
 body/headings, bold/italic/underline, left/center/right alignment, word wrapping
 and one-inch margins. It is independent of the screen layout and filesystem.
@@ -154,7 +154,7 @@ Save/Discard/Cancel guard still applies.
 
 ## Desktop integration contract
 
-`src/writer.h` exposes one client-area module, default 720x520 and minimum
+`src/apps/writer.h` exposes one client-area module, default 720x520 and minimum
 420x260. The caller supplies client origin and dimensions to drawing, clicking
 and dragging. Every draw operation is clipped to the appropriate client/page
 rectangle as well as the screen. The desktop owns New/Open/Close confirmation,

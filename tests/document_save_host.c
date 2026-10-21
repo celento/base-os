@@ -1,8 +1,8 @@
 /* Real adapter, native coordinator and existing ordinary in-memory disk fixture. */
 #define NATIVE_SYNC_FIXTURE
 #include "native_sync_host.c"
-#include "../src/kernel_owner.c"
-#include "../src/document_save.c"
+#include "../src/kernel/kernel_owner.c"
+#include "../src/lib/document_save.c"
 
 static DocumentRevision revision = {1, 7};
 static void adapter_boundary(void) {

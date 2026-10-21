@@ -1,7 +1,7 @@
 /* Ordinary data-volume entry for disposable 128 MiB (or protected 64 MiB) boots. */
-#include "platform.h"
-#include "persist.h"
-#include "fs.h"
+#include "kernel/platform.h"
+#include "kernel/persist.h"
+#include "kernel/fs.h"
 #ifndef LARGE_VOLUME_MODE
 #define LARGE_VOLUME_MODE 1
 #endif

@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class CalendarUITests(unittest.TestCase):
     def test_smallest_production_display_fits(self):
-        kernel = (ROOT / 'src/kernel.c').read_text()
-        header = (ROOT / 'src/calendar.h').read_text()
+        kernel = (ROOT / 'src/shell/desktop/desktop.c').read_text()
+        header = (ROOT / 'src/apps/calendar.h').read_text()
         def constant(source, name):
             return int(re.search(r'^#define\s+' + name + r'\s+(\d+)', source, re.M)[1])
         available = 600 - constant(kernel, 'MENUBAR_H') - constant(kernel, 'TASKBAR_H') - 8
@@ -25,7 +25,7 @@ class CalendarUITests(unittest.TestCase):
             self.assertIsNotNone(compiler)
             subprocess.run([compiler, '-std=gnu11', '-Wall', '-Wextra', '-Werror', '-O1',
                             '-DRTC_HOST_TEST', '-I', str(ROOT / 'src'),
-                            str(ROOT / 'tests/calendar_ui_host.c'), str(ROOT / 'src/rtc.c'),
+                            str(ROOT / 'tests/calendar_ui_host.c'), str(ROOT / 'src/kernel/rtc.c'),
                             '-o', str(binary)], check=True)
             result = subprocess.run([str(binary)], check=True, text=True, capture_output=True)
             self.assertIn('All Calendar UI functional checks passed.', result.stdout)

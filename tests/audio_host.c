@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #define AUDIO_HOST_TEST
-#include "../src/audio.c"
+#include "../src/kernel/audio.c"
 
 uint8_t audio_test_dma[RING_BYTES],audio_test_source[AUDIO_WORK_CAPACITY];
 uint8_t audio_test_large_source[AUDIO_LARGE_WORK_CAPACITY];

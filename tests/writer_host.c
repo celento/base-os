@@ -3,14 +3,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "writer.h"
-#include "layout.h"
+#include "apps/writer.h"
+#include "kernel/layout.h"
 static unsigned char presented[FB_CAPACITY];
 #undef PRESENT_BASE
 #define PRESENT_BASE ((uintptr_t)presented)
 #define GFX_HOST_TEST
-#include "../src/gfx.c"
-#include "app.h"
+#include "../src/kernel/gfx.c"
+#include "../src/ui/icons.c"
+#include "ui/app.h"
 /* Theme tokens normally owned by kernel.c's theme_apply. The fixture keeps the
  * classic light mapping so pixel assertions stay literal and distinct. */
 uint8_t app_accent = COLOR_BLUE, app_accent_dk = COLOR_BLACK, app_on_accent = COLOR_WHITE;

@@ -20,9 +20,9 @@ POINTER_SPECS = (('pointer.bex', 'examples/c/pointer.c'),)
 POINTER_INPUTS = ('tools/build_app.py', 'sdk/start.c', 'sdk/app.ld',
                   'sdk/baseos.h', 'sdk/baseos_abi.h', 'sdk/baseos_executable.h',
                   'examples/c/pointer_backend.h')
-POINTER_SERVICE_INPUTS = ('Makefile', 'src/kernel.c', 'src/process.c',
-                          'src/native_ui.c', 'src/native_ui.h', 'src/canvas_view.c',
-                          'src/canvas_view.h', 'src/input_ingress.c', 'src/input_ingress.h')
+POINTER_SERVICE_INPUTS = ('Makefile', 'src/shell/desktop/desktop.c', 'src/kernel/process.c',
+                          'src/kernel/native_ui.c', 'src/kernel/native_ui.h', 'src/lib/canvas_view.c',
+                          'src/lib/canvas_view.h', 'src/kernel/input_ingress.c', 'src/kernel/input_ingress.h')
 POINTER_GUIDE_NAME = 'Pointer guide.txt'
 POINTER_GUIDE = b'NATIVE POINTER SDK EXAMPLE\n\nOpen pointer.bex from /Programs or Ctrl+Space, or use Terminal:\nstart /Programs/pointer.bex\n\nPointer draws inside its existing hosted Terminal canvas. It requires\nthe installed hosted UI service, successful PS/2 initialization and a\nbound desktop task. Synchronous exec is unsupported. The app checks\nthe service at runtime and prints POINTER UNSUPPORTED if unavailable.\n\nHold left or right inside the drawing area for separate ink colors;\nhold both for a chord. Only ordinary final button release commits a\nstroke. Losing focus, overlays, minimize or geometry changes cancel\nthe unfinished preview. RESET/CANCEL never commit a partial stroke.\nRelease all buttons before beginning a fresh gesture after cancellation.\n\nR toggles 160x100 / 320x200 and clears; C clears the ink.\nO releases and reopens the endpoint; P prints Terminal status.\nQ or Esc exits. Status shows coordinates, sequence, reset/cancel counts.\n\nThis is a BEX1 SDK drawing/input demonstration. It does not save a\ndocument or create an independent native window. Closing loses ink.\nBEX1 memory limits and the five original frozen BEX1 examples are unchanged.\nSource and service limits: source/examples/c/pointer.c and\nsource/docs/NATIVE_UI.md in the release archive.\n'
 
@@ -49,11 +49,11 @@ def require_pointer_service(source):
         'BOS_FEATURE_OWNED_NATIVE_WINDOW:BOS_FEATURE_HOSTED_UI;}',
     )
     required = {
-        'src/kernel.c': ('if(mouse_ok){const NativeUiHooks native_hooks={native_host_snapshot,native_host_acquired,native_host_focus};native_ui_init(&native_hooks);}',),
-        'src/process.c': (
+        'src/shell/desktop/desktop.c': ('if(kernel_pointer_ready()){const NativeUiHooks native_hooks={native_host_snapshot,native_host_acquired,native_host_focus};native_ui_init(&native_hooks);}',),
+        'src/kernel/process.c': (
             'if(!current_task||!current_task->bound||!native_ui_available())return BOS_E_UNSUPPORTED;',
             'else if(call==BOS_CALL_UI)r[7]=(unsigned)native_ui_call(r,a,b,c,d,e);'),
-        'src/native_ui.c': ('int native_ui_available(void){return hooks.snapshot&&hooks.acquired&&hooks.focus;}',),
+        'src/kernel/native_ui.c': ('int native_ui_available(void){return hooks.snapshot&&hooks.acquired&&hooks.focus;}',),
         'sdk/baseos_abi.h': ('#define BOS_FEATURE_HOSTED_UI (1u<<6)', 'BOS_CALL_MEMORY_INFO=28,BOS_CALL_UI=29};', '#define BOS_UI_MAJOR 1u'),
     }
     try:
@@ -67,7 +67,7 @@ def require_pointer_service(source):
             code = re.sub(r'\s+', '', code)
             if any(code.count(re.sub(r'\s+', '', part)) != 1 for part in fragments):
                 raise ValueError('Pointer example requires known source-installed hosted UI wiring: ' + name)
-            if name == 'src/process.c' and (
+            if name == 'src/kernel/process.c' and (
                     sum(code.count(part) for part in hosted_feature_wirings) != 1 or
                     code.count('BOS_FEATURE_HOSTED_UI') != 1):
                 raise ValueError('Pointer example requires known context-scoped hosted UI feature wiring')
@@ -92,7 +92,7 @@ def build_pointer_example(source, destination):
 
 def require_workspace_loader(source):
     source = pathlib.Path(source)
-    header = (source / 'src/program.h').read_text()
+    header = (source / 'src/kernel/program.h').read_text()
     enabled = re.findall(r'^\s*#\s*define\s+BASEOS_BEX2_ENABLED\s+([01])\s*$', header, re.M)
     if enabled != ['1']:
         raise ValueError('Workspace examples require the explicit source-enabled BEX2 loader')

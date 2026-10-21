@@ -1,5 +1,5 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
+#include "../src/shell/desktop/desktop.c"
 #include "process_guest_fixture.h"
 static ProcessHandle argument_handles[3];
 static void check(int ok,const char *why){if(!ok)panic(why);}

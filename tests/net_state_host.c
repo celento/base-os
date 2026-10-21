@@ -5,7 +5,7 @@
 static unsigned char arena[65536] __attribute__((aligned(16)));
 #define NET_MEMORY ((Network *)arena)
 #define NET_HOST_TEST
-#include "../src/net.c"
+#include "../src/kernel/net.c"
 static uint32_t now;
 static int available=1,link_up=1,sent;
 uint32_t timer_ticks(void){return now;}

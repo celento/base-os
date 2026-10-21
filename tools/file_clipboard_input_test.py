@@ -13,7 +13,7 @@ from writer_input_test import WriterSession, WriterCheck, fixture, native
 class FilesCheck:
     def __init__(self, session, build):
         self.s = session; self.ui = WriterCheck(session, build)
-        self.size, self.fields = DebugInfo(pathlib.Path(build) / 'kernel.elf').structure('WindowState', 'src/kernel.c')
+        self.size, self.fields = DebugInfo(pathlib.Path(build) / 'kernel.elf').structure('WindowState', 'src/shell/desktop/desktop.c')
         assert self.fields['doc'] < 4096 and self.size * 8 < session.layout['EDITOR_CAPACITY']
 
     def front(self):
@@ -174,7 +174,7 @@ def run(build):
         captures.append(str(session.screenshot('files-text-clipboard-is-distinct.png')))
         session.launch('editor'); session.key('ctrl-v')
         front = check.front(); assert front['kind'] == 5
-        debug = DebugInfo(build / 'kernel.elf'); doc_size, doc_fields = debug.structure('Document', 'src/kernel.c')
+        debug = DebugInfo(build / 'kernel.elf'); doc_size, doc_fields = debug.structure('Document', 'src/shell/desktop/desktop.c')
         raw = session.memory(session.layout['EDITOR_BASE'] + front['slot'] * check.size + check.fields['doc'], doc_size)
         length = struct.unpack_from('<i', raw, doc_fields['len'])[0]
         assert raw[:length] == b'Keep this selected text'

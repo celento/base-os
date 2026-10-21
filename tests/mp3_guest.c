@@ -1,6 +1,6 @@
 #define FEATURE_TEST
-#include "../src/kernel.c"
-#include "../src/audio.h"
+#include "../src/shell/desktop/desktop.c"
+#include "../src/kernel/audio.h"
 #include "media_fixture.h"
 static void mp3_check(int ok,const char *message){if(!ok)panic(message);}
 void feature_test(void) {

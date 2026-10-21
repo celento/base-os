@@ -22,7 +22,7 @@ class NativeSdkTests(unittest.TestCase):
             subprocess.run([compiler, '-std=gnu11', '-O1', '-g', '-Wall', '-Wextra',
                             '-Werror', '-fsanitize=address,undefined', '-I', str(ROOT / 'src'),
                             str(ROOT / 'tests/sdk_canvas_host.c'), str(ROOT / 'tests/net_stub.c'),
-                            str(ROOT / 'src/download.c'), '-DDOWNLOAD_HOST_TEST',
+                            str(ROOT / 'src/kernel/download.c'), '-DDOWNLOAD_HOST_TEST',
                             '-o', str(exe)], check=True)
             env = dict(os.environ, ASAN_OPTIONS='detect_leaks=0')
             subprocess.run([str(exe)], env=env, check=True)

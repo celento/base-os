@@ -40,8 +40,8 @@ OUTPUTS = ('/Documents/async.bwr', '/Documents/async.bsh', '/Documents/document.
 EXPECTED_CODEC_SOURCE = r'''
 #include <stdio.h>
 #include <string.h>
-#include "writer_codec.h"
-#include "writer_pdf.h"
+#include "lib/writer_codec.h"
+#include "lib/writer_pdf.h"
 static WriterDoc doc;
 static unsigned char output[16384];
 void platform_poll(void) { }
@@ -169,7 +169,7 @@ class WhiteUiText:
 
 def name_field_bounds(width, height):
     """Union of ordinary/PDF fields from the unchanged namedlg geometry."""
-    source = (ROOT / 'src/kernel.c').read_text()
+    source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
     menubar = int(re.search(r'^#define MENUBAR_H\s+(\d+)\s*$', source, re.M)[1])
     left = (width - 420) // 2 + 22
     bounds = (left, menubar + 140 + 64, left + 420 - 44, menubar + 140 + 108 + 34)
@@ -231,8 +231,8 @@ def expected_outputs(work):
     compiler = shutil.which('clang') or shutil.which('cc')
     assert compiler, 'A host C compiler is required for predetermined export bytes'
     subprocess.run([compiler, '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
-                    '-I', str(ROOT / 'src'), str(source), str(ROOT / 'src/writer_codec.c'),
-                    str(ROOT / 'src/writer_pdf.c'), '-o', str(executable)], check=True, timeout=60)
+                    '-I', str(ROOT / 'src'), str(source), str(ROOT / 'src/lib/writer_codec.c'),
+                    str(ROOT / 'src/lib/writer_pdf.c'), '-o', str(executable)], check=True, timeout=60)
     subprocess.run([str(executable), str(directory)], check=True, timeout=15)
     text = b'ALPHAZCD'
     native = struct.pack('<4sHHII', b'BWR1', 1, 0, len(text), 0) + text + bytes(2 * (len(text) + 1))
@@ -495,7 +495,7 @@ class Session(DesktopSession):
         existing = next((item for item in matches if item['text'] == text), None)
         if existing is None:
             if not hasattr(self, 'white_ui_text'):
-                self.white_ui_text = WhiteUiText(ROOT / 'src/font.h')
+                self.white_ui_text = WhiteUiText(ROOT / 'src/kernel/font.h')
             path = self.directory / pathlib.Path(event['screenshot']).name
             with Image.open(path) as image:
                 foreground = (32, 32, 32) if filename else (255, 255, 255)

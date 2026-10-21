@@ -83,7 +83,7 @@ def main():
                         '-msoft-float', '-I', str(ROOT / 'src'), *flags, '-c',
                         str(ROOT / 'tests/network_guest.c'), '-o', str(directory / 'guest.o')], check=True)
         subprocess.run(['nasm', '-f', 'elf', '-Dkmain=network_guest', '-p', str(build / 'layout.inc'),
-                        str(ROOT / 'src/kernel_entry.asm'), '-o', str(directory / 'entry.o')], check=True)
+                        str(ROOT / 'src/kernel/kernel_entry.asm'), '-o', str(directory / 'entry.o')], check=True)
         objects = [str(p) for p in build.glob('*.o') if p.name != 'kernel_entry.o']
         subprocess.run([tool('ld'), '-T', str(build / 'linker.ld'), '-nostdlib', '-m', 'elf_i386',
                         '-z', 'noexecstack', '-o', str(directory / 'kernel.elf'),

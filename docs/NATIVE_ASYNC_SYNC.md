@@ -92,8 +92,8 @@ backoff or protection rules. `fs_incarnation()` exposes the existing no-wrap
 mount identity for other kernel services; it is not a durable app handle.
 
 All coordinator and FS calls run in the existing serialized desktop/syscall
-context. IRQ and device-only polling never call app code. The desktop's actual
-`storage_poll()` services the coordinator before and after its existing bounded
+context. IRQ and device-only polling never call app code. The kernel's
+`kernel_storage_poll()` (src/kernel/kernel.c) services the coordinator before and after its existing bounded
 FS pump, including idle and terminal turns. Its 256-step/PIT-tick bounds are
 unchanged. Native waits do not add reentrant dispatch to `platform_poll()`.
 

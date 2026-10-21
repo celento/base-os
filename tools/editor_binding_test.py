@@ -37,8 +37,8 @@ class EditorCheck(FilesCheck):
     def __init__(self, session, build):
         super().__init__(session, build)
         debug = DebugInfo(pathlib.Path(build) / 'kernel.elf')
-        self.doc_size, self.doc_fields = debug.structure('Document', 'src/kernel.c')
-        self.source_size, self.source_fields = debug.structure('EditorSource', 'src/kernel.c')
+        self.doc_size, self.doc_fields = debug.structure('Document', 'src/shell/desktop/desktop.c')
+        self.source_size, self.source_fields = debug.structure('EditorSource', 'src/shell/desktop/desktop.c')
         assert self.doc_size == 65572 and self.source_size == 16
 
     def doc(self, slot=None):

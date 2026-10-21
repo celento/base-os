@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "media.h"
+#include "lib/media.h"
 
 static uint8_t file[4096];
 static void u16(unsigned p,unsigned v){file[p]=v;file[p+1]=v>>8;}

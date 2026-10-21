@@ -29,7 +29,7 @@ class SystemMonitorTests(unittest.TestCase):
 
     def test_terminal_task_metadata(self):
         self.native('term_task_info_host', [ROOT / 'tests/net_stub.c',
-                                          ROOT / 'src/download.c', '-DDOWNLOAD_HOST_TEST'])
+                                          ROOT / 'src/kernel/download.c', '-DDOWNLOAD_HOST_TEST'])
 
 
 if __name__ == '__main__':

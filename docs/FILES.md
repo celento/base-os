@@ -88,7 +88,7 @@ format change.
 
 ## Verification
 
-The view model in `src/file_view.c` has no rendering or mutation dependency.
+The view model in `src/apps/file_view.c` has no rendering or mutation dependency.
 Focused tests use valid volumes and ASan/UBSan:
 
 ```sh

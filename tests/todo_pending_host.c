@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "platform.h"
+#include "kernel/platform.h"
 static unsigned char node_arena[FS_CAPACITY], image_arena[FS_IMG_CAPACITY], pool_arena[FS_POOL_CAPACITY];
 #undef FS_BASE
 #undef FS_IMG_BASE
@@ -12,7 +12,7 @@ static unsigned char node_arena[FS_CAPACITY], image_arena[FS_IMG_CAPACITY], pool
 #define FS_BASE ((uintptr_t)node_arena)
 #define FS_IMG_BASE ((uintptr_t)image_arena)
 #define FS_POOL_BASE ((uintptr_t)pool_arena)
-#include "../src/fs.c"
+#include "../src/kernel/fs.c"
 #include "ata_async_stub.h"
 static unsigned char floppy[DISK_SECTORS * SECTOR_SIZE], ide[DATA_DISK_SECTORS * SECTOR_SIZE];
 static int ide_present, fail_write, transport_writes;
@@ -61,7 +61,7 @@ static int todo_test_delete(int id) { ++todo_mutations; return fs_delete(id); }
 #define fs_mkdir todo_test_mkdir
 #define fs_create todo_test_create
 #define fs_delete todo_test_delete
-#include "../src/todo.c"
+#include "../src/apps/todo.c"
 #undef fs_write
 #undef fs_mkdir
 #undef fs_create

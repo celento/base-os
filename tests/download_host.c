@@ -3,15 +3,15 @@
 #define main filesystem_fixture_main
 #include "fs_host.c"
 #undef main
-#include "net_wire.h"
+#include "kernel/net_wire.h"
 #define DOWNLOAD_HOST_TEST
-#include "../src/download.c"
+#include "../src/kernel/download.c"
 static unsigned char terminal_arena[0x100000];
 #define TERM_MEMORY ((uintptr_t)terminal_arena)
-#include "../src/app_storage.c"
-#include "../src/app_canvas.c"
-#include "../src/app_view.c"
-#include "../src/term.c"
+#include "../src/apps/app_storage.c"
+#include "../src/apps/app_canvas.c"
+#include "../src/apps/app_view.c"
+#include "../src/apps/term.c"
 #define V (views[selected])
 
 static NetHttpResult response;
@@ -37,8 +37,6 @@ int net_http_start(const char *url,char *body,unsigned cap){
 }
 void net_cancel(void){cancelled++;busy=0;response.state=NET_HTTP_ERROR;strcpy(response.error,"Request cancelled");}
 int basic_run(const char *text,int n,const ProgramIO *io){(void)text;(void)n;(void)io;return -1;}
-int program_key(void){return 0;}
-void program_present(void){}
 int process_run(const void *p,unsigned n,const ProgramIO *io){(void)p;(void)n;(void)io;return -1;}
 int process_create(const void *p,unsigned n,const char *argument,unsigned length,ProcessHandle *out){(void)p;(void)n;(void)argument;(void)length;(void)out;return -1;}
 int process_create_mode(const void *file,unsigned bytes,const char *argument,unsigned length,
