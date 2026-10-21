@@ -296,7 +296,13 @@ void kmain(void) {
         /* ELF program threads run until the next timer tick, then the
          * desktop gets its turn again. */
         busy |= thread_run_users();
-        /* ATA uses polling, not IRQ14: do not sleep once per sector wait. */
-        if(!busy&&!fs_sync_busy()&&!input_pending(&device_input))__asm__ volatile("hlt");
+        /* ATA uses polling, not IRQ14: do not sleep once per sector wait.
+         * The timer interrupts every millisecond; the desktop still turns
+         * once per TIMER_HZ tick when idle, or sooner for a sleeping thread. */
+        if(!busy&&!fs_sync_busy()&&!input_pending(&device_input)){
+            uint32_t tick=timer_ticks();
+            do __asm__ volatile("hlt");
+            while(timer_ticks()==tick&&!thread_wake_due());
+        }
     }
 }

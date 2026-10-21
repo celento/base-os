@@ -40,7 +40,7 @@ typedef struct Thread {
     uint32_t tid;
     int state;
     uintptr_t channel;          /* what a waiting thread waits for */
-    uint32_t wake_tick;         /* nonzero: give up waiting at this tick */
+    uint32_t wake_at;           /* nonzero: give up waiting at this millisecond */
     int timed_out;
     uint32_t tls_base;
     struct Thread *next;        /* ring of every thread */
@@ -62,9 +62,10 @@ int thread_run_users(void);
 
 /* Current user thread only. */
 void thread_yield(void);
-/* Wait on channel until thread_wake_channel or the timeout tick (0: none).
+/* Wait on channel until thread_wake_channel or the timeout millisecond
+ * (timer_milliseconds; 0: none).
  * Returns 0 when woken, nonzero on timeout. */
-int thread_wait(uintptr_t channel, uint32_t wake_tick);
+int thread_wait(uintptr_t channel, uint32_t wake_at);
 /* Wakes up to count threads waiting on channel; returns how many. */
 unsigned thread_wake_channel(uintptr_t channel, unsigned count);
 /* Mark a thread dead. The current thread never returns from this. */
@@ -76,6 +77,8 @@ void thread_kill_process(struct Uproc *process);
 unsigned thread_live_count(struct Uproc *process);
 /* Point the TLS segment at base (current thread). */
 void thread_set_tls(uint32_t base);
+/* Nonzero when a waiting user thread's timeout has passed. */
+int thread_wake_due(void);
 /* Number of threads that are not dead, thread 0 excluded. */
 unsigned thread_user_count(void);
 #endif

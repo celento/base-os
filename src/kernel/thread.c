@@ -114,10 +114,10 @@ static void switch_to(Thread *next) {
 /* Next runnable thread after the current one in ring order; wakes waiters
  * whose timeout passed. Thread 0 is always runnable. */
 static Thread *pick(void) {
-    uint32_t now = timer_ticks();
+    uint32_t now = timer_milliseconds();
     for (Thread *thread = current->next;; thread = thread->next) {
-        if (thread->state == THREAD_WAITING && thread->wake_tick &&
-            (int32_t)(now - thread->wake_tick) >= 0) {
+        if (thread->state == THREAD_WAITING && thread->wake_at &&
+            (int32_t)(now - thread->wake_at) >= 0) {
             thread->state = THREAD_RUNNABLE;
             thread->timed_out = 1;
             thread->channel = 0;
@@ -156,24 +156,32 @@ int thread_run_users(void) {
     if (desktop.next == &desktop) return 0;
     reschedule();
     reap();
-    uint32_t now = timer_ticks();
+    uint32_t now = timer_milliseconds();
     for (Thread *thread = desktop.next; thread != &desktop; thread = thread->next)
         if (thread->state == THREAD_RUNNABLE ||
-            (thread->state == THREAD_WAITING && thread->wake_tick &&
-             (int32_t)(now - thread->wake_tick) >= 0))
+            (thread->state == THREAD_WAITING && thread->wake_at &&
+             (int32_t)(now - thread->wake_at) >= 0))
+            return 1;
+    return 0;
+}
+
+int thread_wake_due(void) {
+    uint32_t now = timer_milliseconds();
+    for (Thread *thread = desktop.next; thread != &desktop; thread = thread->next)
+        if (thread->state == THREAD_WAITING && thread->wake_at && (int32_t)(now - thread->wake_at) >= 0)
             return 1;
     return 0;
 }
 
 void thread_yield(void) { reschedule(); }
 
-int thread_wait(uintptr_t channel, uint32_t wake_tick) {
+int thread_wait(uintptr_t channel, uint32_t wake_at) {
     current->state = THREAD_WAITING;
     current->channel = channel;
-    current->wake_tick = wake_tick;
+    current->wake_at = wake_at;
     current->timed_out = 0;
     reschedule();
-    current->wake_tick = 0;
+    current->wake_at = 0;
     return current->timed_out;
 }
 

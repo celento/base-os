@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include "kernel/layout.h"
 #define TIMER_HZ 70u
+/* Interrupt rate of the PIT; TIMER_HZ ticks are derived from it. */
+#define TIMER_IRQ_HZ 1000u
 _Static_assert(E820_BASE + E820_MAX * 24 < 0x7000, "memory map overlaps boot stack");
 
 typedef struct {
@@ -32,6 +34,10 @@ int platform_memory_map_valid(const MemoryRange *map, unsigned count);
 int platform_memory_map_available(const MemoryRange *map, unsigned count,
                                   uint64_t base, uint64_t end);
 uint32_t timer_ticks(void);
+/* Milliseconds since boot (wraps after 49 days; compare with differences). */
+uint32_t timer_milliseconds(void);
+/* Monotonic time since boot with sub-microsecond resolution. */
+void timer_clock(uint32_t *seconds, uint32_t *nanoseconds);
 void timer_delay(unsigned ticks);
 /* Collect input while blocking; never dispatch application actions here. */
 void platform_poll(void);

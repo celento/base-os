@@ -36,9 +36,9 @@ can reuse its definitions.
 | `OPEN`, `STAT`, `FSTAT` | Not yet (`ENOENT` or `ENOSYS`); file descriptors arrive with the file system work |
 | `VM_MAP`, `VM_UNMAP`, `VM_PROTECT` | Anonymous private mappings; file mappings return `ENOSYS` |
 | `TCB_SET` | Points this thread's TLS segment at the TCB and loads `%gs` |
-| `CLOCK_GET` | `REALTIME` (CMOS clock at first use plus uptime) and `MONOTONIC`, at timer-tick resolution |
-| `SLEEP`, `YIELD` | Tick resolution (70 Hz) for now |
-| `FUTEX_WAIT`, `FUTEX_WAKE` | Keyed by physical address, with optional relative timeout |
+| `CLOCK_GET` | `REALTIME` (CMOS clock at first use plus uptime) and `MONOTONIC`, with sub-microsecond resolution (PIT counter) |
+| `SLEEP`, `YIELD` | Sleeps end at the first millisecond boundary after the requested time |
+| `FUTEX_WAIT`, `FUTEX_WAKE` | Keyed by physical address, with optional relative timeout (millisecond resolution) |
 | `THREAD_CREATE` | `(entry, stack, argument, tcb)`; the thread starts as `entry(argument)` with a zero return address |
 | `GETPID`, `GETTID`, `MEMINFO`, `LOG` | As named |
 
@@ -65,14 +65,23 @@ faulting in the kernel. Frames the kernel itself touches stay below 1 GiB;
 user frames between 1 and 3 GiB are cleared through a brief switch to the
 kernel root.
 
+## Timer
+
+The PIT interrupts at about 1 kHz. `timer_milliseconds()` counts milliseconds
+and `timer_clock()` adds the PIT counter for sub-microsecond reads that never
+step backwards. The legacy `TIMER_HZ` tick (70 Hz) that the desktop, apps and
+BEX tasks use is derived from the same interrupt, so their timing is
+unchanged. When idle, the desktop loop still turns once per legacy tick, and
+sooner when a sleeping user thread is due.
+
 ## Threads and scheduling
 
 `kernel/thread.c` adds kernel threads with their own 32 KiB kernel stacks.
 Thread 0 is the desktop: `kmain`'s loop, the shell and the BEX runtime keep
 running on the legacy stacks exactly as before.
 
-The kernel stays non-preemptive. A user thread loses the CPU when the timer
-fires while it runs in ring 3, or when a system call blocks or yields. The
+The kernel stays non-preemptive. A user thread loses the CPU after a 10 ms
+quantum while it runs in ring 3, or when a system call blocks or yields. The
 desktop loop calls `thread_run_users()` once per turn, which runs the user
 threads in round-robin order until the turn comes back to thread 0. The
 desktop halts only when no user thread is runnable, so a busy program gets the
@@ -113,6 +122,6 @@ Terminal releases it. BEX files go through the existing launcher unchanged.
 
 ## Not yet
 
-File descriptors beyond the console, `mmap` of files, signals, `fork`/`exec`,
-and sub-tick timers belong to the later phases of the roadmap (IRQ-driven
+File descriptors beyond the console, `mmap` of files, signals and `fork`/`exec`
+belong to the later phases of the roadmap (IRQ-driven
 drivers, file system limits, window and input APIs).
