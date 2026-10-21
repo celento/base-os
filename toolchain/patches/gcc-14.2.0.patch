@@ -1,0 +1,125 @@
+--- a/config.sub
++++ b/config.sub
+@@ -1736,7 +1736,7 @@
+ 	     | ptx* | coff* | ecoff* | winnt* | domain* | vsta* \
+ 	     | udi* | lites* | ieee* | go32* | aux* | hcos* \
+ 	     | chorusrdb* | cegcc* | glidix* | serenity* \
+-	     | cygwin* | msys* | pe* | moss* | proelf* | rtems* \
++	     | cygwin* | msys* | pe* | moss* | proelf* | rtems* | baseos* \
+ 	     | midipix* | mingw32* | mingw64* | mint* \
+ 	     | uxpv* | beos* | mpeix* | udk* | moxiebox* \
+ 	     | interix* | uwin* | mks* | rhapsody* | darwin* \
+--- a/gcc/config.gcc
++++ b/gcc/config.gcc
+@@ -1932,6 +1932,12 @@
+ i[34567]86-*-elf*)
+ 	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h newlib-stdint.h i386/i386elf.h"
+ 	;;
++i[34567]86-*-baseos*)
++	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h glibc-stdint.h i386/i386elf.h baseos.h"
++	thread_file='posix'
++	use_gcc_stdint=wrap
++	native_system_header_dir=/usr/include
++	;;
+ x86_64-*-elf*)
+ 	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h newlib-stdint.h i386/i386elf.h i386/x86-64.h"
+ 	;;
+--- a/libgcc/config.host
++++ b/libgcc/config.host
+@@ -741,6 +741,10 @@
+ i[34567]86-*-elf*)
+ 	tmake_file="$tmake_file i386/t-crtstuff t-crtstuff-pic t-libgcc-pic"
+ 	;;
++i[34567]86-*-baseos*)
++	extra_parts="$extra_parts crtbegin.o crtend.o"
++	tmake_file="$tmake_file i386/t-crtstuff t-crtstuff-pic t-libgcc-pic"
++	;;
+ x86_64-*-elf* | x86_64-*-rtems*)
+ 	tmake_file="$tmake_file i386/t-crtstuff t-crtstuff-pic t-libgcc-pic"
+ 	case ${host} in
+--- a/fixincludes/mkfixinc.sh
++++ b/fixincludes/mkfixinc.sh
+@@ -20,6 +20,7 @@
+     powerpcle-*-eabisim* | \
+     powerpcle-*-eabi* | \
+     *-*-vxworks7* | \
++    *-baseos* | \
+     *-musl* )
+ 	#  IF there is no include fixing,
+ 	#  THEN create a no-op fixer and exit
+--- a/libstdc++-v3/crossconfig.m4
++++ b/libstdc++-v3/crossconfig.m4
+@@ -174,7 +174,7 @@
+ 
+     GCC_CHECK_TLS
+     ;;
+-  *-linux* | *-uclinux* | *-gnu* | *-kfreebsd*-gnu | *-cygwin* | *-solaris*)
++  *-linux* | *-uclinux* | *-gnu* | *-kfreebsd*-gnu | *-cygwin* | *-solaris* | *-baseos*)
+     GLIBCXX_CHECK_COMPILER_FEATURES
+     GLIBCXX_CHECK_LINKER_FEATURES
+     GLIBCXX_CHECK_MATH_SUPPORT
+--- a/libstdc++-v3/configure
++++ b/libstdc++-v3/configure
+@@ -38822,7 +38822,7 @@
+ 
+   fi
+     ;;
+-  *-linux* | *-uclinux* | *-gnu* | *-kfreebsd*-gnu | *-cygwin* | *-solaris*)
++  *-linux* | *-uclinux* | *-gnu* | *-kfreebsd*-gnu | *-cygwin* | *-solaris* | *-baseos*)
+ 
+   # All these tests are for C++; save the language and the compiler flags.
+   # The CXXFLAGS thing is suspicious, but based on similar bits previously
+--- a/gcc/config/baseos.h
++++ b/gcc/config/baseos.h
+@@ -0,0 +1,51 @@
++/* Target definitions for BaseOS on i686: static ELF32 programs over mlibc.
++   Programs load in the per-process user window that starts at 1 GiB. */
++
++#undef TARGET_OS_CPP_BUILTINS
++#define TARGET_OS_CPP_BUILTINS()          \
++  do {                                    \
++    builtin_define ("__baseos__");        \
++    builtin_define ("__unix__");          \
++    builtin_assert ("system=baseos");     \
++    builtin_assert ("system=unix");       \
++    builtin_assert ("system=posix");      \
++    if (c_dialect_cxx ())                 \
++      builtin_define ("_GNU_SOURCE");     \
++  } while (0)
++
++/* C++ static destructors go through __cxa_atexit; crtbegin.o then
++   defines __dso_handle, which the C library references. */
++#undef DEFAULT_USE_CXA_ATEXIT
++#define DEFAULT_USE_CXA_ATEXIT 1
++
++#undef STARTFILE_SPEC
++#define STARTFILE_SPEC "crt1.o%s crti.o%s crtbegin.o%s"
++
++#undef ENDFILE_SPEC
++#define ENDFILE_SPEC "crtend.o%s crtn.o%s"
++
++#undef LIB_SPEC
++#define LIB_SPEC "%{pthread:} -lc"
++
++/* Static executables only; the text segment starts inside the user window. */
++#undef LINK_SPEC
++#define LINK_SPEC "-static %{!Ttext-segment*:-Ttext-segment=0x40100000} -z max-page-size=4096"
++
++#undef LINK_GCC_C_SEQUENCE_SPEC
++#define LINK_GCC_C_SEQUENCE_SPEC "--start-group %G %L --end-group"
++
++#undef CPP_SPEC
++#define CPP_SPEC "%{pthread:-D_REENTRANT}"
++
++/* mlibc keeps thread pointers in %gs, like other i386 Unix systems. */
++#undef TARGET_THREAD_SSP_OFFSET
++#define TARGET_THREAD_SSP_OFFSET 0x14
++
++#undef SIZE_TYPE
++#define SIZE_TYPE "unsigned int"
++#undef PTRDIFF_TYPE
++#define PTRDIFF_TYPE "int"
++#undef WCHAR_TYPE
++#define WCHAR_TYPE "int"
++#undef WCHAR_TYPE_SIZE
++#define WCHAR_TYPE_SIZE 32

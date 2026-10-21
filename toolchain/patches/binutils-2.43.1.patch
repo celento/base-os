@@ -1,0 +1,51 @@
+diff --git a/bfd/config.bfd b/bfd/config.bfd
+index 6553aac1..9195496d 100644
+--- a/bfd/config.bfd
++++ b/bfd/config.bfd
+@@ -587,7 +587,7 @@ case "${targ}" in
+     targ_selvecs=hppa_elf32_vec
+     ;;
+ 
+-  i[3-7]86-*-elf* | i[3-7]86-*-rtems* | i[3-7]86-*-genode*)
++  i[3-7]86-*-elf* | i[3-7]86-*-rtems* | i[3-7]86-*-genode* | i[3-7]86-*-baseos*)
+     targ_defvec=i386_elf32_vec
+     targ_selvecs="iamcu_elf32_vec i386_coff_vec"
+     ;;
+diff --git a/config.sub b/config.sub
+index 2c6a07ab..dd87fe33 100755
+--- a/config.sub
++++ b/config.sub
+@@ -1755,7 +1755,7 @@ case $os in
+ 	     | ptx* | ecoff* | winnt* | domain* | vsta* \
+ 	     | udi* | lites* | ieee* | go32* | aux* | hcos* \
+ 	     | chorusrdb* | cegcc* | glidix* | serenity* \
+-	     | cygwin* | msys* | moss* | proelf* | rtems* \
++	     | cygwin* | msys* | moss* | proelf* | rtems* | baseos* \
+ 	     | midipix* | mingw32* | mingw64* | mint* \
+ 	     | uxpv* | beos* | mpeix* | udk* | moxiebox* \
+ 	     | interix* | uwin* | mks* | rhapsody* | darwin* \
+diff --git a/gas/configure.tgt b/gas/configure.tgt
+index d58f2187..58af41a8 100644
+--- a/gas/configure.tgt
++++ b/gas/configure.tgt
+@@ -232,6 +232,7 @@ case ${generic_target} in
+   i386-*-fuchsia*)			fmt=elf ;;
+   i386-*-haiku*)			fmt=elf em=haiku ;;
+   i386-*-genode*)			fmt=elf ;;
++  i386-*-baseos*)			fmt=elf ;;
+   i386-*-bsd*)				fmt=aout em=386bsd ;;
+   i386-*-netbsd*-gnu* | \
+   i386-*-knetbsd*-gnu | \
+diff --git a/ld/configure.tgt b/ld/configure.tgt
+index f937f78b..9afa2f9f 100644
+--- a/ld/configure.tgt
++++ b/ld/configure.tgt
+@@ -402,7 +402,7 @@ i[3-7]86-*-openbsd*)
+ i[3-7]86-*-elfiamcu)	targ_emul=elf_iamcu
+ 			targ_extra_emuls=elf_i386
+ 			;;
+-i[3-7]86-*-elf* | i[3-7]86-*-rtems* | i[3-7]86-*-genode*)
++i[3-7]86-*-elf* | i[3-7]86-*-rtems* | i[3-7]86-*-genode* | i[3-7]86-*-baseos*)
+ 			targ_emul=elf_i386
+ 			targ_extra_emuls=elf_iamcu
+ 			;;
