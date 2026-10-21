@@ -7,7 +7,7 @@ _Static_assert(PHYS_KIND_LIMIT < CLAIM_BIT, "page kinds overlap transient claim 
 
 /* Source of truth: full static containers, including slack and dormant aliases.
  * Values come from layout.h, never a separately maintained list of free holes.
- * Owners: boot/linker; kernel graphics/editor; fs; writer/paint; term/gfx/download;
+ * Owners: boot/linker (including kernel BSS in the reused staging area); kernel graphics/editor; fs; writer/paint; term/gfx/download;
  * persist/audio/sheet; process paging/tasks; net (including RTL8139 DMA);
  * browser/image_viewer/video. Both filesystem profiles and both audio workspaces
  * stay reserved regardless of mount/fallback/migration/playback state. */

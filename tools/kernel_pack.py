@@ -1,12 +1,15 @@
 """Deterministic BaseOS packed boot image, preserving exact objcopy kernel bytes.
 
 Disk bytes: 4096-byte plain bootstrap prefix, 32-byte BPK1 envelope, then one
-complete raw or LZ4 block payload. CRC32 detects corruption, not authenticity.
+complete raw, LZ4 block or raw LZMA1 payload. CRC32 detects corruption, not
+authenticity. LZMA (the default) uses Python's standard lzma module with fixed
+properties lc=3, lp=0, pb=2 that src/kernel/boot_lzma.c decodes.
 This is an original implementation of the public LZ4 block format:
 https://github.com/lz4/lz4/blob/v1.10.0/doc/lz4_Block_format.md
 No LZ4 library or third-party implementation is copied or required at build time.
 """
 import argparse
+import lzma
 import pathlib
 import struct
 import zlib
@@ -15,6 +18,9 @@ from layout import constants
 
 RAW = 0
 LZ4 = 1
+LZMA = 2
+LZMA_FILTERS = [{'id': lzma.FILTER_LZMA1, 'preset': 9 | lzma.PRESET_EXTREME,
+                 'lc': 3, 'lp': 0, 'pb': 2, 'dict_size': 1 << 20}]
 HEADER = struct.Struct('<8I')
 
 
@@ -116,13 +122,29 @@ def decompress_lz4(payload, raw_size):
     raise ValueError('LZ4 block has no final literal sequence')
 
 
-def pack_kernel(raw, c=None, codec=LZ4):
+def compress_lzma(raw):
+    """Raw LZMA1 stream: one zero byte, four code bytes, then range-coded data."""
+    return lzma.compress(bytes(raw), format=lzma.FORMAT_RAW, filters=LZMA_FILTERS)
+
+
+def decompress_lzma(payload, raw_size):
+    """Reference decoder; trailing end-marker bytes are permitted, as at boot."""
+    decoder = lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=LZMA_FILTERS)
+    output = decoder.decompress(bytes(payload), max_length=raw_size)
+    if len(output) != raw_size:
+        raise ValueError('LZMA output size mismatch')
+    return output
+
+
+def pack_kernel(raw, c=None, codec=LZMA):
     """Pack canonical initialized bytes; enforce disk and linked-RAM budgets."""
     c = c or constants()
     raw = bytes(raw)
     if not raw or len(raw) > c['STACK_BOTTOM'] - c['KERNEL_LOAD_ADDR']:
         raise ValueError('raw kernel exceeds initialized RAM reservation')
-    if codec == LZ4:
+    if codec == LZMA:
+        payload = compress_lzma(raw)
+    elif codec == LZ4:
         payload = compress_lz4(raw)
     elif codec == RAW:
         payload = raw
@@ -161,6 +183,11 @@ def unpack_kernel(packed, c=None):
             raise ValueError('raw payload size mismatch')
     elif codec == LZ4:
         raw = decompress_lz4(payload, raw_size)
+    elif codec == LZMA:
+        try:
+            raw = decompress_lzma(payload, raw_size)
+        except lzma.LZMAError as exc:
+            raise ValueError(f'invalid LZMA payload: {exc}') from exc
     else:
         raise ValueError('unsupported kernel codec')
     if zlib.crc32(raw) != raw_crc:
@@ -174,11 +201,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('raw', type=pathlib.Path)
     parser.add_argument('packed', type=pathlib.Path)
-    parser.add_argument('--codec', choices=('lz4', 'raw'), default='lz4')
+    parser.add_argument('--codec', choices=('lzma', 'lz4', 'raw'), default='lzma')
     args = parser.parse_args()
     try:
         raw = args.raw.read_bytes()
-        packed = pack_kernel(raw, codec=LZ4 if args.codec == 'lz4' else RAW)
+        packed = pack_kernel(raw, codec={'lzma': LZMA, 'lz4': LZ4, 'raw': RAW}[args.codec])
         if unpack_kernel(packed) != raw:
             raise ValueError('packed kernel round-trip mismatch')
         args.packed.write_bytes(packed)

@@ -1,14 +1,19 @@
 """Ordinary valid packed-image fixtures. No corrupt inputs or fault injection."""
 import ctypes
 import ctypes.util
+import os
 import pathlib
+import shutil
 import struct
+import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-from kernel_pack import LZ4, RAW, compress_lz4, decompress_lz4, pack_kernel, unpack_kernel
+from kernel_pack import (LZ4, LZMA, RAW, compress_lz4, compress_lzma, decompress_lz4,
+                         pack_kernel, unpack_kernel)
 from layout import constants
 
 
@@ -30,10 +35,10 @@ class KernelPackTests(unittest.TestCase):
         block += raw + b'\xff\xff' + b'\x50FINAL'
         self.assertEqual(decompress_lz4(block, 65547), raw + raw[:7] + b'FINAL')
 
-    def test_explicit_raw_and_lz4_envelopes(self):
+    def test_explicit_raw_lz4_and_lzma_envelopes(self):
         c = constants()
         raw = bytes(range(256)) * 1000
-        for codec in (RAW, LZ4):
+        for codec in (RAW, LZ4, LZMA):
             packed = pack_kernel(raw, c, codec)
             self.assertEqual(packed[:4096], raw[:4096])
             self.assertEqual(struct.unpack_from('<I', packed, 4104)[0], codec)
@@ -91,6 +96,53 @@ class KernelPackTests(unittest.TestCase):
             result = lib.LZ4_decompress_safe(packed, output, len(packed), len(raw))
             self.assertEqual(result, len(raw))
             self.assertEqual(output.raw, raw)
+
+
+class BootLzmaTests(unittest.TestCase):
+    """The C decoder that runs at boot, checked against Python's lzma encoder."""
+
+    def test_boot_decoder_matches_reference(self):
+        compiler = shutil.which('clang') or shutil.which('gcc')
+        if not compiler:
+            self.skipTest('no host C compiler')
+        cases = {'repeat': b'BaseOS packed kernel\n' * 30000,
+                 'mixed': bytes((i * 37 + i // 511) & 255 for i in range(200000)),
+                 'tiny': b'A' * 100}
+        kernel = ROOT / 'build/kernel.bin'
+        if kernel.exists():
+            cases['kernel'] = kernel.read_bytes()
+        with tempfile.TemporaryDirectory() as name:
+            directory = pathlib.Path(name)
+            binary = directory / 'boot_lzma'
+            flags = ['-fsanitize=address,undefined', '-fno-sanitize-recover=all'] \
+                if compiler.endswith('clang') else []
+            subprocess.run([compiler, '-std=gnu11', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
+                            *flags, '-I', str(ROOT / 'src'), str(ROOT / 'tests/boot_lzma_host.c'),
+                            '-o', str(binary)], check=True)
+            env = dict(os.environ, ASAN_OPTIONS='detect_leaks=0')
+            for label, raw in cases.items():
+                with self.subTest(case=label):
+                    (directory / 'raw').write_bytes(raw)
+                    (directory / 'packed').write_bytes(compress_lzma(raw))
+                    result = subprocess.run([str(binary), str(directory / 'packed'),
+                                             str(directory / 'raw')], env=env,
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_linked_decoder_is_position_independent(self):
+        objects = ROOT / 'build/boot_lzma.o'
+        if not objects.exists():
+            self.skipTest('make first to check the linked boot decoder')
+        relocations = subprocess.run(['objdump', '-r', '-j', '.text.entry', str(objects)], check=True,
+                                     capture_output=True, text=True).stdout
+        self.assertNotIn('R_386', relocations)
+        sections = subprocess.run(['objdump', '-h', str(objects)], check=True,
+                                  capture_output=True, text=True).stdout
+        self.assertIn('.text.entry', sections)
+        for line in sections.splitlines():
+            parts = line.split()
+            if len(parts) > 2 and parts[1] in ('.data', '.bss', '.rodata', '.text'):
+                self.assertEqual(int(parts[2], 16), 0, line)
 
 
 if __name__ == '__main__':

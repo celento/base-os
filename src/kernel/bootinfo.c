@@ -49,6 +49,7 @@ void platform_validate_memory(void) {
     if (!boot_info->map_count || boot_info->map_count > E820_MAX)
         panic("BIOS memory map unavailable");
     if (!available(KERNEL_LOAD_ADDR, (uintptr_t)__kernel_end) ||
+        !available(KERNEL_BSS_BASE, KERNEL_BSS_BASE + KERNEL_BSS_CAPACITY) ||
         !available(STACK_BOTTOM, STACK_TOP) ||
         !available(FB_BASE, RAM_REQUIRED_END))
         panic("required RAM is unavailable or reserved");
