@@ -8088,6 +8088,8 @@ static unsigned desktop_input_turn(void) {
             if(sample.kind==INPUT_RESET)desktop_input_reset(&sample);
             desktop_input_modifiers(sample.modifiers);
             if(wake) {
+                /* Bytes already collected belong to the wake backlog too. */
+                input_acquire_backlog();
                 input_wake_serial=device_input.serial;
                 saver_stop();desktop_input_fence();
                 input_cursor_moved=1;

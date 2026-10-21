@@ -156,10 +156,12 @@ static int input_ready;
 void platform_poll(void){if(input_ready)drain_8042();audio_poll();net_poll();}
 void fs_background_poll(void){platform_poll();}
 
-/* Once IRQ1/IRQ12 are on, the interrupt moves 8042 bytes (with their status)
- * into this ring as they arrive, so none wait behind a busy desktop turn. */
+/* Once IRQ1/IRQ12 are on, the interrupt moves 8042 bytes (with their status
+ * and arrival tick) into this ring as they arrive, so none wait behind a busy
+ * desktop turn and gesture timing still reflects when they arrived. */
 #define PS2_RING 512u
-static uint16_t ps2_ring[PS2_RING];
+typedef struct { uint32_t ticks; uint8_t status, data; } Ps2Entry;
+static Ps2Entry ps2_ring[PS2_RING];
 static volatile unsigned ps2_head, ps2_count;
 static int ps2_irq_mode;
 static void ps2_collect(void) {
@@ -169,13 +171,12 @@ static void ps2_collect(void) {
         uint8_t data = inb(KEYBOARD_DATA_PORT);
         if (ps2_count == PS2_RING) status |= 0x40;  /* report the overflow as loss */
         else ++ps2_count;
-        ps2_ring[(ps2_head + ps2_count - 1) % PS2_RING] = (uint16_t)(status << 8 | data);
+        ps2_ring[(ps2_head + ps2_count - 1) % PS2_RING] = (Ps2Entry){timer_ticks(), status, data};
     }
 }
 static int ps2_pending(void) { return ps2_count != 0; }
 
-static void input_byte(uint8_t status, uint8_t data) {
-    uint32_t ticks = timer_ticks();
+static void input_byte(uint8_t status, uint8_t data, uint32_t ticks) {
     if (status & 0xc0) input_device_loss(&device_input, ticks);
     else if (status & 0x20) input_mouse_byte(&device_input, data, ticks);
     else input_keyboard_byte(&device_input, data, ticks);
@@ -191,14 +192,14 @@ unsigned input_acquire(unsigned budget) {
             /* A byte that raised no interrupt would block the 8042. */
             if (!ps2_count) ps2_collect();
             int have = ps2_count != 0;
-            uint16_t entry = ps2_ring[ps2_head];
+            Ps2Entry entry = ps2_ring[ps2_head];
             if (have) {
                 ps2_head = (ps2_head + 1) % PS2_RING;
                 --ps2_count;
             }
             __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
             if (!have) break;
-            input_byte((uint8_t)(entry >> 8), (uint8_t)entry);
+            input_byte(entry.status, entry.data, entry.ticks);
         }
         return acquired;
     }
@@ -207,7 +208,7 @@ unsigned input_acquire(unsigned budget) {
         if (!(status & 1)) break;
         uint8_t data = inb(KEYBOARD_DATA_PORT);
         ++acquired;
-        input_byte(status, data);
+        input_byte(status, data, timer_ticks());
     }
     return acquired;
 }
@@ -231,6 +232,7 @@ static void ps2_irq_enable(void) {
     kprint_debug("PS/2 interrupts on\n");
 }
 void drain_8042(void) { (void)input_acquire(32); }
+void input_acquire_backlog(void) { if (ps2_irq_mode) (void)input_acquire(ps2_count); }
 
 /* ---------- Video init ---------- */
 

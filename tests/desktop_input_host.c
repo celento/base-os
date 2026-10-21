@@ -63,6 +63,7 @@ static void saver_stop(void){saver_on=0;last_input_frame=frame_count;dirty=1;}
 static unsigned terminal_losses;
 static void term_input_lost(int slot){(void)slot;++terminal_losses;}
 static void drain_8042(void){}
+static void input_acquire_backlog(void){}
 static unsigned acquire_tail;
 static unsigned input_acquire(unsigned budget){unsigned n=acquire_tail<budget?acquire_tail:budget;acquire_tail-=n;return n;}
 #ifndef NATIVE_UI_DESKTOP_REAL
