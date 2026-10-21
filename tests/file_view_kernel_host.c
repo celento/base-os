@@ -84,7 +84,8 @@ static void selection_and_filter(void) {
     assert(fm_filter_open&&!fm_filter_focus&&fm_row_id(fm_selected)==b);
     fm_open_selected();assert(opened==b);
     input(KEY_ESC,0);assert(!fm_filter_open&&fm_count==3);
-    filter_text("123456789012345678901234567890");assert(strlen(fm_view.filter)==23);
+    {char longer[FILE_VIEW_FILTER_LEN+8];memset(longer,'7',sizeof longer-1);longer[sizeof longer-1]=0;
+     filter_text(longer);assert(strlen(fm_view.filter)==FILE_VIEW_FILTER_LEN-1);}
     input(0x1e,1);input(KEY_BACKSPACE,0);assert(!fm_view.filter[0]&&fm_count==3);
     filter_text("a");input(KEY_BACKSPACE,0);assert(!fm_view.filter[0]);
     input(KEY_ESC,0);assert(fm_first==0);

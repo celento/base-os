@@ -1,6 +1,7 @@
 #include "kernel/net.h"
 #include "kernel/platform.h"
 #include "kernel/fs.h"
+#include "kernel/physmem.h"
 #include "apps/term.h"
 #ifndef HTTP_PORT
 #define HTTP_PORT "18080"
@@ -25,7 +26,8 @@ void network_guest(void){
 #ifdef TEST_PUBLIC_DNS
     uint32_t address;check(net_resolve("example.com",&address)==0&&address,"DNS lookup");char ip[16];net_format_ipv4(address,ip);platform_log("NETWORK-DNS-PASS ");platform_log(ip);platform_log("\n");
 #endif
-    fs_init();term_select(0);term_reset();terminal_command("net");check(terminal_has("RTL8139: link up"),"Terminal net");
+    /* Node names live on the kernel heap, as under kmain. */
+    check(physmem_init()==PHYS_OK,"physmem");fs_init();term_select(0);term_reset();terminal_command("net");check(terminal_has("RTL8139: link up"),"Terminal net");
     terminal_command("nslookup 10.0.2.2");check(terminal_has("10.0.2.2"),"Terminal nslookup");
     terminal_command("fetch http://10.0.2.2:" HTTP_PORT "/hello");check(terminal_has("BaseOS real HTTP works."),"Terminal fetch");platform_log("NETWORK-TERMINAL-PASS\n");
     platform_log("NETWORK-QEMU-PASS\n");for(;;)__asm__ volatile("hlt");

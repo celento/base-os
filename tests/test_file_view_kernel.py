@@ -23,7 +23,7 @@ class FileViewKernelTests(unittest.TestCase):
             first = source.index('typedef struct {\n    char buf[EDIT_BUF_SIZE];')
             last = source.index('static WindowState *window_state', first)
             (directory / 'files_kernel_types.inc').write_text(source[first:last])
-            first = source.index('#define fm_cwd ')
+            first = source.index("/* A folder's rows: room for every child")
             last = source.index('static void edit_fingerprint', first)
             operations = source[first:last]
             first = source.index('static const int files_sort_width')

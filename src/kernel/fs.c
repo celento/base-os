@@ -21,8 +21,12 @@
 #define FS_CONVERT_TO_BASEFS 1
 #endif
 
+/* Names longer than this cannot be stored in the snapshot formats. */
+#define FS_SNAPSHOT_NAME_LEN 24
+#define FS_BASEFS_NAME_MAX BFS_NAME_MAX
+
 typedef struct {
-    char name[FS_NAME_LEN];
+    char *name;      /* kmalloc'd; the root's is the static "" */
     int parent;
     int is_dir;
     int is_app;
@@ -30,6 +34,18 @@ typedef struct {
     int used;
     unsigned modified;
     unsigned offset; /* Nonempty data lives in one compact, bounded arena. */
+    unsigned identity, revision;
+    /* BaseFS 2: where the bytes are on disk. A dirty node's bytes are not on
+     * disk yet; its old extents stay valid until the next commit. */
+    BfsExtent *extents;
+    uint32_t extent_count;
+    unsigned char dirty;
+    /* Files load on demand: the arena is a cache of the volume. An absent
+     * node keeps its size but has no bytes in the arena; fs_data reads it
+     * back. Only clean files are ever absent. touch orders residents for
+     * eviction. */
+    unsigned char absent;
+    unsigned touch;
 } FsNode;
 
 /* One serialized node: fixed header, then `size` bytes of data. */
@@ -40,7 +56,7 @@ typedef struct {
     unsigned char is_app;
     unsigned short pad;
     unsigned int size;
-    char name[FS_NAME_LEN];
+    char name[FS_SNAPSHOT_NAME_LEN];
     unsigned modified;
 } DiskNode;
 
@@ -55,15 +71,16 @@ typedef struct {
 } DiskHeader;
 
 static FsNode *nodes;
+static int node_slots;
 static int fs_touched = 0;
-static unsigned identities[FS_MAX_NODES], next_identity;
-unsigned fs_identity(int id){return fs_valid(id)?identities[id]:0;}
+static unsigned next_identity;
+unsigned fs_identity(int id){return fs_valid(id)?nodes[id].identity:0;}
 static unsigned new_identity(void) {
     /* Unknown after exhaustion, never wrap an old node incarnation into use. */
     return next_identity == ~0u ? 0 : ++next_identity;
 }
-static unsigned content_revisions[FS_MAX_NODES], next_content_revision;
-unsigned fs_content_revision(int id){return fs_valid(id)?content_revisions[id]:0;}
+static unsigned next_content_revision;
+unsigned fs_content_revision(int id){return fs_valid(id)?nodes[id].revision:0;}
 static unsigned new_content_revision(void) {
     /* This diagnostic token must neither alias an old version nor prevent an
      * ordinary write. Once exhausted, new versions remain explicitly unknown. */
@@ -88,51 +105,93 @@ static unsigned pool_capacity, image_capacity;
 static int data_problem;
 static int sync_new_incarnation(void);
 
-/* BaseFS 2: the mounted volume and where each node's bytes are on disk.
- * Node ids are checkpoint record indices at mount. A dirty node's bytes are
- * not on disk yet; its old extents stay valid until the next commit. */
+/* BaseFS 2: the mounted volume. Node ids are checkpoint record indices at
+ * mount. */
 static BfsVolume bfs;
-static BfsExtent *node_extents[FS_MAX_NODES];
-static uint32_t node_extent_count[FS_MAX_NODES];
-static unsigned char node_dirty[FS_MAX_NODES];
-/* Files load on demand: the arena is a cache of the volume. An absent node
- * keeps its size but has no bytes in the arena; fs_data reads it back. Only
- * clean files are ever absent. node_touch orders residents for eviction. */
-static unsigned char node_absent[FS_MAX_NODES];
-static unsigned node_touch[FS_MAX_NODES], touch_clock;
+static unsigned touch_clock;
 static void bfs_forget(int id) {
-    kfree(node_extents[id]);
-    node_extents[id] = 0;
-    node_extent_count[id] = 0;
-    node_dirty[id] = 0;
-    node_absent[id] = 0;
-    node_touch[id] = 0;
+    kfree(nodes[id].extents);
+    nodes[id].extents = 0;
+    nodes[id].extent_count = 0;
+    nodes[id].dirty = 0;
+    nodes[id].absent = 0;
+    nodes[id].touch = 0;
 }
 /* Blocks of files deleted since the last commit, freed once it lands. */
 static uint64_t bfs_released;
 static uint64_t extent_blocks(int id) {
     uint64_t blocks = 0;
-    for (uint32_t k = 0; k < node_extent_count[id]; ++k) blocks += node_extents[id][k].blocks;
+    for (uint32_t k = 0; k < nodes[id].extent_count; ++k) blocks += nodes[id].extents[k].blocks;
     return blocks;
 }
 /* Whether the next commit frees blocks: a deleted file, or the old copy of
  * a changed one. */
 static int bfs_save_frees(void) {
     if (bfs_released) return 1;
-    for (int i = 0; i < FS_MAX_NODES; ++i)
-        if (nodes[i].used && node_dirty[i] && node_extent_count[i]) return 1;
+    for (int i = 0; i < node_slots; ++i)
+        if (nodes[i].used && nodes[i].dirty && nodes[i].extent_count) return 1;
     return 0;
 }
 static void bfs_release(void) {
     bfs_released = 0;
-    for (int i = 0; i < FS_MAX_NODES; ++i) bfs_forget(i);
+    for (int i = 0; nodes && i < node_slots; ++i) bfs_forget(i);
     if (bfs.used) bfs_unmount(&bfs);
+}
+
+/* The node table starts in the fixed metadata arena, which holds every node
+ * of the snapshot formats, and moves to the kernel heap when a BaseFS 2
+ * volume needs more. Ids are slots: [0, node_slots). */
+#define FS_ARENA_SLOTS ((int)(FS_CAPACITY / sizeof(FsNode)))
+/* Practically bounded by memory and by a checkpoint fitting the staging
+ * arena (see node_fits); this only keeps ids far from int overflow. */
+#define FS_BASEFS_NODE_LIMIT (1 << 24)
+static char root_name[1];
+static void set_name_storage(int id, char *name) {
+    if (nodes[id].name && nodes[id].name != root_name) kfree(nodes[id].name);
+    nodes[id].name = name;
+}
+/* Copies name (at most length bytes) into node id; -1 when out of memory. */
+static int set_name(int id, const char *name, int length) {
+    if (!id) { set_name_storage(id, root_name); return 0; }
+    char *copy = kmalloc((uint32_t)length + 1);
+    if (!copy) return -1;
+    kmemcpy(copy, name, length);
+    copy[length] = 0;
+    set_name_storage(id, copy);
+    return 0;
+}
+/* Frees every node's name and extents and empties the table, back in the
+ * fixed arena. */
+static void clear_nodes(void) {
+    for (int i = 0; nodes && i < node_slots; ++i) {
+        set_name_storage(i, 0);
+        kfree(nodes[i].extents);
+    }
+    if (nodes && (uintptr_t)nodes != FS_BASE) kfree(nodes);
+    nodes = (FsNode *)FS_BASE;
+    node_slots = FS_ARENA_SLOTS;
+    kmemset(nodes, 0, (int)sizeof(FsNode) * node_slots);
+}
+/* Makes room for at least slots nodes. */
+static int grow_nodes(int slots) {
+    if (slots <= node_slots) return 0;
+    if (slots > fs_node_limit()) return -1;
+    int wanted = node_slots * 2 > slots ? node_slots * 2 : slots;
+    if (wanted > fs_node_limit()) wanted = fs_node_limit();
+    FsNode *table = kmalloc((uint32_t)wanted * (uint32_t)sizeof(FsNode));
+    if (!table) return -1;
+    kmemcpy(table, nodes, (int)sizeof(FsNode) * node_slots);
+    if ((uintptr_t)nodes != FS_BASE) kfree(nodes);
+    nodes = table;
+    node_slots = wanted;
+    return 0;
 }
 
 _Static_assert(sizeof(FsNode) * FS_MAX_NODES <= FS_CAPACITY, "FS arena overflow");
 _Static_assert(FS_MAX_NODES <= 32768, "node IDs exceed signed disk parents");
 _Static_assert(FS_MAX_DEPTH >= FS_LEGACY_NODES - 1, "old directory trees must remain readable");
-_Static_assert(FS_MAX_DEPTH * FS_NAME_LEN < FS_PATH_LEN, "canonical path buffer too small");
+_Static_assert(FS_MAX_DEPTH * FS_SNAPSHOT_NAME_LEN < FS_PATH_LEN, "canonical path buffer too small");
+_Static_assert(FS_BASEFS_NAME_MAX < FS_NAME_LEN, "name buffers too small for BaseFS 2");
 _Static_assert(sizeof(DiskHeader) == 28 && sizeof(DiskNode) == 40, "disk ABI changed");
 _Static_assert(FS_SECTOR_SIZE + FS_LEGACY_NODES * (sizeof(DiskNode) + FS_MAX_SIZE - 1)
                <= FS_DISK_SECTORS * FS_SECTOR_SIZE, "floppy snapshot capacity too small");
@@ -155,7 +214,13 @@ _Static_assert(DATA_LARGE_FIRST_LBA + DATA_LARGE_SLOT_SECTORS == DATA_LARGE_SECO
 __attribute__((weak)) unsigned fs_clock(void) { return 0; }
 __attribute__((weak)) void fs_background_poll(void) {}
 unsigned fs_modified(int id) { return fs_valid(id) ? nodes[id].modified : 0; }
-int fs_node_limit(void) { return data_backend ? FS_MAX_NODES : FS_LEGACY_NODES; }
+/* Ids and names the snapshot formats can hold. */
+static int snapshot_node_limit(void) { return data_backend ? FS_MAX_NODES : FS_LEGACY_NODES; }
+int fs_node_limit(void) {
+    return data_backend == 3 ? FS_BASEFS_NODE_LIMIT : data_backend ? FS_MAX_NODES : FS_LEGACY_NODES;
+}
+int fs_node_slots(void) { return node_slots; }
+int fs_name_max(void) { return data_backend == 3 ? (int)FS_BASEFS_NAME_MAX : FS_SNAPSHOT_NAME_LEN - 1; }
 /* Keep the original 64-node reservation even for small volumes. Additional
  * records consume 40 bytes each; no old full v4 snapshot loses capacity. */
 /* BaseFS 2 writes changed files next to their old copies, and the old
@@ -171,14 +236,14 @@ static uint32_t bfs_blocks_for(uint64_t size) { return (uint32_t)((size + BFS_BL
 static uint64_t bfs_checkpoint_bytes(unsigned count, int except, uint64_t extra, int rewrite_all) {
     uint64_t bytes = 16, extents = except >= 0 ? extra : 0;
     unsigned have = 0;
-    for (int i = 0; i < FS_MAX_NODES; ++i) {
+    for (int i = 0; i < node_slots; ++i) {
         if (!nodes[i].used) continue;
         ++have;
         bytes += 36u + (((unsigned)kstrlen(nodes[i].name) + 3u) & ~3u);
         if (i == except || nodes[i].is_dir) continue;
-        extents += rewrite_all || node_dirty[i] ? bfs_blocks_for((uint64_t)nodes[i].size) : node_extent_count[i];
+        extents += rewrite_all || nodes[i].dirty ? bfs_blocks_for((uint64_t)nodes[i].size) : nodes[i].extent_count;
     }
-    if (count > have) bytes += (uint64_t)(count - have) * (36u + ((FS_NAME_LEN - 1u + 3u) & ~3u));
+    if (count > have) bytes += (uint64_t)(count - have) * (36u + (((unsigned)fs_name_max() + 3u) & ~3u));
     return bytes + 12u * extents;
 }
 static uint32_t bfs_checkpoint_blocks(unsigned count, int except, uint64_t extra, int rewrite_all) {
@@ -187,13 +252,16 @@ static uint32_t bfs_checkpoint_blocks(unsigned count, int except, uint64_t extra
 /* Blocks the next commit writes for changed files, leaving out node except. */
 static uint64_t bfs_pending_blocks(int except) {
     uint64_t blocks = 0;
-    for (int i = 0; i < FS_MAX_NODES; ++i)
-        if (i != except && nodes[i].used && node_dirty[i] && !nodes[i].is_dir)
+    for (int i = 0; i < node_slots; ++i)
+        if (i != except && nodes[i].used && nodes[i].dirty && !nodes[i].is_dir)
             blocks += bfs_blocks_for((uint64_t)nodes[i].size);
     return blocks;
 }
+/* The commit also stages its checkpoint in the image arena. */
 static int bfs_commit_fits(unsigned count, int except, uint64_t extra) {
-    return bfs_pending_blocks(except) + extra + bfs_checkpoint_blocks(count, except, extra, 0) <= bfs.free_blocks;
+    uint64_t checkpoint = bfs_checkpoint_blocks(count, except, extra, 0);
+    return checkpoint * BFS_BLOCK <= image_capacity &&
+           bfs_pending_blocks(except) + extra + checkpoint <= bfs.free_blocks;
 }
 /* Files load on demand, so the disk bounds capacity, not the arena. Very
  * large volumes report at most 2 GiB, which stays positive as an int. */
@@ -201,7 +269,7 @@ static int bfs_commit_fits(unsigned count, int except, uint64_t extra) {
 /* The largest file, in blocks. */
 static uint64_t bfs_largest_blocks(void) {
     uint64_t largest = 0;
-    for (int i = 0; i < FS_MAX_NODES; ++i)
+    for (int i = 0; i < node_slots; ++i)
         if (nodes[i].used && !nodes[i].is_dir && bfs_blocks_for((uint64_t)nodes[i].size) > largest)
             largest = bfs_blocks_for((uint64_t)nodes[i].size);
     return largest;
@@ -254,7 +322,7 @@ const char *fs_storage_name(void) {
 }
 unsigned fs_used_bytes(void) {
     uint64_t n = 0;
-    for (int i = 0; i < FS_MAX_NODES; ++i) if (nodes[i].used) n += (unsigned)nodes[i].size;
+    for (int i = 0; i < node_slots; ++i) if (nodes[i].used) n += (unsigned)nodes[i].size;
     return n < BFS_CAPACITY_REPORT_MAX ? (unsigned)n : BFS_CAPACITY_REPORT_MAX;
 }
 
@@ -315,12 +383,12 @@ static void copy_bytes(void *destination, const void *source, unsigned length) {
 
 static int valid_name(const char *name) {
     if (!name || !*name || !kstrcmp(name, ".") || !kstrcmp(name, "..")) return 0;
-    int n = 0;
-    while (n < FS_NAME_LEN && name[n]) {
+    int n = 0, limit = fs_name_max();
+    while (n <= limit && name[n]) {
         if (name[n] == '/') return 0;
         n++;
     }
-    return n < FS_NAME_LEN;
+    return n <= limit;
 }
 
 /* Measure components, including a leading slash per component. Root has no
@@ -345,7 +413,7 @@ static int tree_fits(int id, int parent, const char *name) {
     ++depth; bytes += 1 + kstrlen(name);
     if (depth > FS_MAX_DEPTH || bytes >= FS_PATH_LEN) return 0;
     if (id < 0 || !nodes[id].is_dir) return 1;
-    for (int i = 1; i < fs_node_limit(); ++i) {
+    for (int i = 1; i < node_slots; ++i) {
         if (!nodes[i].used || i == id) continue;
         int walk = i, below_depth = 0, below_bytes = 0;
         while (walk > 0 && walk != id && below_depth < FS_MAX_DEPTH) {
@@ -362,38 +430,41 @@ static int tree_fits(int id, int parent, const char *name) {
 static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
     if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!valid_name(name)) return -1;
-    if (parent < 0 || parent >= fs_node_limit() || !nodes[parent].used)
+    if (parent < 0 || parent >= node_slots || !nodes[parent].used)
         return -1;
     if (!nodes[parent].is_dir)
         return -1;
     if (fs_find_child(parent, name) >= 0)
         return -1;
-    if (kstrlen(name) <= 0 || kstrlen(name) >= FS_NAME_LEN)
-        return -1;
 
     if (!tree_fits(-1, parent, name) ||
         fs_used_bytes() > fs_capacity_for_nodes(fs_node_count() + 1)) return -1;
+    int count = fs_node_count();
+    if (count >= fs_node_limit()) return -1;
     /* A larger node table must still fit the next commit, even with no data. */
-    if (data_backend == 3 && !bfs_node_fits((unsigned)fs_node_count() + 1)) return -1;
-    for (int i = 0; i < fs_node_limit(); i++) {
-        if (!nodes[i].used) {
-            kmemset(&nodes[i], 0, (int)sizeof(FsNode));
-            kstrcpy(nodes[i].name, name);
-            nodes[i].parent = parent;
-            nodes[i].is_dir = is_dir;
-            nodes[i].is_app = is_app;
-            nodes[i].size = 0;
-            nodes[i].used = 1;
-            identities[i]=new_identity();
-            content_revisions[i]=new_content_revision();
-            nodes[i].modified = fs_clock();
-            bfs_forget(i);
-            node_dirty[i] = 1;
-            fs_touched = 1;
-            return i;
-        }
-    }
-    return -1;
+    if (data_backend == 3 && !bfs_node_fits((unsigned)count + 1)) return -1;
+    /* Snapshot formats store ids, so they stay below the format's limit. */
+    int slots = node_slots < fs_node_limit() ? node_slots : fs_node_limit();
+    int i = 0;
+    while (i < slots && nodes[i].used) ++i;
+    if (i == slots && grow_nodes(slots + 1) < 0) return -1;
+    char *copy = kmalloc((uint32_t)kstrlen(name) + 1);
+    if (!copy) return -1;
+    kstrcpy(copy, name);
+    bfs_forget(i);
+    set_name_storage(i, 0);
+    kmemset(&nodes[i], 0, (int)sizeof(FsNode));
+    nodes[i].name = copy;
+    nodes[i].parent = parent;
+    nodes[i].is_dir = is_dir;
+    nodes[i].is_app = is_app;
+    nodes[i].used = 1;
+    nodes[i].identity=new_identity();
+    nodes[i].revision=new_content_revision();
+    nodes[i].modified = fs_clock();
+    nodes[i].dirty = 1;
+    fs_touched = 1;
+    return i;
 }
 
 int fs_init(void) {
@@ -408,16 +479,14 @@ int fs_init(void) {
     bfs_release();
     pool_base = FS_POOL_BASE; image_base = FS_IMG_BASE;
     pool_capacity = FS_POOL_CAPACITY; image_capacity = FS_IMG_CAPACITY;
-    nodes = (FsNode *)FS_BASE;
-    kmemset(nodes, 0, (int)sizeof(FsNode) * FS_MAX_NODES);
-    kmemset(content_revisions, 0, sizeof(content_revisions));
+    clear_nodes();
 
     nodes[0].used = 1;
-    identities[0]=new_identity();
-    content_revisions[0]=new_content_revision();
+    nodes[0].name = root_name;
+    nodes[0].identity=new_identity();
+    nodes[0].revision=new_content_revision();
     nodes[0].is_dir = 1;
     nodes[0].parent = -1;
-    nodes[0].name[0] = 0;
 
     int docs = fs_mkdir(0, "docs");
     fs_mkdir(0, "trash");
@@ -466,7 +535,7 @@ int fs_init(void) {
 int fs_root(void) { return 0; }
 
 int fs_valid(int id) {
-    return id >= 0 && id < FS_MAX_NODES && nodes[id].used;
+    return id >= 0 && id < node_slots && nodes[id].used;
 }
 
 int fs_is_dir(int id) { return fs_valid(id) && nodes[id].is_dir; }
@@ -474,7 +543,7 @@ int fs_is_app(int id) { return fs_valid(id) && nodes[id].is_app; }
 
 int fs_node_count(void) {
     int n = 0;
-    for (int i = 0; i < FS_MAX_NODES; i++)
+    for (int i = 0; i < node_slots; i++)
         if (fs_valid(i))
             n++;
     return n;
@@ -493,13 +562,13 @@ static const char *absent_bytes(int id) {
 }
 const char *fs_data(int id) {
     if (!fs_valid(id) || !nodes[id].size) return "";
-    if (node_absent[id] && load_data(id) < 0 && node_absent[id]) return absent_bytes(id);
-    node_touch[id] = ++touch_clock;
+    if (nodes[id].absent && load_data(id) < 0 && nodes[id].absent) return absent_bytes(id);
+    nodes[id].touch = ++touch_clock;
     return (const char *)pool_base + nodes[id].offset;
 }
 
 int fs_find_child(int parent, const char *name) {
-    for (int i = 0; i < FS_MAX_NODES; i++) {
+    for (int i = 0; i < node_slots; i++) {
         if (nodes[i].used && nodes[i].parent == parent &&
             kstrcmp(nodes[i].name, name) == 0)
             return i;
@@ -522,8 +591,8 @@ int fs_create_app(int parent, const char *name) {
 /* Remove a data block and compact in place. Since the destination is lower,
  * a forward byte copy is overlap-safe. No allocation or fragmentation remains. */
 static void release_data(int id) {
-    if (node_absent[id]) {
-        node_absent[id] = 0;
+    if (nodes[id].absent) {
+        nodes[id].absent = 0;
         nodes[id].size = 0;
         nodes[id].offset = 0;
         return;
@@ -535,8 +604,8 @@ static void release_data(int id) {
         pool[i] = pool[i + bytes];
         if((i & 4095u)==4095u)fs_background_poll();
     }
-    for (int i = 0; i < FS_MAX_NODES; ++i)
-        if (nodes[i].used && nodes[i].size && !node_absent[i] && nodes[i].offset > offset)
+    for (int i = 0; i < node_slots; ++i)
+        if (nodes[i].used && nodes[i].size && !nodes[i].absent && nodes[i].offset > offset)
             nodes[i].offset -= bytes;
     pool_used -= bytes;
     nodes[id].size = 0;
@@ -548,8 +617,8 @@ static void release_data(int id) {
  * least recently used first and fs_data reads them back. */
 static unsigned dirty_bytes(int except) {
     unsigned bytes = 0;
-    for (int i = 0; i < FS_MAX_NODES; ++i)
-        if (i != except && nodes[i].used && nodes[i].size && !node_absent[i] && node_dirty[i])
+    for (int i = 0; i < node_slots; ++i)
+        if (i != except && nodes[i].used && nodes[i].size && !nodes[i].absent && nodes[i].dirty)
             bytes += (unsigned)nodes[i].size + 1;
     return bytes;
 }
@@ -560,14 +629,14 @@ static unsigned dirty_limit(void) {
     return pool_capacity > reserve ? pool_capacity - reserve : 0;
 }
 static int evictable(int i, int keep) {
-    return i != keep && nodes[i].used && nodes[i].size && !node_absent[i] && !node_dirty[i] &&
+    return i != keep && nodes[i].used && nodes[i].size && !nodes[i].absent && !nodes[i].dirty &&
            !nodes[i].is_dir;
 }
 /* Arena bytes free now or after evicting every clean file but keep. */
 static unsigned room(int keep) {
     unsigned bytes = pool_capacity - pool_used;
     if (data_backend == 3)
-        for (int i = 0; i < FS_MAX_NODES; ++i)
+        for (int i = 0; i < node_slots; ++i)
             if (evictable(i, keep)) bytes += (unsigned)nodes[i].size + 1;
     return bytes;
 }
@@ -575,7 +644,7 @@ static void evict(int id) {
     int size = nodes[id].size;
     release_data(id);
     nodes[id].size = size;
-    node_absent[id] = 1;
+    nodes[id].absent = 1;
 }
 /* Frees arena space until bytes fit, least recently used files first and
  * never keep. Compaction moves the files that stay. */
@@ -583,8 +652,8 @@ static int make_room(unsigned bytes, int keep) {
     if (room(keep) < bytes) return -1;
     while (pool_capacity - pool_used < bytes) {
         int oldest = -1;
-        for (int i = 0; i < FS_MAX_NODES; ++i)
-            if (evictable(i, keep) && (oldest < 0 || node_touch[i] < node_touch[oldest])) oldest = i;
+        for (int i = 0; i < node_slots; ++i)
+            if (evictable(i, keep) && (oldest < 0 || nodes[i].touch < nodes[oldest].touch)) oldest = i;
         if (oldest < 0) return -1;
         evict(oldest);
     }
@@ -595,7 +664,7 @@ static int make_room(unsigned bytes, int keep) {
  * bytes cannot be read the file reads as zeros, at its size, until a later
  * load succeeds; callers rely on fs_size bytes being there. */
 static int load_data(int id) {
-    if (data_backend != 3 || !node_absent[id]) return 0;
+    if (data_backend != 3 || !nodes[id].absent) return 0;
     if (fs_sync_busy()) (void)fs_sync();
     unsigned bytes = (unsigned)nodes[id].size + 1;
     int result = make_room(bytes, id);
@@ -609,8 +678,8 @@ static int load_data(int id) {
     char *destination = (char *)pool_base + pool_used;
     BfsRecord record = {0};
     record.size = (uint64_t)nodes[id].size;
-    record.extent_count = node_extent_count[id];
-    record.extents = node_extents[id];
+    record.extent_count = nodes[id].extent_count;
+    record.extents = nodes[id].extents;
     result = bfs_read(&bfs, &record, 0, destination, (uint32_t)nodes[id].size) == BFS_OK ? 0 : -1;
     if (result < 0) {
         kmemset(destination, 0, nodes[id].size);
@@ -619,7 +688,7 @@ static int load_data(int id) {
     destination[nodes[id].size] = 0;
     nodes[id].offset = pool_used;
     pool_used += bytes;
-    node_absent[id] = 0;
+    nodes[id].absent = 0;
     /* A failed read stays clean, so it is evicted and read again later. */
     return result;
 }
@@ -659,7 +728,7 @@ int fs_write(int id, const char *data, int len) {
         if (fs_sync() < 0) return -1;
     }
     if (!write_fits(id, len)) return -1;
-    unsigned previous = nodes[id].size && !node_absent[id] ? nodes[id].size + 1 : 0;
+    unsigned previous = nodes[id].size && !nodes[id].absent ? nodes[id].size + 1 : 0;
     if (required > room(id) + previous) return -1;
     /* fs_write(dst, fs_data(src), n), self-overwrite, and fs_copy all work even
      * when compaction moves the source. Staging is idle outside disk commits. */
@@ -671,12 +740,12 @@ int fs_write(int id, const char *data, int len) {
     }
     if (len && source >= image_base && source - image_base < image_capacity &&
         (unsigned)len > image_capacity - (source - image_base)) return -1;
-    if (len && len == nodes[id].size && !node_absent[id]) {
+    if (len && len == nodes[id].size && !nodes[id].absent) {
         /* Common autosaves and media overwrites need no arena movement. */
         copy_bytes((char *)pool_base + nodes[id].offset, data, len);
         nodes[id].modified = fs_clock();
-        content_revisions[id]=new_content_revision();
-        node_dirty[id] = 1;
+        nodes[id].revision=new_content_revision();
+        nodes[id].dirty = 1;
         fs_touched = 1;
         return len;
     }
@@ -684,7 +753,7 @@ int fs_write(int id, const char *data, int len) {
     /* Checked above: evicting clean files frees enough. */
     if (required) (void)make_room(required, id);
     if (len) {
-        node_touch[id] = ++touch_clock;
+        nodes[id].touch = ++touch_clock;
         nodes[id].offset = pool_used;
         char *destination = (char *)pool_base + pool_used;
         copy_bytes(destination, data, len);
@@ -693,8 +762,8 @@ int fs_write(int id, const char *data, int len) {
     }
     nodes[id].size = len;
     nodes[id].modified = fs_clock();
-    content_revisions[id]=new_content_revision();
-    node_dirty[id] = 1;
+    nodes[id].revision=new_content_revision();
+    nodes[id].dirty = 1;
     fs_touched = 1;
     return len;
 }
@@ -717,7 +786,7 @@ int fs_list(int parent, int *ids, int max) {
         return 0;
     /* Directories first, then files, in node order. */
     for (int pass = 0; pass < 2; pass++) {
-        for (int i = 0; i < FS_MAX_NODES; i++) {
+        for (int i = 0; i < node_slots; i++) {
             if (!nodes[i].used || nodes[i].parent != parent)
                 continue;
             if (pass == 0 && !nodes[i].is_dir)
@@ -738,7 +807,7 @@ int fs_list(int parent, int *ids, int max) {
 
 int fs_list_files(int *ids, int max) {
     int n = 0;
-    for (int i = 0; i < FS_MAX_NODES; i++) {
+    for (int i = 0; i < node_slots; i++) {
         if (nodes[i].used && !nodes[i].is_dir) {
             if (n < max)
                 ids[n++] = i;
@@ -782,19 +851,19 @@ void fs_path(int id, char *out, int max) {
 
 int fs_unique_file(int parent, char *out) {
     /* new1.txt, new2.txt, ... */
-    for (int n = 1; n <= fs_node_limit(); n++) {
+    for (int n = 1; n <= fs_node_count() + 1; n++) {
         char name[FS_NAME_LEN];
         int pos = 0;
         name[pos++] = 'n';
         name[pos++] = 'e';
         name[pos++] = 'w';
         int x = n;
-        char digs[4];
+        char digs[12];
         int nd = 0;
         do {
             digs[nd++] = (char)('0' + (x % 10));
             x /= 10;
-        } while (x && nd < 4);
+        } while (x);
         while (nd--)
             name[pos++] = digs[nd];
         name[pos++] = '.';
@@ -810,9 +879,10 @@ int fs_unique_file(int parent, char *out) {
     return -1;
 }
 
+/* "base" or "base n", cut to the volume's name length. */
 static void numbered_name(char *out, const char *base, int n) {
-    int i = 0;
-    while (base[i] && i < FS_NAME_LEN - 1) {
+    int limit = fs_name_max() + 1, i = 0;
+    while (base[i] && i < limit - 1) {
         out[i] = base[i];
         i++;
     }
@@ -820,26 +890,24 @@ static void numbered_name(char *out, const char *base, int n) {
         out[i] = 0;
         return;
     }
-    /* Up to three digits at the current 256-node limit. */
-    int digits = n >= 100 ? 3 : n >= 10 ? 2 : 1;
-    if (i > FS_NAME_LEN - 2 - digits)
-        i = FS_NAME_LEN - 2 - digits;
-    out[i++] = ' ';
-    char digs[4];
+    char digs[12];
     int nd = 0;
     int x = n;
     do {
         digs[nd++] = (char)('0' + (x % 10));
         x /= 10;
-    } while (x && nd < 4);
-    while (nd-- && i < FS_NAME_LEN - 1)
+    } while (x);
+    if (i > limit - 2 - nd)
+        i = limit - 2 - nd;
+    out[i++] = ' ';
+    while (nd-- && i < limit - 1)
         out[i++] = digs[nd];
     out[i] = 0;
 }
 
 int fs_unique_dir(int parent, char *out) {
     const char *base = "untitled folder";
-    for (int n = 1; n <= fs_node_limit(); n++) {
+    for (int n = 1; n <= fs_node_count() + 1; n++) {
         char name[FS_NAME_LEN];
         numbered_name(name, base, n);
         if (fs_find_child(parent, name) < 0) {
@@ -854,7 +922,7 @@ int fs_child_count(int parent) {
     int n = 0;
     if (!fs_is_dir(parent))
         return 0;
-    for (int i = 0; i < FS_MAX_NODES; i++) {
+    for (int i = 0; i < node_slots; i++) {
         if (nodes[i].used && nodes[i].parent == parent)
             n++;
     }
@@ -866,16 +934,17 @@ int fs_delete(int id) {
     if (!fs_valid(id) || id == 0)
         return -1;
     if (nodes[id].is_dir) {
-        for (int i = 0; i < FS_MAX_NODES; i++) {
+        for (int i = 0; i < node_slots; i++) {
             if (nodes[i].used && nodes[i].parent == id)
                 fs_delete(i);
         }
     }
     release_data(id);
     nodes[id].used = 0;
-    content_revisions[id]=0;
+    nodes[id].revision=0;
     if (data_backend == 3) bfs_released += extent_blocks(id);
     bfs_forget(id);
+    set_name_storage(id, 0);
     fs_touched = 1;
     return 0;
 }
@@ -901,7 +970,7 @@ int fs_move(int id, int new_parent) {
     int clash = fs_find_child(new_parent, name);
     if (clash >= 0 && clash != id) {
         int found = 0;
-        for (int n = 2; n <= fs_node_limit(); n++) {
+        for (int n = 2; n <= fs_node_count() + 1; n++) {
             numbered_name(name, nodes[id].name, n);
             if (fs_find_child(new_parent, name) < 0) {
                 found = 1;
@@ -910,8 +979,7 @@ int fs_move(int id, int new_parent) {
         }
         if (!found) return -1;
     }
-    if (!tree_fits(id, new_parent, name)) return -1;
-    kstrcpy(nodes[id].name, name);
+    if (!tree_fits(id, new_parent, name) || set_name(id, name, kstrlen(name)) < 0) return -1;
     nodes[id].parent = new_parent;
     nodes[id].modified = fs_clock();
     fs_touched = 1;
@@ -922,7 +990,7 @@ int fs_empty_dir(int parent) {
     if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_is_dir(parent))
         return -1;
-    for (int i = 0; i < FS_MAX_NODES; i++) {
+    for (int i = 0; i < node_slots; i++) {
         if (nodes[i].used && nodes[i].parent == parent)
             fs_delete(i);
     }
@@ -930,8 +998,9 @@ int fs_empty_dir(int parent) {
 }
 
 static void make_copy_name(char *out, const char *base, int n) {
-    /* n==1: "Hello copy"; n>=2: "Hello copy 2". Fit in FS_NAME_LEN. */
-    char suffix[16];
+    /* n==1: "Hello copy"; n>=2: "Hello copy 2". Fit the volume's names. */
+    int limit = fs_name_max() + 1;
+    char suffix[20];
     int sl = 0;
     suffix[sl++] = ' ';
     suffix[sl++] = 'c';
@@ -940,19 +1009,19 @@ static void make_copy_name(char *out, const char *base, int n) {
     suffix[sl++] = 'y';
     if (n >= 2) {
         suffix[sl++] = ' ';
-        char digs[4];
+        char digs[12];
         int nd = 0;
         int x = n;
         do {
             digs[nd++] = (char)('0' + (x % 10));
             x /= 10;
-        } while (x && nd < 4);
+        } while (x);
         while (nd--)
             suffix[sl++] = digs[nd];
     }
     suffix[sl] = 0;
 
-    int max_base = FS_NAME_LEN - 1 - sl;
+    int max_base = limit - 1 - sl;
     if (max_base < 1)
         max_base = 1;
     int i = 0;
@@ -961,7 +1030,7 @@ static void make_copy_name(char *out, const char *base, int n) {
         i++;
     }
     int j = 0;
-    while (suffix[j] && i < FS_NAME_LEN - 1)
+    while (suffix[j] && i < limit - 1)
         out[i++] = suffix[j++];
     out[i] = 0;
 }
@@ -980,7 +1049,7 @@ static int copy_into(int id, int parent, const char *name) {
     if (dst < 0)
         return -1;
     if (nodes[id].is_dir) {
-        for (int i = 0; i < FS_MAX_NODES; i++) {
+        for (int i = 0; i < node_slots; i++) {
             if (nodes[i].used && nodes[i].parent == id &&
                 copy_into(i, dst, nodes[i].name) < 0) {
                 fs_delete(dst);
@@ -999,7 +1068,7 @@ static int copy_into(int id, int parent, const char *name) {
 int fs_unique_copy(int parent, const char *src, char *out) {
     if (!src || !out)
         return -1;
-    for (int n = 1; n <= fs_node_limit(); n++) {
+    for (int n = 1; n <= fs_node_count() + 1; n++) {
         make_copy_name(out, src, n);
         if (fs_find_child(parent, out) < 0)
             return 0;
@@ -1036,14 +1105,10 @@ int fs_rename(int id, const char *name) {
     if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(id) || id == 0 || !valid_name(name))
         return -1;
-    int len = kstrlen(name);
-    if (len <= 0 || len >= FS_NAME_LEN)
-        return -1;
     int clash = fs_find_child(nodes[id].parent, name);
     if (clash >= 0 && clash != id)
         return -1;
-    if (!tree_fits(id, nodes[id].parent, name)) return -1;
-    kstrcpy(nodes[id].name, name);
+    if (!tree_fits(id, nodes[id].parent, name) || set_name(id, name, kstrlen(name)) < 0) return -1;
     nodes[id].modified = fs_clock();
     fs_touched = 1;
     return 0;
@@ -1053,8 +1118,6 @@ int fs_rename(int id, const char *name) {
  * the name. Changes nothing. */
 int fs_can_place(int id, int parent, const char *name) {
     if (!fs_valid(id) || id == 0 || !fs_is_dir(parent) || !valid_name(name)) return 0;
-    int len = kstrlen(name);
-    if (len <= 0 || len >= FS_NAME_LEN) return 0;
     for (int walk = parent; walk >= 0; walk = nodes[walk].parent)
         if (walk == id) return 0;
     return tree_fits(id, parent, name);
@@ -1066,8 +1129,8 @@ int fs_place(int id, int parent, const char *name) {
     int clash = fs_find_child(parent, name);
     if (clash >= 0 && clash != id) return -1;
     if (nodes[id].parent == parent && !kstrcmp(nodes[id].name, name)) return 0;
+    if (set_name(id, name, kstrlen(name)) < 0) return -1;
     nodes[id].parent = parent;
-    kstrcpy(nodes[id].name, name);
     nodes[id].modified = fs_clock();
     fs_touched = 1;
     return 0;
@@ -1213,7 +1276,7 @@ enum { VALIDATE_RECORDS = 1, VALIDATE_NEXT, VALIDATE_PATH, VALIDATE_NAMES,
 static int validator_begin(PayloadValidator *v, const DiskHeader *h,
                            const unsigned char *image) {
     kmemset(v, 0, sizeof(*v));
-    if (!h->count || h->count > (unsigned)fs_node_limit() ||
+    if (!h->count || h->count > (unsigned)snapshot_node_limit() ||
         h->bytes > (slot_sectors() - 1) * FS_SECTOR_SIZE ||
         h->bytes < h->count * disk_node_size(h)) return -1;
     v->header = h; v->image = image;
@@ -1236,17 +1299,17 @@ static int validator_step(PayloadValidator *v, unsigned budget) {
             DiskNode d;
             if (v->pos > end || end - v->pos < ds) return -1;
             decode_node(&d, img + v->pos, h);
-            if (d.id >= (unsigned)fs_node_limit() || v->offsets[d.id] ||
-                d.parent < -1 || d.parent >= fs_node_limit() ||
+            if (d.id >= (unsigned)snapshot_node_limit() || v->offsets[d.id] ||
+                d.parent < -1 || d.parent >= snapshot_node_limit() ||
                 d.is_dir > 1 || d.is_app > 1 || (d.is_dir && d.is_app) ||
                 d.size > fs_file_limit() || d.size > end - v->pos - ds ||
                 ((d.is_dir || d.is_app) && d.size)) return -1;
             int length = 0;
-            while (length < FS_NAME_LEN && d.name[length]) {
+            while (length < FS_SNAPSHOT_NAME_LEN && d.name[length]) {
                 if (d.name[length] == '/') return -1;
                 ++length;
             }
-            if (length == FS_NAME_LEN || (d.id && !length) ||
+            if (length == FS_SNAPSHOT_NAME_LEN || (d.id && !length) ||
                 (d.id && (!kstrcmp(d.name, ".") || !kstrcmp(d.name, ".."))) ||
                 (!d.id && (d.parent != -1 || !d.is_dir || length)) ||
                 d.size > v->allowance - v->total) return -1;
@@ -1312,7 +1375,7 @@ static int read_slot(int slot, DiskHeader *h) {
                ? 1 : -1;
     }
     kmemcpy(h, img, sizeof(*h));
-    if (h->magic != FS_DISK_MAGIC || !h->count || h->count > (unsigned)fs_node_limit() ||
+    if (h->magic != FS_DISK_MAGIC || !h->count || h->count > (unsigned)snapshot_node_limit() ||
         h->bytes > (span - 1) * FS_SECTOR_SIZE ||
         h->bytes < h->count * disk_node_size(h)) return -1;
     if (data_backend) {
@@ -1329,25 +1392,25 @@ static int read_slot(int slot, DiskHeader *h) {
     return 0;
 }
 
-static void import_payload(const DiskHeader *h) {
+/* -1 only when the names do not fit in memory. */
+static int import_payload(const DiskHeader *h) {
     const unsigned char *img = (const unsigned char *)image_base;
     unsigned pos = FS_SECTOR_SIZE;
-    kmemset(nodes, 0, sizeof(FsNode) * FS_MAX_NODES);
-    kmemset(content_revisions, 0, sizeof(content_revisions));
+    clear_nodes();
     pool_used = 0;
     for (unsigned n = 0; n < h->count; ++n) {
         DiskNode d;
         decode_node(&d, img + pos, h);
         pos += disk_node_size(h);
         FsNode *nd = &nodes[d.id];
-        kmemcpy(nd->name, d.name, FS_NAME_LEN);
+        if (set_name(d.id, d.name, kstrlen(d.name)) < 0) return -1;
         nd->parent = d.parent;
         nd->is_dir = d.is_dir;
         nd->is_app = d.is_app;
         nd->size = d.size;
         nd->used = 1;
-        identities[d.id]=new_identity();
-        content_revisions[d.id]=new_content_revision();
+        nodes[d.id].identity=new_identity();
+        nodes[d.id].revision=new_content_revision();
         nd->modified = d.modified;
         if (d.size) {
             nd->offset = pool_used;
@@ -1358,6 +1421,15 @@ static void import_payload(const DiskHeader *h) {
         }
         pos += d.size;
     }
+    return 0;
+}
+
+/* Names on snapshot volumes are already within FS_SNAPSHOT_NAME_LEN - 1. */
+static void snapshot_name(char out[FS_SNAPSHOT_NAME_LEN], const char *name) {
+    int length = kstrlen(name);
+    if (length > FS_SNAPSHOT_NAME_LEN - 1) length = FS_SNAPSHOT_NAME_LEN - 1;
+    kmemset(out, 0, FS_SNAPSHOT_NAME_LEN);
+    kmemcpy(out, name, length);
 }
 
 static int load_volume(void) {
@@ -1376,7 +1448,10 @@ static int load_volume(void) {
         DiskHeader current;
         int rc = read_slot(slot, &current);
         if (rc != 0) { state[slot] = rc; continue; }
-        import_payload(&current);
+        if (import_payload(&current) < 0) {
+            clear_nodes();
+            return -1;
+        }
         active_slot = slot;
         generation = current.generation;
         fs_touched = sync_failures = save_failed = 0;
@@ -1410,14 +1485,42 @@ static BfsDevice bfs_device(void) {
     return (BfsDevice){bfs_device_read, bfs_device_write, bfs_device_flush, 0, ata_sector_count()};
 }
 
+static uint32_t name_hash(int parent, const char *name) {
+    uint32_t hash = 2166136261u ^ (uint32_t)parent;
+    while (*name) hash = (hash ^ (uint8_t)*name++) * 16777619u;
+    return hash;
+}
+/* No two children of a directory share a name: one pass with a hash table. */
+static int unique_siblings(uint32_t count) {
+    uint32_t size = 16;
+    while (size < count * 2) size *= 2;
+    int *table = kmalloc(size * sizeof *table);
+    if (!table) return -1;
+    int result = 0;
+    for (uint32_t i = 1; i < count && !result; ++i) {
+        uint32_t slot = name_hash(nodes[i].parent, nodes[i].name) & (size - 1);
+        while (table[slot]) {
+            int k = table[slot] - 1;
+            if (nodes[k].parent == nodes[i].parent && !kstrcmp(nodes[k].name, nodes[i].name)) {
+                result = -1;
+                break;
+            }
+            slot = (slot + 1) & (size - 1);
+        }
+        table[slot] = (int)i + 1;
+    }
+    kfree(table);
+    return result;
+}
+
 /* The volume's nodes are the records, in order. Checks what this backend can
  * hold (node count, name length, file size, path shape). File bytes stay on
  * disk until fs_data needs them. Takes the records' extents; the caller
  * frees the records. */
 static int import_basefs(BfsRecord *records, uint32_t count) {
-    if (!count || count > FS_MAX_NODES) return -1;
-    kmemset(nodes, 0, sizeof(FsNode) * FS_MAX_NODES);
-    kmemset(content_revisions, 0, sizeof(content_revisions));
+    if (!count || count > (uint32_t)fs_node_limit()) return -1;
+    clear_nodes();
+    if (grow_nodes((int)count) < 0) return -1;
     pool_used = 0;
     for (uint32_t i = 0; i < count; ++i) {
         BfsRecord *r = &records[i];
@@ -1425,28 +1528,26 @@ static int import_basefs(BfsRecord *records, uint32_t count) {
         if ((i && !valid_name(r->name)) || (directory && app) || (app && r->size) ||
             (directory && r->size) || r->size > fs_file_limit()) return -1;
         FsNode *n = &nodes[i];
-        kstrcpy(n->name, r->name);
+        if (set_name((int)i, r->name, kstrlen(r->name)) < 0) return -1;
         n->parent = i ? (int)r->parent : -1;
         n->is_dir = directory;
         n->is_app = app;
         n->used = 1;
         n->modified = r->modified;
-        identities[i] = new_identity();
-        content_revisions[i] = new_content_revision();
+        nodes[i].identity = new_identity();
+        nodes[i].revision = new_content_revision();
         n->size = (int)r->size;
-        node_absent[i] = r->size != 0;
-        node_extents[i] = r->extents;
-        node_extent_count[i] = r->extent_count;
+        nodes[i].absent = r->size != 0;
+        nodes[i].extents = r->extents;
+        nodes[i].extent_count = r->extent_count;
         r->extents = 0;
         r->extent_count = 0;
     }
     for (uint32_t i = 1; i < count; ++i) {
         int depth, bytes;
-        if (path_shape((int)i, &depth, &bytes) < 0) return -1;
-        for (uint32_t k = 1; k < i; ++k)
-            if (nodes[k].parent == nodes[i].parent && !kstrcmp(nodes[k].name, nodes[i].name)) return -1;
+        if (!fs_is_dir(nodes[i].parent) || path_shape((int)i, &depth, &bytes) < 0) return -1;
     }
-    return 0;
+    return unique_siblings(count);
 }
 
 /* Prefer the large arenas whenever the machine has them: BaseFS 2 volumes
@@ -1493,7 +1594,7 @@ static int format_basefs(void) {
     bfs_free_records(records, count);
     data_backend = 3;
     basefs_arenas();
-    for (int i = 0; i < FS_MAX_NODES; ++i) node_dirty[i] = nodes[i].used;
+    for (int i = 0; i < node_slots; ++i) nodes[i].dirty = nodes[i].used;
     writable = 1;
     active_slot = -1;
     generation = sync_failures = save_failed = 0;
@@ -1504,8 +1605,8 @@ static int format_basefs(void) {
 /* Reads every file once, checking each extent; for verifying a conversion
  * while the old snapshot can still be restored. */
 static int read_all_files(void) {
-    for (int i = 0; i < FS_MAX_NODES; ++i)
-        if (nodes[i].used && node_absent[i] && load_data(i) < 0) return -1;
+    for (int i = 0; i < node_slots; ++i)
+        if (nodes[i].used && nodes[i].absent && load_data(i) < 0) return -1;
     return 0;
 }
 
@@ -1520,7 +1621,7 @@ static void convert_to_basefs(int profile) {
     if (!FS_CONVERT_TO_BASEFS || !writable) return;
     uint32_t limit = (profile == 2 ? DATA_LARGE_SECOND_LBA : DATA_SECOND_LBA) / BFS_SECTORS_PER_BLOCK;
     uint64_t needed = BFS_RESERVED_BLOCKS + bfs_checkpoint_blocks((unsigned)fs_node_count(), -1, 0, 1);
-    for (int i = 0; i < FS_MAX_NODES; ++i)
+    for (int i = 0; i < node_slots; ++i)
         if (nodes[i].used) needed += bfs_blocks_for((uint64_t)nodes[i].size);
     if (needed > limit) {
         /* Checked before anything is written, so a full disk is not
@@ -1537,9 +1638,9 @@ static void convert_to_basefs(int profile) {
     }
     BfsDevice device = bfs_device();
     unsigned old_marker[SECTOR_SIZE / sizeof(unsigned)];
-    int ids[FS_MAX_NODES], index[FS_MAX_NODES];
+    int ids[FS_MAX_NODES], index[FS_MAX_NODES]; /* snapshot volumes */
     uint32_t count = 0;
-    for (int i = 0; i < FS_MAX_NODES; ++i)
+    for (int i = 0; i < snapshot_node_limit(); ++i)
         if (nodes[i].used) { index[i] = (int)count; ids[count++] = i; }
     BfsRecord *records = kmalloc(count * sizeof *records);
     int result = records && ata_read(0, old_marker, 1) == 0 ? BFS_OK : BFS_ERR_NOMEM;
@@ -1548,7 +1649,7 @@ static void convert_to_basefs(int profile) {
         FsNode *n = &nodes[ids[k]];
         records[k] = (BfsRecord){k ? (uint32_t)index[n->parent] : BFS_ROOT_PARENT,
                                  (n->is_dir ? BFS_DIRECTORY : 0u) | (n->is_app ? BFS_APP : 0u),
-                                 identities[ids[k]], content_revisions[ids[k]], n->modified,
+                                 nodes[ids[k]].identity, nodes[ids[k]].revision, n->modified,
                                  (uint64_t)n->size, 0, 0, n->name};
         result = bfs_write_data(&bfs, fs_data(ids[k]), (uint64_t)n->size, &records[k].extents,
                                 &records[k].extent_count);
@@ -1656,12 +1757,12 @@ static int save_snapshot(void) {
     DiskHeader h = { .magic = FS_DISK_MAGIC,
                      .version = snapshot_version(),
                      .generation = generation + 1 };
-    for (int i = 0; i < FS_MAX_NODES; ++i) {
+    for (int i = 0; i < node_slots; ++i) {
         if (!nodes[i].used) continue;
         DiskNode d = { .id = i, .parent = nodes[i].parent,
                        .is_dir = nodes[i].is_dir, .is_app = nodes[i].is_app,
                        .size = nodes[i].size, .modified = nodes[i].modified };
-        kmemcpy(d.name, nodes[i].name, FS_NAME_LEN);
+        snapshot_name(d.name, nodes[i].name);
         if (d.size > fs_file_limit() || pos + sizeof(d) + d.size >
             slot_sectors() * FS_SECTOR_SIZE) return -1;
         kmemcpy(img + pos, &d, sizeof(d)); pos += sizeof(d);
@@ -1733,7 +1834,7 @@ static SyncJob sync_job;
 static struct {
     BfsRecord *records;
     unsigned char *fresh;          /* records whose extents this job allocated */
-    unsigned short ids[FS_MAX_NODES];
+    int *ids;                      /* node id of each record */
     uint32_t count, record, extent, copied, crc, run, offset, compared;
     uint64_t file_offset;
     int begun;
@@ -1747,12 +1848,12 @@ static void bfs_job_end(int result) {
     for (uint32_t k = 0; bfs_job.records && k < bfs_job.count; ++k) {
         int id = bfs_job.ids[k];
         BfsRecord *r = &bfs_job.records[k];
-        if (!result) node_dirty[id] = 0;
+        if (!result) nodes[id].dirty = 0;
         if (!bfs_job.fresh[k]) continue;
         if (!result) {
-            kfree(node_extents[id]);
-            node_extents[id] = r->extents;
-            node_extent_count[id] = r->extent_count;
+            kfree(nodes[id].extents);
+            nodes[id].extents = r->extents;
+            nodes[id].extent_count = r->extent_count;
             continue;
         }
         /* Blocks a possibly committed checkpoint names stay taken until a
@@ -1762,6 +1863,7 @@ static void bfs_job_end(int result) {
     }
     kfree(bfs_job.records);
     kfree(bfs_job.fresh);
+    kfree(bfs_job.ids);
     kmemset(&bfs_job, 0, sizeof bfs_job);
 }
 
@@ -1769,13 +1871,21 @@ static enum FsSyncProgress sync_finish(int result);
 static enum FsSyncProgress sync_io(int operation, unsigned lba, void *buffer, int sectors, unsigned next);
 
 static enum FsSyncProgress bfs_plan(void) {
-    int index[FS_MAX_NODES];
+    int *index = kmalloc((uint32_t)node_slots * sizeof *index);
+    bfs_job.ids = kmalloc((uint32_t)node_slots * sizeof *bfs_job.ids);
+    if (!index || !bfs_job.ids) {
+        kfree(index);
+        return sync_finish(-1);
+    }
     uint32_t count = 0;
-    for (int i = 0; i < FS_MAX_NODES; ++i)
-        if (nodes[i].used) { index[i] = (int)count; bfs_job.ids[count++] = (unsigned short)i; }
+    for (int i = 0; i < node_slots; ++i)
+        if (nodes[i].used) { index[i] = (int)count; bfs_job.ids[count++] = i; }
     bfs_job.records = kmalloc(count * sizeof *bfs_job.records);
     bfs_job.fresh = kmalloc(count);
-    if (!bfs_job.records || !bfs_job.fresh) return sync_finish(-1);
+    if (!bfs_job.records || !bfs_job.fresh) {
+        kfree(index);
+        return sync_finish(-1);
+    }
     kmemset(bfs_job.fresh, 0, (int)count);
     bfs_job.count = count;
     for (uint32_t k = 0; k < count; ++k) {
@@ -1783,12 +1893,13 @@ static enum FsSyncProgress bfs_plan(void) {
         FsNode *n = &nodes[id];
         bfs_job.records[k] = (BfsRecord){k ? (uint32_t)index[n->parent] : BFS_ROOT_PARENT,
                                          (n->is_dir ? BFS_DIRECTORY : 0u) | (n->is_app ? BFS_APP : 0u),
-                                         identities[id], content_revisions[id], n->modified,
-                                         (uint64_t)n->size, node_extent_count[id], node_extents[id], n->name};
+                                         nodes[id].identity, nodes[id].revision, n->modified,
+                                         (uint64_t)n->size, nodes[id].extent_count, nodes[id].extents, n->name};
     }
+    kfree(index);
     for (uint32_t k = 0; k < count; ++k) {
         int id = bfs_job.ids[k];
-        if (!node_dirty[id] || nodes[id].is_dir) continue;
+        if (!nodes[id].dirty || nodes[id].is_dir) continue;
         BfsRecord *r = &bfs_job.records[k];
         bfs_job.fresh[k] = 1;
         if (bfs_allocate(&bfs, r->size, &r->extents, &r->extent_count) != BFS_OK) return sync_finish(-1);
@@ -2062,8 +2173,8 @@ enum FsSyncProgress fs_sync_step(void) {
     switch (j->phase) {
     case SYNC_IDLE: return FS_SYNC_IDLE;
     case SYNC_SERIALIZE_NODE: {
-        while (j->node < FS_MAX_NODES && !nodes[j->node].used) ++j->node;
-        if (j->node == FS_MAX_NODES) {
+        while (j->node < (unsigned)snapshot_node_limit() && !nodes[j->node].used) ++j->node;
+        if (j->node == (unsigned)snapshot_node_limit()) {
             j->header.bytes = j->pos - FS_SECTOR_SIZE;
             if (validator_begin(&j->validator, &j->header, img) < 0) return sync_finish(-1);
             j->phase = SYNC_VALIDATE_STAGE; return FS_SYNC_MORE;
@@ -2073,7 +2184,7 @@ enum FsSyncProgress fs_sync_step(void) {
             .is_dir = n->is_dir, .is_app = n->is_app, .size = n->size, .modified = n->modified };
         if (d.size > fs_file_limit() || j->pos > slot_sectors() * FS_SECTOR_SIZE ||
             sizeof(d) + d.size > slot_sectors() * FS_SECTOR_SIZE - j->pos) return sync_finish(-1);
-        kmemcpy(d.name, n->name, FS_NAME_LEN);
+        snapshot_name(d.name, n->name);
         kmemcpy(img + j->pos, &d, sizeof(d)); j->pos += sizeof(d);
         j->length = d.size; j->copied = 0; ++j->header.count;
         j->phase = SYNC_SERIALIZE_DATA; return FS_SYNC_MORE;

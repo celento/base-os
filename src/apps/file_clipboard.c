@@ -53,7 +53,7 @@ static int within(int node, int ancestor) {
 }
 
 static int contains_apps(int node) {
-    for (int i = 1; i < fs_node_limit(); ++i)
+    for (int i = 1; i < fs_node_slots(); ++i)
         if (fs_is_app(i) && within(i, node)) return 1;
     return 0;
 }
@@ -98,10 +98,10 @@ static int choose_copy_name(int node, int directory, char *out) {
     int dot = fs_is_dir(node) ? -1 : normal_extension(name);
     if (dot < 0) return fs_unique_copy(directory, name, out);
     int extension_length = kstrlen(name + dot); /* Includes the final dot. */
-    for (int number = 1; number <= fs_node_limit(); ++number) {
+    for (int number = 1; number <= fs_node_count() + 1; ++number) {
         char suffix[16];
         int suffix_length = copy_suffix(suffix, number);
-        int stem_length = FS_NAME_LEN - 1 - suffix_length - extension_length;
+        int stem_length = fs_name_max() - suffix_length - extension_length;
         /* Preserve the complete extension and at least one stem character.
          * An unusually long extension can leave no room for a copy label. */
         if (stem_length < 1) return -1;
@@ -125,14 +125,10 @@ int file_copy_named(int node, int directory) {
     if (result < 0) return result;
     /* fs_copy is also the legacy Duplicate, so it always chooses a " copy"
      * name after the whole filename. Finalize our already-chosen free name
-     * in RAM before the caller's sync. Rename cannot fail under the current
-     * valid-volume contract: final_name is valid, fs_copy proved subtree depth
-     * fits, every legal-depth path fits FS_PATH_LEN, and fs_background_poll
-     * cannot mutate the tree during copy. Keep a defensive rollback if a
-     * future contract changes; never retain an unexpected copy or overwrite
+     * in RAM before the caller's sync. With long names the chosen name can
+     * make a path in the copied tree too long where the " copy" name fitted;
+     * then the copy is removed. Never retain an unexpected copy or overwrite
      * any pre-existing node. */
-    _Static_assert(FS_MAX_DEPTH * FS_NAME_LEN < FS_PATH_LEN,
-                   "legal-depth paths must fit after finalizing a copied name");
     if (kstrcmp(fs_name(result), final_name) && fs_rename(result, final_name) < 0) {
         fs_delete(result);
         return -1;

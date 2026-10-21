@@ -42,8 +42,8 @@ known times in descending order. Properties still shows complete metadata.
 ## Filter this folder
 
 Click **Filter** or press Ctrl+F, then type part of a name. Matching is an ASCII
-case-insensitive substring, limited to 23 characters, the filesystem's maximum
-name length. Filtering is local to the current folder; it does not search file
+case-insensitive substring of up to 255 characters, the longest name BaseFS 2
+allows. Filtering is local to the current folder; it does not search file
 contents or subfolders and does not interpret wildcards.
 
 - Ctrl+F or clicking the field selects its current text for replacement.

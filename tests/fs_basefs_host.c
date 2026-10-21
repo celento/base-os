@@ -95,6 +95,7 @@ static void expect(const char *name, const char *text, int length) {
     int id = fs_find_child(0, name);
     assert(id >= 0 && fs_size(id) == length && !memcmp(fs_data(id), text, (size_t)length));
 }
+static int put_in(int id, const char *text) { return fs_write(id, text, (int)strlen(text)); }
 static int is_basefs(void) {
     BfsDevice device = bfs_device();
     return bfs_probe(&device);
@@ -416,10 +417,61 @@ int main(void) {
     assert(sectors_written > saves && fs_needs_sync() && fs_sync() == 0);
     assert(mount() == 0 && fs_node_count() == nodes_before);
 
+    /* No fixed node table or 23-byte names on BaseFS 2: thousands of nodes
+     * and 255-byte names save, mount and resolve; 256 bytes is refused. */
+    memset(data_disk, 0, sizeof data_disk);
+    device = bfs_device();
+    assert(bfs_format(&device, 5) == BFS_OK);
+    assert(mount() == 0 && fs_name_max() == 255);
+    enum { MANY = 3000 };
+    char long_name[257];
+    memset(long_name, 'n', 255);
+    long_name[255] = 0;
+    int deep = fs_mkdir(0, long_name);
+    assert(deep >= 0 && fs_find_child(0, long_name) == deep && kstrlen(fs_name(deep)) == 255);
+    long_name[255] = 'n'; long_name[256] = 0;
+    assert(fs_mkdir(0, long_name) < 0 && fs_create(deep, long_name) < 0);
+    long_name[255] = 0;
+    int many = fs_mkdir(0, "many");
+    char item[32];
+    for (int i = 0; i < MANY; ++i) {
+        snprintf(item, sizeof item, "item %d.txt", i);
+        int id = fs_create(many, item);
+        assert(id >= 0 && put_in(id, item) == (int)strlen(item));
+    }
+    assert(fs_node_count() == 1 + 2 + MANY && fs_node_slots() > FS_MAX_NODES);
+    assert(fs_child_count(many) == MANY);
+    char unique[FS_NAME_LEN];
+    assert(fs_unique_dir(deep, unique) == 0 && !strcmp(unique, "untitled folder"));
+    int copied = fs_copy(fs_find_child(many, "item 7.txt"), many);
+    assert(copied >= 0 && !strcmp(fs_name(copied), "item 7.txt copy") && fs_delete(copied) == 0);
+    assert(fs_rename(fs_find_child(many, "item 0.txt"), long_name) == 0);
+    assert(fs_sync() == 0 && mount() == 0);
+    assert(fs_node_count() == 1 + 2 + MANY && fs_child_count(fs_find_child(0, "many")) == MANY);
+    many = fs_find_child(0, "many");
+    for (int i = 1; i < MANY; i += 97) {
+        snprintf(item, sizeof item, "item %d.txt", i);
+        int id = fs_find_child(many, item);
+        assert(id >= 0 && fs_size(id) == (int)strlen(item) && !memcmp(fs_data(id), item, strlen(item)));
+    }
+    int renamed = fs_find_child(many, long_name);
+    assert(renamed >= 0 && fs_size(renamed) == (int)strlen("item 0.txt"));
+    /* Deleting most of them leaves a table that still saves and mounts. */
+    for (int i = 1; i < MANY; i += 2) {
+        snprintf(item, sizeof item, "item %d.txt", i);
+        assert(fs_delete(fs_find_child(many, item)) == 0);
+    }
+    assert(fs_sync() == 0 && mount() == 0 && fs_child_count(fs_find_child(0, "many")) == MANY / 2);
+
+    /* The snapshot formats keep their limits. */
+    fs_init();
+    assert(fs_name_max() == 23 && fs_mkdir(0, "a name of twenty four bb") < 0);
+    assert(fs_mkdir(0, "twenty three bytes name") >= 0);
+
     printf("basefs volume: format, %u-step incremental save, reuse, %u+%u save cuts, conversion from "
            "both slots, %u+%u conversion cuts, restore after %u read faults, odd sizes, %d full-disk files with %d "
-           "refused rewrites, a %d-folder small volume, an unreadable superblock and on-demand loading of %d files "
-           "passed\n", steps, outcomes[0], outcomes[1], kept, converted, attempts, files, refused, folders,
-           (int)CACHED_FILES);
+           "refused rewrites, a %d-folder small volume, an unreadable superblock and on-demand loading of %d files, "
+           "%d nodes and 255-byte names passed\n", steps, outcomes[0], outcomes[1], kept, converted, attempts, files,
+           refused, folders, (int)CACHED_FILES, (int)MANY);
     return 0;
 }

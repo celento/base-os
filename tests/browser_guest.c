@@ -2,6 +2,7 @@
 #include "ui/app.h"
 #include "apps/browser.h"
 #include "kernel/fs.h"
+#include "kernel/physmem.h"
 #include "kernel/net.h"
 #include "kernel/platform.h"
 #ifndef HTTP_PORT
@@ -23,7 +24,8 @@ void browser_guest(void){
     platform_validate_memory();const BootInfo *bi=(const BootInfo *)BOOTINFO_ADDR;check(video_info_valid(bi),"graphics boot info");
     gfx_init((uint8_t *)FB_BASE,(uint8_t *)(uintptr_t)bi->lfb,bi->width,bi->height,bi->bpp,bi->pitch);
     app_accent=gfx_rgb(43,103,190);app_text=gfx_gray(30);app_text_dim=gfx_gray(90);app_chrome=gfx_gray(239);
-    fs_init();net_init();check(net_status()->available,"RTL8139 available");browser_init();present();
+    /* Node names live on the kernel heap, as under kmain. */
+    check(physmem_init()==PHYS_OK,"physmem");fs_init();net_init();check(net_status()->available,"RTL8139 available");browser_init();present();
     check(equals(browser_url(),"about:home"),"local home");check(!net_busy(),"opening browser does not start a request");
     browser_key(0x26,0,BROWSER_MOD_CTRL);const char *typed=ORIGIN "/index";while(*typed)browser_key(0,*typed++,0);browser_key(KEY_ENTER,0,0);
     check(browser_loading(),"asynchronous Go");wait_page("BaseOS live HTTP");check(contains(browser_status(),"HTTP 200"),"HTTP status visible");platform_log("BROWSER-HTTP-PASS\n");

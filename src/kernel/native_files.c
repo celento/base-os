@@ -45,7 +45,7 @@ static void file_info(const NativeFile *file, BosFileInfo *out) {
 static int document_parent(int parent) {
     int documents = fs_find_child(fs_root(), "Documents");
     if (documents < 0 || !fs_is_dir(documents)) return 0;
-    for (unsigned i = 0; i < FS_MAX_NODES && parent >= 0; ++i) {
+    for (int i = 0; i < fs_node_slots() && parent >= 0; ++i) {
         if (parent == documents) return 1;
         parent = fs_parent(parent);
     }

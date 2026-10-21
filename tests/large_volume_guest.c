@@ -62,7 +62,7 @@ void large_volume_guest(void) {
     sync_disk(); platform_log("LARGE-MIGRATION-PASS\n");
 #else
     check(loaded >= 0 && fs_large_profile() && fs_large_arenas_available(), "large: high arenas unavailable");
-    check(fs_file_limit() == FS_LARGE_FILE_MAX && fs_node_limit() == 256, "large: limits wrong");
+    check(fs_file_limit() == FS_LARGE_FILE_MAX && fs_node_limit() >= 256, "large: limits wrong");
     int maximum = fs_find_child(0, "maximum");
     if (maximum < 0) {
         fs_empty_dir(0);

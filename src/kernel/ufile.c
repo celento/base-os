@@ -232,7 +232,7 @@ static int destination(Uproc *process, uint32_t address, int *parent, char *name
     const char *last = path;
     for (const char *p = path; *p; ++p)
         if (*p == '/') last = p + 1;
-    if (kstrlen(last) >= FS_NAME_LEN) return -BOS_ENAMETOOLONG;
+    if (kstrlen(last) > fs_name_max()) return -BOS_ENAMETOOLONG;
     *parent = fs_destination(cwd_of(process), path, name);
     if (*parent >= 0) return 0;
     if (!*last || !kstrcmp(last, ".") || !kstrcmp(last, "..")) return -BOS_EEXIST;
@@ -527,8 +527,8 @@ int ufile_readdir(Uproc *process, int fd, uint32_t buffer, uint32_t length) {
     if (!file) return -BOS_EBADF;
     if (file->kind != UFILE_DIRECTORY) return -BOS_ENOTDIR;
     if (!node_current(file)) return -BOS_EIO;
-    int limit = fs_node_limit();
-    int *children = kmalloc((uint32_t)limit * sizeof *children);
+    int limit = fs_child_count(file->node);
+    int *children = kmalloc((uint32_t)(limit ? limit : 1) * sizeof *children);
     if (!children) return -BOS_ENOMEM;
     int count = fs_list(file->node, children, limit);
     uint32_t done = 0;

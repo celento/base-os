@@ -50,6 +50,7 @@ int fs_is_dir(int id){return id==0||id==1;}
 int fs_is_app(int id){(void)id;return 0;}
 int fs_find_child(int parent,const char *name){return parent==0&&!strcmp(name,"Documents")?1:-1;}
 int fs_parent(int id){return id==2?1:id==1?0:-1;}
+int fs_node_slots(void){return FS_MAX_NODES;}
 int fs_resolve(int cwd,const char *path){(void)cwd;return !strcmp(path,"/Documents/data.txt")?2:-1;}
 int fs_destination(int cwd,const char *path,char *name){(void)cwd;(void)path;strcpy(name,"data.txt");return 1;}
 int fs_size(int id){assert(id==2);return sizeof disk_bytes;}

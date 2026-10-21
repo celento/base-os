@@ -46,6 +46,7 @@ int writer_clipboard_get(char *text, unsigned capacity, unsigned *generation) {
     memcpy(text, clipboard, clipboard_length + 1); *generation = clipboard_generation;
     return (int)clipboard_length;
 }
+int fs_name_max(void) { return 23; }
 int fs_valid(int id) { return id >= 0 && id < 20 && files[id].valid; }
 int fs_is_dir(int id) { return fs_valid(id) && files[id].folder; }
 int fs_is_app(int id) { (void)id; return 0; }

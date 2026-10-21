@@ -37,6 +37,7 @@ enum { WK_TERM=1,WK_NATIVE=2 };
 typedef struct {int x,y,w,h,open,kind,seq;} Win;
 static Win wins[MAX_WIN];
 static unsigned window_state[MAX_WIN];
+static void window_state_clear(int slot){window_state[slot]=0;}
 static int native_output_scroll[MAX_WIN],wm_seq,wm_z,context_slot=7,selected=7;
 static int dirty,open_dlg,input_available=1,focused,terminal_windows,terminal_starts,terminal_lines;
 static const char *native_launch_status="";

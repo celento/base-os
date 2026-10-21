@@ -31,7 +31,7 @@ void node_capacity_guest(void) {
     /* BaseFS 2 volumes allocate from the kernel heap, as under kmain. */
     if (physmem_init() != PHYS_OK) platform_log("PANIC: physmem\n");
     fs_init(); int loaded = fs_load_disk();
-    require(fs_node_limit() == 256 && fs_file_limit() == 2097152u, "node test: wrong IDE limits");
+    require(fs_node_limit() >= 256 && fs_file_limit() == 2097152u, "node test: wrong IDE limits");
 #if NODE_TEST_MODE == 1
     if (loaded == FS_LOAD_BLANK) {
         fs_empty_dir(0);
@@ -58,7 +58,10 @@ void node_capacity_guest(void) {
         /* BaseFS 2 keeps at least the snapshot format's 256-node allowance. */
         require(fs_node_count() == 256 && fs_capacity() >= 8377344u, "node test: 256 count/capacity wrong");
         synced();
-        require(fs_create(0, "overflow") == -1 && !fs_needs_sync(), "node test: full slots changed state");
+        /* BaseFS 2 has no fixed node table: a 257th node fits too. */
+        int overflow = fs_create(0, "overflow");
+        require(overflow > 0 && fs_node_count() == 257 && fs_delete(overflow) == 0, "node test: 257th node refused");
+        synced();
         platform_log("NODE-256-WRITE-PASS\n");
     } else {
         require(loaded == 0 && fs_node_count() == 256, "node test: 256-node remount failed");

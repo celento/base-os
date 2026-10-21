@@ -1,3 +1,4 @@
+#include <stdlib.h>
 /* Exact desktop dispatch with real Terminal/FS; process execution is guest-tested. */
 #define TERM_TASK_FIXTURE_ONLY
 #include "term_task_info_host.c"
@@ -28,12 +29,23 @@ static void layout_window(int kind,int *x,int *y,int *w,int *h){
 }
 static void win_clamp(Win *w){assert(w->w>0&&w->h>0);}
 static int context_slot,open_dlg,dirty,properties_id,launch_n,launch_len,launch_sel,launcher_on;
-static int fm_cwd,fm_count,fm_total,fm_selected,fm_ids[FS_MAX_NODES];
+static int fm_cwd,fm_count,fm_total,fm_selected,*fm_ids,fm_ids_capacity;
 static FileViewOptions fm_view;
-static unsigned fm_ids_identity[FS_MAX_NODES];
+static unsigned *fm_ids_identity;
+/* One Files window's rows stand in for the desktop's per-window state. */
+static int window_state_reserve(void *state,int count){
+    (void)state;
+    if(count>fm_ids_capacity){
+        fm_ids=realloc(fm_ids,(size_t)count*sizeof *fm_ids);
+        fm_ids_identity=realloc(fm_ids_identity,(size_t)count*sizeof *fm_ids_identity);
+        assert(fm_ids&&fm_ids_identity);fm_ids_capacity=count;
+    }
+    return fm_ids_capacity;
+}
+static void window_state_clear(int slot){(void)slot;}
 static int pick_count,pick_selected,pick_cwd,pick_writer,pick_sheet,pick_pics_only;
-static int pick_owner=-1,pick_owner_seq,pick_ids[FS_MAX_NODES],trash_id=-1,prefs_id=-1;
-static unsigned pick_identity[FS_MAX_NODES];
+static int pick_owner=-1,pick_owner_seq,*pick_ids,pick_capacity,trash_id=-1,prefs_id=-1;
+static unsigned *pick_identity;
 static char launch_buf[24];
 static const char *native_launch_status="",*properties_reason;
 static int edits,other_opens,icon_opens,document_requests;

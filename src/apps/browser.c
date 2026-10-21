@@ -468,8 +468,8 @@ static int save_page(void){
     int parent=fs_find_child(fs_root(),"Downloads");
     if(parent<0)parent=fs_mkdir(fs_root(),"Downloads");
     if(!fs_is_dir(parent)){set_status("Cannot create /Downloads. Check that it is a folder and space is available.");return 1;}
-    char name[FS_NAME_LEN],path[64],digits[12];
-    for(unsigned n=1;n<=FS_MAX_NODES;n++){
+    char name[FS_NAME_LEN],path[FS_PATH_LEN],digits[12];
+    for(unsigned n=1;n<=(unsigned)fs_node_count()+1;n++){
         copy(name,sizeof name,"page");if(n>1){append(name,sizeof name,"-");number(digits,n);append(name,sizeof name,digits);}
         append(name,sizeof name,B.html?".html":".txt");
         if(fs_find_child(parent,name)<0){copy(path,sizeof path,"/Downloads/");append(path,sizeof path,name);browser_save_page(fs_root(),path);return 1;}
@@ -536,7 +536,7 @@ static int download_problem(const char *message) {
     copy(B.download_notice,sizeof B.download_notice,message);set_status(message);B.download_visible=1;B.download_scroll=0;B.focus=0;B.pick_link=0;download_summary();return 1;
 }
 static int start_download(void) {
-    char url[NET_URL_MAX],stem[FS_NAME_LEN],extension[8],name[FS_NAME_LEN],path[64],suffix[12];
+    char url[NET_URL_MAX],stem[FS_NAME_LEN],extension[8],name[FS_NAME_LEN],path[FS_PATH_LEN],suffix[12];
     const char *target=!B.focus&&B.focused_link?B.links[B.focused_link-1]:B.address;
     if(!normalize(url,target))return download_problem("Enter an HTTP address shorter than 256 characters.");
     if(!starts(url,"http://"))return download_problem("Only HTTP downloads are supported. HTTPS is never downgraded; local files and other schemes are not downloaded.");
@@ -547,9 +547,9 @@ static int start_download(void) {
     int parent=fs_find_child(fs_root(),"Downloads");if(parent<0)parent=fs_mkdir(fs_root(),"Downloads");
     if(!fs_is_dir(parent))return download_problem("Cannot create /Downloads. Check that it is a folder and space is available.");
     download_basename(url,stem,extension);
-    for(unsigned n=1;n<=FS_MAX_NODES+1;n++) {
+    for(unsigned n=1;n<=(unsigned)fs_node_count()+2;n++) {
         suffix[0]=0;if(n>1){suffix[0]='-';number(suffix+1,n);}
-        unsigned room=FS_NAME_LEN-1-(unsigned)len(extension)-(unsigned)len(suffix);copy(name,room+1,stem);
+        unsigned room=(unsigned)fs_name_max()-(unsigned)len(extension)-(unsigned)len(suffix);copy(name,room+1,stem);
         append(name,sizeof name,suffix);append(name,sizeof name,extension);
         if(fs_find_child(parent,name)>=0)continue;
         copy(path,sizeof path,"/Downloads/");append(path,sizeof path,name);

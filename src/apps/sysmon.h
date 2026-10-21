@@ -45,7 +45,7 @@ typedef struct {
     int program_n;
     SysmonProgram programs[SYSMON_MAX_PROGRAMS];
     int fs_nodes;
-    int fs_max;
+    int fs_max;      /* 0 when the volume has no fixed node limit */
     int fs_bytes;
     int fs_cap;
     int fb_w, fb_h, fb_bpp;

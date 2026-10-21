@@ -72,14 +72,13 @@ static void drain(void) {
     assert(fs_sync_step() == FS_SYNC_IDLE);
 }
 static unsigned char image_before[FS_IMG_CAPACITY], pool_before[FS_POOL_CAPACITY];
-static FsNode nodes_before[FS_MAX_NODES];
-static unsigned identities_before[FS_MAX_NODES];
+static FsNode nodes_before[FS_ARENA_SLOTS];
 static void assert_busy_lease(int id, int dir) {
     assert(fs_sync_busy() && fs_needs_sync());
     memcpy(image_before, image_arena, sizeof(image_before));
     memcpy(pool_before, pool_arena, sizeof(pool_before));
-    memcpy(nodes_before, nodes, sizeof(nodes_before));
-    memcpy(identities_before, identities, sizeof(identities_before));
+    assert(node_slots <= FS_ARENA_SLOTS);
+    memcpy(nodes_before, nodes, (size_t)node_slots * sizeof *nodes);
     unsigned used = pool_used, identity = next_identity;
     int active = active_slot; unsigned gen = generation;
     assert(fs_create(0, "new") == FS_ERR_BUSY);
@@ -98,8 +97,12 @@ static void assert_busy_lease(int id, int dir) {
     assert(fs_load_disk() == FS_ERR_BUSY);
     assert(fs_needs_sync() && used == pool_used && identity == next_identity);
     assert(active_slot == active && generation == gen);
-    assert(!memcmp(nodes_before, nodes, sizeof(nodes_before)));
-    assert(!memcmp(identities_before, identities, sizeof(identities_before)));
+    /* Reads may reorder the cache (touch); nothing else changes. */
+    for (int i = 0; i < node_slots; ++i) {
+        FsNode now = nodes[i];
+        now.touch = nodes_before[i].touch;
+        assert(!memcmp(&nodes_before[i], &now, sizeof now));
+    }
     assert(!memcmp(pool_before, pool_arena, sizeof(pool_before)));
     assert(!memcmp(image_before, image_arena, sizeof(image_before)));
     char text[64]; int list[8];
