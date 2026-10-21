@@ -464,7 +464,9 @@ int uproc_spawn(const void *image, uint32_t size, const char *const *argv, unsig
     process->pid = next_pid++;
     process->state = UPROC_RUNNING;
     process->threads = 1;
+    process->cpu_ms = 0;
     process->host = host;
+    process->name[0] = 0;
     if (argc) {
         const char *name = argv[0], *slash = name;
         for (const char *p = name; *p; ++p)
@@ -474,6 +476,7 @@ int uproc_spawn(const void *image, uint32_t size, const char *const *argv, unsig
             process->name[length] = slash[length];
             ++length;
         }
+        process->name[length] = 0;
     }
     process->next = processes;
     processes = process;
@@ -517,4 +520,19 @@ uint32_t uproc_next(uint32_t after, uint32_t *host) {
         }
     if (chosen && host) *host = chosen->host;
     return best;
+}
+
+int uproc_info(uint32_t pid, UprocInfo *out) {
+    Uproc *process = find(pid);
+    if (!process || process->state == UPROC_UNKNOWN) return 0;
+    kmemset(out, 0, sizeof *out);
+    out->pid = process->pid;
+    out->host = process->host;
+    out->state = process->state;
+    out->threads = process->state == UPROC_RUNNING ? thread_live_count(process) : 0;
+    out->pages = process->space.resident_pages + process->space.table_pages;
+    out->cpu_ms = process->cpu_ms;
+    kmemcpy(out->name, process->name, sizeof out->name);
+    out->name[sizeof out->name - 1] = 0;
+    return 1;
 }

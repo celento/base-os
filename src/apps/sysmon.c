@@ -60,6 +60,8 @@ static int current_tab;
 static int drawn_tab=-1, drawn_task_n, drawn_win_n;
 static MonitorRect drawn_client;
 static TermTaskInfo drawn_tasks[SYSMON_MAX_TASKS];
+static int drawn_program_n;
+static unsigned drawn_programs[SYSMON_MAX_PROGRAMS];
 static int drawn_windows[SYSMON_MAX_WIN];
 static unsigned drawn_window_instances[SYSMON_MAX_WIN];
 
@@ -176,6 +178,10 @@ static MonitorRect task_button(const MonitorLayout *l,int i,int stop){
     return (MonitorRect){stop?right-sw:right-sw-gap-showw,l->rows_y+i*TASK_ROW_H,
         stop?sw:showw,22};
 }
+static MonitorRect program_button(const MonitorLayout *l,int row){
+    int sw=tool_button_w("Stop program");
+    return (MonitorRect){l->x+l->w-sw,l->rows_y+row*TASK_ROW_H,sw,22};
+}
 static MonitorRect window_button(const MonitorLayout *l,int i){
     int width=tool_button_w("Close");
     return (MonitorRect){l->x+l->w-width,l->rows_y+i*WINDOW_ROW_H+4,width,24};
@@ -205,7 +211,11 @@ static void windows_draw(const MonitorLayout *l,const SysInfo *si){
     text(l,footer,l->x,l->footer_y,l->w,0,app_text_dim);
 }
 static void tasks_draw(const MonitorLayout *l,const SysInfo *si){
-    char heading[40];fmt_uint(heading,(unsigned)si->task_n);append(heading,si->task_n==1?" active native task":" active native tasks");
+    char heading[64];fmt_uint(heading,(unsigned)si->task_n);append(heading,si->task_n==1?" active native task":" active native tasks");
+    if(si->program_n>0){
+        char t[12];append(heading,", ");fmt_uint(t,(unsigned)si->program_n);append(heading,t);
+        append(heading,si->program_n==1?" program":" programs");
+    }
     text(l,heading,l->x,l->heading_y,l->w,1,app_text);
     int count=smaller(si->task_n,SYSMON_MAX_TASKS);
     for(int i=0;i<count&&row_visible(l,i,TASK_ROW_H);i++){
@@ -225,18 +235,35 @@ static void tasks_draw(const MonitorLayout *l,const SysInfo *si){
         draw_hline(l->x,y+TASK_ROW_H-1,l->w,app_chrome_dk);
         drawn_tasks[drawn_task_n++]=*task;
     }
-    if(count==0){
+    /* ELF programs follow the native tasks, one row each. */
+    int programs=smaller(si->program_n,SYSMON_MAX_PROGRAMS);
+    for(int k=0;k<programs&&drawn_task_n==count&&row_visible(l,count+k,TASK_ROW_H);k++){
+        const SysmonProgram *program=&si->programs[k];
+        int y=l->rows_y+(count+k)*TASK_ROW_H;
+        MonitorRect stop=program_button(l,count+k);
+        text(l,program->name,l->x+6,y+2,stop.x-l->x-12,1,app_text);
+        button(l,stop,ICON_STOP_SQUARE,"Stop program");
+        char detail[96]="Program ",t[24];
+        fmt_uint(t,program->pid);append(detail,t);
+        append(detail,"   Threads ");fmt_uint(t,program->threads);append(detail,t);
+        append(detail,"   Memory ");fmt_uint(t,program->kib);append(detail,t);append(detail," KiB");
+        append(detail,"   CPU ");fmt_time(t,program->cpu_ms/1000);append(detail,t);
+        text(l,detail,l->x+6,y+22,l->w-12,0,app_text_dim);
+        draw_hline(l->x,y+TASK_ROW_H-1,l->w,app_chrome_dk);
+        drawn_programs[drawn_program_n++]=program->pid;
+    }
+    if(count==0&&programs==0){
         text(l,"No native tasks are running.",l->x,l->rows_y,l->w,0,app_text);
         text(l,"In Terminal: start /Programs/counter.bex",l->x,l->rows_y+28,l->w,0,app_text_dim);
     }
-    const char *footer=drawn_task_n<count?"Enlarge the window to see all tasks.":
+    const char *footer=drawn_task_n<count||drawn_program_n<programs?"Enlarge the window to see all tasks.":
         "Elapsed is lifetime, including time spent sleeping.";
     text(l,footer,l->x,l->footer_y,l->w,0,app_text_dim);
 }
-void sysmon_reset(void){current_tab=SYSMON_TAB_SYSTEM;drawn_tab=-1;drawn_task_n=drawn_win_n=0;}
+void sysmon_reset(void){current_tab=SYSMON_TAB_SYSTEM;drawn_tab=-1;drawn_task_n=drawn_win_n=drawn_program_n=0;}
 int sysmon_tab(void){return current_tab;}
 void sysmon_draw(int bx,int by,int bw,int bh,const SysInfo *si){
-    drawn_tab=-1;drawn_task_n=drawn_win_n=0;
+    drawn_tab=-1;drawn_task_n=drawn_win_n=drawn_program_n=0;
     if(bw<=0||bh<=0||!si)return;
     if(!cpu_done)cpu_probe();
     MonitorLayout l=layout(bx,by,bw,bh);
@@ -278,6 +305,12 @@ SysmonAction sysmon_click(int bx,int by,int bw,int bh,int mx,int my,const SysInf
                    (live->state==PROCESS_TASK_READY||live->state==PROCESS_TASK_SLEEPING))
                     return (SysmonAction){kind,shown->owner,shown->instance};
             }
+        }
+        for(int k=0;k<drawn_program_n;k++){
+            if(!contains(program_button(&l,drawn_task_n+k),mx,my))continue;
+            for(int j=0;j<si->program_n&&j<SYSMON_MAX_PROGRAMS;j++)
+                if(si->programs[j].pid==drawn_programs[k])
+                    return (SysmonAction){SYSMON_ACTION_STOP_PROGRAM,-1,drawn_programs[k]};
         }
     }
     return none;

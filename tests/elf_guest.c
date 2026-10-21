@@ -24,6 +24,7 @@ typedef struct {
 
 static unsigned step, turns, started_turns;
 static uint32_t pid, began;
+static unsigned peak_threads, cpu_ms;
 static PhysmemStats baseline;
 static KheapStats heap_baseline;
 static char output[512];
@@ -77,6 +78,7 @@ static void spawn(void) {
         }
         if (result) fail("spawn");
         started_turns = turns;
+        peak_threads = cpu_ms = 0;
         began = timer_ticks();
         return;
     }
@@ -97,6 +99,11 @@ static int turn(void) {
     output_length += uproc_take_output(pid, output + output_length, sizeof output - 1 - output_length);
     int status;
     int state = uproc_status(pid, &status);
+    UprocInfo info;
+    if (uproc_info(pid, &info)) {
+        if (info.threads > peak_threads) peak_threads = info.threads;
+        cpu_ms = info.cpu_ms;
+    }
     if (state == UPROC_RUNNING) {
         if (timer_ticks() - began > 60 * TIMER_HZ) {
             output[output_length] = 0;
@@ -123,6 +130,10 @@ static int turn(void) {
         say_number("ELF desktop turns during scheduler ", desktop_turns);
         say_number("ELF scheduler ticks ", ticks);
         if (desktop_turns * TIMER_HZ < 30 * ticks) fail("desktop starved by many threads");
+        /* What System Monitor shows: the thread count and CPU time. */
+        say_number("ELF peak threads ", peak_threads);
+        say_number("ELF CPU ms ", cpu_ms);
+        if (peak_threads < 26 || !cpu_ms) fail("process info");
     }
     if (uproc_release(pid)) fail("release");
     ++step;

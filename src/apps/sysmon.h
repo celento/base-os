@@ -7,6 +7,7 @@
 #define SYSMON_H 440
 #define SYSMON_MAX_WIN 8
 #define SYSMON_MAX_TASKS 8
+#define SYSMON_MAX_PROGRAMS 8
 
 enum { SYSMON_TAB_SYSTEM, SYSMON_TAB_WINDOWS, SYSMON_TAB_TASKS };
 enum {
@@ -14,7 +15,8 @@ enum {
     SYSMON_ACTION_REDRAW,
     SYSMON_ACTION_CLOSE_WINDOW,
     SYSMON_ACTION_SHOW_TERMINAL,
-    SYSMON_ACTION_STOP_TASK
+    SYSMON_ACTION_STOP_TASK,
+    SYSMON_ACTION_STOP_PROGRAM    /* task_instance is the ELF process id */
 };
 #define SYSMON_ACTION_SHOW_WINDOW SYSMON_ACTION_SHOW_TERMINAL
 typedef struct {
@@ -22,6 +24,12 @@ typedef struct {
     int owner;                    /* Window/terminal slot, only for an action. */
     unsigned task_instance;       /* Process handle, or window seq for Close. */
 } SysmonAction;
+
+/* A running ELF program (platform ABI v2). */
+typedef struct {
+    unsigned pid, threads, kib, cpu_ms;
+    char name[32];
+} SysmonProgram;
 
 typedef struct {
     unsigned uptime_sec;
@@ -34,6 +42,8 @@ typedef struct {
     int win_min[SYSMON_MAX_WIN];
     int task_n;
     TermTaskInfo tasks[SYSMON_MAX_TASKS];
+    int program_n;
+    SysmonProgram programs[SYSMON_MAX_PROGRAMS];
     int fs_nodes;
     int fs_max;
     int fs_bytes;

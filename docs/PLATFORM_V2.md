@@ -132,6 +132,12 @@ Their output appears in that Terminal, cut into lines, followed by
 `Program exited with status N.` `stop` ends the program and closing the
 Terminal releases it. BEX files go through the existing launcher unchanged.
 
+System Monitor's Tasks tab lists running ELF programs after the native tasks,
+with process id, live threads, memory (resident and page-table frames) and CPU
+time, from `uproc_info()`. CPU time is charged per process at every thread
+switch, in milliseconds. Its Stop program button ends the process; the
+Terminal that started it reports the exit status.
+
 ## Tests
 
 - `tools/elf_runtime_test.py` builds `tests/elf_program.c` as a freestanding

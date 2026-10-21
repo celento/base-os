@@ -21,6 +21,7 @@ typedef struct Uproc {
     int state;
     int exit_code;
     unsigned threads;          /* not yet reaped */
+    uint32_t cpu_ms;           /* time its threads held the CPU */
     uint32_t host;             /* opaque tag chosen by the host */
     char name[32];
     char output[UPROC_OUTPUT_BYTES];
@@ -42,6 +43,17 @@ int uproc_kill(uint32_t pid);
 int uproc_release(uint32_t pid);
 /* Next pid after the given one (0 starts), or 0 at the end. */
 uint32_t uproc_next(uint32_t after, uint32_t *host);
+
+typedef struct {
+    uint32_t pid, host;
+    int state;                 /* UPROC_RUNNING or UPROC_EXITED */
+    unsigned threads;          /* live threads */
+    uint32_t pages;            /* resident and page-table frames */
+    uint32_t cpu_ms;
+    char name[32];
+} UprocInfo;
+/* Nonzero and *out for a listed process; 0 otherwise. */
+int uproc_info(uint32_t pid, UprocInfo *out);
 
 /* Called by platform.c for every interrupt; nonzero when handled. */
 int uproc_interrupt(uint32_t *registers);
