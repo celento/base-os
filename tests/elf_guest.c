@@ -135,6 +135,12 @@ static int turn(void) {
         say_number("ELF CPU ms ", cpu_ms);
         if (peak_threads < 26 || !cpu_ms) fail("process info");
     }
+    /* The files check leaves a file open at exit; it must reach the volume. */
+    if (steps[step].image && !kstrcmp(steps[step].check, "files")) {
+        int kept = fs_resolve(fs_root(), "/elf-exit.txt");
+        if (kept < 0 || fs_size(kept) != 4 || !contains(fs_data(kept), "kept")) fail("file saved at exit");
+        fs_delete(kept);
+    }
     if (uproc_release(pid)) fail("release");
     ++step;
     spawn();

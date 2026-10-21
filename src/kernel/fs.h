@@ -83,6 +83,8 @@ int fs_delete(int id);
 int fs_empty_dir(int parent);
 int fs_copy(int id, int parent);
 int fs_rename(int id, const char *name);
+int fs_can_place(int id, int parent, const char *name);
+int fs_place(int id, int parent, const char *name);
 
 int fs_save_disk(void);
 #define FS_LOAD_BLANK 1

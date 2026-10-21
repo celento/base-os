@@ -31,9 +31,23 @@ struct BaseosSysdepTags :
 	PrepareStack,
 	Clone,
 	ThreadExit,
-	// Referenced unconditionally by the BSD pty helpers; descriptors other
-	// than the console arrive with the file-descriptor work.
-	Dup2
+	Stat,
+	OpenDir,
+	ReadEntries,
+	Openat,
+	Mkdir,
+	Rmdir,
+	Unlinkat,
+	Rename,
+	Access,
+	Faccessat,
+	Dup,
+	Dup2,
+	Pipe,
+	Chdir,
+	GetCwd,
+	Fsync,
+	Ftruncate
 {};
 
 template<typename Tag>

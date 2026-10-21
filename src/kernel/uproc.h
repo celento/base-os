@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "kernel/vm.h"
 #include "kernel/thread.h"
+#include "kernel/ufile.h"
 
 /* ELF processes (platform ABI v2, sdk/baseos_sys.h). Each process owns a
  * private address space, one or more threads and a text output buffer that
@@ -26,6 +27,7 @@ typedef struct Uproc {
     char name[32];
     char output[UPROC_OUTPUT_BYTES];
     unsigned output_head, output_count;
+    UFileTable files;
     struct Uproc *next;
 } Uproc;
 
@@ -54,6 +56,12 @@ typedef struct {
 } UprocInfo;
 /* Nonzero and *out for a listed process; 0 otherwise. */
 int uproc_info(uint32_t pid, UprocInfo *out);
+
+/* For kernel/ufile.c, on the process's own thread: user memory access
+ * (0 or a negated BOS_E*), and console output (bytes written or an error). */
+int uproc_copy_in(Uproc *process, void *out, uint32_t address, uint32_t length);
+int uproc_copy_out(Uproc *process, uint32_t address, const void *in, uint32_t length);
+int uproc_console_write(Uproc *process, uint32_t buffer, uint32_t length);
 
 /* Called by platform.c for every interrupt; nonzero when handled. */
 int uproc_interrupt(uint32_t *registers);

@@ -2,9 +2,9 @@
 
 python3 tools/elf_libc_test.py build
 Needs build/toolchain (python3 toolchain/build.py). Builds examples/elf/hello.c
-and hello.cpp, then boots them in the tools/elf_runtime_test.py fixture:
+, hello.cpp and files.c, then boots them in the tools/elf_runtime_test.py fixture:
 stdio, malloc of 32 MiB, POSIX threads with a mutex, gmtime, C++ containers,
-static constructors and exceptions.
+static constructors and exceptions, and files, directories and pipes.
 """
 import pathlib
 import subprocess
@@ -42,23 +42,29 @@ def run(build):
         raise SystemExit('Build the toolchain first: python3 toolchain/build.py')
     work = pathlib.Path(tempfile.mkdtemp(prefix='baseos-elf-libc-'))
     print('Work directory:', work, flush=True)
-    hello_c, hello_cpp = work / 'hello', work / 'hello-cpp'
+    hello_c, hello_cpp, files = work / 'hello', work / 'hello-cpp', work / 'files'
+    subprocess.run([str(gcc), '-O2', '-Wall', '-Wextra', str(ROOT / 'examples/elf/files.c'),
+                    '-o', str(files)], check=True)
     subprocess.run([str(gcc), '-O2', '-Wall', '-Wextra', str(ROOT / 'examples/elf/hello.c'),
                     '-o', str(hello_c), '-lpthread'], check=True)
     subprocess.run([str(gxx), '-O2', '-Wall', '-Wextra', str(ROOT / 'examples/elf/hello.cpp'),
                     '-o', str(hello_cpp)], check=True)
     # The fixture embeds the programs in the kernel image, so drop symbols.
-    subprocess.run([str(TOOLCHAIN / 'i686-baseos-strip'), str(hello_c), str(hello_cpp)], check=True)
+    subprocess.run([str(TOOLCHAIN / 'i686-baseos-strip'), str(hello_c), str(hello_cpp), str(files)],
+                   check=True)
     print('Stripped sizes:', hello_c.stat().st_size, hello_cpp.stat().st_size, flush=True)
-    disk = data_disk(work, {'hello': hello_c.read_bytes(), 'hello-cpp': hello_cpp.read_bytes()})
+    disk = data_disk(work, {'hello': hello_c.read_bytes(), 'hello-cpp': hello_cpp.read_bytes(),
+                            'files': files.read_bytes()})
     text = boot(build, work, [
         ('/Programs/hello', 'c', 0, 'threads total 1000000 (expected 1000000)'),
         ('/Programs/hello-cpp', 'cpp', 0, 'exceptions work'),
+        ('/Programs/files', 'files', 0, 'files ok: 1 entry, pipe'),
     ], disk)
     for needle in ('Hello from C on BaseOS (3 arguments)', 'malloc and memset of 32 MiB ok',
+                   'read 100 lines, last 100', 'notes.txt is 792 bytes', 'entry kept.txt',
                    'Hello from C++ on BaseOS: apps first, 4 words, 2 counters'):
         assert needle in text, needle
-    print('ELF_LIBC_PASS: mlibc stdio, heap, pthreads and time; libstdc++ containers and exceptions.',
+    print('ELF_LIBC_PASS: mlibc stdio, heap, pthreads, time, files and pipes; libstdc++ containers and exceptions.',
           flush=True)
 
 

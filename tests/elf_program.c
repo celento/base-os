@@ -275,6 +275,79 @@ static int scheduler(void) {
     return 0;
 }
 
+/* File descriptors on the native volume, pipes and descriptor copies. */
+static int files(void) {
+    static char block[3000], back[3100];
+    char cwd[64];
+    if (sys(BOS_SYS_MKDIR, (long)"/elf-files", 0755, 0, 0, 0, 0) ||
+        sys(BOS_SYS_MKDIR, (long)"/elf-files", 0755, 0, 0, 0, 0) != -BOS_EEXIST ||
+        sys(BOS_SYS_CHDIR, (long)"/elf-files", 0, 0, 0, 0, 0) ||
+        sys(BOS_SYS_GETCWD, (long)cwd, sizeof cwd, 0, 0, 0, 0) != 11 || !same(cwd, "/elf-files"))
+        return 2;
+    for (int i = 0; i < 3000; ++i) block[i] = (char)('a' + i % 26);
+    long fd = sys(BOS_SYS_OPEN, (long)"data.txt", BOS_O_CREAT | BOS_O_RDWR, 0644, 0, 0, 0);
+    if (fd < 3 || sys(BOS_SYS_WRITE, fd, (long)block, 3000, 0, 0, 0) != 3000) return 3;
+    long long position = -1;
+    if (sys(BOS_SYS_SEEK, fd, 10, 0, BOS_SEEK_SET, (long)&position, 0) || position != 10 ||
+        sys(BOS_SYS_READ, fd, (long)back, sizeof back, 0, 0, 0) != 2990 || back[0] != block[10] ||
+        back[2989] != block[2999])
+        return 4;
+    BosStat st;
+    if (sys(BOS_SYS_FSTAT, fd, (long)&st, 0, 0, 0, 0) || st.size != 3000 ||
+        (st.mode & BOS_S_IFMT) != BOS_S_IFREG || sys(BOS_SYS_CLOSE, fd, 0, 0, 0, 0, 0))
+        return 5;
+    fd = sys(BOS_SYS_OPEN, (long)"/elf-files/data.txt", BOS_O_WRONLY | BOS_O_APPEND, 0, 0, 0, 0);
+    if (fd < 0 || sys(BOS_SYS_WRITE, fd, (long)"xyz", 3, 0, 0, 0) != 3 || sys(BOS_SYS_CLOSE, fd, 0, 0, 0, 0, 0) ||
+        sys(BOS_SYS_STAT, (long)"data.txt", (long)&st, 0, 0, 0, 0) || st.size != 3003)
+        return 6;
+    if (sys(BOS_SYS_OPEN, (long)"data.txt", BOS_O_CREAT | BOS_O_EXCL | BOS_O_WRONLY, 0, 0, 0, 0) != -BOS_EEXIST ||
+        sys(BOS_SYS_RENAME, (long)"data.txt", (long)"moved.txt", 0, 0, 0, 0) ||
+        sys(BOS_SYS_OPEN, (long)"data.txt", BOS_O_RDONLY, 0, 0, 0, 0) != -BOS_ENOENT)
+        return 7;
+    fd = sys(BOS_SYS_OPEN, (long)"moved.txt", BOS_O_RDONLY, 0, 0, 0, 0);
+    if (fd < 0 || sys(BOS_SYS_READ, fd, (long)back, sizeof back, 0, 0, 0) != 3003 ||
+        back[3000] != 'x' || sys(BOS_SYS_WRITE, fd, (long)"no", 2, 0, 0, 0) != -BOS_EBADF)
+        return 8;
+    sys(BOS_SYS_CLOSE, fd, 0, 0, 0, 0, 0);
+    /* The directory lists ".", ".." and moved.txt. */
+    long dir = sys(BOS_SYS_OPEN, (long)".", BOS_O_RDONLY | BOS_O_DIRECTORY, 0, 0, 0, 0);
+    int seen = 0;
+    long bytes;
+    while ((bytes = sys(BOS_SYS_READDIR, dir, (long)back, 64, 0, 0, 0)) > 0)
+        for (long at = 0; at < bytes; at += ((BosDirent *)(back + at))->length) {
+            BosDirent *entry = (BosDirent *)(back + at);
+            if (same(entry->name, ".") || same(entry->name, "..")) seen += entry->type == BOS_DT_DIR;
+            else if (same(entry->name, "moved.txt") && entry->type == BOS_DT_REG) seen += 4;
+            else return 9;
+        }
+    if (dir < 0 || bytes || seen != 6 || sys(BOS_SYS_CLOSE, dir, 0, 0, 0, 0, 0)) return 9;
+    /* A pipe carries bytes and reports end of file once the writer closes. */
+    int ends[2];
+    if (sys(BOS_SYS_PIPE, (long)ends, 0, 0, 0, 0, 0) ||
+        sys(BOS_SYS_WRITE, ends[1], (long)"ping", 4, 0, 0, 0) != 4 ||
+        sys(BOS_SYS_CLOSE, ends[1], 0, 0, 0, 0, 0) ||
+        sys(BOS_SYS_READ, ends[0], (long)back, 16, 0, 0, 0) != 4 || back[0] != 'p' ||
+        sys(BOS_SYS_READ, ends[0], (long)back, 16, 0, 0, 0) != 0 ||
+        sys(BOS_SYS_ISATTY, ends[0], 0, 0, 0, 0, 0) != -BOS_ENOTTY)
+        return 10;
+    sys(BOS_SYS_CLOSE, ends[0], 0, 0, 0, 0, 0);
+    if (sys(BOS_SYS_DUP2, 1, 9, 0, 0, 0, 0) != 9 || sys(BOS_SYS_ISATTY, 9, 0, 0, 0, 0, 0)) return 11;
+    /* A huge target is refused rather than sizing the table past 32 bits. */
+    if (sys(BOS_SYS_DUP2, 1, 0x40000000, 0, 0, 0, 0) != -BOS_EBADF) return 11;
+    sys(BOS_SYS_WRITE, 9, (long)"ELF dup2 output\n", 16, 0, 0, 0);
+    if (sys(BOS_SYS_CHDIR, (long)"..", 0, 0, 0, 0, 0) ||
+        sys(BOS_SYS_UNLINK, (long)"elf-files", BOS_AT_REMOVEDIR, 0, 0, 0, 0) != -BOS_ENOTEMPTY ||
+        sys(BOS_SYS_UNLINK, (long)"elf-files/moved.txt", 0, 0, 0, 0, 0) ||
+        sys(BOS_SYS_UNLINK, (long)"elf-files", BOS_AT_REMOVEDIR, 0, 0, 0, 0) ||
+        sys(BOS_SYS_STAT, (long)"/elf-files", (long)&st, 0, 0, 0, 0) != -BOS_ENOENT)
+        return 12;
+    /* A file written and left open is saved when the process exits. */
+    fd = sys(BOS_SYS_OPEN, (long)"/elf-exit.txt", BOS_O_CREAT | BOS_O_WRONLY | BOS_O_TRUNC, 0644, 0, 0, 0);
+    if (fd < 0 || sys(BOS_SYS_WRITE, fd, (long)"kept", 4, 0, 0, 0) != 4) return 13;
+    say("ELF files ok\n");
+    return 0;
+}
+
 static int gate(void) {
     __asm__ volatile("int $0x80");   /* the BEX call gate is not for ELF programs */
     return 0;
@@ -292,6 +365,7 @@ int start(int argc, char **argv) {
     if (same(argv[1], "gate")) return gate();
     if (same(argv[1], "clock")) return clock();
     if (same(argv[1], "scheduler")) return scheduler();
+    if (same(argv[1], "files")) return files();
     return 1;
 }
 
