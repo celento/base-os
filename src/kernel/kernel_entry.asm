@@ -11,6 +11,7 @@ global _start
 extern kmain
 extern __load_end, __bss_start, __bss_end
 extern platform_init
+extern boot_lzma
 
 BOOTINFO        equ BOOTINFO_ADDR
 VBE_INFO        equ 0x8000
@@ -356,7 +357,7 @@ pm_relocate:
     jne packed_failed
     cmp dword [ebp + 4], KERNEL_PACK_HEADER_BYTES
     jne packed_failed
-    cmp dword [ebp + 8], 1       ; codec 0 = raw, 1 = LZ4 block
+    cmp dword [ebp + 8], 2       ; codec 0 = raw, 1 = LZ4 block, 2 = LZMA1
     ja packed_failed
     cmp dword [ebp + 24], 0
     jne packed_failed
@@ -384,6 +385,8 @@ pm_relocate:
     mov ebx, __load_end         ; fixed exclusive destination bound
     cmp dword [ebp + 8], 0
     je .raw
+    cmp dword [ebp + 8], 2
+    je .lzma
     mov eax, [ebp + 12]
     lea ebp, [esi + eax]        ; exclusive input bound, already stage-bounded
 .sequence:
@@ -432,6 +435,22 @@ pm_relocate:
     rep movsb                  ; forward byte copy supports overlapping matches
     pop esi
     jmp .sequence
+.lzma:
+    ; boot_lzma is position independent C in this same prefix (relative call).
+    ; Its probability tables use the not yet live kernel stack reservation.
+    push dword STACK_BOTTOM
+    mov eax, ebx
+    sub eax, edi
+    push eax                   ; exact raw size
+    push edi
+    push dword [ebp + 12]      ; payload size, already stage-bounded
+    push esi
+    call boot_lzma
+    add esp, 20
+    test eax, eax
+    jnz packed_failed
+    mov edi, ebx
+    jmp .decoded
 .raw:
     mov ecx, [ebp + 12]
     cmp ecx, [ebp + 16]
@@ -584,8 +603,6 @@ gdt_user_code: dq 0
 gdt_user_data: dq 0
 gdt_tss: dq 0
 gdt_end:
-global __bootstrap_end
-__bootstrap_end:
 
 CODE_SEG equ gdt_code - gdt_start
 DATA_SEG equ gdt_data - gdt_start

@@ -5,6 +5,10 @@
 /* BIOS reads below conventional RAM; the protected kernel runs above 1 MiB. */
 #define KERNEL_STAGE_ADDR 0x10000
 #define KERNEL_STAGE_LIMIT 0x90000
+/* After relocation the staging area is free, so zeroed kernel BSS lives there
+ * and initialized code and data can use the whole window up to STACK_BOTTOM. */
+#define KERNEL_BSS_BASE 0x10000
+#define KERNEL_BSS_CAPACITY 0x80000
 #define KERNEL_LOAD_ADDR 0x100000
 #define KERNEL_BOOTSTRAP_BYTES 4096
 #define KERNEL_PACK_HEADER_BYTES 32
