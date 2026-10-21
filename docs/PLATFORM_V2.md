@@ -40,6 +40,7 @@ can reuse its definitions.
 | `SLEEP`, `YIELD` | Sleeps end at the first millisecond boundary after the requested time |
 | `FUTEX_WAIT`, `FUTEX_WAKE` | Keyed by physical address, with optional relative timeout (millisecond resolution) |
 | `THREAD_CREATE` | `(entry, stack, argument, tcb)`; the thread starts as `entry(argument)` with a zero return address |
+| `THREAD_PRIORITY` | `(thread id or 0, priority)` with -1 low, 0 normal, 1 high; `ESRCH` for a thread outside the process |
 | `GETPID`, `GETTID`, `MEMINFO`, `LOG` | As named |
 
 ## Memory
@@ -95,12 +96,21 @@ Thread 0 is the desktop: `kmain`'s loop, the shell and the BEX runtime keep
 running on the legacy stacks exactly as before.
 
 The kernel stays non-preemptive. A user thread loses the CPU after a 10 ms
-quantum while it runs in ring 3, or when a system call blocks or yields. The
-desktop loop calls `thread_run_users()` once per turn, which runs the user
-threads in round-robin order until the turn comes back to thread 0. The
+quantum of its own while it runs in ring 3, or when a system call blocks or
+yields. The desktop loop calls `thread_run_users()` once per turn, which hands
+user threads one 10 ms round in total and then takes the CPU back, so the
+desktop keeps turning about every 10 ms however many threads are busy. The
 desktop halts only when no user thread is runnable, so a busy program gets the
 CPU between desktop turns and an idle one costs nothing. x87 state is saved
 and restored eagerly for user threads.
+
+Threads have three priorities: low (-1), normal (0, the default) and high (1),
+set with `THREAD_PRIORITY`. The highest runnable level runs, round-robin within
+it. A high-priority thread whose sleep ends takes the CPU at the next
+millisecond instead of waiting for a lower one's quantum. A thread that has
+waited 100 ms to run gets a turn whatever its level, but such turns come at
+most once per 100 ms, so low-priority work can take one quantum in ten from
+busier levels and never starves.
 
 Each thread switch loads the next thread's kernel stack into the TSS, its
 address space into CR3 (when the process changes) and its TLS base into the
@@ -130,7 +140,10 @@ Terminal releases it. BEX files go through the existing launcher unchanged.
   passing, `.bss`, the real-time clock, a 128 MiB anonymous mapping touched
   page by page, threads with futexes while one thread spins (the desktop loop
   must keep running), fault isolation, and that every process frame and heap
-  object comes back.
+  object comes back. The scheduler check runs 24 low-priority spinners, a
+  high-priority sleeper that must wake on time, and four producers and four
+  consumers on a futex mutex and condition; the desktop must keep turning at
+  least 30 times a second throughout.
 - `tools/elf_terminal_input_test.py` drives the real desktop with PS/2 input:
   it starts the program twice from Terminal and checks the scrollback.
 

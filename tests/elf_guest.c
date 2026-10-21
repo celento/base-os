@@ -98,7 +98,11 @@ static int turn(void) {
     int status;
     int state = uproc_status(pid, &status);
     if (state == UPROC_RUNNING) {
-        if (timer_ticks() - began > 60 * TIMER_HZ) fail("timeout");
+        if (timer_ticks() - began > 60 * TIMER_HZ) {
+            output[output_length] = 0;
+            platform_log(output);
+            fail("timeout");
+        }
         return 0;
     }
     if (state != UPROC_EXITED) fail("lost process");
@@ -112,6 +116,13 @@ static int turn(void) {
     if (!kstrcmp(steps[step].check, "threads")) {
         say_number("ELF desktop turns during threads ", turns - started_turns);
         if (turns - started_turns < 5) fail("desktop starved");
+    }
+    /* With thirty busy threads the desktop still turns every quantum or so. */
+    if (!kstrcmp(steps[step].check, "scheduler")) {
+        unsigned ticks = timer_ticks() - began, desktop_turns = turns - started_turns;
+        say_number("ELF desktop turns during scheduler ", desktop_turns);
+        say_number("ELF scheduler ticks ", ticks);
+        if (desktop_turns * TIMER_HZ < 30 * ticks) fail("desktop starved by many threads");
     }
     if (uproc_release(pid)) fail("release");
     ++step;

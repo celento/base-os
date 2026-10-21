@@ -48,6 +48,7 @@ enum {
     BOS_SYS_FSTAT = 22,       /* (fd, BosStat*) */
     BOS_SYS_ISATTY = 23,      /* (fd) -> 0 or -ENOTTY */
     BOS_SYS_MEMINFO = 24,     /* (BosMemInfo*) */
+    BOS_SYS_THREAD_PRIORITY = 25, /* (thread id or 0 for this thread, priority) */
     BOS_SYS_LIMIT
 };
 

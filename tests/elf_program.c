@@ -153,6 +153,128 @@ static int clock(void) {
     return 0;
 }
 
+/* A futex mutex (0 free, 1 locked, 2 contended) and a sequence condition. */
+static int swap(volatile int *word, int value) {
+    __asm__ volatile("xchg %0, %1" : "+r"(value), "+m"(*word) :: "memory");
+    return value;
+}
+static int compare_swap(volatile int *word, int expected, int value) {
+    __asm__ volatile("lock cmpxchg %2, %1" : "+a"(expected), "+m"(*word) : "r"(value) : "memory");
+    return expected;
+}
+static void lock(volatile int *m) {
+    int c = compare_swap(m, 0, 1);
+    if (!c) return;
+    if (c != 2) c = swap(m, 2);
+    while (c) {
+        sys(BOS_SYS_FUTEX_WAIT, (long)m, 2, 0, 0, 0, 0);
+        c = swap(m, 2);
+    }
+}
+static void unlock(volatile int *m) {
+    if (swap(m, 0) == 2) sys(BOS_SYS_FUTEX_WAKE, (long)m, 1, 0, 0, 0, 0);
+}
+static void wait_change(volatile int *sequence, volatile int *m) {
+    int seen = *sequence;
+    unlock(m);
+    sys(BOS_SYS_FUTEX_WAIT, (long)sequence, seen, 0, 0, 0, 0);
+    lock(m);
+}
+static void signal_all(volatile int *sequence) {
+    __asm__ volatile("lock incl %0" : "+m"(*sequence) :: "memory");
+    sys(BOS_SYS_FUTEX_WAKE, (long)sequence, 0x7FFFFFFF, 0, 0, 0, 0);
+}
+
+#define SPINNERS 24
+#define WORKERS 4
+#define ITEMS 4000
+static u32 spin_stacks[SPINNERS][512] __attribute__((aligned(16)));
+static u32 worker_stacks[2 * WORKERS][1024] __attribute__((aligned(16)));
+static volatile u32 spun[SPINNERS];
+static volatile int stop_spinning, queue_lock, queue_changed, finished;
+static u32 queue[16], head, tail;
+static volatile u32 consumed_sum, consumed_count;
+
+static void low_spinner(long index) {
+    while (!stop_spinning) ++spun[index];
+    sys(BOS_SYS_THREAD_EXIT, 0, 0, 0, 0, 0, 0);
+}
+static void producer(long index) {
+    for (u32 i = 1; i <= ITEMS; ++i) {
+        lock(&queue_lock);
+        while (tail - head == 16) wait_change(&queue_changed, &queue_lock);
+        queue[tail++ & 15] = (u32)index * ITEMS + i;
+        signal_all(&queue_changed);
+        unlock(&queue_lock);
+    }
+    sys(BOS_SYS_THREAD_EXIT, 0, 0, 0, 0, 0, 0);
+}
+static void consumer(long unused) {
+    (void)unused;
+    lock(&queue_lock);
+    for (;;) {
+        while (head == tail && consumed_count < WORKERS * ITEMS) wait_change(&queue_changed, &queue_lock);
+        if (head == tail) break;
+        consumed_sum += queue[head++ & 15];
+        ++consumed_count;
+        signal_all(&queue_changed);
+    }
+    unlock(&queue_lock);
+    __asm__ volatile("lock incl %0" : "+m"(finished) :: "memory");
+    sys(BOS_SYS_FUTEX_WAKE, (long)&finished, 1, 0, 0, 0, 0);
+    sys(BOS_SYS_THREAD_EXIT, 0, 0, 0, 0, 0, 0);
+}
+
+/* Many low-priority spinners, a high-priority sleeper that must still wake
+ * on time, and producers and consumers on a futex mutex and condition. The
+ * desktop's turn rate during this check is verified by the fixture. */
+static int scheduler(void) {
+    static ThreadStart spin_starts[SPINNERS], worker_starts[2 * WORKERS];
+    for (int i = 0; i < SPINNERS; ++i) {
+        spin_starts[i] = (ThreadStart){low_spinner, i};
+        long tid = sys(BOS_SYS_THREAD_CREATE, (long)thread_entry, (long)(spin_stacks[i] + 512),
+                       (long)&spin_starts[i], 0, 0, 0);
+        if (tid <= 0 || sys(BOS_SYS_THREAD_PRIORITY, tid, -1, 0, 0, 0, 0)) return 2;
+    }
+    if (sys(BOS_SYS_THREAD_PRIORITY, 0, 1, 0, 0, 0, 0) ||
+        sys(BOS_SYS_THREAD_PRIORITY, 0, 2, 0, 0, 0, 0) != -BOS_EINVAL ||
+        sys(BOS_SYS_THREAD_PRIORITY, 0x7FFFFFFF, 0, 0, 0, 0, 0) != -BOS_ESRCH)
+        return 3;
+    long long begin = nanoseconds();
+    BosTimespec nap = {0, 2000000};
+    for (int i = 0; i < 50; ++i)
+        if (sys(BOS_SYS_SLEEP, (long)&nap, 0, 0, 0, 0, 0)) return 4;
+    u32 elapsed = (u32)(nanoseconds() - begin) / 1000000u;
+    number("ELF high-priority 50 sleeps of 2 ms took ms ", elapsed);
+    if (elapsed > 400) return 5;
+    for (int i = 0; i < 2 * WORKERS; ++i) {
+        worker_starts[i] = (ThreadStart){i < WORKERS ? producer : consumer, i};
+        if (sys(BOS_SYS_THREAD_CREATE, (long)thread_entry, (long)(worker_stacks[i] + 1024),
+                (long)&worker_starts[i], 0, 0, 0) <= 0)
+            return 6;
+    }
+    for (;;) {
+        int seen = finished;
+        if (seen == WORKERS) break;
+        BosTimespec dbg = {1, 0};
+        sys(BOS_SYS_FUTEX_WAIT, (long)&finished, seen, (long)&dbg, 0, 0, 0);
+        number("DBG consumed ", consumed_count); number("DBG head ", head); number("DBG tail ", tail);
+    }
+    u32 expected = 0;
+    for (u32 p = 0; p < WORKERS; ++p) expected += p * ITEMS * ITEMS + ITEMS * (ITEMS + 1) / 2;
+    if (consumed_count != WORKERS * ITEMS || consumed_sum != expected) return 7;
+    /* Wait long enough for every starving spinner to get its turn. */
+    BosTimespec settle = {0, 0};
+    for (int i = 0; i < SPINNERS; ++i) {
+        settle.nanoseconds = 100000000;
+        while (!spun[i]) sys(BOS_SYS_SLEEP, (long)&settle, 0, 0, 0, 0, 0);
+    }
+    stop_spinning = 1;
+    number("ELF items through the queue ", consumed_count);
+    say("ELF scheduler ok\n");
+    return 0;
+}
+
 static int gate(void) {
     __asm__ volatile("int $0x80");   /* the BEX call gate is not for ELF programs */
     return 0;
@@ -169,6 +291,7 @@ int start(int argc, char **argv) {
     if (same(argv[1], "fault")) return fault();
     if (same(argv[1], "gate")) return gate();
     if (same(argv[1], "clock")) return clock();
+    if (same(argv[1], "scheduler")) return scheduler();
     return 1;
 }
 

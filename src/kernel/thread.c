@@ -19,6 +19,11 @@ static Thread desktop = {.state = THREAD_RUNNABLE, .next = &desktop};
 static Thread *current = &desktop;
 static uint32_t next_tid = 1;
 static int have_fpu;
+/* When thread 0 handed over the CPU, and when the current thread started. */
+static uint32_t round_start, slice_start;
+/* Starving threads get one extra turn per THREAD_STARVE_MS between them, so
+ * many low-priority threads take at most one quantum in ten. */
+static uint32_t last_boost;
 
 static void tls_descriptor(uint32_t base) {
     unsigned char *p = gdt_user_tls;
@@ -51,6 +56,11 @@ Thread *thread_create_user(Uproc *process, uint32_t eip, uint32_t esp, uint32_t 
     thread->tid = next_tid++;
     thread->state = THREAD_RUNNABLE;
     thread->tls_base = tls_base;
+    thread->priority = THREAD_PRIORITY_NORMAL;
+    thread->last_run = timer_milliseconds();
+    thread->channel = 0;
+    thread->wake_at = 0;
+    thread->timed_out = 0;
     if (have_fpu) {
         unsigned flags;
         __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
@@ -111,20 +121,53 @@ static void switch_to(Thread *next) {
     thread_switch(&previous->saved_esp, next->saved_esp);
 }
 
-/* Next runnable thread after the current one in ring order; wakes waiters
- * whose timeout passed. Thread 0 is always runnable. */
+static void wake_due(Thread *thread, uint32_t now) {
+    if (thread->state == THREAD_WAITING && thread->wake_at &&
+        (int32_t)(now - thread->wake_at) >= 0) {
+        thread->state = THREAD_RUNNABLE;
+        thread->timed_out = 1;
+        thread->channel = 0;
+        thread->last_run = now;
+    }
+}
+
+/* The runnable user thread to run next, or 0; wakes waiters whose timeout
+ * passed. The highest priority wins and, within it, the thread that has
+ * waited longest since it last ran or became ready. When a boost is due, a
+ * lower-priority thread that has waited THREAD_STARVE_MS goes first. */
+static Thread *pick_user(uint32_t now, int *boosted) {
+    Thread *best = 0, *starved = 0;
+    for (Thread *thread = desktop.next; thread != &desktop; thread = thread->next) {
+        wake_due(thread, now);
+        if (thread->state != THREAD_RUNNABLE) continue;
+        if (now - thread->last_run >= THREAD_STARVE_MS &&
+            (!starved || (int32_t)(thread->last_run - starved->last_run) < 0))
+            starved = thread;
+        if (!best || thread->priority > best->priority ||
+            (thread->priority == best->priority && (int32_t)(thread->last_run - best->last_run) < 0))
+            best = thread;
+    }
+    *boosted = 0;
+    if (starved && starved->priority < best->priority && now - last_boost >= THREAD_STARVE_MS) {
+        *boosted = 1;
+        return starved;
+    }
+    return best;
+}
+
+/* Thread 0 gets the CPU back once the round has used a quantum, so many busy
+ * threads delay the desktop no more than one. */
 static Thread *pick(void) {
     uint32_t now = timer_milliseconds();
-    for (Thread *thread = current->next;; thread = thread->next) {
-        if (thread->state == THREAD_WAITING && thread->wake_at &&
-            (int32_t)(now - thread->wake_at) >= 0) {
-            thread->state = THREAD_RUNNABLE;
-            thread->timed_out = 1;
-            thread->channel = 0;
-        }
-        if (thread->state == THREAD_RUNNABLE) return thread;
-        if (thread == current) return &desktop;
-    }
+    if (current != &desktop && now - round_start >= THREAD_QUANTUM_MS) return &desktop;
+    int boosted;
+    Thread *next = pick_user(now, &boosted);
+    if (!next) return &desktop;
+    if (boosted) last_boost = now;
+    if (current == &desktop) round_start = now;
+    if (next != current) slice_start = now;
+    next->last_run = now;
+    return next;
 }
 
 static void reschedule(void) {
@@ -132,6 +175,29 @@ static void reschedule(void) {
     __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
     switch_to(pick());
     __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
+}
+
+void thread_tick(void) {
+    if (current == &desktop) return;
+    uint32_t now = timer_milliseconds();
+    current->last_run = now;
+    if (now - slice_start >= THREAD_QUANTUM_MS) {
+        unsigned flags;
+        __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
+        switch_to(&desktop);
+        __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
+        return;
+    }
+    /* A higher-priority thread whose sleep ended does not wait for the
+     * rest of this slice. */
+    for (Thread *thread = desktop.next; thread != &desktop; thread = thread->next) {
+        if (thread->priority <= current->priority) continue;
+        wake_due(thread, now);
+        if (thread->state == THREAD_RUNNABLE) {
+            reschedule();
+            return;
+        }
+    }
 }
 
 static void reap(void) {
@@ -191,6 +257,8 @@ unsigned thread_wake_channel(uintptr_t channel, unsigned count) {
         if (thread->state == THREAD_WAITING && thread->channel == channel) {
             thread->state = THREAD_RUNNABLE;
             thread->channel = 0;
+            /* Starvation counts from when it could run again. */
+            thread->last_run = timer_milliseconds();
             ++woken;
         }
     return woken;
@@ -220,6 +288,13 @@ unsigned thread_live_count(Uproc *process) {
 void thread_set_tls(uint32_t base) {
     current->tls_base = base;
     tls_descriptor(base);
+}
+
+Thread *thread_find(Uproc *process, uint32_t tid) {
+    for (Thread *thread = desktop.next; thread != &desktop; thread = thread->next)
+        if (thread->process == process && thread->tid == tid && thread->state != THREAD_DEAD)
+            return thread;
+    return 0;
 }
 
 unsigned thread_user_count(void) {
