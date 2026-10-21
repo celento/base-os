@@ -44,7 +44,17 @@ def until(test,message,seconds=20):
         if log.exists() and 'PANIC:' in log.read_text():raise AssertionError(log.read_text())
         if time.monotonic()>deadline:raise AssertionError(message)
         time.sleep(.05)
-def audio_state():return struct.unpack_from('<i',read(symbols['status'],4))[0]
+def object_bss(obj,name):
+    """Address of a static BSS symbol of one object. Several objects define a
+    'status', so locate it through a BSS symbol only that object defines."""
+    local={p[2]:(p[1],int(p[0],16)) for line in subprocess.check_output(['nm',str(build/obj)],text=True).splitlines() if len(p:=line.split())==3}
+    kind,offset=local[name]
+    counts={}
+    for line in subprocess.check_output(['nm',str(build/'kernel.elf')],text=True).splitlines():
+        if len(p:=line.split())==3:counts[p[2]]=counts.get(p[2],0)+1
+    anchor=next(n for n,(k,_) in local.items() if k==kind and n!=name and counts.get(n)==1)
+    return symbols[anchor]-local[anchor][1]+offset
+def audio_state():return struct.unpack_from('<i',read(object_bss('audio.o','status'),4))[0]
 def browser_contains(text):return text.encode() in read(c['BROWSER_BASE'],c['BROWSER_CAPACITY'])
 def shot(name):qmp('screendump',{'filename':str(work/name),'format':'png'})
 try:
