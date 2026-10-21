@@ -7,11 +7,18 @@
  * Every other thread belongs to an ELF process (kernel/uproc.c), has its own
  * kernel stack and runs its program in ring 3.
  *
- * The kernel is not preemptive. A user thread loses the CPU when the timer
- * fires while it runs in ring 3, or when a system call blocks or yields.
+ * The kernel is not preemptive. A user thread loses the CPU when its quantum
+ * ends while it runs in ring 3, or when a system call blocks or yields.
  * Thread 0 hands the CPU to user threads by calling thread_run_users and gets
- * it back in round-robin order. Interrupt handlers never switch threads
- * except through the ring-3 timer and system call paths. */
+ * it back after at most one quantum of user time, however many threads are
+ * runnable. User threads are picked by priority, round-robin within a level;
+ * a thread passed over for THREAD_STARVE_MS runs next whatever its level.
+ * Interrupt handlers never switch threads except through the ring-3 timer
+ * and system call paths. */
+
+#define THREAD_QUANTUM_MS 10u
+#define THREAD_STARVE_MS 100u
+enum { THREAD_PRIORITY_LOW = -1, THREAD_PRIORITY_NORMAL = 0, THREAD_PRIORITY_HIGH = 1 };
 
 /* Ring-3 entry frame: interrupts.asm's pushad block, data segments, vector
  * and error code, then the processor's privilege-change frame. */
@@ -42,6 +49,8 @@ typedef struct Thread {
     uintptr_t channel;          /* what a waiting thread waits for */
     uint32_t wake_at;           /* nonzero: give up waiting at this millisecond */
     int timed_out;
+    int priority;               /* THREAD_PRIORITY_* */
+    uint32_t last_run;          /* millisecond it was last picked or created */
     uint32_t tls_base;
     struct Thread *next;        /* ring of every thread */
     struct Thread *sibling;     /* threads of the same process */
@@ -62,6 +71,11 @@ int thread_run_users(void);
 
 /* Current user thread only. */
 void thread_yield(void);
+/* Timer path, current user thread in ring 3: ends its quantum when due and
+ * returns the CPU to thread 0. */
+void thread_tick(void);
+/* The live thread with this id in process, or 0. */
+Thread *thread_find(struct Uproc *process, uint32_t tid);
 /* Wait on channel until thread_wake_channel or the timeout millisecond
  * (timer_milliseconds; 0: none).
  * Returns 0 when woken, nonzero on timeout. */

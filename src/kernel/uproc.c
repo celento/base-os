@@ -322,6 +322,13 @@ static int syscall(Uproc *process, UserFrame *f) {
         return (int)thread_current()->tid;
     case BOS_SYS_MEMINFO:
         return sys_meminfo(process, a);
+    case BOS_SYS_THREAD_PRIORITY: {
+        Thread *thread = a ? thread_find(process, a) : thread_current();
+        if (!thread) return -BOS_ESRCH;
+        if ((int)b < THREAD_PRIORITY_LOW || (int)b > THREAD_PRIORITY_HIGH) return -BOS_EINVAL;
+        thread->priority = (int)b;
+        return 0;
+    }
     default:
         return -BOS_ENOSYS;
     }
@@ -348,7 +355,7 @@ int uproc_interrupt(uint32_t *registers) {
     UserFrame *f = (UserFrame *)registers;
     if (!process || (f->cs & 3) != 3) return 0;
     if (f->vector == 32) {
-        thread_yield();
+        thread_tick();
         return 1;
     }
     if (f->vector == BOS_SYS_VECTOR) {

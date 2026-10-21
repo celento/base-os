@@ -49,9 +49,8 @@ static volatile uint32_t ticks;
 #define PIT_DIVISOR ((PIT_HZ + TIMER_IRQ_HZ / 2) / TIMER_IRQ_HZ)
 #define PIT_PERIOD_NS 999847u           /* PIT_DIVISOR / PIT_HZ seconds */
 #define PIT_TICK_NS_X1024 858209u       /* 1e9 / PIT_HZ, times 1024 */
-#define USER_QUANTUM_MS 10u
 static volatile uint32_t milliseconds, clock_seconds, clock_nanoseconds;
-static uint32_t legacy_phase, millisecond_phase, quantum;
+static uint32_t legacy_phase, millisecond_phase;
 /* Device IRQs 1-15. A line with a handler runs it in the interrupt; any
  * other attached line is masked until the kernel loop has serviced it. */
 static PlatformIrqHandler irq_handlers[16];
@@ -142,13 +141,10 @@ void interrupt_dispatch(InterruptFrame *f) {
         legacy_phase += TIMER_HZ;
         if (legacy_phase >= TIMER_IRQ_HZ) { legacy_phase -= TIMER_IRQ_HZ; ++ticks; legacy = 1; }
         outb(0x20, 0x20);
-        /* BEX tasks keep their per-tick scheduling; ELF threads get a
-         * fixed quantum. */
+        /* BEX tasks keep their per-tick scheduling; an ELF thread in ring 3
+         * is checked against its quantum every millisecond. */
         if (legacy) process_interrupt((uint32_t *)f);
-        if (++quantum >= USER_QUANTUM_MS) {
-            quantum = 0;
-            uproc_interrupt((uint32_t *)f);
-        }
+        uproc_interrupt((uint32_t *)f);
         return;
     }
     /* Device IRQs come before the BEX and ELF runtimes, which end a

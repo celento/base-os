@@ -30,6 +30,7 @@ PROGRAM_STEPS = (
     ('memory', 0, 'ELF memory 128 MiB ok'),
     ('threads', 0, 'ELF threads ok'),
     ('clock', 0, 'ELF clock ok'),
+    ('scheduler', 0, 'ELF scheduler ok'),
     ('fault', 139, 'ELF fault next'),
     ('gate', 159, None),
     ('hello', 7, None),
@@ -141,7 +142,7 @@ def run(build):
     work = pathlib.Path(tempfile.mkdtemp(prefix='baseos-elf-runtime-'))
     print('Work directory:', work, flush=True)
     text = boot(build, work)
-    for needle in ('ELF hello from ring 3', 'ELF memory 128 MiB ok', 'ELF threads ok',
+    for needle in ('ELF hello from ring 3', 'ELF memory 128 MiB ok', 'ELF threads ok', 'ELF scheduler ok',
                    'uproc: page fault at 0x40000000'):
         assert needle in text, needle
     print('ELF_RUNTIME_PASS: loader, 128 MiB demand paging, threads, futexes, fault isolation.',
