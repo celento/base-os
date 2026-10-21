@@ -332,6 +332,8 @@ static int files(void) {
         return 10;
     sys(BOS_SYS_CLOSE, ends[0], 0, 0, 0, 0, 0);
     if (sys(BOS_SYS_DUP2, 1, 9, 0, 0, 0, 0) != 9 || sys(BOS_SYS_ISATTY, 9, 0, 0, 0, 0, 0)) return 11;
+    /* A huge target is refused rather than sizing the table past 32 bits. */
+    if (sys(BOS_SYS_DUP2, 1, 0x40000000, 0, 0, 0, 0) != -BOS_EBADF) return 11;
     sys(BOS_SYS_WRITE, 9, (long)"ELF dup2 output\n", 16, 0, 0, 0);
     if (sys(BOS_SYS_CHDIR, (long)"..", 0, 0, 0, 0, 0) ||
         sys(BOS_SYS_UNLINK, (long)"elf-files", BOS_AT_REMOVEDIR, 0, 0, 0, 0) != -BOS_ENOTEMPTY ||

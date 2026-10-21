@@ -49,12 +49,14 @@ static void wait_volume(void) {
 
 static int write_back(UFile *file, int may_wait) {
     if (!file->dirty) return 0;
-    if (!node_current(file)) {
-        /* The file was deleted or replaced while open: nothing to update. */
-        file->dirty = 0;
-        return 0;
-    }
     for (;;) {
+        /* Checked on every attempt: while this waited, the file may have
+         * been deleted and its node slot given to another file. */
+        if (!node_current(file)) {
+            /* The file was deleted or replaced while open: nothing to update. */
+            file->dirty = 0;
+            return 0;
+        }
         int result = fs_write(file->node, file->buffer, (int)file->size);
         if (result == FS_ERR_BUSY) {
             if (!may_wait) return FS_ERR_BUSY;
@@ -116,8 +118,13 @@ static UFile *new_file(int kind) {
     return file;
 }
 
+/* Far above any real program's need; it only keeps the table size from
+ * overflowing. */
+#define UFILE_MAX_DESCRIPTORS (1u << 20)
+
 static int grow(UFileTable *table, unsigned needed) {
     if (needed <= table->capacity) return 0;
+    if (needed > UFILE_MAX_DESCRIPTORS) return -BOS_EMFILE;
     unsigned capacity = table->capacity ? table->capacity : 16;
     while (capacity < needed) capacity *= 2;
     UFile **slots = kmalloc(capacity * sizeof *slots);
@@ -633,7 +640,7 @@ int ufile_dup(Uproc *process, int fd) {
 
 int ufile_dup2(Uproc *process, int fd, int target) {
     UFile *file = lookup(&process->files, fd);
-    if (!file || target < 0) return -BOS_EBADF;
+    if (!file || target < 0 || (unsigned)target >= UFILE_MAX_DESCRIPTORS) return -BOS_EBADF;
     if (fd == target) return target;
     int result = grow(&process->files, (unsigned)target + 1);
     if (result) return result;
