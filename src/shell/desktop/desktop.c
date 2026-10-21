@@ -45,6 +45,7 @@
 #include "apps/game2048.h"
 #include "apps/breakout.h"
 #include "apps/sysmon.h"
+#include "kernel/uproc.h"
 #include "kernel/fs.h"
 #include "kernel/native_sync.h"
 #include "kernel/native_ui.h"
@@ -6077,6 +6078,15 @@ static void sysinfo_fill(SysInfo *si) {
     for(int i=0;i<MAX_WIN&&si->task_n<SYSMON_MAX_TASKS;i++)
         if(wins[i].open&&(wins[i].kind==WK_TERM||wins[i].kind==WK_NATIVE)&&
            app_view_info(i,&si->tasks[si->task_n]))si->task_n++;
+    si->program_n = 0;
+    for(uint32_t pid=uproc_next(0,0);pid&&si->program_n<SYSMON_MAX_PROGRAMS;pid=uproc_next(pid,0)){
+        UprocInfo info;
+        if(!uproc_info(pid,&info)||info.state!=UPROC_RUNNING)continue;
+        SysmonProgram *program=&si->programs[si->program_n++];
+        program->pid=info.pid;program->threads=info.threads;
+        program->kib=info.pages*4;program->cpu_ms=info.cpu_ms;
+        kmemcpy(program->name,info.name,sizeof program->name);
+    }
     si->win_n = 0;
     int order[MAX_WIN];
     int n = 0;
@@ -6539,6 +6549,10 @@ static void handle_click(void) {
                 int owner=action.owner;
                 if(owner>=0&&owner<MAX_WIN&&wins[owner].open&&
                    (unsigned)wins[owner].seq==action.task_instance)win_request_close(owner);
+            }
+            else if(action.kind==SYSMON_ACTION_STOP_PROGRAM){
+                /* Its Terminal reports the exit status on its next poll. */
+                uproc_kill(action.task_instance);dirty=1;
             }
             else if(action.kind==SYSMON_ACTION_SHOW_TERMINAL||action.kind==SYSMON_ACTION_STOP_TASK){
                 int owner=action.owner;TermTaskInfo live;

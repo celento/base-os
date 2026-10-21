@@ -21,6 +21,8 @@ static uint32_t next_tid = 1;
 static int have_fpu;
 /* When thread 0 handed over the CPU, and when the current thread started. */
 static uint32_t round_start, slice_start;
+/* When the current thread got the CPU, for per-process CPU time. */
+static uint32_t switched_at;
 /* Starving threads get one extra turn per THREAD_STARVE_MS between them, so
  * many low-priority threads take at most one quantum in ten. */
 static uint32_t last_boost;
@@ -106,6 +108,9 @@ Thread *thread_create_user(Uproc *process, uint32_t eip, uint32_t esp, uint32_t 
 static void switch_to(Thread *next) {
     Thread *previous = current;
     if (next == previous) return;
+    uint32_t now = timer_milliseconds();
+    if (previous->process) previous->process->cpu_ms += now - switched_at;
+    switched_at = now;
     if (previous->process && have_fpu) __asm__ volatile("fnsave %0" : "=m"(previous->fpu) :: "memory");
     current = next;
     if (next->process) {

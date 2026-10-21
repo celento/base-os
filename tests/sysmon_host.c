@@ -142,5 +142,21 @@ int main(int argc,char **argv){
     bx=11;by=13;bw=520;bh=439;si.win_n=si.task_n=0;
     tab(&si,SYSMON_TAB_TASKS);assert(!drawn_task_n&&!stop_labels&&!show_labels);
     tab(&si,SYSMON_TAB_WINDOWS);assert(!drawn_win_n&&!close_labels);
+    /* ELF programs list after native tasks; Stop names the shown process. */
+    si.task_n=1;si.program_n=2;
+    for(int i=0;i<2;i++){
+        snprintf(si.programs[i].name,sizeof si.programs[i].name,"elf-check-%d",i);
+        si.programs[i].pid=(unsigned)i+7;si.programs[i].threads=(unsigned)i+1;
+        si.programs[i].kib=96;si.programs[i].cpu_ms=61500;
+    }
+    tab(&si,SYSMON_TAB_TASKS);assert(drawn_task_n==1&&drawn_program_n==2&&stop_labels==1);
+    MonitorLayout l=layout(bx,by,bw,bh);
+    for(int i=0;i<2;i++){
+        SysmonAction a=click(&si,program_button(&l,1+i));
+        assert(a.kind==SYSMON_ACTION_STOP_PROGRAM&&a.task_instance==si.programs[i].pid);
+    }
+    SysInfo gone=si;gone.program_n=1;
+    assert(!click(&gone,program_button(&l,2)).kind);
+    snapshot(argc>1?argv[1]:0,"monitor-programs");
     puts("monitor: three tabs, eight bounded rows, resized hit targets, task identity, empty states and 8/32 MiB bars passed");
 }
