@@ -92,7 +92,58 @@ static void verify(BfsVolume *v, const BfsRecord *r, uint32_t count, const uint6
     }
 }
 
-int main(void) {
+/* Image exchange with tools/basefs.py: "dump FILE" lists a volume, "make
+ * FILE SECTORS" writes a fixed tree. */
+static int image_tool(char **argv) {
+    FILE *f = fopen(argv[2], !strcmp(argv[1], "dump") ? "rb" : "wb");
+    assert(f);
+    Disk disk = {0, 0, -1, 0};
+    if (!strcmp(argv[1], "dump")) {
+        fseek(f, 0, SEEK_END);
+        disk.sectors = (uint32_t)(ftell(f) / 512);
+        rewind(f);
+        disk.data = malloc((size_t)disk.sectors * 512);
+        assert(fread(disk.data, 512, disk.sectors, f) == disk.sectors);
+    } else {
+        disk.sectors = (uint32_t)atol(argv[3]);
+        disk.data = calloc(disk.sectors, 512);
+    }
+    BfsDevice device = device_of(&disk);
+    BfsVolume v;
+    BfsRecord *r;
+    uint32_t n;
+    if (!strcmp(argv[1], "make")) {
+        assert(bfs_format(&device, 40) == BFS_OK);
+        assert(bfs_mount(&v, &device, &r, &n) == BFS_OK);
+        bfs_free_records(r, n);
+        uint64_t sizes[] = {0, 1, 4096, 4097, 65536, 70000, 300000};
+        r = build(&v, sizes, 7, 3, &n);
+        assert(r && bfs_commit(&v, r, n, 41, 9) == BFS_OK);
+        bfs_free_records(r, n);
+        bfs_unmount(&v);
+        assert(fwrite(disk.data, 512, disk.sectors, f) == disk.sectors);
+    } else {
+        int result = bfs_mount(&v, &device, &r, &n);
+        if (result) { printf("error %d\n", result); return 1; }
+        printf("generation %llu next %u %u\n", (unsigned long long)v.generation, v.next_identity, v.next_revision);
+        for (uint32_t i = 0; i < n; ++i) {
+            uint8_t *data = malloc(r[i].size ? r[i].size : 1);
+            assert(bfs_read(&v, &r[i], 0, data, (uint32_t)r[i].size) == BFS_OK);
+            printf("%u %d %u %u %u %llu %08x %s\n", i, r[i].parent == BFS_ROOT_PARENT ? -1 : (int)r[i].parent,
+                   r[i].flags, r[i].identity, r[i].modified, (unsigned long long)r[i].size,
+                   bfs_crc32(0, data, (uint32_t)r[i].size), r[i].name);
+            free(data);
+        }
+        bfs_free_records(r, n);
+        bfs_unmount(&v);
+    }
+    fclose(f);
+    free(disk.data);
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc > 2) return image_tool(argv);
     Disk disk = {calloc(1, 8u << 20), (8u << 20) / 512, -1, 0};
     BfsDevice device = device_of(&disk);
     assert(!bfs_probe(&device));
@@ -210,10 +261,36 @@ int main(void) {
     assert(bfs_commit(&v, r, n, 800, 300) == BFS_OK);
     bfs_free_records(r, n);
     bfs_unmount(&v);
+
+    /* Converting a disk in place: the old marker survives until the end and
+     * nothing is written at or above the limit. */
+    memset(disk.data, 0x5A, (size_t)disk.sectors * 512);
+    uint8_t old_sector[512];
+    memcpy(old_sector, disk.data, 512);
+    uint32_t limit = disk.sectors / BFS_SECTORS_PER_BLOCK / 2;
+    assert(bfs_create(&v, &device, limit) == BFS_OK);
+    assert(!memcmp(disk.data, old_sector, 512) && !bfs_probe(&device));
+    uint64_t small_sizes[] = {5, 4096, 70000, 0, 100, 65536, 12345};
+    r = build(&v, small_sizes, files, 55, &n);
+    assert(r && bfs_commit(&v, r, n, 900, 77) == BFS_OK);
+    for (uint32_t i = 0; i < n; ++i)
+        for (uint32_t e = 0; e < r[i].extent_count; ++e)
+            assert(r[i].extents[e].start + r[i].extents[e].blocks <= limit);
+    for (size_t at = (size_t)limit * BFS_BLOCK; at < (size_t)disk.sectors * 512; ++at)
+        assert(disk.data[at] == 0x5A);
+    assert(!memcmp(disk.data, old_sector, 512) && !bfs_probe(&device));
+    bfs_free_records(r, n);
+    bfs_unmount(&v);
+    assert(bfs_write_marker(&device) == BFS_OK && bfs_probe(&device));
+    assert(bfs_mount(&v, &device, &r, &n) == BFS_OK && v.limit == v.blocks && v.next_revision == 77);
+    verify(&v, r, n, small_sizes, 55);
+    bfs_free_records(r, n);
+    bfs_unmount(&v);
+
     assert(live == 0);
     free(before);
     free(disk.data);
     printf("basefs: format, mount, %u file shapes, reuse, refused tables, %u+%u crash points, "
-           "corruption and full volume passed\n", files, outcomes[0], outcomes[1]);
+           "corruption, full volume and conversion passed\n", files, outcomes[0], outcomes[1]);
     return 0;
 }

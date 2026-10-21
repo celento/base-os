@@ -55,6 +55,12 @@ no write since has taken. A commit then:
 3. writes the superblock with the next generation to the slot not in use,
    flushes, and reads it back.
 
+`bfs_commit` does all of this with blocking device calls. `bfs_commit_begin`
+and `bfs_commit_end` split it so a caller can drive the disk itself in small
+steps: begin validates, encodes and reserves the checkpoint blocks without
+I/O, the caller writes and checks the blocks, and end takes the outcome (done,
+failed before the superblock write, or uncertain after it).
+
 Only after step 3 do the old commit's blocks become free. Mount reads both
 slots, tries the newest valid generation first and falls back to the other
 one when its checkpoint is damaged. If the superblock write fails, the
@@ -65,6 +71,22 @@ The checkpoint may be split into at most 48 runs. Each run is as long as the
 free space at that point allows, so only a heavily fragmented volume would
 hit that; the commit then reports no space and the previous commit stays
 current.
+
+## Converting a disk in place
+
+`bfs_create` sets up an empty volume in memory without touching sector 0
+and with allocation limited to the blocks below a given limit. A converter
+writes the files and the first commit there, then writes the BaseFS 2 marker
+last. Until that final sector write the disk still carries its old marker
+and its old contents above the limit, so a crash leaves the old volume as it
+was.
+
+## Host tools
+
+`tools/basefs.py` reads and writes the same format in Python, and
+`tools/volume.py` uses it for BaseFS 2 images (`info`, `ls`, `import`,
+`export`, `mkdir`). A host commit goes to the superblock slot not in use and
+keeps the extents of unchanged files.
 
 ## Errors
 
@@ -87,5 +109,7 @@ free space returns to the same value, and checks that bad tables are refused.
 It then cuts power at every sector write of a commit (including its data
 writes) and requires every mount afterwards to show exactly the old or the
 new state. It also flips bits in an extent (the read reports corruption) and
-in the newest checkpoint (mount falls back one generation), fills the volume
-and checks that every heap object comes back.
+in the newest checkpoint (mount falls back one generation), fills the volume,
+converts a disk in place below a block limit, and checks that every heap
+object comes back. It also cross-checks `tools/basefs.py`: the C code mounts
+images the host wrote and the host mounts images the C code wrote.

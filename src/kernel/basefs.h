@@ -64,6 +64,7 @@ typedef struct {
 typedef struct {
     BfsDevice device;
     uint32_t blocks;
+    uint32_t limit;                 /* allocation stays below this block */
     uint64_t generation;
     uint32_t next_identity, next_revision;
     int slot;                       /* superblock slot of the current commit */
@@ -76,6 +77,12 @@ typedef struct {
 
 /* Writes the marker, an empty root and both superblocks. */
 int bfs_format(const BfsDevice *device, uint32_t identity_seed);
+/* An empty volume in memory, ready for writes and a first commit, for
+ * converting a disk in place: it clears both superblock slots but leaves
+ * sector 0 alone, and allocates only below block limit (0: the whole disk)
+ * until it is mounted again. Write the marker after the first commit. */
+int bfs_create(BfsVolume *volume, const BfsDevice *device, uint32_t limit);
+int bfs_write_marker(const BfsDevice *device);
 /* Nonzero when sector 0 holds a BaseFS 2 marker for this device size. */
 int bfs_probe(const BfsDevice *device);
 /* Loads the newest valid commit. *records (count *count) and their extents
@@ -86,16 +93,50 @@ void bfs_free_records(BfsRecord *records, uint32_t count);
 
 /* Reads length bytes at offset of a file, checking each extent it touches. */
 int bfs_read(BfsVolume *volume, const BfsRecord *record, uint64_t offset, void *buffer, uint32_t length);
-/* Writes size bytes into newly allocated blocks; *extents is kmalloc'd. */
+/* Reserves blocks for size bytes in extents of at most BFS_EXTENT_BLOCKS;
+ * *extents is kmalloc'd. The caller writes each extent, zero padded to whole
+ * blocks, and sets its crc to bfs_crc32(0, bytes of the file in it). */
+int bfs_allocate(BfsVolume *volume, uint64_t size, BfsExtent **extents, uint32_t *count);
+/* bfs_allocate plus the writes. */
 int bfs_write_data(BfsVolume *volume, const void *data, uint64_t size, BfsExtent **extents, uint32_t *count);
-/* Gives back blocks written by bfs_write_data that no commit will use. */
+/* Gives back blocks reserved since the last commit that no commit will use. */
 void bfs_discard(BfsVolume *volume, const BfsExtent *extents, uint32_t count);
 
-/* Makes records the current state: writes the checkpoint, flushes, writes the
- * other superblock and flushes again. Blocks only the old commit used become
- * free afterwards. On failure the previous commit stays current. */
+/* Makes records the current state: writes the checkpoint, flushes, reads it
+ * back, then writes the other superblock, flushes and reads it back. Blocks
+ * only the old commit used become free afterwards. On failure the previous
+ * commit stays current. */
 int bfs_commit(BfsVolume *volume, const BfsRecord *records, uint32_t count,
                uint32_t next_identity, uint32_t next_revision);
+
+/* The same commit in steps, for callers that drive the device themselves:
+ *   bfs_commit_begin   validate and encode, reserve checkpoint blocks (no I/O)
+ *   write each run of checkpoint (bfs_commit_runs/run) in order, flush, read
+ *   it back and compare
+ *   write the block super_block (super, zero padded), flush, read its first
+ *   sector back and compare
+ *   bfs_commit_end     with the outcome
+ * records must not change in between. */
+typedef struct {
+    uint8_t *checkpoint;            /* checkpoint_blocks whole blocks */
+    uint32_t checkpoint_blocks;
+    uint32_t super_block;
+    uint8_t super[512] __attribute__((aligned(4)));
+} BfsCommit;
+enum {
+    BFS_COMMIT_DONE,        /* the superblock read back intact */
+    BFS_COMMIT_FAILED,      /* failed before the superblock write was issued */
+    BFS_COMMIT_UNCERTAIN    /* the superblock write was issued but not verified */
+};
+int bfs_commit_begin(BfsVolume *volume, const BfsRecord *records, uint32_t count,
+                     uint32_t next_identity, uint32_t next_revision, BfsCommit *commit);
+uint32_t bfs_commit_runs(const BfsCommit *commit);
+/* Start block of run index; *blocks its length. */
+uint32_t bfs_commit_run(const BfsCommit *commit, uint32_t index, uint32_t *blocks);
+/* Drops a begun commit before any write. */
+void bfs_commit_cancel(BfsVolume *volume, BfsCommit *commit);
+int bfs_commit_end(BfsVolume *volume, BfsCommit *commit, const BfsRecord *records, uint32_t count,
+                   int outcome);
 
 uint64_t bfs_free_bytes(const BfsVolume *volume);
 uint32_t bfs_crc32(uint32_t crc, const void *data, uint32_t length);
