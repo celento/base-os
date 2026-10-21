@@ -52,6 +52,75 @@ static volatile uint32_t ticks;
 #define USER_QUANTUM_MS 10u
 static volatile uint32_t milliseconds, clock_seconds, clock_nanoseconds;
 static uint32_t legacy_phase, millisecond_phase, quantum;
+/* Device IRQs 1-15. A line with a handler runs it in the interrupt; any
+ * other attached line is masked until the kernel loop has serviced it. */
+static PlatformIrqHandler irq_handlers[16];
+static volatile uint16_t irq_attached, irq_deferred_pending;
+static uint16_t irq_mask = 0xfffe;   /* only IRQ0 (PIT) at start */
+
+static void irq_mask_write(void) {
+    uint16_t mask = irq_mask;
+    /* Any open slave line needs the IRQ2 cascade. */
+    if ((mask & 0xff00) != 0xff00) mask = (uint16_t)(mask & ~4u);
+    outb(0x21, mask & 255);
+    outb(0xa1, mask >> 8);
+}
+static void irq_eoi(unsigned irq) {
+    if (irq >= 8) outb(0xa0, 0x20);
+    outb(0x20, 0x20);
+}
+/* IRQ7 and IRQ15 can be spurious; the in-service bit tells. */
+static int irq_spurious(unsigned irq) {
+    if (irq != 7 && irq != 15) return 0;
+    uint16_t pic = irq == 7 ? 0x20 : 0xa0;
+    outb(pic, 0x0b);
+    if (inb(pic) & 0x80) return 0;
+    if (pic == 0xa0) outb(0x20, 0x20);
+    return 1;
+}
+static void irq_dispatch(unsigned irq) {
+    if (irq_spurious(irq)) return;
+    if (!(irq_attached & (1u << irq))) {
+        irq_eoi(irq);
+        return;
+    }
+    if (irq_handlers[irq]) {
+        irq_handlers[irq]();
+    } else {
+        irq_mask |= (uint16_t)(1u << irq);
+        irq_mask_write();
+        irq_deferred_pending |= (uint16_t)(1u << irq);
+    }
+    irq_eoi(irq);
+}
+void platform_irq_attach(unsigned irq, PlatformIrqHandler handler) {
+    if (irq == 0 || irq > 15) return;
+    unsigned flags;
+    __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
+    irq_handlers[irq] = handler;
+    irq_attached |= (uint16_t)(1u << irq);
+    irq_mask &= (uint16_t)~(1u << irq);
+    irq_mask_write();
+    __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
+}
+unsigned platform_irq_take(void) {
+    unsigned flags;
+    __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
+    unsigned pending = irq_deferred_pending;
+    irq_deferred_pending = 0;
+    __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
+    return pending;
+}
+int platform_irq_pending(void) { return irq_deferred_pending != 0; }
+void platform_irq_rearm(unsigned lines) {
+    lines &= irq_attached;
+    if (!lines) return;
+    unsigned flags;
+    __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
+    irq_mask &= (uint16_t)~lines;
+    irq_mask_write();
+    __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
+}
 
 /* pushad, normalized vector/error, then the processor's ring-0 frame. */
 typedef struct {
@@ -78,17 +147,14 @@ void interrupt_dispatch(InterruptFrame *f) {
         }
         return;
     }
+    /* Device IRQs come before the BEX and ELF runtimes, which end a
+     * program for any vector they do not own. */
+    if (f->vector > 32 && f->vector < 48) {
+        irq_dispatch(f->vector - 32);
+        return;
+    }
     if (process_interrupt((uint32_t *)f)) return;
     if (uproc_interrupt((uint32_t *)f)) return;
-    /* PIC IRQ7/15 can be spurious even when masked. */
-    if (f->vector == 39 || f->vector == 47) {
-        uint16_t pic = f->vector == 39 ? 0x20 : 0xa0;
-        outb(pic, 0x0b);
-        if (!(inb(pic) & 0x80)) {
-            if (pic == 0xa0) outb(0x20, 0x20);
-            return;
-        }
-    }
     platform_log("EXCEPTION vector="); hex(f->vector);
     platform_log(" error="); hex(f->error);
     platform_log(" eip="); hex(f->eip);
@@ -113,13 +179,13 @@ void platform_init(void) {
     };
     __asm__ volatile("lidt %0" :: "m"(descriptor) : "memory");
     /* Move legacy IRQs away from CPU exception vectors; only PIT IRQ0 is
-     * unmasked. PS/2 and floppy remain polled and do not mutate app state. */
+     * unmasked until a driver attaches its line. Floppy remains polled. */
     outb(0x21, 0xff); outb(0xa1, 0xff);
     outb(0x20, 0x11); io_wait(); outb(0xa0, 0x11); io_wait();
     outb(0x21, 32); io_wait(); outb(0xa1, 40); io_wait();
     outb(0x21, 4); io_wait(); outb(0xa1, 2); io_wait();
     outb(0x21, 1); io_wait(); outb(0xa1, 1); io_wait();
-    outb(0x21, 0xfe); outb(0xa1, 0xff);
+    irq_mask_write();
     outb(0x43, 0x34);  /* PIT channel 0, low/high bytes, rate generator. */
     outb(0x40, PIT_DIVISOR & 255); outb(0x40, PIT_DIVISOR >> 8);
     __asm__ volatile("sti" ::: "memory");

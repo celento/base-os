@@ -39,6 +39,14 @@ uint32_t timer_milliseconds(void);
 /* Monotonic time since boot with sub-microsecond resolution. */
 void timer_clock(uint32_t *seconds, uint32_t *nanoseconds);
 void timer_delay(unsigned ticks);
+/* Device interrupt lines 1-15. With a handler, it runs inside the interrupt
+ * (keep it short; no locks are held). Without one, the line is masked when it
+ * fires and reported by platform_irq_take() until platform_irq_rearm(). */
+typedef void (*PlatformIrqHandler)(void);
+void platform_irq_attach(unsigned irq, PlatformIrqHandler handler);
+unsigned platform_irq_take(void);
+int platform_irq_pending(void);
+void platform_irq_rearm(unsigned lines);
 /* Collect input while blocking; never dispatch application actions here. */
 void platform_poll(void);
 int video_info_valid(const BootInfo *bi);

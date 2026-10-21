@@ -23,6 +23,9 @@ extern InputIngress device_input;
  * number acquired. Never dispatches shell or application work. */
 unsigned input_acquire(unsigned budget);
 void drain_8042(void);
+/* Decodes every byte already collected by interrupt, so a caller can fence
+ * input that arrived before now. */
+void input_acquire_backlog(void);
 /* Nonzero once the PS/2 mouse answered initialization. */
 int kernel_pointer_ready(void);
 
