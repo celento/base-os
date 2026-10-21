@@ -28,6 +28,7 @@ static unsigned data_sectors = DATA_DISK_SECTORS;
 static long write_budget = -1;      /* sectors before a power cut; <0 unlimited */
 static int cut, read_errors_after = -1;
 static long fail_read_at = -1;      /* fail only this read (counted from 0) */
+static long fail_lba = -1;          /* fail every read of this sector */
 static long reads;
 static unsigned restored;
 static unsigned sectors_written, max_poll;
@@ -38,6 +39,7 @@ int ata_read(unsigned lba, void *buffer, int sectors) {
     if (read_errors_after == 0) return -1;
     if (read_errors_after > 0) --read_errors_after;
     if (reads++ == fail_read_at) return -1;
+    if (fail_lba >= 0 && (long)lba <= fail_lba && fail_lba < (long)lba + sectors) return -1;
     memcpy(buffer, data_disk + (size_t)lba * SECTOR_SIZE, (size_t)sectors * SECTOR_SIZE);
     return 0;
 }
@@ -74,7 +76,7 @@ int disk_write(unsigned lba, const void *buffer, int sectors) {
     return 0;
 }
 
-static void power_on(void) { write_budget = -1; cut = 0; read_errors_after = -1; fail_read_at = -1; }
+static void power_on(void) { write_budget = -1; cut = 0; read_errors_after = -1; fail_read_at = -1; fail_lba = -1; }
 static void marked_blank(void) {
     memset(data_disk, 0, sizeof(data_disk));
     unsigned *m = (unsigned *)data_disk;
@@ -291,10 +293,47 @@ int main(void) {
         else { ++refused; assert(fs_size(id) == before && !memcmp(fs_data(id), copy, (size_t)before)); }
     }
     assert(refused >= 1 && mount() == 0);
+
+    /* A volume too small for a larger node table refuses the new node
+     * instead of accepting a change that cannot be saved. */
+    data_sectors = 5 * BFS_SECTORS_PER_BLOCK;
+    memset(data_disk, 0, sizeof data_disk);
+    device = bfs_device();
+    assert(bfs_format(&device, 5) == BFS_OK);
+    assert(mount() == 0);
+    char folder_name[] = "d000";
+    int folders = 0;
+    for (;; ++folders) {
+        folder_name[1] = (char)('0' + folders / 100);
+        folder_name[2] = (char)('0' + folders / 10 % 10);
+        folder_name[3] = (char)('0' + folders % 10);
+        if (fs_mkdir(0, folder_name) < 0) break;
+        assert(fs_sync() == 0);
+    }
+    assert(folders > 10 && folders < FS_MAX_NODES - 1 && !fs_needs_sync() && mount() == 0);
+    assert(fs_node_count() == folders + 1);
     data_sectors = DATA_DISK_SECTORS;
+
+    /* An unreadable superblock may hold the newest commit: the volume does
+     * not mount as BaseFS 2 (so nothing writes over it), and it mounts with
+     * the newest files once the sector reads again. */
+    memset(data_disk, 0, sizeof data_disk);
+    device = bfs_device();
+    assert(bfs_format(&device, 5) == BFS_OK);
+    assert(mount() == 0 && put("first.txt", "one", 3) == 3 && fs_sync() == 0);
+    assert(put("first.txt", "two", 3) == 3 && fs_sync() == 0);
+    int newest = bfs.slot;
+    power_on();
+    fs_init();
+    fail_lba = (1 + newest) * BFS_SECTORS_PER_BLOCK;
+    (void)fs_load_disk();
+    assert(data_backend != 3 && !fs_writes_allowed());
+    assert(mount() == 0 && data_backend == 3 && bfs.slot == newest);
+    expect("first.txt", "two", 3);
 
     printf("basefs volume: format, %u-step incremental save, reuse, %u+%u save cuts, conversion from "
            "both slots, %u+%u conversion cuts, restore after %u read faults, odd sizes, %d full-disk files with %d "
-           "refused rewrites passed\n", steps, outcomes[0], outcomes[1], kept, converted, attempts, files, refused);
+           "refused rewrites, a %d-folder small volume and an unreadable superblock passed\n", steps, outcomes[0], outcomes[1], kept, converted, attempts, files, refused,
+           folders);
     return 0;
 }

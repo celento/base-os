@@ -458,7 +458,14 @@ int bfs_mount(BfsVolume *volume, const BfsDevice *device, BfsRecord **records, u
     uint32_t blocks = bfsi_device_blocks(device);
     Super supers[2];
     int valid[2];
-    for (int s = 0; s < 2; ++s) valid[s] = bfsi_read_super(device, s, &supers[s]) == BFS_OK;
+    /* Only a slot that reads back corrupt may be passed over. An unreadable
+     * one could hold the newest commit, and mounting the older one would let
+     * the next commit overwrite it and reuse its blocks. */
+    for (int s = 0; s < 2; ++s) {
+        int read = bfsi_read_super(device, s, &supers[s]);
+        if (read == BFS_ERR_IO) return BFS_ERR_IO;
+        valid[s] = read == BFS_OK;
+    }
     int order[2] = {0, 1};
     uint64_t g0 = supers[0].generation_low | (uint64_t)supers[0].generation_high << 32;
     uint64_t g1 = supers[1].generation_low | (uint64_t)supers[1].generation_high << 32;
@@ -477,13 +484,17 @@ int bfs_mount(BfsVolume *volume, const BfsDevice *device, BfsRecord **records, u
         int s = order[k];
         if (!valid[s]) continue;
         uint8_t *payload;
-        if ((result = bfsi_read_checkpoint(device, &supers[s], &payload))) continue;
+        if ((result = bfsi_read_checkpoint(device, &supers[s], &payload))) {
+            if (result == BFS_ERR_CORRUPT) continue;
+            break;
+        }
         kmemset(volume->used, 0, (int)((blocks + 7) / 8));
         BfsRecord *list;
         uint32_t n;
         result = bfsi_decode(payload, supers[s].checkpoint_bytes, blocks, volume->used, &list, &n);
         kfree(payload);
-        if (result) continue;
+        if (result == BFS_ERR_CORRUPT) continue;
+        if (result) break;
         if (n != supers[s].node_count || bfsi_mark_owned(volume->used, blocks, &supers[s], list, n) ||
             bfsi_remember_checkpoint(volume, &supers[s])) {
             bfs_free_records(list, n);

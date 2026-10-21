@@ -139,9 +139,23 @@ int fs_node_limit(void) { return data_backend ? FS_MAX_NODES : FS_LEGACY_NODES; 
  * while the next commit still fits in the free blocks: every changed file
  * rounded up to whole blocks, plus a checkpoint for count nodes. */
 static uint32_t bfs_blocks_for(uint64_t size) { return (uint32_t)((size + BFS_BLOCK - 1) / BFS_BLOCK); }
-static uint32_t bfs_checkpoint_blocks(unsigned count) {
-    uint64_t bytes = 16u + count * (36u + FS_NAME_LEN + 12u) + 12u * (pool_capacity / 65536u);
-    return bfs_blocks_for(bytes) + 1;
+/* An upper bound on the next checkpoint for count nodes, in blocks. Each
+ * record is 36 bytes, its name padded to 4, and 12 per extent. A file the
+ * commit writes may get one extent per block when free space is scattered;
+ * node except is about to hold extra blocks. With rewrite_all every file is
+ * written (a conversion). Nodes beyond the current ones get the longest name. */
+static uint32_t bfs_checkpoint_blocks(unsigned count, int except, uint64_t extra, int rewrite_all) {
+    uint64_t bytes = 16, extents = except >= 0 ? extra : 0;
+    unsigned have = 0;
+    for (int i = 0; i < FS_MAX_NODES; ++i) {
+        if (!nodes[i].used) continue;
+        ++have;
+        bytes += 36u + (((unsigned)kstrlen(nodes[i].name) + 3u) & ~3u);
+        if (i == except || nodes[i].is_dir) continue;
+        extents += rewrite_all || node_dirty[i] ? bfs_blocks_for((uint64_t)nodes[i].size) : node_extent_count[i];
+    }
+    if (count > have) bytes += (uint64_t)(count - have) * (36u + ((FS_NAME_LEN - 1u + 3u) & ~3u));
+    return bfs_blocks_for(bytes + 12u * extents);
 }
 /* Blocks the next commit writes for changed files, leaving out node except. */
 static uint64_t bfs_pending_blocks(int except) {
@@ -152,11 +166,11 @@ static uint64_t bfs_pending_blocks(int except) {
     return blocks;
 }
 static int bfs_commit_fits(unsigned count, int except, uint64_t extra) {
-    return bfs_pending_blocks(except) + extra + bfs_checkpoint_blocks(count) <= bfs.free_blocks;
+    return bfs_pending_blocks(except) + extra + bfs_checkpoint_blocks(count, except, extra, 0) <= bfs.free_blocks;
 }
 static unsigned basefs_capacity(unsigned count) {
     unsigned pool = pool_capacity - count;
-    uint64_t need = bfs_pending_blocks(-1) + bfs_checkpoint_blocks(count);
+    uint64_t need = bfs_pending_blocks(-1) + bfs_checkpoint_blocks(count, -1, 0, 0);
     uint64_t spare = bfs.free_blocks > need ? (uint64_t)(bfs.free_blocks - need) * BFS_BLOCK : 0;
     uint64_t total = fs_used_bytes() + spare;
     return total < pool ? (unsigned)total : pool;
@@ -303,6 +317,8 @@ static int alloc_node(int parent, const char *name, int is_dir, int is_app) {
 
     if (!tree_fits(-1, parent, name) ||
         fs_used_bytes() > fs_capacity_for_nodes(fs_node_count() + 1)) return -1;
+    /* A larger node table must still fit the next commit, even with no data. */
+    if (data_backend == 3 && !bfs_commit_fits((unsigned)fs_node_count() + 1, -1, 0)) return -1;
     for (int i = 0; i < fs_node_limit(); i++) {
         if (!nodes[i].used) {
             kmemset(&nodes[i], 0, (int)sizeof(FsNode));
@@ -1316,7 +1332,7 @@ static int save_snapshot(void);
 static void convert_to_basefs(int profile) {
     if (!FS_CONVERT_TO_BASEFS || !writable) return;
     uint32_t limit = (profile == 2 ? DATA_LARGE_SECOND_LBA : DATA_SECOND_LBA) / BFS_SECTORS_PER_BLOCK;
-    uint64_t needed = BFS_RESERVED_BLOCKS + bfs_checkpoint_blocks((unsigned)fs_node_count());
+    uint64_t needed = BFS_RESERVED_BLOCKS + bfs_checkpoint_blocks((unsigned)fs_node_count(), -1, 0, 1);
     for (int i = 0; i < FS_MAX_NODES; ++i)
         if (nodes[i].used) needed += bfs_blocks_for((uint64_t)nodes[i].size);
     if (needed > limit) {
