@@ -644,7 +644,13 @@ static int slot_entry(FatVolume *v, uint32_t first, uint32_t slot, uint8_t **e, 
     *e = v->dir + slot % SLOTS_PER_SECTOR * ENTRY;
     return FAT_OK;
 }
-static int dir_store(FatVolume *v) { return dev_write(v, v->dir_lba, v->dir, 1); }
+/* Writes back the cached directory sector. On failure the cache is dropped,
+ * so a later write of the same sector cannot publish the failed change. */
+static int dir_store(FatVolume *v) {
+    int result = dev_write(v, v->dir_lba, v->dir, 1);
+    if (result) v->dir_lba = NONE;
+    return result;
+}
 
 static int is_dot_entry(const uint8_t *e) {
     return e[0] == '.' && (e[1] == ' ' || (e[1] == '.' && e[2] == ' '));

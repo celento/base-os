@@ -401,6 +401,25 @@ class FatTests(unittest.TestCase):
                                  text=True).stdout
         self.assertNotIn('GHOST', listing)
 
+    def test_failed_write_is_not_published_later(self):
+        # One sector write fails, then the disk works again: the failed
+        # change must not reach the disk with a later write of its sector.
+        for k in range(1, 26):
+            with self.subTest(failing_write=k):
+                path = self.image('fat16', 'failwrite')
+                script = (f'put\tA.TXT\t1\t0\t0\nfailwrite\t{k}\nput\tA.TXT\t1\t10\t0\n'
+                          f'put\tB.TXT\t2\t10\t0\nput\tC.TXT\t3\t5000\t0\n')
+                self.tool('script', path, stdin=script.encode(), check=False)
+                check_structure(self, path.read_bytes())
+                # Each file holds what its last write left, or nothing when
+                # the failure hit that write; a file whose creation failed is
+                # missing.
+                for name, data in (('A.TXT', pattern(1, 10)), ('B.TXT', pattern(2, 10)),
+                                   ('C.TXT', pattern(3, 5000))):
+                    result = self.tool('cat', path, name, check=False)
+                    if result.returncode == 0:
+                        self.assertIn(result.stdout, (b'', data), name)
+
     def test_full_volume(self):
         path = self.image('fat12', 'full')
         script = ''.join(f'put\tfile{i}\t{i}\t300000\t0\n' for i in range(6))
