@@ -13,7 +13,25 @@ static inline uint8_t inb(uint16_t p) {
 }
 static void io_wait(void) { outb(0x80, 0); }
 
+/* The most recent log text, kept for the boot screen's message view. */
+static char log_ring[16384];
+static unsigned log_head, log_used;
+
+unsigned platform_log_copy(char *out, unsigned cap) {
+    if (!cap) return 0;
+    unsigned n = log_used < cap - 1 ? log_used : cap - 1;
+    unsigned at = (log_head + sizeof log_ring - n) % sizeof log_ring;
+    for (unsigned i = 0; i < n; ++i) out[i] = log_ring[(at + i) % sizeof log_ring];
+    out[n] = 0;
+    return n;
+}
+
 void platform_log(const char *s) {
+    for (const char *t = s; *t; ++t) {
+        log_ring[log_head] = *t;
+        log_head = (log_head + 1) % sizeof log_ring;
+        if (log_used < sizeof log_ring) ++log_used;
+    }
     while (*s) {
         unsigned n = 100000;
         while (!(inb(0x3fd) & 0x20) && --n) { }

@@ -43,4 +43,5 @@ void kernel_services_poll(void);
 /* Stop the machine. Callers flush storage first; this does not return on
  * QEMU or VirtualBox and halts elsewhere. */
 void kernel_power_off(void);
+void kernel_restart(void);
 #endif

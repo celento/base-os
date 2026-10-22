@@ -93,7 +93,6 @@
 #define KEY_S          0x1F
 #define KEY_W          0x11
 #define KEY_Q          0x10
-#define SAVER_DELAY    (70 * 90)
 
 #define EDIT_BUF_SIZE  65536
 
@@ -108,6 +107,21 @@ static int ui_accent_id, ui_desktop_id, ui_pattern;
 #define WINOPT_LINE_NUMBERS  8   /* Editor line numbers */
 static int win_options = WINOPT_DOUBLE_CLICK | WINOPT_SNAP | WINOPT_LINE_NUMBERS;
 static int win_snap_distance = 8;
+#define SNAP_DISTANCE_MAX 32
+/* Screen saver delay choices, in seconds. */
+#define SAVER_DELAY_N 5
+static const unsigned saver_delay_secs[SAVER_DELAY_N] = {90, 180, 300, 600, 1800};
+static int saver_delay;
+/* Taskbar clock: 12-hour time, no date. */
+#define CLOCK_12H 1
+#define CLOCK_NO_DATE 2
+static int clock_flags;
+/* Double-click speed: slow, normal, fast. */
+static int dbl_click_speed = 1;
+static unsigned dbl_click_ticks(void) {
+    static const unsigned ms[3] = {600, 400, 250};
+    return TIMER_HZ * ms[dbl_click_speed < 0 || dbl_click_speed > 2 ? 1 : dbl_click_speed] / 1000;
+}
 static const char *session_status="";
 static const char *native_launch_status="";
 
@@ -197,6 +211,7 @@ static int btn_w(const char *label) { return kit_button_w(label, -1); }
 static int chrome_icon = -1;
 static int chrome_kind = -1;
 static int chrome_slot = -1;
+static int chrome_flags;  /* WIN_MAXED and WIN_DIALOG for the window being drawn */
 
 /* Hover and press state for a control under the pointer. */
 static int ctl_state(int x, int y, int w, int h) {
@@ -268,6 +283,7 @@ static void draw_scrollbars(int x, int y, int w, int h, int top) {
 
 void gui_draw_window(int x, int y, int w, int h, const char *title,
                      const char *info, int flags) {
+    flags |= chrome_flags;
     int noclose = flags & WIN_NOCLOSE;
     int active = !(flags & WIN_INACTIVE);
     int maxed = flags & WIN_MAXED;
@@ -366,7 +382,6 @@ static DeskIcon icons[ICON_DESK_COUNT];
 enum { DESK_SYSTEM, DESK_HOME, DESK_TRASH, DESK_COUNT };
 typedef struct { const char *label; int x, y; } DesktopIcon;
 static DesktopIcon desk[DESK_COUNT];
-static int desk_renaming;
 
 static void icon_set(int id, const char *label, int icon) {
     icons[id].label = label;
@@ -515,7 +530,7 @@ enum {
     ACT_SORT_NAME, ACT_SORT_KIND, ACT_SORT_SIZE, ACT_SORT_MODIFIED, ACT_SORT_DESCENDING,
     ACT_LINE_NUMBERS, ACT_RESTORE, ACT_MOVE, ACT_SIZE, ACT_SETTINGS, ACT_EXPORT_PDF,
     ACT_RECENT_MENU, ACT_RECENT_CLEAR, ACT_COPY_PATH, ACT_NEW_GAME, ACT_REVERT, ACT_QUIT,
-    ACT_RESTART, ACT_SHUTDOWN,
+    ACT_RESTART, ACT_SHUTDOWN, ACT_DESK_OPEN, ACT_DESK_PROPERTIES,
     ACT_RECENT = 0x300 /* + index */
 };
 
@@ -641,6 +656,11 @@ static const MItem mi_desktop_context[] = {
 static int win_kbd_mode, win_kbd_slot = -1;  /* Alt+Space Move (1) or Size (2) */
 static int menu_bar_focus = -1;              /* Alt or F10: row focused, no pulldown */
 #define MENU_BAR 101
+static int switcher_on;                      /* Alt+Tab panel is up */
+static int key_ext;                          /* the key event carried the E0 prefix */
+static int super_down, super_used;           /* Super held; a shortcut consumed it */
+static int alt_tap;                          /* Alt pressed with nothing else yet */
+static int drag_outline_x, drag_outline_y;   /* outline position while dragging */
 
 static const MItem mi_desktop_file[] = {
     {"&Open Home", "", ACT_GO_HOME, 0}, {"&Settings...", "", ACT_SETTINGS, 0}, MSEP,
@@ -769,6 +789,10 @@ static int menu_item_enabled(int m, int item);
 static int act_enabled(int act);
 static int act_checked(int act);
 static void act_run(int act);
+static void desk_open(int i);
+static void settings_key(void);
+static void win_kbd_begin(void);
+static void display_click(void);
 static void launcher_open(void);
 static void saver_start(void);
 static void show_desktop(void);
@@ -777,6 +801,7 @@ static const char *win_display_title(int slot, char *buffer);
 static void draw_logo(int x, int y, int size);
 static void icon_open(int id);
 static void open_fs_file(int id);
+static void recent_add(int id);
 static int snake_is_front(void);
 static int wordle_is_front(void);
 static int clip_is_number(void);
@@ -794,6 +819,7 @@ static int fm_history_target(int dir);
 static void fm_navigate(int id);
 static void theme_load(void);
 static void draw_about(int wx, int wy, int ww, int wh, int fl);
+static void handle_about_click(int wx, int wy, int ww, int wh);
 static void draw_settings(int wx, int wy, int ww, int wh, int fl);
 static int settings_window_h(void);
 static void handle_settings_click(int wx, int wy, int ww, int wh);
@@ -862,29 +888,6 @@ static void menu_open_sub(int parent) {
 static uint32_t frame_count = 0;
 
 /* "Thu Oct 15  20:34" for the taskbar clock. */
-static void clock_text(char *clk) {
-    RtcTime now;
-    rtc_read(&now);
-    int n = 0;
-    static const char *dshort[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-    const char *d = dshort[now.wday];
-    while (*d) clk[n++] = *d++;
-    clk[n++] = ' ';
-    const char *mn = rtc_month_name[now.month - 1];
-    for (int i = 0; i < 3 && mn[i]; i++) clk[n++] = mn[i];
-    clk[n++] = ' ';
-    char t[4];
-    fmt_uint(t, (unsigned)now.day);
-    for (int i = 0; t[i]; i++) clk[n++] = t[i];
-    clk[n++] = ' ';
-    clk[n++] = ' ';
-    fmt_pad2(t, now.hour);
-    clk[n++] = t[0]; clk[n++] = t[1];
-    clk[n++] = ':';
-    fmt_pad2(t, now.min);
-    clk[n++] = t[0]; clk[n++] = t[1];
-    clk[n] = 0;
-}
 
 static int alt_down;
 /* Draw a label with its mnemonic underlined while Alt is held. */
@@ -1373,7 +1376,11 @@ static int fm_rename_len = 0;
 
 static int preferences_prepare_shutdown(void);
 static int win_open(int kind);
+/* Restart runs the same save path as Shut Down and resets at the end. */
+static int power_restart;
 static void do_shutdown(void) {
+    int restart = power_restart;
+    power_restart = 0;
     if (preferences_prepare_shutdown() < 0) {
         if (win_open(WK_SETTINGS) < 0)
             session_status="Shutdown paused. Open Settings after closing a window.";
@@ -1401,7 +1408,12 @@ static void do_shutdown(void) {
         dirty = 1;
         return; /* Keep unsaved work available after a failed flush. */
     }
+    if (restart) kernel_restart();
     kernel_power_off();
+}
+static void do_restart(void) {
+    power_restart = 1;
+    do_shutdown();
 }
 
 static int find_open_kind(int kind) {
@@ -1430,6 +1442,10 @@ static void front_window_origin(int *x, int *y) {
 }
 static int win_has_menu(int kind) {
     return kind != WK_ABOUT && kind != WK_HELP && kind != WK_HELLO && kind != WK_PROPERTIES;
+}
+/* Fixed-size information windows: a close button only, no snapping. */
+static int win_is_dialog(int kind) {
+    return kind == WK_ABOUT || kind == WK_PROPERTIES;
 }
 /* The menu row item under the pointer, or -1. Classic rows live inside the
  * front window; Modern shows the front window's menus in the top bar. */
@@ -3092,7 +3108,7 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
         paint_tool_cell(wx, wy, i, &tx, &ty);
         if (i == paint_tool) {
             draw_round_rect(tx, ty, PAINT_CELL, PAINT_CELL, 6, ui_accent_dk);
-            draw_round_rect(tx + 1, ty + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, PAL_ACCENT + 2);
+            draw_round_rect(tx + 1, ty + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, TK_ACCENT_100);
         } else {
             draw_round_rect(tx, ty, PAINT_CELL, PAINT_CELL, 6, INK(10));
             draw_round_rect(tx + 1, ty + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, INK(6));
@@ -3111,7 +3127,7 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
             int on = (paint_brush == i + 1);
             if (on) {
                 draw_round_rect(bx, by, PAINT_CELL, PAINT_CELL, 6, ui_accent_dk);
-                draw_round_rect(bx + 1, by + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, PAL_ACCENT + 2);
+                draw_round_rect(bx + 1, by + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, TK_ACCENT_100);
             } else {
                 draw_round_rect(bx, by, PAINT_CELL, PAINT_CELL, 6, INK(10));
                 draw_round_rect(bx + 1, by + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, INK(6));
@@ -3667,7 +3683,7 @@ static void draw_snake(int wx, int wy, int ww, int wh, int inactive) {
     for (int c = 0; c <= SNK_COLS; c++)
         draw_vline(gx + c * SNK_CELL, gy, SNK_ROWS * SNK_CELL, grid);
     for (int i = 0; i < snk_len; i++) {
-        uint8_t body = (i == 0) ? PAL_ACCENT + 4 : ui_accent;
+        uint8_t body = (i == 0) ? TK_ACCENT_700 : ui_accent;
         draw_round_rect(gx + snk_x[i] * SNK_CELL + 1, gy + snk_y[i] * SNK_CELL + 1,
                         SNK_CELL - 2, SNK_CELL - 2, 3, body);
     }
@@ -4088,6 +4104,7 @@ static void open_fs_file(int id) {
     if (!fs_valid(id))
         return;
     const char *n = fs_name(id);
+    if(!fs_is_dir(id)&&!fs_is_app(id))recent_add(id);
     if(fs_is_app(id)&&!kstrcmp(n,"Browser")){open_browser(-1);return;}
     if(fs_is_app(id)&&!kstrcmp(n,"Media Player")){open_player(-1);return;}
     if(fs_is_app(id)&&!kstrcmp(n,"Writer")){open_writer(-1);return;}
@@ -4378,7 +4395,7 @@ static void edit_ensure_caret_visible(int rows, int cols) {
 
 static int double_click(int item, int *last_item, uint32_t *last_frame) {
     unsigned dt = input_gesture_ticks() - *last_frame;
-    int is_dbl = (item == *last_item && dt < TIMER_HZ * 2 / 5);
+    int is_dbl = (item == *last_item && dt < dbl_click_ticks());
     *last_item = item;
     *last_frame = input_gesture_ticks();
     return is_dbl;
@@ -5028,7 +5045,7 @@ static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
     }
     /* Toolbar: back, forward, up, breadcrumbs, filter */
     int tx=wx+side+1,tw=ww-side-2;
-    draw_rect(tx,top,tw,FILES_TOOL_H-1,inactive?ui_chrome:ui_title);
+    draw_rect(tx,top,tw,FILES_TOOL_H-1,ui_chrome);
     draw_hline(tx,top+FILES_TOOL_H-1,tw,INK(7));
     static const int nav_icon[3]={ICON_BACK,ICON_FORWARD,ICON_UP};
     for(int i=0;i<3;i++){
@@ -5331,7 +5348,6 @@ static int kind_icon(int kind) {
     default: return ICON_WINDOW;
     }
 }
-static void draw_tb_icon(int kind, int x, int y, uint8_t ink) { (void)ink; app_icon_draw(app_icon_for(kind_icon(kind)), x, y, AI_SMALL); }
 
 static void draw_window_contents(Win *w, int inactive) {
     context_set((int)(w - wins));
@@ -5457,11 +5473,11 @@ static void draw_window_contents(Win *w, int inactive) {
 }
 
 static void draw_one_window(Win *w,int inactive) {
-    uint8_t corners[256];
-    gfx_window_corners(w->x-1,w->y-1,w->w+2,w->h+2,corners,0,ui_border);
+    int slot=(int)(w-wins);
+    chrome_kind=w->kind; chrome_slot=slot;
+    chrome_flags=(w->maximized?WIN_MAXED:0)|(win_is_dialog(w->kind)?WIN_DIALOG:0);
     draw_window_contents(w,inactive);
-    chrome_icon=-1;
-    gfx_window_corners(w->x-1,w->y-1,w->w+2,w->h+2,corners,1,ui_border);
+    chrome_icon=chrome_kind=chrome_slot=-1; chrome_flags=0;
 }
 static int render_skip=-1,drag_cached=-1;
 void draw_ui(void) {
@@ -6031,6 +6047,16 @@ static void handle_files_click(int wx, int wy, int ww, int wh) {
     fm_rename_cancel();
 }
 
+/* The Files list row under the pointer: an index, -1 for empty list
+ * space, or -2 outside the list. */
+static int files_row_at(int wx, int wy, int ww, int wh) {
+    int x = files_list_x(wx, ww), y = files_list_y(wy), lw = files_list_w(ww);
+    int rows = files_rows(wy, wh), vis = fm_vis_count();
+    if (!hit(mouse_x, mouse_y, x, y, lw, rows * ROW_H)) return -2;
+    int i = fm_first + (mouse_y - y) / ROW_H;
+    return i < vis ? i : -1;
+}
+
 static void files_drop(void) {
     int id = fm_drag_id;
     int active = fm_drag_active;
@@ -6416,6 +6442,7 @@ static int act_enabled(int act) {
     case ACT_MOVE: case ACT_SIZE: return f >= 0 && !wins[f].maximized;
     case ACT_RECENT_CLEAR: return recent_n > 0;
     case ACT_QUIT: return f >= 0;
+    case ACT_DESK_OPEN: case ACT_DESK_PROPERTIES: return icon_sel >= 0;
     default: return 1;
     }
 }
@@ -6507,6 +6534,7 @@ static void act_run(int act) {
     case ACT_MOVE: case ACT_SIZE:
         win_kbd_mode = act == ACT_MOVE ? 1 : 2;
         win_kbd_slot = f;
+        win_kbd_begin();
         break;
     case ACT_SETTINGS: win_open(WK_SETTINGS); break;
     case ACT_RECENT_CLEAR: recent_n = 0; break;
@@ -6523,6 +6551,12 @@ static void act_run(int act) {
             if (wins[i].open && wins[i].kind == fk && edit_close_owner < 0) win_request_close(i);
         break;
     case ACT_RESTART: do_restart(); break;
+    case ACT_DESK_OPEN: desk_open(icon_sel); break;
+    case ACT_DESK_PROPERTIES:
+        properties_id = icon_sel == DESK_TRASH && trash_id >= 0 ? trash_id : fs_root();
+        properties_reason = "";
+        win_open(WK_PROPERTIES);
+        break;
     case ACT_SHUTDOWN: do_shutdown(); break;
     default: break;
     }
@@ -6926,7 +6960,7 @@ static void draw_launcher(void) {
         int sel = i == launch_sel;
         if (sel) {
             draw_round_rect(gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6, 10, INK(3));
-            draw_round_frame(gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6, 10, PAL_ACCENT + 4);
+            draw_round_frame(gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6, 10, TK_ACCENT);
         }
         app_icon_draw(launcher_item_icon(i), gx + (LP_CELL_W - AI_BIG) / 2, gy + 10, AI_BIG);
         const char *label = launch_items[i].name;
@@ -7337,32 +7371,346 @@ static void namedlg_key(void) {
     }
 }
 
+/* ---------- Window switcher ----------
+ * Alt+Tab shows every open window, most recent first, centered on screen.
+ * Windows keep their state until Alt is released; Esc cancels. */
+
+static int switcher_ids[MAX_WIN], switcher_n, switcher_sel;
+
+static void switcher_build(void) {
+    switcher_n = 0;
+    for (int i = 0; i < MAX_WIN; i++)
+        if (wins[i].open) switcher_ids[switcher_n++] = i;
+    /* Most recent first; minimized windows keep their recency. */
+    for (int a = 0; a < switcher_n; a++)
+        for (int b = a + 1; b < switcher_n; b++)
+            if (wins[switcher_ids[b]].z > wins[switcher_ids[a]].z) {
+                int t = switcher_ids[a];
+                switcher_ids[a] = switcher_ids[b];
+                switcher_ids[b] = t;
+            }
+}
+
+static int switcher_cell_w(void) { return MODERN ? 104 : 96; }
+static int switcher_cell_h(void) { return MODERN ? 96 : 88; }
+static int switcher_cols(void) {
+    int cw = switcher_cell_w(), cols = (fb_w - 64 + 8) / (cw + 8);
+    if (cols < 1) cols = 1;
+    return cols < switcher_n ? cols : switcher_n;
+}
+
+static void switcher_geom(int *x, int *y, int *w, int *h) {
+    int cols = switcher_cols(), rows = (switcher_n + cols - 1) / cols;
+    *w = 32 + cols * switcher_cell_w() + (cols - 1) * 8;
+    *h = 16 + rows * switcher_cell_h() + (rows - 1) * 8 + (MODERN ? 52 : 60);
+    *x = (fb_w - *w) / 2;
+    *y = (fb_h - *h) / 2;
+}
+
+static void switcher_cell(int k, int *cx, int *cy) {
+    int x, y, w, h, cols = switcher_cols();
+    switcher_geom(&x, &y, &w, &h);
+    *cx = x + 16 + (k % cols) * (switcher_cell_w() + 8);
+    *cy = y + 16 + (k / cols) * (switcher_cell_h() + 8);
+}
+
+static void switcher_open(int dir) {
+    switcher_build();
+    if (switcher_n == 0) return;
+    if (open_menu >= 0) menu_close();
+    switcher_on = 1;
+    /* The first step goes to the previous window, not the current one. */
+    int f = win_front();
+    switcher_sel = (f >= 0 && switcher_ids[0] == f) ? (dir > 0 ? 1 : switcher_n - 1) : 0;
+    if (switcher_sel >= switcher_n) switcher_sel = 0;
+    dirty = 1;
+}
+
+static void switcher_step(int dir) {
+    if (!switcher_n) return;
+    switcher_sel = (switcher_sel + dir + switcher_n) % switcher_n;
+    dirty = 1;
+}
+
+static void switcher_commit(void) {
+    if (!switcher_on) return;
+    switcher_on = 0;
+    if (switcher_sel >= 0 && switcher_sel < switcher_n) win_focus(switcher_ids[switcher_sel]);
+    dirty = 1;
+}
+
+static void switcher_cancel(void) {
+    switcher_on = 0;
+    dirty = 1;
+}
+
+static void switcher_click(void) {
+    for (int k = 0; k < switcher_n; k++) {
+        int cx, cy;
+        switcher_cell(k, &cx, &cy);
+        if (hit(mouse_x, mouse_y, cx, cy, switcher_cell_w(), switcher_cell_h())) {
+            switcher_sel = k;
+            switcher_commit();
+            return;
+        }
+    }
+    switcher_cancel();
+}
+
+/* "Editor, in Documents" under the cells: the app and, for a file view,
+ * the folder it shows. */
+static void switcher_detail(int slot, char *out, int cap) {
+    const char *app = win_app_name(wins[slot].kind);
+    int n = 0;
+    while (*app && n < cap - 1) out[n++] = *app++;
+    const char *where = 0;
+    if (wins[slot].kind == WK_FILES) {
+        int cwd = window_state[slot].cwd;
+        where = fs_is_dir(cwd) ? (cwd == fs_root() ? "Home" : fs_name(cwd)) : 0;
+    }
+    if (wins[slot].min) where = 0;
+    if (where) {
+        const char *sep = ", in ";
+        while (*sep && n < cap - 1) out[n++] = *sep++;
+        while (*where && n < cap - 1) out[n++] = *where++;
+    }
+    if (wins[slot].min) {
+        const char *m = ", minimized";
+        while (*m && n < cap - 1) out[n++] = *m++;
+    }
+    out[n] = 0;
+}
+
+static void draw_switcher(void) {
+    if (!switcher_on || !switcher_n) return;
+    int x, y, w, h, cw = switcher_cell_w(), ch = switcher_cell_h();
+    switcher_geom(&x, &y, &w, &h);
+    if (MODERN) {
+        kit_shadow(x, y, w, h, 12);
+        kit_box(x, y, w, h, 12, TK_46, TK_LINE_STRONG);
+    } else {
+        kit_shadow(x, y, w, h, 0);
+        kit_box(x, y, w, h, KIT_R_SQUARE, TK_RAISED, TK_LINE_STRONG);
+    }
+    char title[TERM_TASK_TITLE_LEN];
+    for (int k = 0; k < switcher_n; k++) {
+        int i = switcher_ids[k], cx, cy, on = k == switcher_sel;
+        switcher_cell(k, &cx, &cy);
+        if (on) {
+            if (MODERN) {
+                kit_fill(cx, cy, cw, ch, 8, TK_ACCENT_100, 1);
+                kit_frame(cx, cy, cw, ch, 8, TK_ACCENT);
+                kit_frame(cx + 1, cy + 1, cw - 2, ch - 2, 7, TK_ACCENT);
+            } else {
+                draw_rect(cx, cy, cw, ch, TK_ACCENT_100);
+                draw_frame(cx, cy, cw, ch, TK_ACCENT);
+                draw_frame(cx + 1, cy + 1, cw - 2, ch - 2, TK_ACCENT);
+            }
+        }
+        int top = MODERN ? 16 : 14;
+        app_icon_draw(app_icon_for(kind_icon(wins[i].kind)), cx + (cw - 32) / 2, cy + top, AI_BIG);
+        const char *t = win_display_title(i, title);
+        uint8_t ink = on ? (MODERN ? TK_ACCENT_700 : TK_TEXT) : wins[i].min ? TK_TEXT2 : TK_TEXT;
+        int tw = kit_text_w(t, on), maxw = cw - 12;
+        if (tw > maxw) tw = maxw;
+        kit_text(t, cx + (cw - tw) / 2, cy + top + 32 + (MODERN ? 10 : 8), ink, maxw, on);
+    }
+    int sel = switcher_ids[switcher_sel];
+    char detail[64];
+    switcher_detail(sel, detail, sizeof detail);
+    const char *t = win_display_title(sel, title);
+    int ty = y + h - (MODERN ? 36 : 40) + (MODERN ? 10 : 12);
+    int tx = x + (MODERN ? 18 : 16);
+    int used = kit_text(t, tx, ty, TK_TEXT, w / 2, 1);
+    kit_text(detail, tx + used + 6, ty, TK_TEXT2, x + w - 16 - (tx + used + 6), 0);
+}
+
+/* The top window under the pointer, or -1. */
+static int win_at(int px, int py) {
+    int order[MAX_WIN], n = 0;
+    wins_by_z(order, &n, 1);
+    for (int k = 0; k < n; k++) {
+        int i = order[k];
+        if (i >= 0 && i < MAX_WIN && hit(px, py, wins[i].x, wins[i].y, wins[i].w, wins[i].h)) return i;
+    }
+    return -1;
+}
+
+/* Caption buttons react to the pointer only when nothing modal is up and
+ * the window being drawn is the one under the pointer. */
+static int caption_pointer_ok(void) {
+    if (open_menu >= 0 || open_dlg || name_dlg || edit_close_dlg || launcher_on || switcher_on ||
+        display_pending || dragging_win >= 0 || resizing_win >= 0)
+        return 0;
+    return chrome_slot >= 0 && win_at(mouse_x, mouse_y) == chrome_slot;
+}
+
+static int desk_at(int px, int py) {
+    for (int i = 0; i < DESK_COUNT; i++)
+        if (icon_hit(i, px, py)) return i;
+    return -1;
+}
+
+static void desk_open(int i) {
+    if (i == DESK_SYSTEM) { properties_id = fs_root(); properties_reason = ""; win_open(WK_PROPERTIES); }
+    else if (i == DESK_HOME) open_files(fs_root());
+    else if (i == DESK_TRASH) open_files(trash_id >= 0 ? trash_id : fs_root());
+    dirty = 1;
+}
+
+static const MItem mi_desk_icon[] = {
+    {"&Open", "Enter", ACT_DESK_OPEN, 0}, MSEP, {"Propert&ies", "Alt+Enter", ACT_DESK_PROPERTIES, 0},
+};
+static const MItem mi_trash_icon[] = {
+    {"&Open", "Enter", ACT_DESK_OPEN, 0}, MSEP, {"&Empty Trash", "", ACT_EMPTY_TRASH, 0},
+};
+
 static void handle_rclick(void) {
-    if (display_pending || name_dlg || edit_close_dlg || launcher_on || open_dlg || open_menu >= 0)
+    if (display_pending || name_dlg || edit_close_dlg || open_dlg || launcher_on || switcher_on)
         return;
-    int i = win_front();
-    if (i < 0)
+    if (open_menu >= 0) menu_close();
+    volume_on = 0;
+    if (taskbar_rclick()) return;
+    int i = win_at(mouse_x, mouse_y);
+    if (i >= 0) {
+        Win *w = &wins[i];
+        win_focus(i);
+        context_set(i);
+        if (mouse_y < w->y + TITLE_BAR) {
+            menu_open_context(mi_window, (int)(sizeof mi_window / sizeof mi_window[0]), mouse_x, mouse_y);
+            return;
+        }
+        if (w->kind == WK_MINES) {
+            if (mines_click(w->x, w->y + TITLE_H + 1, mouse_x, mouse_y, 1)) dirty = 1;
+            return;
+        }
+        if (w->kind == WK_FILES && mouse_y >= w->y + TITLE_H) {
+            int row = files_row_at(w->x, w->y, w->w, w->h);
+            if (row >= 0 && fm_row_id(row) >= 0) {
+                fm_rename_cancel();
+                fm_selected = row;
+                menu_open_context(mi_files_context, (int)(sizeof mi_files_context / sizeof mi_files_context[0]), mouse_x, mouse_y);
+            } else if (row == -1) {
+                menu_open_context(mi_folder_context, (int)(sizeof mi_folder_context / sizeof mi_folder_context[0]), mouse_x, mouse_y);
+            }
+            return;
+        }
+        if (w->kind == WK_EDIT && mouse_y >= w->y + TITLE_H) {
+            menu_open_context(mi_editor_edit, (int)(sizeof mi_editor_edit / sizeof mi_editor_edit[0]), mouse_x, mouse_y);
+            return;
+        }
         return;
+    }
+    int d = desk_at(mouse_x, mouse_y);
+    if (d >= 0) {
+        icon_sel = d;
+        if (d == DESK_TRASH) menu_open_context(mi_trash_icon, (int)(sizeof mi_trash_icon / sizeof mi_trash_icon[0]), mouse_x, mouse_y);
+        else menu_open_context(mi_desk_icon, (int)(sizeof mi_desk_icon / sizeof mi_desk_icon[0]), mouse_x, mouse_y);
+        return;
+    }
+    icon_sel = -1;
+    menu_open_context(mi_desktop_context, (int)(sizeof mi_desktop_context / sizeof mi_desktop_context[0]), mouse_x, mouse_y);
+}
+
+/* Press on a window's title bar: drag, or double-click to maximize. A
+ * snapped window comes off its snap once the drag starts. */
+static void title_press(int i) {
     Win *w = &wins[i];
-    if (w->kind == WK_MINES && hit(mouse_x, mouse_y, w->x, w->y, w->w, w->h)) {
-        if (mines_click(w->x, w->y + TITLE_H + 1, mouse_x, mouse_y, 1))
+    if ((win_options & WINOPT_DOUBLE_CLICK) && title_click_window == i &&
+        input_gesture_ticks() - title_click_time < dbl_click_ticks()) {
+        title_click_window = -1;
+        win_arrange(i, w->maximized == SNAP_MAX ? 3 : 0);
+        return;
+    }
+    title_click_window = i;
+    title_click_time = input_gesture_ticks();
+    dragging_win = i;
+    drag_active = 0;
+    drag_from_x = mouse_x;
+    drag_from_y = mouse_y;
+    drag_orig_x = w->x;
+    drag_orig_y = w->y;
+    drag_outline_x = w->x;
+    drag_outline_y = w->y;
+    fm_dragging = 0;
+    fm_drag_active = 0;
+}
+
+static void window_body_click(int i) {
+    Win *w = &wins[i];
+    if (w->kind == WK_NATIVE) {
+        if (hit(mouse_x, mouse_y, w->x + 8, w->y + TITLE_H + 4, 100, NATIVE_TOOLBAR_H - 6)) native_output_toggle(i);
+    } else if (w->kind == WK_FILES)
+        handle_files_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_EDIT)
+        handle_edit_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_CALC)
+        handle_calc_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_SETTINGS)
+        handle_settings_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_ABOUT)
+        handle_about_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_PAINT)
+        handle_paint_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_WORDLE) {
+        if (wordle_click(w->x, w->y + TITLE_H, mouse_x, mouse_y)) dirty = 1;
+    } else if (w->kind == WK_VIEW) {
+        if (image_viewer_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2, mouse_x, mouse_y)) dirty = 1;
+    } else if (w->kind == WK_BROWSER) {
+        if (browser_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2, mouse_x, mouse_y)) dirty = 1;
+    } else if (w->kind == WK_SPREADSHEET) {
+        spreadsheet_result(spreadsheet_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2,
+            mouse_x, mouse_y, (ctrl_down ? SPREADSHEET_MOD_CTRL : 0) | (shift_down ? SPREADSHEET_MOD_SHIFT : 0)));
+    } else if (w->kind == WK_WRITER) {
+        writer_result(writer_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2,
+            mouse_x, mouse_y, (ctrl_down ? WRITER_MOD_CTRL : 0) | (shift_down ? WRITER_MOD_SHIFT : 0)));
+    } else if (w->kind == WK_PLAYER) {
+        if (player_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2, mouse_x, mouse_y)) dirty = 1;
+    } else if (w->kind == WK_TODO)
+        handle_todo_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_CAL) {
+        if (cal_click(w->x, w->y + TITLE_H + 1, w->w, mouse_x, mouse_y)) dirty = 1;
+    } else if (w->kind == WK_MINES) {
+        if (mines_click(w->x, w->y + TITLE_H + 1, mouse_x, mouse_y, shift_down)) dirty = 1;
+    } else if (w->kind == WK_BREAKOUT) {
+        bo_click();
+        dirty = 1;
+    } else if (w->kind == WK_SYSMON) {
+        SysInfo si;
+        sysinfo_fill(&si);
+        SysmonAction action = sysmon_click(w->x, w->y + TITLE_H + 1, w->w, w->h - TITLE_H - 1, mouse_x, mouse_y, &si);
+        if (action.kind == SYSMON_ACTION_REDRAW) dirty = 1;
+        else if (action.kind == SYSMON_ACTION_CLOSE_WINDOW) {
+            int owner = action.owner;
+            if (owner >= 0 && owner < MAX_WIN && wins[owner].open &&
+                (unsigned)wins[owner].seq == action.task_instance) win_request_close(owner);
+        } else if (action.kind == SYSMON_ACTION_STOP_PROGRAM) {
+            /* Its Terminal reports the exit status on its next poll. */
+            uproc_kill(action.task_instance);
             dirty = 1;
+        } else if (action.kind == SYSMON_ACTION_SHOW_TERMINAL || action.kind == SYSMON_ACTION_STOP_TASK) {
+            int owner = action.owner;
+            TermTaskInfo live;
+            if (owner >= 0 && owner < MAX_WIN && wins[owner].open &&
+                (wins[owner].kind == WK_TERM || wins[owner].kind == WK_NATIVE) &&
+                app_view_info(owner, &live) && live.instance == action.task_instance) {
+                if (action.kind == SYSMON_ACTION_SHOW_TERMINAL) win_focus(owner);
+                else { app_view_stop(owner); dirty = 1; }
+            }
+        }
     }
 }
 
 static void handle_click(void) {
-    if (display_pending) {
-        int x = (fb_w - 420) / 2, y = (fb_h - 150) / 2;
-        if (hit(mouse_x, mouse_y, x + 34, y + 98, 164, 30)) display_keep();
-        else if (hit(mouse_x, mouse_y, x + 222, y + 98, 164, 30)) display_revert();
-        return;
-    }
+    alt_tap = 0;
+    if (display_pending) { display_click(); return; }
     if (edit_close_dlg) { edit_close_click(); return; }
-    if (name_dlg) {
-        namedlg_click();
-        return;
-    }
+    if (name_dlg) { namedlg_click(); return; }
+    if (switcher_on) { switcher_click(); return; }
+    if (volume_on && volume_click()) return;
     if (launcher_on) {
+        /* The Apps button toggles; anything else goes to the launcher. */
+        if (taskbar_hover_at() == HOT_APPS) { launcher_close(); return; }
         launcher_click();
         return;
     }
@@ -7370,175 +7718,61 @@ static void handle_click(void) {
      * decides. Clicking chrome/menus/desktop cancels (Return commits). */
     if (fm_renaming && !click_on_rename_field()) {
         int wx, wy, ww, wh;
-        int in_body = 0;
-        if (win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh) &&
-            hit(mouse_x, mouse_y, wx, wy + TITLE_H, ww, wh - TITLE_H))
-            in_body = 1;
-        if (!in_body)
+        if (!(win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh) &&
+              hit(mouse_x, mouse_y, wx, wy + TITLE_H, ww, wh - TITLE_H)))
             fm_rename_cancel();
     }
+    if (win_kbd_mode) { win_kbd_mode = 0; win_kbd_slot = -1; dirty = 1; }
+    if (open_menu >= 0) { menu_click(); return; }
+    if (open_dlg) { handle_open_dlg_click(); return; }
+    if (taskbar_hit()) return;
+    volume_on = 0;
 
-    if (open_menu >= 0) {
-        int item = menu_item_at(open_menu, mouse_x, mouse_y);
-        if (item >= 0) {
-            menu_activate(open_menu, item);
-            return;
-        }
-        int bar = win_menu_at(mouse_x, mouse_y);
-        if (bar >= 0) {
-            if (bar == open_menu) {
-                open_menu = MENU_NONE;
-                menu_sel = -1;
-            } else {
-                open_menu = bar;
-                menu_sel = menu_item_at(bar, mouse_x, mouse_y);
-            }
-            dirty = 1;
-            return;
-        }
-        open_menu = MENU_NONE;
-        menu_sel = -1;
-        dirty = 1;
-        return;
-    }
-
-    if (open_dlg) {
-        handle_open_dlg_click();
-        return;
-    }
-
-    /* Taskbar, then windows front-to-back, then desktop icons. */
-    if (mouse_y >= TASKBAR_Y) {
-        taskbar_hit();
-        return;
-    }
-
-    int order[MAX_WIN];
-    int n = 0;
-    wins_by_z(order, &n, 1);
-    for (int k = 0; k < n; k++) {
-        int i = order[k];
-        if (i < 0 || i >= MAX_WIN)
-            continue;
+    int i = win_at(mouse_x, mouse_y);
+    if (i >= 0) {
         Win *w = &wins[i];
-        if (!hit(mouse_x, mouse_y, w->x, w->y, w->w, w->h))
-            continue;
         win_focus(i);
-        resize_edges = (mouse_x < w->x+4 ? 1 : 0) | (mouse_x >= w->x+w->w-5 ? 2 : 0) |
-                       (mouse_y < w->y+3 ? 4 : 0) | (mouse_y >= w->y+w->h-5 ? 8 : 0);
-        if (resize_edges) {
-            resizing_win=i; drag_from_x=mouse_x; drag_from_y=mouse_y;
-            drag_orig_x=w->x; drag_orig_y=w->y; resize_start_w=w->w; resize_start_h=w->h;
-            w->maximized=0; return;
-        }
-        if (max_hit(w->x, w->y, w->w)) { win_arrange(i,0); return; }
-        if (min_hit(w->x, w->y, w->w)) {
-            win_minimize(i);
-            return;
-        }
-        if (close_hit(w->x, w->y, w->w)) {
-            win_request_close(i);
-            return;
-        }
-        if (!open_dlg && hit(mouse_x, mouse_y, w->x, w->y + TITLE_BAR, w->w, WMENU_H)) {
-            int m = win_menu_at(mouse_x, mouse_y);
-            if (m >= 0) { open_menu = m; menu_sel = -1; fm_last_click_item = -1; dirty = 1; }
-            return;
-        }
-        if (hit(mouse_x, mouse_y, w->x, w->y, w->w, TITLE_BAR)) {
-            if (title_click_window == i && input_gesture_ticks()-title_click_time < 28) {
-                title_click_window=-1; win_arrange(i,0); return;
-            }
-            title_click_window=i; title_click_time=input_gesture_ticks();
-            dragging_win = i;
-            drag_active = 0;
+        context_set(i);
+        int edges = win_resize_edges(w, mouse_x, mouse_y);
+        if (edges) {
+            resizing_win = i;
+            resize_edges = edges;
             drag_from_x = mouse_x;
             drag_from_y = mouse_y;
             drag_orig_x = w->x;
             drag_orig_y = w->y;
-            fm_dragging = 0;
-            fm_drag_active = 0;
+            resize_start_w = w->w;
+            resize_start_h = w->h;
             return;
         }
-        if (w->kind == WK_NATIVE){
-            if(hit(mouse_x,mouse_y,w->x+8,w->y+TITLE_H+4,100,NATIVE_TOOLBAR_H-6))native_output_toggle(i);
-        }else if (w->kind == WK_FILES)
-            handle_files_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_EDIT)
-            handle_edit_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_CALC)
-            handle_calc_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_SETTINGS)
-            handle_settings_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_PAINT)
-            handle_paint_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_WORDLE) {
-            if (wordle_click(w->x, w->y + TITLE_H, mouse_x, mouse_y))
-                dirty = 1;
+        if (close_hit(w->x, w->y, w->w)) { win_request_close(i); return; }
+        if (!win_is_dialog(w->kind)) {
+            if (max_hit(w->x, w->y, w->w)) { win_arrange(i, w->maximized ? 3 : 0); return; }
+            if (min_hit(w->x, w->y, w->w)) { win_minimize(i); return; }
         }
-        else if(w->kind==WK_VIEW){
-            if(image_viewer_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
+        if (!MODERN && WMENU_H > 0 && win_has_menu(w->kind) &&
+            hit(mouse_x, mouse_y, w->x, w->y + TITLE_BAR, w->w, WMENU_H)) {
+            int m = win_menu_at(mouse_x, mouse_y);
+            if (m >= 0) { fm_last_click_item = -1; menu_open_bar(m); }
+            return;
         }
-        else if(w->kind==WK_BROWSER){
-            if(browser_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
-        }else if(w->kind==WK_SPREADSHEET){
-            spreadsheet_result(spreadsheet_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,
-                mouse_x,mouse_y,(ctrl_down?SPREADSHEET_MOD_CTRL:0)|(shift_down?SPREADSHEET_MOD_SHIFT:0)));
-        }else if(w->kind==WK_WRITER){
-            writer_result(writer_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,
-                mouse_x,mouse_y,(ctrl_down?WRITER_MOD_CTRL:0)|(shift_down?WRITER_MOD_SHIFT:0)));
-        }else if(w->kind==WK_PLAYER){
-            if(player_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
+        if (mouse_y < w->y + TITLE_BAR) {
+            /* The window icon opens the window menu. */
+            int ix = w->x + (MODERN ? 8 : 4);
+            if (hit(mouse_x, mouse_y, ix, w->y + 4, 24, TITLE_BAR - 8)) { menu_open_window(i); return; }
+            title_press(i);
+            return;
         }
-        else if (w->kind == WK_TODO)
-            handle_todo_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_CAL) {
-            if (cal_click(w->x, w->y + TITLE_H + 1, w->w, mouse_x, mouse_y))
-                dirty = 1;
-        } else if (w->kind == WK_MINES) {
-            if (mines_click(w->x, w->y + TITLE_H + 1, mouse_x, mouse_y, shift_down))
-                dirty = 1;
-        } else if (w->kind == WK_BREAKOUT) {
-            bo_click();
-            dirty = 1;
-        } else if (w->kind == WK_SYSMON) {
-            SysInfo si;
-            sysinfo_fill(&si);
-            SysmonAction action=sysmon_click(w->x,w->y+TITLE_H+1,w->w,w->h-TITLE_H-1,mouse_x,mouse_y,&si);
-            if(action.kind==SYSMON_ACTION_REDRAW)dirty=1;
-            else if(action.kind==SYSMON_ACTION_CLOSE_WINDOW){
-                int owner=action.owner;
-                if(owner>=0&&owner<MAX_WIN&&wins[owner].open&&
-                   (unsigned)wins[owner].seq==action.task_instance)win_request_close(owner);
-            }
-            else if(action.kind==SYSMON_ACTION_STOP_PROGRAM){
-                /* Its Terminal reports the exit status on its next poll. */
-                uproc_kill(action.task_instance);dirty=1;
-            }
-            else if(action.kind==SYSMON_ACTION_SHOW_TERMINAL||action.kind==SYSMON_ACTION_STOP_TASK){
-                int owner=action.owner;TermTaskInfo live;
-                if(owner>=0&&owner<MAX_WIN&&wins[owner].open&&
-                   (wins[owner].kind==WK_TERM||wins[owner].kind==WK_NATIVE)&&
-                   app_view_info(owner,&live)&&live.instance==action.task_instance){
-                    if(action.kind==SYSMON_ACTION_SHOW_TERMINAL)win_focus(owner);
-                    else {app_view_stop(owner);dirty=1;}
-                }
-            }
-        }
+        window_body_click(i);
         return;
     }
 
-    int hit_icon = -1;
-    for (int i = 0; i < ICON_DESK_COUNT; i++) {
-        if (icon_hit(i, mouse_x, mouse_y))
-            hit_icon = i;
-    }
-    if (hit_icon >= 0) {
-        int dbl = double_click(hit_icon, &icon_last, &icon_last_frame);
-        icon_sel = hit_icon;
+    int d = desk_at(mouse_x, mouse_y);
+    if (d >= 0) {
+        int dbl = double_click(d, &icon_last, &icon_last_frame);
+        icon_sel = d;
         dirty = 1;
-        if (dbl)
-            icon_open(hit_icon);
+        if (dbl) desk_open(d);
     } else if (icon_sel >= 0) {
         icon_sel = -1;
         dirty = 1;
@@ -7592,6 +7826,59 @@ static int native_task_key_dispatch(int slot,int owned){
     return 1;
 }
 
+/* Super combinations: window states, Show Desktop and Files. Super alone
+ * toggles the launcher on release. Returns 1 when used. */
+static int super_key(void) {
+    if (!super_down) return 0;
+    super_used = 1;
+    int f = win_front();
+    if (key_sc == KEY_UP && f >= 0 && !win_is_dialog(wins[f].kind)) win_arrange(f, 0);
+    else if (key_sc == KEY_DOWN && f >= 0) { if (wins[f].maximized) win_arrange(f, 3); else win_minimize(f); }
+    else if ((key_sc == KEY_LEFT || key_sc == KEY_RIGHT) && f >= 0 && !win_is_dialog(wins[f].kind))
+        win_arrange(f, key_sc == KEY_LEFT ? 1 : 2);
+    else if (key_sc == 0x20) show_desktop();
+    else if (key_sc == 0x12) open_files(fs_root());
+    else return 0;
+    dirty = 1;
+    return 1;
+}
+
+/* Alt+Space Move and Size: arrows step 8px (1px with Shift); Enter or a
+ * click ends, Esc puts the window back. Returns 1 when used. */
+static int win_kbd_orig_x, win_kbd_orig_y, win_kbd_orig_w, win_kbd_orig_h;
+static void win_kbd_begin(void) {
+    int s = win_kbd_slot;
+    if (s < 0) return;
+    win_kbd_orig_x = wins[s].x; win_kbd_orig_y = wins[s].y;
+    win_kbd_orig_w = wins[s].w; win_kbd_orig_h = wins[s].h;
+}
+static int win_kbd_key(void) {
+    if (!win_kbd_mode) return 0;
+    int s = win_kbd_slot;
+    if (s < 0 || s >= MAX_WIN || !wins[s].open) { win_kbd_mode = 0; return 0; }
+    Win *w = &wins[s];
+    int step = shift_down ? 1 : 8, dx = 0, dy = 0;
+    if (key_sc == KEY_LEFT) dx = -step;
+    else if (key_sc == KEY_RIGHT) dx = step;
+    else if (key_sc == KEY_UP) dy = -step;
+    else if (key_sc == KEY_DOWN) dy = step;
+    else if (key_sc == KEY_ESC) {
+        w->x = win_kbd_orig_x; w->y = win_kbd_orig_y; w->w = win_kbd_orig_w; w->h = win_kbd_orig_h;
+        win_kbd_mode = 0;
+    } else if (key_sc == KEY_ENTER) win_kbd_mode = 0;
+    if (win_kbd_mode == 1) { w->x += dx; w->y += dy; }
+    else if (win_kbd_mode == 2) {
+        int mw, mh;
+        w->w += dx; w->h += dy;
+        win_minimum(w, &mw, &mh);
+        if (w->w < mw) w->w = mw;
+        if (w->h < mh) w->h = mh;
+    }
+    win_clamp(w);
+    dirty = 1;
+    return 1;
+}
+
 static void handle_key(void) {
     if (display_pending) {
         if (key_sc == KEY_ENTER) display_keep();
@@ -7599,7 +7886,36 @@ static void handle_key(void) {
         return;
     }
     if (edit_close_dlg) { edit_close_key(); return; }
+    if (switcher_on) {
+        if (key_sc == KEY_TAB) switcher_step(shift_down ? -1 : 1);
+        else if (key_sc == KEY_LEFT || key_sc == KEY_RIGHT) switcher_step(key_sc == KEY_LEFT ? -1 : 1);
+        else if (key_sc == KEY_ESC) switcher_cancel();
+        else if (key_sc == KEY_ENTER) switcher_commit();
+        return;
+    }
+    if (!name_dlg && !open_dlg && !launcher_on && super_key()) return;
+    if (win_kbd_key()) return;
     context_set(win_front());
+    if (!name_dlg && !open_dlg && !launcher_on) {
+        int f = win_front();
+        if (alt_down && key_sc == KEY_TAB) { switcher_open(shift_down ? -1 : 1); return; }
+        if (alt_down && key_sc == 0x3e) { if (f >= 0) win_request_close(f); return; }
+        if (alt_down && key_sc == KEY_SPACE) { if (f >= 0) menu_open_window(f); return; }
+        if (open_menu >= 0 && menu_key()) return;
+        if (key_sc == 0x44) {
+            if (shift_down && f >= 0) {
+                Win *w = &wins[f];
+                int n, cx = w->x + 24, cy = w->y + TITLE_H + 24;
+                const MMenu *bar = menubar_for(w->kind, &n);
+                if (w->kind == WK_FILES)
+                    menu_open_context(mi_files_context, (int)(sizeof mi_files_context / sizeof mi_files_context[0]), cx, cy);
+                else if (n > 1)
+                    menu_open_context(bar[1].items, bar[1].n, cx, cy);
+            } else menu_focus_row();
+            return;
+        }
+        if (menu_mnemonic_open()) return;
+    }
     if(front_kind()==WK_EDIT)edit_manual_scroll=0;
     if(front_kind()==WK_FILES)fm_manual_scroll=0;
     if(front_kind()==WK_FILES&&!name_dlg&&!open_dlg&&!launcher_on&&open_menu<0){
@@ -7621,11 +7937,23 @@ static void handle_key(void) {
            (shift_down?BROWSER_MOD_SHIFT:0)|(alt_down?BROWSER_MOD_ALT:0)))dirty=1;
         return;
     }
-    if (!name_dlg && !open_dlg && alt_down && key_sc == KEY_TAB) { win_cycle(); return; }
-    if (!name_dlg && !open_dlg && alt_down && key_sc == KEY_ENTER) { win_arrange(win_front(),0); return; }
-    if (!name_dlg && !open_dlg && alt_down && (key_sc == KEY_LEFT || key_sc == KEY_RIGHT)) {
-        win_arrange(win_front(),key_sc==KEY_LEFT?1:2); return;
+    if (!name_dlg && !open_dlg && alt_down && key_sc == KEY_ENTER) {
+        int f = win_front();
+        if (front_kind() == WK_FILES) act_run(ACT_PROPERTIES);
+        else if (f >= 0 && !win_is_dialog(wins[f].kind)) win_arrange(f, wins[f].maximized == SNAP_MAX ? 3 : 0);
+        return;
     }
+    if (!name_dlg && !open_dlg && alt_down && front_kind() == WK_FILES &&
+        (key_sc == KEY_LEFT || key_sc == KEY_RIGHT || key_sc == KEY_UP)) {
+        act_run(key_sc == KEY_LEFT ? ACT_GO_BACK : key_sc == KEY_RIGHT ? ACT_GO_FORWARD : ACT_GO_UP);
+        return;
+    }
+    if (!name_dlg && !open_dlg && alt_down && (key_sc == KEY_LEFT || key_sc == KEY_RIGHT)) {
+        int f = win_front();
+        if (f >= 0 && !win_is_dialog(wins[f].kind)) win_arrange(f, key_sc == KEY_LEFT ? 1 : 2);
+        return;
+    }
+    if (!name_dlg && !open_dlg && key_sc == 0x3b) { act_run(ACT_HELP); return; }
     if (name_dlg) {
         namedlg_key();
         return;
@@ -7653,6 +7981,10 @@ static void handle_key(void) {
             files_clipboard_action(key_sc==0x2d?0:key_sc==0x2e?1:2);return;
         }
         if(key_sc==0x17 && front_kind()==WK_FILES){menu_activate(MENU_FILE,6);return;}
+        if(key_sc==0x20 && front_kind()==WK_FILES){act_run(ACT_DUPLICATE);return;}
+        if(key_sc==KEY_N && shift_down && front_kind()==WK_FILES){act_run(ACT_NEW_FOLDER);return;}
+        if(key_sc==KEY_S && shift_down && act_enabled(ACT_SAVE_AS)){act_run(ACT_SAVE_AS);return;}
+        if(key_sc==KEY_Q){act_run(ACT_QUIT);return;}
         if (key_sc == 0x2c || key_sc == 0x15) {
             int redo = key_sc == 0x15 || shift_down;
             if (front_kind() == WK_EDIT) edit_undo(redo);
@@ -7692,22 +8024,6 @@ static void handle_key(void) {
             return;
         }
     }
-    if(key_sc==0x44){if(win_front()>=0&&win_has_menu(wins[win_front()].kind)){open_menu=MENU_FILE;menu_sel=0;dirty=1;}return;}
-    if (open_menu >= 0) {
-        if(key_sc==KEY_LEFT||key_sc==KEY_RIGHT){open_menu=(open_menu+(key_sc==KEY_LEFT?MENU_N-1:1))%MENU_N;menu_sel=0;}
-        else if(key_sc==KEY_UP||key_sc==KEY_DOWN){
-            int d=key_sc==KEY_UP?-1:1;
-            for(int n=0;n<menu_count[open_menu];n++){menu_sel=(menu_sel+d+menu_count[open_menu])%menu_count[open_menu];if(menu_item_enabled(open_menu,menu_sel)&&kstrcmp(menu_items[open_menu][menu_sel],"-"))break;}
-        }else if(key_sc==KEY_ENTER && menu_sel>=0 && menu_item_enabled(open_menu,menu_sel)) {int m=open_menu,i=menu_sel;open_menu=MENU_NONE;menu_activate(m,i);}
-        dirty=1;
-        if (key_sc == KEY_ESC) {
-            open_menu = MENU_NONE;
-            menu_sel = -1;
-            dirty = 1;
-        }
-        return;
-    }
-
     if (open_dlg) {
         if(key_sc==KEY_TAB){pick_focus=(pick_focus+(shift_down?2:1))%3;dirty=1;return;}
         if(key_sc==KEY_ENTER&&pick_focus==1){close_open_dialog();return;}
@@ -7730,9 +8046,9 @@ static void handle_key(void) {
     int fk = front_kind();
     if (fk == WK_NONE) {
         if (key_sc==KEY_TAB || key_sc==KEY_RIGHT || key_sc==KEY_DOWN)
-            icon_sel=(icon_sel+1)%ICON_DESK_COUNT;
-        else if(key_sc==KEY_LEFT || key_sc==KEY_UP)icon_sel=(icon_sel+ICON_DESK_COUNT-1)%ICON_DESK_COUNT;
-        else if(key_sc==KEY_ENTER && icon_sel>=0)icon_open(icon_sel);
+            icon_sel=(icon_sel+1)%DESK_COUNT;
+        else if(key_sc==KEY_LEFT || key_sc==KEY_UP)icon_sel=(icon_sel+DESK_COUNT-1)%DESK_COUNT;
+        else if(key_sc==KEY_ENTER && icon_sel>=0)desk_open(icon_sel);
         dirty=1;return;
     }
 
@@ -7770,6 +8086,9 @@ static void handle_key(void) {
             return;
         }
         int vis = fm_vis_count();
+        if (key_sc == 0x3c) { act_run(ACT_RENAME); return; }
+        if (key_sc == 0x53) { act_run(ACT_TRASH); return; }
+        if (key_sc == 0x3f) { act_run(ACT_REFRESH); return; }
         if (key_sc == KEY_UP) {
             if (vis)
                 fm_selected = fm_selected<0?vis-1:(fm_selected - 1 + vis) % vis;
@@ -7874,15 +8193,7 @@ static void handle_key(void) {
         return;
     }
 
-    if(fk==WK_SETTINGS){
-        if (key_char >= '1' && key_char <= '4') { display_request(key_char-'1'); return; }
-        if(key_sc==KEY_TAB||key_sc==KEY_RIGHT||key_sc==KEY_DOWN)theme_set((theme_id+(shift_down?THEME_N-1:1))%THEME_N);
-        else if(key_sc==KEY_LEFT||key_sc==KEY_UP)theme_set((theme_id+THEME_N-1)%THEME_N);
-        else if(key_sc==KEY_SPACE){saver_enabled=!saver_enabled;saver_save();dirty=1;}
-        else if(key_char=='r'||key_char=='R')preferences_retry();
-        else if(key_sc==KEY_ESC)close_front();
-        return;
-    }
+    if(fk==WK_SETTINGS){ settings_key(); return; }
     if (fk == WK_CALC) {
         /* Mouse clicks only; ESC still dismisses the window. */
         if (key_sc == KEY_ESC)
@@ -7990,24 +8301,34 @@ static void handle_key(void) {
 }
 
 
-/* ---------- Themes, Kilroy, Settings, splash ---------- */
+/* ---------- Preferences, Settings, logo, boot screen ---------- */
 
 /* Fixed system paths are resolved afresh: cached node IDs can be moved/reused.
  * Only recognized one-byte preferences are replaceable. No pending choice
- * borrows filesystem bytes or changes a leased snapshot. */
-enum { PREF_THEME, PREF_SAVER, PREF_DISPLAY, PREF_COUNT };
+ * borrows filesystem bytes or changes a leased snapshot. Each preference is
+ * one byte, '0' plus its value. */
+enum {
+    PREF_STYLE, PREF_ACCENT, PREF_DESKTOP, PREF_PATTERN, PREF_WINDOWS, PREF_SNAP,
+    PREF_SAVER, PREF_SAVER_DELAY, PREF_DISPLAY, PREF_CLOCK, PREF_MOUSE, PREF_COUNT
+};
 enum { PREF_IDLE, PREF_QUEUED, PREF_RAM, PREF_SAVED, PREF_WRITE_FAILED, PREF_SYNC_FAILED, PREF_PATH_FAILED, PREF_FULL_FAILED };
 enum { PREF_ERR_PATH = -4, PREF_ERR_FULL = -5 };
 typedef struct { char choice; int state, file; unsigned identity; } PendingPreference;
 static PendingPreference preferences[PREF_COUNT];
-static const char *const preference_names[PREF_COUNT] = { "theme", "saver", "display" };
+static const char *const preference_names[PREF_COUNT] = {
+    "style", "accent", "desktop", "pattern", "windows", "snap",
+    "saver", "saverdelay", "display", "clock", "mouse"
+};
+static const int preference_counts[PREF_COUNT] = {
+    UI_STYLE_COUNT, UI_ACCENT_N, UI_DESKTOP_N, UI_PATTERN_N, 16, SNAP_DISTANCE_MAX + 1,
+    2, SAVER_DELAY_N, DISPLAY_MODE_COUNT, 4, 3
+};
 static FsSyncTicket preference_sync_ticket;
 static int preference_sync_active, preference_retry_requested;
 static unsigned preference_retry_after;
 
 static int preference_valid(int which, char value) {
-    int count = which == PREF_THEME ? THEME_N : which == PREF_SAVER ? 2 : DISPLAY_MODE_COUNT;
-    return value >= '0' && value < '0' + count;
+    return value >= '0' && value < '0' + preference_counts[which];
 }
 static int preference_file(int which) {
     int dir = fs_find_child(fs_root(), "prefs");
@@ -8138,218 +8459,618 @@ static const char *preference_message(int which) {
     default: return "";
     }
 }
-static void theme_save(void) {
-    preference_queue(PREF_THEME, (char)('0' + theme_id));
+static void preference_save(int which, int value) {
+    preference_queue(which, (char)('0' + value));
 }
 static void saver_save(void) {
-    preference_queue(PREF_SAVER, saver_enabled ? '1' : '0');
+    preference_save(PREF_SAVER, saver_enabled ? 1 : 0);
 }
 static void saver_load(void) {
     int choice = preference_read(PREF_SAVER);
     if (choice >= 0) saver_enabled = choice;
+    choice = preference_read(PREF_SAVER_DELAY);
+    if (choice >= 0) saver_delay = choice;
 }
+static void windows_save(void) {
+    preference_save(PREF_WINDOWS, win_options & 15);
+}
+/* Appearance, window behavior, clock and mouse preferences. A missing or
+ * unrecognized file keeps the default. */
 static void theme_load(void) {
-    int choice = preference_read(PREF_THEME);
-    theme_id = choice >= 0 ? choice : 0;
+    int v;
+    if ((v = preference_read(PREF_STYLE)) >= 0) ui_style = v;
+    if ((v = preference_read(PREF_ACCENT)) >= 0) ui_accent_id = v;
+    if ((v = preference_read(PREF_DESKTOP)) >= 0) ui_desktop_id = v;
+    if ((v = preference_read(PREF_PATTERN)) >= 0) ui_pattern = v;
+    if ((v = preference_read(PREF_WINDOWS)) >= 0) win_options = v;
+    if ((v = preference_read(PREF_SNAP)) >= 0) win_snap_distance = v;
+    if ((v = preference_read(PREF_CLOCK)) >= 0) clock_flags = v;
+    if ((v = preference_read(PREF_MOUSE)) >= 0) dbl_click_speed = v;
 }
 
-static void theme_set(int id) {
-    if (id < 0 || id >= THEME_N)
-        return;
-    theme_id = id;
+/* Switching style changes metrics, so windows are clamped to the new work
+ * area and the menu row is rebuilt. */
+static void style_set(int style) {
+    if (style < 0 || style >= UI_STYLE_COUNT || style == ui_style) return;
+    ui_style = style;
     theme_apply();
-    theme_save();
+    for (int i = 0; i < MAX_WIN; i++) if (wins[i].open) win_clamp(&wins[i]);
+    icons_init();
+    preference_save(PREF_STYLE, style);
+    dirty = 1;
+}
+static void accent_set(int accent) {
+    if (accent < 0 || accent >= UI_ACCENT_N) return;
+    ui_accent_id = accent;
+    ui_theme_set_accent(accent);
+    preference_save(PREF_ACCENT, accent);
+    dirty = 1;
+}
+static void desktop_color_set(int desktop) {
+    if (desktop < 0 || desktop >= UI_DESKTOP_N) return;
+    ui_desktop_id = desktop;
+    ui_theme_set_desktop(desktop);
+    desk_cache_theme = -1;
+    preference_save(PREF_DESKTOP, desktop);
+    dirty = 1;
+}
+static void pattern_set(int pattern) {
+    if (pattern < 0 || pattern >= UI_PATTERN_N) return;
+    ui_pattern = pattern;
+    desk_cache_theme = -1;
+    preference_save(PREF_PATTERN, pattern);
     dirty = 1;
 }
 
+/* ---------- About ---------- */
+
+static void fmt_cat(char *out, const char *s) { kstrcpy(out + kstrlen(out), s); }
+static void fmt_cat_uint(char *out, unsigned v) { char n[12]; fmt_uint(n, v); fmt_cat(out, n); }
+
+static void about_lines(char lines[4][64]) {
+    SysInfo si;
+    sysinfo_fill(&si);
+    kstrcpy(lines[0], "Version 0.9, build " BASEOS_BUILD_LABEL);
+    lines[1][0] = 0; fmt_cat_uint(lines[1], (unsigned)fb_w); fmt_cat(lines[1], " x ");
+    fmt_cat_uint(lines[1], (unsigned)fb_h); fmt_cat(lines[1], ", 256 colors");
+    lines[2][0] = 0; fmt_cat_uint(lines[2], (unsigned)si.mem_mb); fmt_cat(lines[2], " MB memory");
+    lines[3][0] = 0; fmt_cat_uint(lines[3], (unsigned)(si.fs_bytes / 1024)); fmt_cat(lines[3], " KB used of ");
+    fmt_cat_uint(lines[3], (unsigned)(si.fs_cap / 1024)); fmt_cat(lines[3], " KB");
+}
+
 static void draw_about(int wx, int wy, int ww, int wh, int fl) {
-    gui_draw_window(wx, wy, ww, wh, "About BaseOS", 0, fl | WIN_NOMENU);
-    int ox = wx + (ww - KILROY_ABOUT_W) / 2;
-    int oy = wy + TITLE_BAR + 22;
-    blit_bits_color(ox, oy, KILROY_ABOUT_W, KILROY_ABOUT_H, kilroy_about_bits, ui_text);
-    int y = oy + KILROY_ABOUT_H + 12;
-    draw_string_bold("BaseOS", wx + (ww - uib_string_w("BaseOS")) / 2, y, ui_text);
-    y += CHAR_H + 10;
-    char geometry[80], number[16];
-    kstrcpy(geometry, "Version 0.9  |  "); fmt_uint(number, fb_w);
-    kstrcpy(geometry + kstrlen(geometry), number); kstrcpy(geometry + kstrlen(geometry), "x");
-    fmt_uint(number, fb_h); kstrcpy(geometry + kstrlen(geometry), number);
-    kstrcpy(geometry + kstrlen(geometry), "  |  256 colors");
-    draw_string_in_win(geometry, wx, ww, y, ui_text);
-    y += CHAR_H + 10;
-    draw_string_in_win("Build " BASEOS_BUILD_LABEL, wx, ww, y, ui_text_dim);
-    y += CHAR_H + 6;
-    draw_string_in_win("(C) 2026 CCG", wx, ww, y, ui_text_dim);
+    (void)wh;
+    gui_draw_window(wx, wy, ww, wh, "About BaseOS", 0, fl | WIN_NOMENU | WIN_DIALOG);
+    int top = wy + TITLE_BAR, pad = ui_theme.pad_dialog + 4;
+    ui_icon_draw(UI_ICON_LOGO, wx + pad, top + pad, 48, TK_ACCENT, ui_theme.content);
+    int tx = wx + pad + 48 + 16, ty = top + pad + 2;
+    draw_string_bold("BaseOS", tx, ty, TK_TEXT);
+    char lines[4][64];
+    about_lines(lines);
+    for (int i = 0; i < 4; i++)
+        kit_text(lines[i], tx, ty + 24 + i * 20, TK_TEXT2, wx + ww - pad - tx, 0);
+    kit_text("(C) 2026 CCG", tx, ty + 24 + 4 * 20 + 8, TK_TEXT2, wx + ww - pad - tx, 0);
+    int bw = 88, bh = BTN_H;
+    draw_default_button(wx + ww - pad - bw, wy + wh - pad - bh, bw, bh, "OK");
+}
+static void handle_about_click(int wx, int wy, int ww, int wh) {
+    int pad = ui_theme.pad_dialog + 4, bw = 88, bh = BTN_H;
+    if (hit(mouse_x, mouse_y, wx + ww - pad - bw, wy + wh - pad - bh, bw, bh)) close_front();
 }
 
-#define SW_W   96
-#define SW_H   60
-#define SW_GAP 16
+/* ---------- Settings ----------
+ * A sidebar of pages and a form on the right. Drawing records the hit
+ * zones, so clicks use exactly the geometry that was drawn. */
 
-/* Swatch thumbnails are decoded once, the first time Settings is drawn. */
-static uint8_t wall_thumb[WALLPAPER_N][SW_W * SW_H];
-static int wall_thumb_ready = 0;
-static void wallpaper_thumbs(void) {
-    if (wall_thumb_ready) return;
-    wall_thumb_ready = 1;
-    for (int i = 0; i < WALLPAPER_N; i++)
-        if (!wallpaper_paint(&wallpapers[i], wall_thumb[i], SW_W, SW_H))
-            kmemset(wall_thumb[i], INK(8), SW_W * SW_H);
+enum { SET_APPEARANCE, SET_DESKTOP, SET_DISPLAY, SET_INPUT, SET_TIME, SET_ABOUT, SET_PAGES };
+static const char *const settings_pages[SET_PAGES] = {
+    "Appearance", "Desktop", "Display", "Keyboard and Mouse", "Date and Time", "About"
+};
+static const int settings_page_icon[SET_PAGES] = {
+    UI_ICON_A_PAL, UI_ICON_DESK, UI_ICON_SCREEN, UI_ICON_KB, UI_ICON_CLOCK, UI_ICON_INFO
+};
+static int settings_page;
+
+enum {
+    SZ_PAGE = 1, SZ_STYLE, SZ_ACCENT, SZ_DESKTOP, SZ_PATTERN, SZ_WINOPT, SZ_SNAP,
+    SZ_SAVER, SZ_SAVER_DELAY, SZ_SAVER_PREVIEW, SZ_DISPLAY, SZ_CLOCK, SZ_MOUSE, SZ_RETRY
+};
+typedef struct { int x, y, w, h, kind, arg; } SetZone;
+static SetZone set_zones[64];
+static int set_zone_n, set_slider_drag;
+static int set_snap_x, set_snap_w;
+
+static void set_zone(int x, int y, int w, int h, int kind, int arg) {
+    if (set_zone_n < (int)(sizeof set_zones / sizeof set_zones[0]))
+        set_zones[set_zone_n++] = (SetZone){x, y, w, h, kind, arg};
 }
-static void settings_swatch_pos(int wx, int wy, int i, int *sx, int *sy) {
-    int ox = wx + 24;
-    int oy = wy + TITLE_H + 48;
-    int col = i % 4;
-    int row = i / 4;
-    *sx = ox + col * (SW_W + SW_GAP);
-    *sy = oy + row * (SW_H + 44);
+static const SetZone *set_zone_at(int px, int py) {
+    for (int i = set_zone_n - 1; i >= 0; i--)
+        if (hit(px, py, set_zones[i].x, set_zones[i].y, set_zones[i].w, set_zones[i].h)) return &set_zones[i];
+    return 0;
+}
+static int set_hover(int kind, int arg) {
+    const SetZone *z = set_zone_at(mouse_x, mouse_y);
+    return z && z->kind == kind && z->arg == arg;
 }
 
-/* Wallpaper rows, then Display resolution, then the screen saver option. */
-static int settings_display_y(int wy) {
-    int rows = (THEME_N + 3) / 4;
-    return wy + TITLE_H + 48 + rows * (SW_H + 44) + 16;
+static int settings_side_w(void) { return MODERN ? 200 : 192; }
+static int settings_window_h(void) { return MODERN ? 540 : 564; }
+
+/* Form layout: a label column and a control column. Classic rows sit on
+ * the content with a rule between sections; Modern groups rows in cards. */
+typedef struct { int x, y, w, card_y, rows; } SetForm;
+static int set_label_w(void) { return MODERN ? 150 : 152; }
+
+static void set_heading(SetForm *f, const char *title, const char *sub) {
+    draw_string_bold(title, f->x, f->y, TK_TEXT);
+    f->y += 20;
+    if (sub) { draw_string(sub, f->x, f->y, TK_TEXT2); f->y += 20; }
+    f->y += MODERN ? 8 : 10;
 }
-static int settings_window_h(void) { return settings_display_y(0) + 150; }
-static void settings_saver_box(int wx, int wy, int wh, int *x, int *y) {
-    *x = wx + 24;
-    *y = wy + wh - 44;
+static void set_rule(SetForm *f) {
+    if (MODERN) { f->y += 16; return; }
+    draw_hline(f->x, f->y + 10, f->w, TK_LINE_SUBTLE);
+    f->y += 24;
+}
+static void set_card_begin(SetForm *f) {
+    f->card_y = f->y;
+    f->rows = 0;
+}
+/* Starts a row of height h (Classic) or at least 48 (Modern). Draws the
+ * label and returns the y of the row; *cx gets the control column x. */
+static int set_row(SetForm *f, const char *label, int h, int *cx) {
+    int y;
+    if (MODERN) {
+        int rh = h + 16 < 48 ? 48 : h + 16;
+        if (f->rows) draw_hline(f->x + 1, f->y, f->w - 2, TK_45);
+        y = f->y + (rh - h) / 2;
+        if (label) kit_text(label, f->x + 16, kit_ty(f->y, rh), TK_TEXT, set_label_w(), 0);
+        *cx = f->x + 16 + set_label_w() + 16;
+        f->y += rh;
+    } else {
+        y = f->y;
+        if (label) kit_text(label, f->x, kit_ty(y, h), TK_TEXT2, set_label_w(), 0);
+        *cx = f->x + set_label_w() + 16;
+        f->y += h + 14;
+    }
+    f->rows++;
+    return y;
+}
+static void set_card_end(SetForm *f) {
+    if (!MODERN) { f->y -= 14; return; }
+    kit_frame(f->x, f->card_y, f->w, f->y - f->card_y, 10, TK_LINE_SUBTLE);
+}
+
+static uint8_t pal_of(uint32_t rgb) { return gfx_rgb((int)(rgb >> 16) & 255, (int)(rgb >> 8) & 255, (int)rgb & 255); }
+
+static void set_swatches(int x, int y, int n, int sel, int kind, int accent) {
+    for (int i = 0; i < n; i++) {
+        uint8_t c = pal_of(accent ? ui_accent_rgb(ui_style, i) : ui_desktop_rgb(ui_style, i));
+        if (MODERN) {
+            int sx = x + i * 32, sy = y + 2;
+            if (i == sel) { kit_fill(sx - 4, sy - 4, 30, 30, 15, TK_ACCENT, 1); kit_fill(sx - 2, sy - 2, 26, 26, 13, ui_theme.content, 1); }
+            kit_fill(sx, sy, 22, 22, 11, c, 1);
+            set_zone(sx - 4, sy - 4, 30, 30, kind, i);
+        } else {
+            int sx = x + i * 36;
+            if (i == sel) { draw_frame(sx, y, 26, 26, TK_TEXT); draw_frame(sx + 1, y + 1, 24, 24, TK_TEXT); }
+            draw_rect(sx + 3, y + 3, 20, 20, c);
+            draw_frame(sx + 3, y + 3, 20, 20, TK_LINE_STRONG);
+            set_zone(sx, y, 26, 26, kind, i);
+        }
+    }
+}
+static void set_value_label(SetForm *f, int y, int h, const char *text, int pill, int after_x) {
+    if (MODERN) {
+        int right = f->x + f->w - 16;
+        if (pill) {
+            int pw = kit_text_w(text, 1) + 18;
+            kit_fill(right - pw, y + (h - 22) / 2, pw, 22, 11, TK_ACCENT_100, 1);
+            kit_text(text, right - pw + 9, kit_ty(y + (h - 22) / 2, 22), TK_ACCENT_700, pw, 1);
+        } else kit_text_right(text, right, kit_ty(y, h), TK_TEXT2, 0);
+    } else kit_text(text, after_x, kit_ty(y, h), TK_TEXT, 200, 0);
+}
+static void set_segmented(int x, int y, const char *const *labels, int n, int sel, int kind) {
+    int xs[8], ws[8], hover = -1;
+    for (int i = 0; i < n; i++) if (set_hover(kind, i)) hover = i;
+    kit_segmented(x, y, labels, n, sel, hover, xs, ws);
+    for (int i = 0; i < n; i++) set_zone(xs[i], y, ws[i], kit_segmented_h(), kind, i);
+}
+/* A check (Classic) or a toggle at the right of the row (Modern). */
+static void set_switch(SetForm *f, const char *label, const char *hint, int on, int kind, int arg) {
+    int cx, h = hint ? 40 : (MODERN ? 20 : 24);
+    int y = set_row(f, 0, h, &cx);
+    if (MODERN) {
+        int lx = f->x + 16;
+        kit_text(label, lx, hint ? y + 2 : kit_ty(y, h), TK_TEXT, f->w - 80, 0);
+        if (hint) kit_text(hint, lx, y + 22, TK_TEXT2, f->w - 80, 0);
+        int tx = f->x + f->w - 16 - KIT_TOGGLE_W, ty = y + (h - KIT_TOGGLE_H) / 2;
+        kit_toggle(tx, ty, (on ? KIT_ON : 0) | (set_hover(kind, arg) ? KIT_HOVER : 0));
+        set_zone(f->x, y - 8, f->w, h + 16, kind, arg);
+    } else {
+        int w = kit_check_row(cx, y, label, (on ? KIT_ON : 0) | (set_hover(kind, arg) ? KIT_HOVER : 0), 0);
+        if (hint) kit_text(hint, cx + ui_theme.check + 8, y + 24, TK_TEXT2, f->x + f->w - cx - 30, 0);
+        set_zone(cx, y, w, 24, kind, arg);
+    }
+}
+/* Classic draws the row label in the label column next to the check. */
+static void set_switch_labeled(SetForm *f, const char *row_label, const char *label, const char *hint,
+                               int on, int kind, int arg) {
+    if (!MODERN) {
+        int save = f->y;
+        kit_text(row_label, f->x, kit_ty(save, 24), TK_TEXT2, set_label_w(), 0);
+    }
+    set_switch(f, label, hint, on, kind, arg);
+}
+
+static const int snap_distance_max = SNAP_DISTANCE_MAX;
+static void set_slider_row(SetForm *f, const char *label, int value, int max, const char *unit, int kind) {
+    int cx, y = set_row(f, 0, 18, &cx);
+    int lx = MODERN ? f->x + 32 : cx;
+    kit_text(label, lx, kit_ty(y, 18), TK_TEXT2, 140, 0);
+    int sx = MODERN ? f->x + 16 + set_label_w() + 16 + 32 : cx + 100;
+    int right = f->x + f->w - (MODERN ? 16 : 0);
+    int sw = right - 60 - sx;
+    if (sw > 240) sw = 240;
+    kit_slider(sx, y, sw, value, max, set_slider_drag ? KIT_PRESSED : 0);
+    char v[16];
+    fmt_uint(v, (unsigned)value);
+    kstrcpy(v + kstrlen(v), unit);
+    if (MODERN) kit_text_right(v, right, kit_ty(y, 18), TK_TEXT, 0);
+    else kit_text(v, sx + sw + 12, kit_ty(y, 18), TK_TEXT, 60, 0);
+    set_snap_x = sx;
+    set_snap_w = sw;
+    set_zone(sx - 4, y - 4, sw + 8, 26, kind, 0);
+}
+
+static const char *const pattern_names[UI_PATTERN_N] = {"None", "Dots", "Grid"};
+static const char *const style_names[UI_STYLE_COUNT] = {"Classic", "Modern"};
+
+static void settings_appearance(SetForm *f) {
+    int cx, y;
+    set_heading(f, "Appearance", "Changes apply right away.");
+    if (!MODERN) set_rule(f), f->y -= 10;
+    set_card_begin(f);
+    y = set_row(f, "Style", kit_segmented_h(), &cx);
+    set_segmented(cx, y, style_names, UI_STYLE_COUNT, ui_style, SZ_STYLE);
+    y = set_row(f, "Accent color", MODERN ? 30 : 26, &cx);
+    set_swatches(cx, y, UI_ACCENT_N, ui_accent_id, SZ_ACCENT, 1);
+    set_value_label(f, y, MODERN ? 30 : 26, ui_accent_name(ui_style, ui_accent_id), 1, cx + UI_ACCENT_N * 36 + 2);
+    y = set_row(f, "Desktop color", MODERN ? 30 : 26, &cx);
+    set_swatches(cx, y, UI_DESKTOP_N, ui_desktop_id, SZ_DESKTOP, 0);
+    set_value_label(f, y, MODERN ? 30 : 26, ui_desktop_name(ui_style, ui_desktop_id), 0, cx + UI_DESKTOP_N * 36 + 2);
+    y = set_row(f, "Desktop pattern", kit_segmented_h(), &cx);
+    set_segmented(cx, y, pattern_names, UI_PATTERN_N, ui_pattern, SZ_PATTERN);
+    set_card_end(f);
+    set_rule(f);
+    draw_string_bold("Windows", f->x, f->y, TK_TEXT);
+    f->y += MODERN ? 24 : 32;
+    set_card_begin(f);
+    if (MODERN) {
+        set_switch(f, "Show window contents while dragging",
+                   "When off, BaseOS draws an outline instead. Faster on slow machines.",
+                   win_options & WINOPT_DRAG_CONTENTS, SZ_WINOPT, WINOPT_DRAG_CONTENTS);
+        set_switch(f, "Double-click a title bar to maximize", 0, win_options & WINOPT_DOUBLE_CLICK, SZ_WINOPT, WINOPT_DOUBLE_CLICK);
+        set_switch(f, "Snap windows to screen edges", 0, win_options & WINOPT_SNAP, SZ_WINOPT, WINOPT_SNAP);
+    } else {
+        set_switch_labeled(f, "While dragging", "Show window contents",
+                           "When off, BaseOS draws a 1px outline instead. Faster on slow machines.",
+                           win_options & WINOPT_DRAG_CONTENTS, SZ_WINOPT, WINOPT_DRAG_CONTENTS);
+        set_switch_labeled(f, "Title bars", "Double-click to maximize", 0, win_options & WINOPT_DOUBLE_CLICK, SZ_WINOPT, WINOPT_DOUBLE_CLICK);
+        set_switch_labeled(f, "Screen edges", "Snap windows to edges", 0, win_options & WINOPT_SNAP, SZ_WINOPT, WINOPT_SNAP);
+    }
+    set_slider_row(f, "Snap distance", win_snap_distance, snap_distance_max, " px", SZ_SNAP);
+    set_card_end(f);
+}
+
+static const char *const saver_delay_names[SAVER_DELAY_N] = {"90 s", "3 min", "5 min", "10 min", "30 min"};
+
+static void settings_desktop(SetForm *f) {
+    int cx, y;
+    set_heading(f, "Desktop", "The screen saver starts when the computer sits idle.");
+    if (!MODERN) set_rule(f), f->y -= 10;
+    set_card_begin(f);
+    if (MODERN) set_switch(f, "Screen saver", 0, saver_enabled, SZ_SAVER, 0);
+    else set_switch_labeled(f, "Screen saver", "Start the screen saver when idle", 0, saver_enabled, SZ_SAVER, 0);
+    y = set_row(f, "Start after", kit_segmented_h(), &cx);
+    set_segmented(cx, y, saver_delay_names, SAVER_DELAY_N, saver_delay, SZ_SAVER_DELAY);
+    y = set_row(f, "Preview", BTN_H, &cx);
+    {
+        int bw = kit_button_w("Preview", -1);
+        kit_button(cx, y, bw, BTN_H, "Preview", -1, KB_DEFAULT, set_hover(SZ_SAVER_PREVIEW, 0) ? KIT_HOVER : 0);
+        set_zone(cx, y, bw, BTN_H, SZ_SAVER_PREVIEW, 0);
+    }
+    set_card_end(f);
+    set_rule(f);
+    draw_string_bold("Desktop icons", f->x, f->y, TK_TEXT);
+    f->y += MODERN ? 24 : 28;
+    draw_string("System opens the volume's properties. Home and Trash open in Files.", f->x, f->y, TK_TEXT2);
+    f->y += 20;
+}
+
+static void settings_display(SetForm *f) {
+    int cx, y;
+    set_heading(f, "Display", "A new resolution waits 15 seconds for you to keep it.");
+    if (!MODERN) set_rule(f), f->y -= 10;
+    set_card_begin(f);
+    for (int i = 0; i < DISPLAY_MODE_COUNT; ++i) {
+        y = set_row(f, i == 0 ? "Resolution" : 0, ui_theme.row_h, &cx);
+        int on = display_current_mode() == i;
+        int w = kit_check_row(cx, y, display_mode(i)->name, (on ? KIT_ON : 0) | (set_hover(SZ_DISPLAY, i) ? KIT_HOVER : 0), 1);
+        set_zone(cx, y, w, ui_theme.row_h, SZ_DISPLAY, i);
+        if (!MODERN) f->y -= 8;
+    }
+    if (!MODERN) f->y += 8;
+    y = set_row(f, "Colors", 20, &cx);
+    kit_text("256 colors", cx, kit_ty(y, 20), TK_TEXT, 200, 0);
+    set_card_end(f);
+    f->y += 12;
+    kit_text(display_message[0] ? display_message :
+             preferences[PREF_DISPLAY].state ? preference_message(PREF_DISPLAY) :
+             "Keys 1-4 select a mode. Enter keeps it; Escape reverts.",
+             f->x, f->y, TK_TEXT2, f->w, 0);
+    f->y += 20;
+}
+
+static const char *const mouse_speed_names[3] = {"Slow", "Normal", "Fast"};
+static const char *const shortcut_keys[][2] = {
+    {"Super", "Apps"}, {"Ctrl+Space", "Apps"}, {"Alt+Tab", "Switch windows"},
+    {"Alt+F4", "Close window"}, {"Super+Arrow", "Snap or maximize"}, {"Super+D", "Show desktop"},
+    {"Alt or F10", "Menu row"}, {"Alt+Space", "Window menu"},
+};
+
+static void settings_input(SetForm *f) {
+    int cx, y;
+    set_heading(f, "Keyboard and Mouse", 0);
+    if (!MODERN) set_rule(f), f->y -= 10;
+    set_card_begin(f);
+    y = set_row(f, "Double-click speed", kit_segmented_h(), &cx);
+    set_segmented(cx, y, mouse_speed_names, 3, dbl_click_speed, SZ_MOUSE);
+    set_card_end(f);
+    set_rule(f);
+    draw_string_bold("Shortcuts", f->x, f->y, TK_TEXT);
+    f->y += MODERN ? 24 : 28;
+    set_card_begin(f);
+    int n = (int)(sizeof shortcut_keys / sizeof shortcut_keys[0]);
+    for (int i = 0; i < n; i++) {
+        y = set_row(f, shortcut_keys[i][1], 22, &cx);
+        kit_kbd(cx, y, shortcut_keys[i][0]);
+        if (!MODERN) f->y -= 6;
+    }
+    if (!MODERN) f->y += 6;
+    set_card_end(f);
+}
+
+static void settings_time(SetForm *f) {
+    int cx, y;
+    set_heading(f, "Date and Time", "The clock reads the computer's real-time clock.");
+    if (!MODERN) set_rule(f), f->y -= 10;
+    char d[24], t[12];
+    date_time_text(d, t);
+    draw_logo_string(t, f->x, f->y, TK_TEXT);
+    f->y += LOGO_FONT_H + 4;
+    draw_string(d, f->x, f->y, TK_TEXT2);
+    f->y += 32;
+    set_card_begin(f);
+    if (MODERN) {
+        set_switch(f, "Use 24-hour time", 0, !(clock_flags & CLOCK_12H), SZ_CLOCK, CLOCK_12H);
+        set_switch(f, "Show the date in the taskbar", 0, !(clock_flags & CLOCK_NO_DATE), SZ_CLOCK, CLOCK_NO_DATE);
+    } else {
+        set_switch_labeled(f, "Time format", "Use 24-hour time", 0, !(clock_flags & CLOCK_12H), SZ_CLOCK, CLOCK_12H);
+        set_switch_labeled(f, "Taskbar", "Show the date", 0, !(clock_flags & CLOCK_NO_DATE), SZ_CLOCK, CLOCK_NO_DATE);
+    }
+    set_card_end(f);
+    (void)y; (void)cx;
+}
+
+static void settings_about(SetForm *f) {
+    ui_icon_draw(UI_ICON_LOGO, f->x, f->y, 48, TK_ACCENT, ui_theme.content);
+    draw_logo_string("BaseOS", f->x + 64, f->y + 6, TK_TEXT);
+    f->y += 64;
+    char lines[4][64];
+    about_lines(lines);
+    for (int i = 0; i < 4; i++) { kit_text(lines[i], f->x, f->y, TK_TEXT, f->w, 0); f->y += 20; }
+    f->y += 8;
+    kit_text("(C) 2026 CCG", f->x, f->y, TK_TEXT2, f->w, 0);
+    f->y += 20;
+}
+
+/* The worst preference state of the page's preferences, for the footer. */
+static int settings_failed_pref(void) {
+    for (int i = 0; i < PREF_COUNT; ++i) {
+        int s = preferences[i].state;
+        if (s == PREF_WRITE_FAILED || s == PREF_SYNC_FAILED || s == PREF_PATH_FAILED || s == PREF_FULL_FAILED) return i;
+    }
+    return -1;
 }
 
 static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
-    gui_draw_window(wx, wy, ww, wh, "Settings", 0, fl);
-    {
-        int bx, by;
-        settings_saver_box(wx, wy, wh, &bx, &by);
-        draw_hline(wx + 24, by - 14, ww - 48, ui_chrome_dk);
-        draw_round_rect(bx, by, 18, 18, 4, saver_enabled ? ui_accent : INK(12));
-        if (saver_enabled) {
-            draw_line(bx + 4, by + 9, bx + 8, by + 13, ui_on_accent);
-            draw_line(bx + 5, by + 9, bx + 9, by + 13, ui_on_accent);
-            draw_line(bx + 8, by + 13, bx + 14, by + 5, ui_on_accent);
-            draw_line(bx + 9, by + 13, bx + 15, by + 5, ui_on_accent);
-        } else {
-            draw_round_rect(bx + 1, by + 1, 16, 16, 3, ui_field);
-        }
-        draw_string("Start the screen saver after 90 seconds idle", bx + 28, by, ui_text);
-        draw_string_clip(preference_message(PREF_SAVER), bx + 28, by + 21, ui_text_dim, wx + ww - 20);
+    gui_draw_window(wx, wy, ww, wh, settings_pages[settings_page], 0, fl);
+    set_zone_n = 0;
+    int top = wy + TITLE_H, side = settings_side_w(), bottom = wy + wh - 1;
+    /* Sidebar */
+    draw_rect(wx + 1, top, side, bottom - top, MODERN ? ui_theme.sidebar : TK_BASE);
+    draw_vline(wx + 1 + side, top, bottom - top, MODERN ? TK_LINE_SUBTLE : TK_LINE_SUBTLE);
+    int iy = top + (MODERN ? 10 : 8), ih = MODERN ? 32 : 24, im = MODERN ? 8 : 4;
+    for (int i = 0; i < SET_PAGES; i++) {
+        int x = wx + 1 + im, w = side - 2 * im, on = i == settings_page;
+        int hov = !on && set_hover(SZ_PAGE, i);
+        if (on) kit_fill(x, iy, w, ih, MODERN ? 6 : KIT_R_SQUARE, TK_ACCENT, 1);
+        else if (hov) kit_fill(x, iy, w, ih, MODERN ? 6 : KIT_R_SQUARE, TK_HOVER, 1);
+        uint8_t ink = on ? TK_ON_ACCENT : TK_TEXT, bg = on ? TK_ACCENT : hov ? TK_HOVER : (MODERN ? ui_theme.sidebar : TK_BASE);
+        int pad = MODERN ? 10 : 8;
+        ui_icon_draw(settings_page_icon[i], x + pad, iy + (ih - 16) / 2, 16, ink, bg);
+        kit_text(settings_pages[i], x + pad + 16 + (MODERN ? 10 : 8), kit_ty(iy, ih), ink, w - 40, on);
+        set_zone(x, iy, w, ih, SZ_PAGE, i);
+        iy += ih + (MODERN ? 2 : 0);
     }
-    int ry = settings_display_y(wy);
-    draw_string_bold("Display resolution", wx + 24, ry, ui_text);
-    for (int i = 0; i < DISPLAY_MODE_COUNT; ++i)
-        draw_button_styled(wx + 24 + i * 127, ry + 26, 119, 30,
-                           display_mode(i)->name, display_current_mode() == i);
-    draw_string_clip(display_message[0] ? display_message :
-                     preferences[PREF_DISPLAY].state ? preference_message(PREF_DISPLAY) :
-                     "Keys 1-4 select a mode. Enter keeps it; Escape reverts.",
-                     wx + 24, ry + 66, ui_text_dim, wx + ww - 20);
-    draw_string_bold("Appearance", wx + 24, wy + TITLE_H + 16, ui_text);
-    tool_button(wx + ww - 156, wy + TITLE_H + 8, 132, 28, ICON_REFRESH, "Retry saving", TB_NORMAL);
-    draw_string_clip(preference_message(PREF_THEME), wx + 24, settings_display_y(wy) - 30, ui_text_dim, wx + ww - 20);
-    draw_hline(wx + 24, wy + TITLE_H + 38, ww - 48, ui_chrome_dk);
-    wallpaper_thumbs();
-    for (int i = 0; i < THEME_N; i++) {
-        int sx, sy;
-        settings_swatch_pos(wx, wy, i, &sx, &sy);
-        const Theme *t = &themes[i];
-        int cur = (i == theme_id);
-        if (cur)
-            draw_round_rect(sx - 3, sy - 3, SW_W + 6, SW_H + 6, 9, ui_accent);
-        draw_round_rect(sx - 1, sy - 1, SW_W + 2, SW_H + 2, 7, cur ? INK(0) : INK(12));
-        /* Miniature of the wallpaper, with the theme's accent. */
-        for (int row = 0; row < SW_H; row++) {
-            int inset = row < 4 ? 4 - row : row > SW_H - 5 ? row - (SW_H - 5) : 0;
-            for (int col = inset; col < SW_W - inset; col++)
-                put_pixel(sx + col, sy + row, wall_thumb[t->wallpaper][row * SW_W + col]);
-        }
-        draw_round_rect(sx + SW_W - 24, sy + SW_H - 22, 10, 10, 5, idx24(t->accent));
-        int nw = ui_string_w(t->name);
-        int nx = sx + (SW_W - nw) / 2;
-        draw_string(t->name, nx, sy + SW_H + 12, cur ? ui_accent_dk : ui_text);
+    /* Page */
+    int cx = wx + 1 + side + 1, pad = MODERN ? 20 : 24;
+    SetForm f = {cx + pad, top + (MODERN ? 20 : 28), wx + ww - 1 - (MODERN ? 0 : SB) - cx - 2 * pad, 0, 0};
+    if (!MODERN) {
+        draw_rect(wx + ww - 1 - SB, top, SB, bottom - top, TK_BASE);
+        draw_vline(wx + ww - 1 - SB, top, bottom - top, TK_LINE_SUBTLE);
+    }
+    switch (settings_page) {
+    case SET_APPEARANCE: settings_appearance(&f); break;
+    case SET_DESKTOP: settings_desktop(&f); break;
+    case SET_DISPLAY: settings_display(&f); break;
+    case SET_INPUT: settings_input(&f); break;
+    case SET_TIME: settings_time(&f); break;
+    default: settings_about(&f); break;
+    }
+    int failed = settings_failed_pref();
+    if (failed >= 0) {
+        int by = bottom - 16 - BTN_H, bw = kit_button_w("Retry saving", -1);
+        kit_text(preference_message(failed), f.x, kit_ty(by, BTN_H), TK_RED_700, f.w - bw - 12, 0);
+        kit_button(f.x + f.w - bw, by, bw, BTN_H, "Retry saving", -1, KB_DEFAULT, set_hover(SZ_RETRY, 0) ? KIT_HOVER : 0);
+        set_zone(f.x + f.w - bw, by, bw, BTN_H, SZ_RETRY, 0);
     }
 }
+
+static void settings_slider_set(void) {
+    if (set_snap_w <= 0) return;
+    int v = (mouse_x - set_snap_x) * snap_distance_max / set_snap_w;
+    if (v < 0) v = 0;
+    if (v > snap_distance_max) v = snap_distance_max;
+    if (v != win_snap_distance) { win_snap_distance = v; dirty = 1; }
+}
+static void settings_drag(void) {
+    if (!set_slider_drag) return;
+    if (!mouse_left) {
+        set_slider_drag = 0;
+        preference_save(PREF_SNAP, win_snap_distance);
+        dirty = 1;
+        return;
+    }
+    settings_slider_set();
+}
+
 static void handle_settings_click(int wx, int wy, int ww, int wh) {
-    if (hit(mouse_x, mouse_y, wx + ww - 156, wy + TITLE_H + 8, 132, 26)) {
-        preferences_retry(); return;
+    (void)wx; (void)wy; (void)ww; (void)wh;
+    const SetZone *z = set_zone_at(mouse_x, mouse_y);
+    if (!z) return;
+    switch (z->kind) {
+    case SZ_PAGE: settings_page = z->arg; break;
+    case SZ_STYLE: style_set(z->arg); break;
+    case SZ_ACCENT: accent_set(z->arg); break;
+    case SZ_DESKTOP: desktop_color_set(z->arg); break;
+    case SZ_PATTERN: pattern_set(z->arg); break;
+    case SZ_WINOPT: win_options ^= z->arg; windows_save(); break;
+    case SZ_SNAP: set_slider_drag = 1; settings_slider_set(); break;
+    case SZ_SAVER: saver_enabled = !saver_enabled; saver_save(); break;
+    case SZ_SAVER_DELAY: saver_delay = z->arg; preference_save(PREF_SAVER_DELAY, saver_delay); break;
+    case SZ_SAVER_PREVIEW: saver_start(); break;
+    case SZ_DISPLAY: display_request(z->arg); break;
+    case SZ_CLOCK: clock_flags ^= z->arg; preference_save(PREF_CLOCK, clock_flags); break;
+    case SZ_MOUSE: dbl_click_speed = z->arg; preference_save(PREF_MOUSE, dbl_click_speed); break;
+    case SZ_RETRY: preferences_retry(); break;
+    default: break;
     }
-    for (int i = 0; i < DISPLAY_MODE_COUNT; ++i) {
-        if (hit(mouse_x, mouse_y, wx + 24 + i * 127, settings_display_y(wy) + 26, 119, 30)) {
-            display_request(i); return;
-        }
-    }
-    {
-        int bx, by;
-        settings_saver_box(wx, wy, wh, &bx, &by);
-        if (hit(mouse_x, mouse_y, bx, by, 300, 20)) {
-            saver_enabled = !saver_enabled;
-            saver_save();
-            dirty = 1;
-            return;
-        }
-    }
-    for (int i = 0; i < THEME_N; i++) {
-        int sx, sy;
-        settings_swatch_pos(wx, wy, i, &sx, &sy);
-        if (hit(mouse_x, mouse_y, sx, sy, SW_W, SW_H)) {
-            theme_set(i);
-            return;
-        }
-    }
+    dirty = 1;
 }
 
+/* Settings keys: Tab and the arrows move between pages, 1-4 pick a display
+ * mode on the Display page, R retries saving. */
+static void settings_key(void) {
+    if (key_sc == KEY_ESC) { close_front(); return; }
+    if (key_sc == KEY_TAB || key_sc == KEY_DOWN) settings_page = (settings_page + (shift_down ? SET_PAGES - 1 : 1)) % SET_PAGES;
+    else if (key_sc == KEY_UP) settings_page = (settings_page + SET_PAGES - 1) % SET_PAGES;
+    else if (key_char >= '1' && key_char <= '0' + DISPLAY_MODE_COUNT) { display_request(key_char - '1'); return; }
+    else if (key_char == 'r' || key_char == 'R') preferences_retry();
+    else if (key_sc == KEY_SPACE && settings_page == SET_DESKTOP) { saver_enabled = !saver_enabled; saver_save(); }
+    dirty = 1;
+}
 
-/* The BaseOS mark: a glossy accent tile with the "B" cut as two bowls. */
+/* ---------- Logo and boot screen ---------- */
+
 static void draw_logo(int x, int y, int size) {
-    int r = size / 4;
-    draw_round_rect(x - 1, y - 1, size + 2, size + 2, r + 1, ui_accent_dk);
-    draw_ramp_round(x, y, size, size, r, 1, PAL_ACCENT, PAL_ACCENT_N, 1 * 16, 11 * 16);
-    draw_hline(x + r, y + 1, size - 2 * r, PAL_ACCENT);
+    ui_icon_draw(UI_ICON_LOGO, x, y, size, TK_ACCENT, get_pixel(x, y));
+}
 
-    int m = size * 22 / 100;
-    int sw = size * 13 / 100;
-    if (sw < 2) sw = 2;
-    int gh = size - 2 * m;
-    int bx = x + m;
-    int by = y + m;
-    int bowl_w = size * 52 / 100;
-    int bowl_h = gh * 55 / 100;
-    int cut = sw;
-    uint8_t ink = COLOR_WHITE;
-    uint8_t hole = PAL_ACCENT + 7;
-    draw_round_rect(bx, by, bowl_w, bowl_h, bowl_h / 2, ink);
-    draw_round_rect(bx + sw, by + cut, bowl_w - sw - cut, bowl_h - 2 * cut, (bowl_h - 2 * cut) / 2, hole);
-    int by2 = by + gh - bowl_h - sw / 2;
-    int bowl_w2 = bowl_w + sw;
-    draw_round_rect(bx, by2, bowl_w2, bowl_h + sw / 2, (bowl_h + sw / 2) / 2, ink);
-    draw_round_rect(bx + sw, by2 + cut, bowl_w2 - sw - cut, bowl_h + sw / 2 - 2 * cut,
-                    (bowl_h + sw / 2 - 2 * cut) / 2, hole);
-    draw_rect(bx, by, sw, gh, ink);
+/* Esc in the input queue during the boot screen. Earlier typeahead is
+ * dropped with it. */
+static int boot_esc_pressed(void) {
+    drain_8042();
+    for (unsigned i = 0; i < device_input.count; i++) {
+        const InputSample *s = &device_input.queue[(device_input.head + i) % INPUT_CAPACITY];
+        if (s->kind == INPUT_KEY && s->scancode == 1 && (s->flags & INPUT_MAKE)) {
+            input_wake_serial = s->serial;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The boot screen borrows tokens for its dark colors; theme_apply puts the
+ * desktop palette back when it ends. Esc shows the kernel log. */
+static void boot_colors(void) {
+    int m = ui_style == UI_STYLE_MODERN;
+    gfx_set_color(TK_DESKTOP, m ? 0x1E2330 : 0x14213A);
+    gfx_set_color(TK_LINE, m ? 0x2E3546 : 0x2A3A57);
+    gfx_set_color(TK_TEXT2, m ? 0xA9B3C4 : 0x9DB0CC);
+    gfx_set_color(TK_LINE_STRONG, m ? 0x8E99AA : 0x6F86A8);
+    gfx_set_color(TK_47, 0x4A5568);
+    gfx_set_color(TK_46, 0xD8DDE6);
+    gfx_pal_commit();
+}
+
+static const char *boot_stage(int prog, int bw) {
+    if (prog < bw / 3) return "Loading drivers";
+    if (prog < bw * 2 / 3) return "Mounting volumes";
+    return "Starting window manager";
+}
+
+static void boot_messages(void) {
+    static char text[8192];
+    platform_log_copy(text, sizeof text);
+    draw_rect(0, 0, fb_w, fb_h, TK_DESKTOP);
+    /* Show the last lines that fit, newest at the bottom. */
+    int line_h = CHAR_H + 2, rows = (fb_h - 48) / line_h, n = kstrlen(text), lines = 0, at = n;
+    while (at > 0 && lines < rows) { at--; if (text[at] == '\n' && at != n - 1) lines++; }
+    if (at > 0) at++;
+    int y = 24;
+    char line[160];
+    while (at < n && y < fb_h - 24) {
+        int k = 0;
+        while (at < n && text[at] != '\n' && k < (int)sizeof line - 1) line[k++] = text[at++];
+        line[k] = 0;
+        if (at < n && text[at] == '\n') at++;
+        draw_string_clip(line, 24, y, TK_TEXT2, fb_w - 24);
+        y += line_h;
+    }
+    flip_vga();
 }
 
 static void boot_splash(void) {
-    draw_desktop();
+    boot_colors();
+    draw_rect(0, 0, fb_w, fb_h, TK_DESKTOP);
     int size = 128;
     int lx = (fb_w - size) / 2;
-    int ly = fb_h / 2 - size + 10;
+    int group = size + 20 + LOGO_FONT_H + 36 + 6 + 12 + CHAR_H;
+    int ly = (fb_h - group) / 2 - 40;
     draw_logo(lx, ly, size);
-    int ty = ly + size + 30;
+    int ty = ly + size + 20;
     int lw = logo_string_w("BaseOS");
-    draw_logo_string("BaseOS", (fb_w - lw) / 2 + 1, ty + 1, INK(31));
     draw_logo_string("BaseOS", (fb_w - lw) / 2, ty, COLOR_WHITE);
-    int sy = ty + LOGO_FONT_H + 8;
-    const char *sub = "a tiny operating system";
-    draw_string(sub, (fb_w - ui_string_w(sub)) / 2 + 1, sy + 1, INK(31));
-    draw_string(sub, (fb_w - ui_string_w(sub)) / 2, sy, INK(0));
-    int bw = 200;
-    int bx = (fb_w - bw) / 2;
-    int by = sy + CHAR_H + 36;
-    uint8_t track = INK(5);
-    draw_round_rect(bx, by, bw, 6, 3, track);
+    int bw = 240, bx = (fb_w - bw) / 2, by = ty + LOGO_FONT_H + 36;
+    int sy = by + 6 + 12;
+    int r = MODERN ? 3 : KIT_R_SQUARE;
+    kit_fill(bx, by, bw, 6, r, TK_LINE, 1);
+    int hy = fb_h - 32 - CHAR_H;
+    if (MODERN) {
+        int kw = kit_text_w("Esc", 0) + 12, tw = ui_string_w("show boot messages"), x0 = (fb_w - kw - 8 - tw) / 2;
+        kit_box(x0, hy - 2, kw, 20, 4, TK_DESKTOP, TK_47);
+        draw_string("Esc", x0 + 6, hy, TK_46);
+        draw_string("show boot messages", x0 + kw + 8, hy, TK_LINE_STRONG);
+    } else draw_string_centered("Press Esc to show boot messages", hy, TK_LINE_STRONG);
     flip_vga();
     kprint_debug("SPLASH\n");
 
     uint32_t start = frame_count;
-    int shown = 0;
+    int shown = -1, messages = 0;
+    const char *stage = 0;
     while (1) {
         poll_time();
         kernel_services_poll();
@@ -8365,19 +9086,27 @@ static void boot_splash(void) {
         if(update.flags)dirty=1;
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
-        drain_8042();
+        if (boot_esc_pressed() && !messages) { messages = 1; boot_messages(); }
         int prog = (int)((frame_count - start) * bw / 150);
         if (prog > bw)
             prog = bw;
-        if (prog - shown >= 8) {
+        if (!messages && prog - shown >= 8) {
             shown = prog;
-            draw_round_rect(bx, by, bw, 6, 3, track);
-            draw_round_rect(bx, by, prog, 6, 3, ui_accent);
+            kit_fill(bx, by, bw, 6, r, TK_LINE, 1);
+            if (prog > 0) kit_fill(bx, by, prog, 6, r, TK_ACCENT, 1);
             flip_rect(bx, by, bw, 6);
+            const char *s = boot_stage(prog, bw);
+            if (s != stage) {
+                stage = s;
+                draw_rect(0, sy, fb_w, CHAR_H + 2, TK_DESKTOP);
+                draw_string_centered(s, sy, TK_TEXT2);
+                flip_rect(0, sy, fb_w, CHAR_H + 2);
+            }
         }
-        if ((frame_count - start) >= 150)
+        if ((frame_count - start) >= (messages ? 450u : 150u))
             break;
     }
+    theme_apply();
     kprint_debug("DESKTOP\n");
     dirty = 1;
 }
@@ -8620,20 +9349,31 @@ int program_key(void){ return desktop_program_key(); }
 void program_present(void){cursor_restore();draw_ui();flip_vga();cursor_on=0;dirty=1;}
 static void render_scene(void) {
                 int isel = icon_sel;
-                if (fm_drag_active && icon_hit(ICON_DESK_TRASH, mouse_x, mouse_y))
-                    isel = ICON_DESK_TRASH;
+                if (fm_drag_active && icon_hit(DESK_TRASH, mouse_x, mouse_y))
+                    isel = DESK_TRASH;
                 draw_desktop();
                 draw_desktop_icons(isel);
                 draw_ui();
                 if (open_dlg)
                     draw_open_dialog();
                 draw_taskbar();
+                if (MODERN)
+                    draw_topbar();
+                draw_volume_popup();
                 draw_pulldown(open_menu, menu_sel);
                 draw_drag_ghost();
                 draw_rename_overlay();
                 draw_launcher();
+                draw_switcher();
                 draw_namedlg();
                 draw_edit_close();
+}
+/* The outline drawn instead of the window while it is dragged with
+ * "Show window contents" off. */
+static void draw_drag_outline(void) {
+    if (dragging_win < 0 || !drag_active) return;
+    Win *w = &wins[dragging_win];
+    draw_frame(drag_outline_x, drag_outline_y, w->w, w->h, TK_TEXT);
 }
 static void draw_display_confirmation(void) {
     if (!display_pending) return;
@@ -8685,6 +9425,13 @@ static int display_request(int mode) {
     display_refresh_layout();
     return 1;
 }
+static void display_revert(void);
+static void display_keep(void);
+static void display_click(void) {
+    int x = (fb_w - 420) / 2, y = (fb_h - 150) / 2;
+    if (hit(mouse_x, mouse_y, x + 34, y + 98, 164, 30)) display_keep();
+    else if (hit(mouse_x, mouse_y, x + 222, y + 98, 164, 30)) display_revert();
+}
 static void display_revert(void) {
     if (!display_pending) return;
     cursor_on = 0;
@@ -8712,12 +9459,14 @@ static void display_load(void) {
 
 static void render_desktop_frame(void) {
     int moving=dragging_win>=0 && dragging_win==win_front() && drag_active && !open_dlg && !name_dlg && !edit_close_dlg && !launcher_on && open_menu<0;
+    int outline=!(win_options&WINOPT_DRAG_CONTENTS);
     if(moving){
         if(drag_cached!=dragging_win){
-            render_skip=dragging_win;render_scene();render_skip=-1;
+            render_skip=outline?-1:dragging_win;render_scene();render_skip=-1;
             kmemcpy((void *)DRAG_CACHE,fb,fb_w*fb_h);drag_cached=dragging_win;
         }else kmemcpy(fb,(void *)DRAG_CACHE,fb_w*fb_h);
-        draw_one_window(&wins[dragging_win],0);context_set(win_front());
+        if(outline)draw_drag_outline();
+        else {draw_one_window(&wins[dragging_win],0);context_set(win_front());}
     }else {drag_cached=-1;render_scene();}
 }
 
@@ -8904,14 +9653,35 @@ static void desktop_pointer_motion(void) {
             int ady = dy < 0 ? -dy : dy;
             if (!drag_active && (adx > 3 || ady > 3))
                 drag_active = 1;
+            if (drag_active && dw->maximized) {
+                /* Pull a snapped window off its snap: restore it with the
+                 * pointer at the same relative spot of the title bar. */
+                int rel = dw->w > 0 ? (drag_from_x - dw->x) * dw->old_w / dw->w : 0;
+                win_arrange(dragging_win, 3);
+                drag_orig_x = drag_from_x - rel;
+                drag_orig_y = drag_from_y - TITLE_BAR / 2;
+            }
             if (drag_active) {
                 int nx = drag_orig_x + dx;
                 int ny = drag_orig_y + dy;
-                if (nx != dw->x || ny != dw->y) {
-                    dw->x = nx;
-                    dw->y = ny;
-                    win_clamp(dw);
-                    dirty = 1;
+                win_snap_edges(&nx, &ny, dw->w, dw->h);
+                if (win_options & WINOPT_DRAG_CONTENTS) {
+                    if (nx != dw->x || ny != dw->y) {
+                        dw->x = nx;
+                        dw->y = ny;
+                        win_clamp(dw);
+                        dirty = 1;
+                    }
+                } else {
+                    Win probe = *dw;
+                    probe.x = nx;
+                    probe.y = ny;
+                    win_clamp(&probe);
+                    if (probe.x != drag_outline_x || probe.y != drag_outline_y) {
+                        drag_outline_x = probe.x;
+                        drag_outline_y = probe.y;
+                        dirty = 1;
+                    }
                 }
             }
         }
@@ -8953,13 +9723,23 @@ static void desktop_pointer_motion(void) {
             if (spreadsheet_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
         }
         if (paint_dragging || paint_shape_drag) paint_drag_tick();
+        if (set_slider_drag) settings_drag();
 }
 static void desktop_pointer_release(void) {
             resizing_win=-1;
             if (dragging_win >= 0 && drag_active) {
-                if (mouse_x < 12) win_arrange(dragging_win,1);
-                else if (mouse_x > fb_w-12) win_arrange(dragging_win,2);
-                else if (mouse_y < MENUBAR_H+12) win_arrange(dragging_win,0);
+                Win *dw = &wins[dragging_win];
+                if (!(win_options & WINOPT_DRAG_CONTENTS)) {
+                    dw->x = drag_outline_x;
+                    dw->y = drag_outline_y;
+                    win_clamp(dw);
+                    dirty = 1;
+                }
+                if (win_options & WINOPT_SNAP) {
+                    if (mouse_x < 2) win_arrange(dragging_win,1);
+                    else if (mouse_x >= fb_w-2) win_arrange(dragging_win,2);
+                    else if (mouse_y <= (MODERN ? MENUBAR_H : 1)) win_arrange(dragging_win,0);
+                }
             }
             if (dragging_win >= 0 && !drag_active && !open_dlg &&
                 wins[dragging_win].kind == WK_FILES && fm_cwd != fs_root())
@@ -8969,6 +9749,7 @@ static void desktop_pointer_release(void) {
             if (fm_dragging)
                 files_drop();
             edit_dragging = 0;
+            if (set_slider_drag) settings_drag();
             writer_release();
             spreadsheet_release();
             paint_mouse_up();
@@ -8992,10 +9773,8 @@ static void desktop_pointer_sample(const InputSample *sample) {
     /* Final release coordinates belong to the gesture being released. */
     if(mouse_moved && (prior&INPUT_LEFT)) desktop_pointer_motion();
     mouse_left=!!(buttons&INPUT_LEFT); mouse_right=!!(buttons&INPUT_RIGHT);
-    if(open_menu>=0 && mouse_moved) {
-        int selected=menu_item_at(open_menu,mouse_x,mouse_y);
-        if(selected!=menu_sel){menu_sel=selected;dirty=1;}
-    }
+    if(open_menu>=0 && open_menu!=MENU_BAR && mouse_moved) menu_hover();
+    if(volume_on && mouse_left && mouse_moved) volume_drag();
     if((buttons&INPUT_RIGHT) && !(prior&INPUT_RIGHT))handle_rclick();
     if((buttons&INPUT_LEFT) && !(prior&INPUT_LEFT))handle_click();
     if(sample->epoch!=device_input.epoch)return;
@@ -9026,6 +9805,38 @@ static void desktop_input_reset(const InputSample *sample) {
     input_cursor_moved |= mouse_x!=sample->x || mouse_y!=sample->y;
     mouse_x=sample->x;mouse_y=sample->y;
     desktop_input_modifiers(sample->modifiers);
+}
+/* Alt tapped alone focuses the menu row; releasing Alt commits the
+ * window switcher. */
+static void desktop_modifier_sample(const InputSample *sample, int was_alt) {
+    if (sample->kind != INPUT_MODIFIER) return;
+    int alt_key = sample->scancode == 0x38;
+    if (alt_key && (sample->flags & INPUT_MAKE)) { if (!was_alt) alt_tap = 1; return; }
+    if (!alt_key) { alt_tap = 0; return; }
+    if (alt_down) return;
+    if (switcher_on) { switcher_commit(); alt_tap = 0; return; }
+    if (alt_tap && !mouse_left && !mouse_right && !name_dlg && !open_dlg && !launcher_on &&
+        !edit_close_dlg && !display_pending) {
+        if (open_menu >= 0) menu_close();
+        else menu_focus_row();
+    }
+    alt_tap = 0;
+}
+/* Super (E0 5B/5C): held for shortcuts, tapped alone for the launcher.
+ * Returns 1 when the sample was the Super key itself. */
+static int desktop_super_sample(const InputSample *sample) {
+    if (!(sample->flags & INPUT_EXTENDED) || (sample->scancode != 0x5b && sample->scancode != 0x5c)) return 0;
+    if (sample->flags & INPUT_MAKE) {
+        if (!super_down) super_used = 0;
+        super_down = 1;
+        return 1;
+    }
+    if (super_down && !super_used && !name_dlg && !open_dlg && !edit_close_dlg && !display_pending) {
+        if (launcher_on) launcher_close();
+        else { if (open_menu >= 0) menu_close(); launcher_open(); }
+    }
+    super_down = 0;
+    return 1;
 }
 static unsigned desktop_input_turn(void) {
     if(input_tail_pending) {
@@ -9082,12 +9893,16 @@ static unsigned desktop_input_turn(void) {
                 desktop_pointer_sample(&sample);
             }
         } else {
+            int was_alt=alt_down;
             desktop_input_modifiers(sample.modifiers);
-            if(sample.kind==INPUT_KEY && (sample.flags&INPUT_MAKE)) {
+            desktop_modifier_sample(&sample,was_alt);
+            if(sample.kind==INPUT_KEY && (sample.flags&INPUT_MAKE) && !desktop_super_sample(&sample)) {
                 key_sc=(uint8_t)sample.scancode;key_char=(char)sample.character;
+                key_ext=!!(sample.flags&INPUT_EXTENDED);
+                alt_tap=0;
                 handle_key();
                 if(desktop_input_scene_changed())desktop_input_cancel(sample.buttons);
-            }
+            } else if(sample.kind==INPUT_KEY) desktop_super_sample(&sample);
         }
         native_ui_refresh(sample.ticks,sample.buttons);
         input_routing=0;
@@ -9147,7 +9962,6 @@ static uint32_t last_blink, last_clock, last_session;
 /* Storage is mounted and input is not live yet. display_load may change the
  * video mode, so the kernel sizes the pointer after this returns. */
 static void desktop_prepare(void) {
-    icon_palette_install();
     kmemset(window_state, 0, sizeof(WindowState) * MAX_WIN);
     poll_time();
     trash_id = fs_find_child(fs_root(), "trash");
@@ -9216,7 +10030,7 @@ static int desktop_turn(void) {
     }
     if (!input_count && saver_enabled && !display_pending &&
         video_status()->state!=VIDEO_PLAYING && video_status()->state!=VIDEO_LOADING &&
-        frame_count-last_input_frame>SAVER_DELAY && !open_dlg && !name_dlg && !edit_close_dlg) {
+        frame_count-last_input_frame>70u*saver_delay_secs[saver_delay] && !open_dlg && !name_dlg && !edit_close_dlg) {
         saver_start();
     }
 

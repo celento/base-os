@@ -494,15 +494,24 @@ void kit_progress_busy(int x, int y, int w, int phase) {
     }
 }
 
+/* a * b / c for non-negative a, b <= c, without 64-bit division: the
+ * operands are scaled down until the product fits in 32 bits. */
+static int mul_div(int a, int b, int c) {
+    unsigned ua = (unsigned)a, ub = (unsigned)b, uc = (unsigned)c;
+    while (ub > 0xFFFFu || uc > 0xFFFFu) { ub >>= 1; uc >>= 1; }
+    if (!uc) return 0;
+    return (int)(ua * ub / uc);
+}
+
 void kit_scroll_thumb(int len, int pos, int visible, int total, int *at, int *size) {
     if (total <= visible || total <= 0) { *at = 0; *size = len; return; }
-    int s = (int)((long long)len * visible / total);
+    int s = mul_div(len, visible, total);
     if (s < 20) s = 20;
     if (s > len) s = len;
     int range = total - visible;
     if (pos < 0) pos = 0;
     if (pos > range) pos = range;
-    *at = (int)((long long)(len - s) * pos / range);
+    *at = mul_div(len - s, pos, range);
     *size = s;
 }
 

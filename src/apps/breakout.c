@@ -167,7 +167,7 @@ void bo_draw(int bx, int by) {
         }
     }
     draw_round_rect(bx + pad_x, by + BO_H - 30, PAD_W, PAD_H, 5, app_accent);
-    draw_hline(bx + pad_x + 5, by + BO_H - 29, PAD_W - 10, PAL_ACCENT + 2);
+    draw_hline(bx + pad_x + 5, by + BO_H - 29, PAD_W - 10, gfx_lighter(app_accent, 35));
     draw_round_rect(bx + (ball_x >> 4), by + (ball_y >> 4), BALL, BALL, BALL / 2, COLOR_WHITE);
 
     char buf[16];

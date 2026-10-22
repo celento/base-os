@@ -16,6 +16,7 @@
 #include "ui/app.h"
 #include "ui/app_icons.h"
 #include "ui/icon_draw.h"
+#include "ui/theme.h"
 #include "lib/provision.h"
 #include "apps/clock.h"
 #include "apps/game2048.h"
@@ -61,28 +62,12 @@ static const char *notice = "";
 static char *const seed_scratch = (char *)EDITOR_BASE;
 
 static void pocket_theme(void) {
-    /* Same light neutral ramp as the desktop, with a green accent, so shared
-     * app components draw with this shell's colors. */
-    uint32_t base = 0x14A37F, light = 0x9BE3CF, dark = 0x0B4F3E;
-    gfx_set_ramp(PAL_GRAY, 17, 0xF7F8FA, 0x8A9099);
-    gfx_set_ramp(PAL_GRAY + 16, 16, 0x8A9099, 0x14161B);
-    gfx_set_ramp(PAL_ACCENT, 9, light, base);
-    gfx_set_ramp(PAL_ACCENT + 8, 8, base, dark);
-    gfx_pal_commit();
-    accent = PAL_ACCENT + 8;
-    accent_dark = PAL_ACCENT + 12;
-    on_accent = COLOR_WHITE;
-    app_accent = accent;
-    app_accent_dk = accent_dark;
-    app_text = INK(29);
-    app_text_dim = INK(18);
-    app_chrome = INK(2);
-    app_chrome_dk = INK(6);
-    app_body = INK(1);
-    app_field = INK(0);
-    app_paper = INK(0);
-    app_border = INK(11);
-    app_on_accent = on_accent;
+    /* The shared theme with a green accent, so app components draw with
+     * this shell's colors. */
+    ui_theme_install(UI_STYLE_MODERN, 2, 0);
+    accent = TK_ACCENT;
+    accent_dark = TK_ACCENT_700;
+    on_accent = TK_ON_ACCENT;
 }
 
 static void pocket_layout(void) {
