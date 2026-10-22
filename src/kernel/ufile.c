@@ -39,6 +39,7 @@ typedef struct UFile {
     struct FatOpen *fat;       /* files: the node, shared by every open of it */
     FatNode *fat_directory;    /* directories: this open's own copy */
     uint32_t fat_cursor;       /* directories: where readdir goes on */
+    char *fat_path;            /* directories: the absolute path it was opened by */
     struct UFile *next_orphan;
 } UFile;
 
@@ -179,6 +180,7 @@ static void fat_drop(FatOpen *open) {
 static void free_file(UFile *file) {
     fat_drop(file->fat);
     kfree(file->fat_directory);
+    kfree(file->fat_path);
     kfree(file->buffer);
     kfree(file);
 }
@@ -530,6 +532,12 @@ static int fat_open_path(Uproc *process, int volume, const char *rest, int flags
     file->volume = volume;
     if (directory) {
         file->fat_directory = node;
+        const char *mount = fatvol_name(volume);
+        unsigned m = (unsigned)kstrlen(mount), r = (unsigned)kstrlen(rest);
+        if (!(file->fat_path = kmalloc(m + r + 2))) { free_file(file); return -BOS_ENOMEM; }
+        file->fat_path[0] = '/';
+        kmemcpy(file->fat_path + 1, mount, (int)m);
+        kmemcpy(file->fat_path + 1 + m, rest, (int)r + 1);
     } else {
         file->fat = fat_hold(volume, node);
         kfree(node);
@@ -1157,6 +1165,19 @@ int ufile_chdir(Uproc *process, uint32_t path) {
     return 0;
 }
 
+int ufile_fd_path(Uproc *process, int fd, uint32_t buffer, uint32_t length) {
+    UFile *file = lookup(&process->files, fd);
+    if (!file) return -BOS_EBADF;
+    char path[FS_PATH_LEN];
+    if (file->kind == UFILE_FAT_DIRECTORY) kmemcpy(path, file->fat_path, kstrlen(file->fat_path) + 1);
+    else if (file->kind == UFILE_DIRECTORY && fs_valid(file->node)) fs_path(file->node, path, sizeof path);
+    else return -BOS_ENOTDIR;
+    uint32_t size = (uint32_t)kstrlen(path) + 1;
+    if (size > length) return -BOS_ERANGE;
+    int result = uproc_copy_out(process, buffer, path, size);
+    return result ? result : (int)size;
+}
+
 int ufile_getcwd(Uproc *process, uint32_t buffer, uint32_t length) {
     char path[FS_PATH_LEN];
     if (process->files.cwd_path) kmemcpy(path, process->files.cwd_path, kstrlen(process->files.cwd_path) + 1);
@@ -1215,4 +1236,40 @@ int ufile_pipe(Uproc *process, uint32_t fds) {
         release(writer, 1);
     }
     return result;
+}
+
+int ufile_load(const char *path, void **data, uint32_t *size) {
+    const char *rest;
+    int volume = fatvol_route(path, &rest);
+    char *buffer;
+    uint32_t length;
+    if (volume >= 0) {
+        FatVolume *v = fatvol_get(volume);
+        FatNode node;
+        int result = fat_resolve(v, rest, &node);
+        if (result) return fat_errno(result);
+        if (node.attributes & FAT_ATTR_DIRECTORY) return -BOS_EISDIR;
+        length = node.size;
+        if (!(buffer = kmalloc(length ? length : 1))) return -BOS_ENOMEM;
+        for (uint32_t done = 0; done < length;) {
+            int got = fat_read(v, &node, done, buffer + done, length - done);
+            if (got <= 0) { kfree(buffer); return got < 0 ? fat_errno(got) : -BOS_EIO; }
+            done += (uint32_t)got;
+        }
+    } else {
+        int node = fs_resolve(fs_root(), path);
+        if (!fs_valid(node)) return -BOS_ENOENT;
+        if (fs_is_dir(node)) return -BOS_EISDIR;
+        length = (uint32_t)fs_size(node);
+        if (!(buffer = kmalloc(length ? length : 1))) return -BOS_ENOMEM;
+        for (uint32_t done = 0; done < length;) {
+            uint32_t n = length - done < DIRECT_PIECE ? length - done : DIRECT_PIECE;
+            int got = fs_read_at(node, done, buffer + done, n);
+            if (got <= 0) { kfree(buffer); return -BOS_EIO; }
+            done += (uint32_t)got;
+        }
+    }
+    *data = buffer;
+    *size = length;
+    return 0;
 }

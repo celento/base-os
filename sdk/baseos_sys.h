@@ -60,6 +60,7 @@ enum {
     BOS_SYS_GETCWD = 34,      /* (buffer, length) -> length including the NUL */
     BOS_SYS_FSYNC = 35,       /* (fd): write a file's contents back to the volume */
     BOS_SYS_FTRUNCATE = 36,   /* (fd, length) */
+    BOS_SYS_FD_PATH = 37,     /* (fd, buffer, length) -> length including the NUL: a directory's path */
     BOS_SYS_LIMIT
 };
 

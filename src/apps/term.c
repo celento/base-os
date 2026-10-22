@@ -7,6 +7,7 @@
 #include "kernel/platform.h"
 #include "apps/app_storage.h"
 #include "kernel/uproc.h"
+#include "kernel/kheap.h"
 typedef TerminalText Terminal;
 static Terminal *terms=((AppStorage *)TERM_MEMORY)->terminals;
 static int selected;
@@ -221,8 +222,11 @@ static int elf_start(int slot,int file,const char *argument){
     if(elf_pids[slot]||term_task_running(slot)){push("Stop this terminal's program first.");return TERM_COMMAND_REPORTED;}
     char path[FS_PATH_LEN];fs_path(file,path,sizeof path);
     const char *argv[2]={path,argument};
-    uint32_t pid;
-    if(uproc_spawn(fs_data(file),(uint32_t)fs_size(file),argv,argument?2u:1u,(uint32_t)slot+1,&pid)){
+    uint32_t pid,size;void *image;
+    /* Loaded through ufile, so programs larger than a whole-file load start too. */
+    int result=ufile_load(path,&image,&size);
+    if(!result){result=uproc_spawn(image,size,argv,argument?2u:1u,(uint32_t)slot+1,&pid);kfree(image);}
+    if(result){
         push("Cannot start: not a valid BaseOS ELF program, or memory is short.");return TERM_COMMAND_REPORTED;
     }
     elf_pids[slot]=pid;elf_line_length[slot]=0;terms[slot].scroll=0;return 0;

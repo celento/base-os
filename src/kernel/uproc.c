@@ -294,6 +294,8 @@ static int syscall(Uproc *process, UserFrame *f) {
         return ufile_fsync(process, (int)a);
     case BOS_SYS_FTRUNCATE:
         return ufile_truncate(process, (int)a, b);
+    case BOS_SYS_FD_PATH:
+        return ufile_fd_path(process, (int)a, b, c);
     case BOS_SYS_VM_MAP: {
         (void)e;
         (void)g;
