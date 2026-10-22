@@ -105,12 +105,17 @@ style has its own drawing of every icon.
   a search field on the right.
 - Sidebars list Places and Devices with 16px glyphs; the current place uses
   `TK_ACCENT_100`.
-- File lists have a details view (Name, Size, Modified with a sort arrow)
-  and an icon grid; dates read "Today 14:30", "Yesterday" or "18 Oct 2026".
+- File lists have a details view (Name, Size, Kind, Modified with a sort
+  arrow; narrow lists drop Kind, then Size, then Modified) and an icon grid;
+  dates read "Today 14:30", "Yesterday" or "18 Oct 2026". Kind is brief
+  ("Folder", "Text", "C source", "Image"); Properties gives it in full.
+- The icon grid and the launcher draw a last row that only partly fits,
+  cut at the bottom of the grid, so the view shows there is more to scroll.
+- Unsaved documents show a dot after the title, also on their taskbar or
+  dock button.
 - Dialogs: Open and Save As share the Places sidebar, path bar and detail
   list. Alerts have a 32px icon, a bold question and one line of detail, with
   the buttons on the content (Classic) or on a footer band (Modern).
-- Unsaved documents show a dot after the title.
 - Terminal is dark in both styles, with colored prompts, errors and folders.
 
 ## Pocket
