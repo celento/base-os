@@ -1,5 +1,6 @@
 #include "ui/app.h"
 #include "apps/game2048.h"
+#include "apps/pane_chrome.h"
 
 static int board[4][4];
 static int score;
@@ -144,57 +145,87 @@ static void tile_style(int v, uint8_t *fill, uint8_t *ink) {
     }
 }
 
-void g2048_draw(int bx, int by) {
+/* Layout: a toolbar with the score, best and New game, the board, and a
+ * status bar. Drawing and clicks share g2048_layout. */
+typedef struct { PaneRect again, board, card, card_button; } G2048Layout;
+
+static void g2048_layout(int bx, int by, int bw, int bh, G2048Layout *L) {
+    int body = pane_body_y(by), bottom = pane_status_y(by, bh);
+    int w = pane_tool_w("New game");
+    L->again = (PaneRect){bx + bw - pane_pad() - w, pane_ctl_y(by), w, ui_theme.control_h};
+    L->board = (PaneRect){bx + (bw - G2048_BOARD) / 2, body + (bottom - body - G2048_BOARD) / 2,
+                          G2048_BOARD, G2048_BOARD};
+    pane_card_layout(L->board.x, L->board.y, L->board.w, L->board.h, &L->card, &L->card_button);
+}
+
+int g2048_client_h(void) {
+    return pane_body_y(0) + 2 * G2048_PAD + G2048_BOARD + pane_status_h();
+}
+
+int g2048_click(int bx, int by, int bw, int bh, int mx, int my) {
+    G2048Layout L;
+    g2048_layout(bx, by, bw, bh, &L);
+    if (pane_hit(mx, my, &L.again) || (over && pane_hit(mx, my, &L.card_button))) {
+        g2048_new(rnd + (unsigned)(mx * 131 + my));
+        return 1;
+    }
+    return 0;
+}
+
+void g2048_draw(int bx, int by, int bw, int bh, PaneHot hot) {
     if (!started)
         g2048_new(7);
-    draw_rect(bx, by, G2048_W, G2048_H, app_body);
-    char buf[16];
-    draw_logo_string("2048", bx + G2048_GAP, by + 6, app_text);
-    int pill_w = 92;
-    int px = bx + G2048_W - G2048_GAP - pill_w;
-    draw_round_rect(px, by + 8, pill_w, 40, 5, app_chrome);
-    draw_string("SCORE", px + (pill_w - ui_string_w("SCORE")) / 2, by + 8, app_text_dim);
-    fmt_uint(buf, (unsigned)score);
-    draw_string_bold(buf, px + (pill_w - uib_string_w(buf)) / 2, by + 8 + 18, app_text);
-    px -= pill_w + 8;
-    draw_round_rect(px, by + 8, pill_w, 40, 5, app_chrome);
-    draw_string("BEST", px + (pill_w - ui_string_w("BEST")) / 2, by + 8, app_text_dim);
-    fmt_uint(buf, (unsigned)best);
-    draw_string_bold(buf, px + (pill_w - uib_string_w(buf)) / 2, by + 8 + 18, app_text);
+    int modern = PANE_MODERN;
+    draw_rect(bx, by, bw, bh, ui_theme.content);
+    G2048Layout L;
+    g2048_layout(bx, by, bw, bh, &L);
+    char buf[16], text[40];
+    /* Toolbar */
+    pane_toolbar(bx, by, bw);
+    int x = bx + pane_pad() + 4;
+    pane_num(buf, (unsigned)score);
+    x += pane_inline_stat(x, L.again.y, L.again.h, "Score", buf) + 20;
+    pane_num(buf, (unsigned)best);
+    pane_inline_stat(x, L.again.y, L.again.h, "Best", buf);
+    pane_tool(&L.again, ICON_REFRESH, "New game", over ? KB_PRIMARY : KB_DEFAULT,
+              pane_hot(hot, L.again.x, L.again.y, L.again.w, L.again.h));
 
-    int gx = bx;
-    int gy = by + G2048_HEAD;
-    draw_round_rect(gx, gy, G2048_W, G2048_H - G2048_HEAD, 8, app_field);
+    /* Board */
+    int gx = L.board.x, gy = L.board.y, top = 0;
+    kit_box(gx, gy, G2048_BOARD, G2048_BOARD, modern ? 10 : KIT_R_SQUARE, TK_SUNKEN,
+            modern ? 0 : TK_LINE);
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
             int x = gx + G2048_GAP + c * (G2048_CELL + G2048_GAP);
             int y = gy + G2048_GAP + r * (G2048_CELL + G2048_GAP);
             int v = board[r][c];
+            if (v > top) top = v;
             if (!v) {
-                draw_round_rect(x, y, G2048_CELL, G2048_CELL, 6, app_chrome_dk);
+                kit_fill(x, y, G2048_CELL, G2048_CELL, 6, TK_HOVER, 1);
                 continue;
             }
             uint8_t fill, ink;
             tile_style(v, &fill, &ink);
-            draw_round_rect(x, y, G2048_CELL, G2048_CELL, 6, fill);
+            kit_fill(x, y, G2048_CELL, G2048_CELL, 6, fill, 1);
             fmt_uint(buf, (unsigned)v);
             if (v < 1000) {
                 int tw = logo_string_w(buf);
                 draw_logo_string(buf, x + (G2048_CELL - tw) / 2, y + (G2048_CELL - LOGO_FONT_H) / 2, ink);
             } else {
-                int tw = uib_string_w(buf);
-                draw_string_bold(buf, x + (G2048_CELL - tw) / 2, y + (G2048_CELL - UI_FONT_H) / 2, ink);
+                kit_text_center(buf, x, y + (G2048_CELL - UI_FONT_H) / 2, G2048_CELL, ink, 1);
             }
         }
     }
     if (over) {
-        shade_rect(gx, gy, G2048_W, G2048_H - G2048_HEAD, 1);
-        int pw = 220, ph = 70;
-        int ox = bx + (G2048_W - pw) / 2;
-        int oy = gy + (G2048_H - G2048_HEAD - ph) / 2;
-        draw_round_rect(ox, oy, pw, ph, 8, app_border);
-        draw_round_rect(ox + 1, oy + 1, pw - 2, ph - 2, 7, app_chrome);
-        draw_string_bold("Game over", ox + (pw - uib_string_w("Game over")) / 2, oy + 12, app_text);
-        draw_string("Space for a new game", ox + (pw - ui_string_w("Space for a new game")) / 2, oy + 36, app_text_dim);
+        shade_rect(gx, gy, G2048_BOARD, G2048_BOARD, 1);
+        pane_num(buf, (unsigned)score);
+        pane_join(text, sizeof text, "No moves left. Score ", buf, ".");
+        pane_card(&L.card, &L.card_button, "Game over", text, "New game",
+                  pane_hot(hot, L.card_button.x, L.card_button.y, L.card_button.w, L.card_button.h));
     }
+    /* Status bar */
+    pane_num(buf, (unsigned)top);
+    pane_join(text, sizeof text, "Highest tile ", buf, 0);
+    pane_statusbar(bx, by, bw, bh, over ? "Space or Enter starts a new game" : "Arrow keys slide the tiles",
+                   TK_TEXT2, text, TK_TEXT2);
 }

@@ -4416,8 +4416,8 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *h = snake_window_h();
         break;
     case WK_WORDLE:
-        *w = WORDLE_W;
-        *h = WORDLE_WIN_H;
+        *w = WORDLE_W + 2;
+        *h = TITLE_H + wordle_client_h() + 1;
         break;
     case WK_TERM:
         *w = TERM_WIN_W;
@@ -4440,12 +4440,12 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *h = TITLE_H + mines_client_h() + 1;
         break;
     case WK_2048:
-        *w = G2048_W;
-        *h = G2048_H + TITLE_H;
+        *w = G2048_W + 2;
+        *h = TITLE_H + g2048_client_h() + 1;
         break;
     case WK_BREAKOUT:
-        *w = BO_W;
-        *h = BO_H + TITLE_H;
+        *w = BO_CLIENT_W + 2;
+        *h = TITLE_H + bo_client_h() + 1;
         break;
     case WK_SYSMON:
         *w = SYSMON_W;
@@ -4458,8 +4458,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     }
     /* These sizes predate the window menu strip; give back its height so the
      * content keeps its original bottom margin. */
-    if (kind == WK_CALC ||
-        kind == WK_WORDLE || kind == WK_TERM || kind == WK_PAINT)
+    if (kind == WK_CALC || kind == WK_TERM || kind == WK_PAINT)
         *h += WMENU_H;
     int maxh = fb_h - MENUBAR_H - TASKBAR_H - 8;
     if (*w > fb_w - 24)
@@ -6280,7 +6279,7 @@ static void draw_window_contents(Win *w, int inactive) {
         draw_snake(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_WORDLE) {
         gui_draw_window(wx, wy, ww, wh, "Wordle", 0, fl);
-        wordle_draw(wx, wy + TITLE_H);
+        wordle_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_TERM) {
         draw_term(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_NATIVE) {
@@ -6298,10 +6297,10 @@ static void draw_window_contents(Win *w, int inactive) {
         mines_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_2048) {
         gui_draw_window(wx, wy, ww, wh, "2048", 0, fl);
-        g2048_draw(wx, wy + TITLE_H + 1);
+        g2048_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_BREAKOUT) {
         gui_draw_window(wx, wy, ww, wh, "Breakout", 0, fl);
-        bo_draw(wx, wy + TITLE_H + 1);
+        bo_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_SPREADSHEET) {
         gui_draw_window(wx,wy,ww,wh,spreadsheet_title(),0,fl);
         spreadsheet_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
@@ -7091,6 +7090,12 @@ static void menu_activate(int m, int item) {
                 snake_reset();
             } else if (front_kind() == WK_WORDLE) {
                 wordle_new_game(frame_count);
+            } else if (front_kind() == WK_MINES) {
+                mines_new(frame_count);
+            } else if (front_kind() == WK_2048) {
+                g2048_new(frame_count);
+            } else if (front_kind() == WK_BREAKOUT) {
+                bo_new();
             } else if (front_kind() == WK_CAL) {
                 cal_new();dirty=1;
             } else if (front_kind() == WK_TODO) {
@@ -8955,7 +8960,7 @@ static void window_body_click(int i) {
     else if (w->kind == WK_SNAKE)
         handle_snake_click(w->x, w->y, w->w, w->h);
     else if (w->kind == WK_WORDLE) {
-        if (wordle_click(w->x, w->y + TITLE_H, mouse_x, mouse_y)) dirty = 1;
+        if (wordle_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y, frame_count)) dirty = 1;
     } else if (w->kind == WK_VIEW) {
         if (image_viewer_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_BROWSER) {
@@ -8974,9 +8979,10 @@ static void window_body_click(int i) {
         if (cal_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_MINES) {
         if (mines_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y, shift_down)) dirty = 1;
+    } else if (w->kind == WK_2048) {
+        if (g2048_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_BREAKOUT) {
-        bo_click();
-        dirty = 1;
+        if (bo_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_SYSMON) {
         SysInfo si;
         sysinfo_fill(&si);

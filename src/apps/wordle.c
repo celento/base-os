@@ -1,29 +1,24 @@
+/* Wordle: six guesses at a five-letter word, an on-screen keyboard that
+ * shows what each letter scored, and a result card when the game ends. */
 #include "apps/wordle.h"
 #include "kernel/font.h"
 
 #include "ui/app.h"
-
-#define WL_INK  app_text
-#define WL_GRAY   2
-#define WL_YELLOW 6
-#define WL_GREEN  7
-#define WL_WHITE  15
+#include "apps/pane_chrome.h"
 
 #define WL_ROWS 6
 #define WL_COLS 5
 
-#define CELL 44
-#define CGAP 6
+#define CELL 38
+#define CGAP 5
 #define GRID_W (WL_COLS * CELL + (WL_COLS - 1) * CGAP)
-#define GRID_X ((WORDLE_W - GRID_W) / 2)
-#define GRID_Y 16
 #define GRID_H (WL_ROWS * CELL + (WL_ROWS - 1) * CGAP)
 
-#define CAP_Y (GRID_Y + GRID_H + 8)
-
-#define KEY_S 28
+#define KEY_W 32
+#define KEY_H 30
+#define KEY_WIDE 50   /* Enter and Backspace */
 #define KGAP 4
-#define KB_Y 368
+#define KB_GAP 14     /* between the grid and the keyboard */
 
 /* mark: 0 unplayed, 1 miss, 2 present, 3 exact */
 #define MK_NONE 0
@@ -62,13 +57,6 @@ static int row_len(int r) {
     while (kb_rows[r][n])
         n++;
     return n;
-}
-
-static void key_rect(int bx, int by, int r, int c, int *x, int *y) {
-    int n = row_len(r);
-    int w = n * KEY_S + (n - 1) * KGAP;
-    *x = bx + (WORDLE_W - w) / 2 + c * (KEY_S + KGAP);
-    *y = by + KB_Y + r * (KEY_S + KGAP);
 }
 
 static void set_caption(const char *s) {
@@ -180,97 +168,168 @@ int wordle_key(int action, char ch) {
     return cur_col != before;
 }
 
-int wordle_click(int bx, int by, int mx, int my) {
+/* Layout: a toolbar with the guess count and New game, the grid, the
+ * keyboard (or the result card once the game ends), and a status bar.
+ * Drawing and clicks share wordle_layout and key_rect. */
+typedef struct { PaneRect again, card, card_button; int gx, gy, ky; int cx, cw; } WordleLayout;
+
+static void wordle_layout(int bx, int by, int bw, int bh, WordleLayout *L) {
+    int body = pane_body_y(by), bottom = pane_status_y(by, bh);
+    int content = GRID_H + KB_GAP + 3 * KEY_H + 2 * KGAP;
+    int w = pane_tool_w("New game");
+    L->again = (PaneRect){bx + bw - pane_pad() - w, pane_ctl_y(by), w, ui_theme.control_h};
+    L->cx = bx; L->cw = bw;
+    L->gx = bx + (bw - GRID_W) / 2;
+    L->gy = body + (bottom - body - content) / 2;
+    L->ky = L->gy + GRID_H + KB_GAP;
+    int top = L->gy + GRID_H + 4;
+    pane_card_layout(bx, top, bw, bottom - top, &L->card, &L->card_button);
+}
+
+int wordle_client_h(void) {
+    return pane_body_y(0) + WORDLE_BODY_H + pane_status_h();
+}
+
+static int key_w(char k) { return k == '\n' || k == '\b' ? KEY_WIDE : KEY_W; }
+
+static void key_rect(const WordleLayout *L, int r, int c, PaneRect *out) {
+    int n = row_len(r), w = (n - 1) * KGAP, x;
+    for (int i = 0; i < n; i++) w += key_w(kb_rows[r][i]);
+    x = L->cx + (L->cw - w) / 2;
+    for (int i = 0; i < c; i++) x += key_w(kb_rows[r][i]) + KGAP;
+    *out = (PaneRect){x, L->ky + r * (KEY_H + KGAP), key_w(kb_rows[r][c]), KEY_H};
+}
+
+int wordle_click(int bx, int by, int bw, int bh, int mx, int my, unsigned int seed) {
+    WordleLayout L;
+    wordle_layout(bx, by, bw, bh, &L);
+    if (pane_hit(mx, my, &L.again) || (state != 0 && pane_hit(mx, my, &L.card_button))) {
+        wordle_new_game(seed);
+        return 1;
+    }
+    if (state != 0)
+        return 0;
     for (int r = 0; r < 3; r++) {
         int n = row_len(r);
         for (int c = 0; c < n; c++) {
-            int x, y;
-            key_rect(bx, by, r, c, &x, &y);
-            if (!hit(mx, my, x, y, KEY_S, KEY_S))
+            PaneRect k;
+            key_rect(&L, r, c, &k);
+            if (!pane_hit(mx, my, &k))
                 continue;
-            char k = kb_rows[r][c];
-            if (k == '\n')
+            char ch = kb_rows[r][c];
+            if (ch == '\n')
                 return wordle_key(WORDLE_ACT_ENTER, 0);
-            if (k == '\b')
+            if (ch == '\b')
                 return wordle_key(WORDLE_ACT_DELETE, 0);
-            return wordle_key(WORDLE_ACT_NONE, k);
+            return wordle_key(WORDLE_ACT_NONE, ch);
         }
     }
     return 0;
 }
 
-static void draw_glyph(char ch, int x, int y, int w, int h, unsigned char color) {
-    char s[2];
-    s[0] = ch;
-    s[1] = 0;
-    draw_string_bold(s, x + (w - uib_string_w(s)) / 2, y + (h - UI_FONT_H) / 2, color);
+/* Tile colors are playfield art: exact cube colors keep their meaning in
+ * every theme. */
+static uint8_t mark_fill(int m) {
+    return m == MK_EXACT ? gfx_rgb(0x40, 0xC0, 0x80) : m == MK_PRESENT ? gfx_rgb(0xFF, 0xC0, 0x40) : gfx_gray(0x50);
+}
+static uint8_t mark_ink(int m) { return m == MK_MISS ? COLOR_WHITE : gfx_gray(0x10); }
+
+/* The best mark a letter has earned so far, for the keyboard. */
+static int letter_mark(char ch) {
+    int best = MK_NONE;
+    for (int r = 0; r < WL_ROWS; r++)
+        for (int c = 0; c < WL_COLS; c++)
+            if (grid[r][c] == ch && mark[r][c] > best) best = mark[r][c];
+    return best;
 }
 
-static void draw_key_enter(int x, int y) {
-    int cx = x + KEY_S / 2;
-    int cy = y + KEY_S / 2;
-    draw_rect(cx + 5, cy - 7, 3, 12, WL_INK);
-    draw_rect(cx - 3, cy + 2, 11, 3, WL_INK);
+static void draw_key_enter(int cx, int cy, uint8_t ink) {
+    draw_rect(cx + 5, cy - 7, 3, 12, ink);
+    draw_rect(cx - 3, cy + 2, 11, 3, ink);
     for (int k = 0; k < 6; k++)
-        draw_rect(cx - 6 + k, cy + 3 - k, 1, 2 * k + 1, WL_INK);
+        draw_rect(cx - 6 + k, cy + 3 - k, 1, 2 * k + 1, ink);
 }
 
-static void draw_key_bksp(int x, int y) {
-    int cx = x + KEY_S / 2;
-    int cy = y + KEY_S / 2;
+static void draw_key_bksp(int cx, int cy, uint8_t ink) {
     for (int k = 0; k < 6; k++)
-        draw_rect(cx - 7 + k, cy - k, 1, 2 * k + 1, WL_INK);
-    draw_rect(cx - 1, cy - 1, 8, 3, WL_INK);
+        draw_rect(cx - 7 + k, cy - k, 1, 2 * k + 1, ink);
+    draw_rect(cx - 1, cy - 1, 8, 3, ink);
 }
 
-void wordle_draw(int bx, int by) {
-    int gx = bx + GRID_X;
-    int gy = by + GRID_Y;
+void wordle_draw(int bx, int by, int bw, int bh, PaneHot hot) {
+    int modern = PANE_MODERN, r6 = modern ? 6 : KIT_R_SQUARE;
+    draw_rect(bx, by, bw, bh, ui_theme.content);
+    WordleLayout L;
+    wordle_layout(bx, by, bw, bh, &L);
+    char buf[12], text[40];
+    /* Toolbar */
+    pane_toolbar(bx, by, bw);
+    int guess = state == 0 ? cur_row + 1 : state == 1 ? cur_row + 1 : WL_ROWS;
+    pane_num(buf, (unsigned)guess);
+    pane_join(text, sizeof text, buf, " of ", "6");
+    pane_inline_stat(bx + pane_pad() + 4, L.again.y, L.again.h, "Guess", text);
+    pane_tool(&L.again, ICON_REFRESH, "New game", state ? KB_PRIMARY : KB_DEFAULT,
+              pane_hot(hot, L.again.x, L.again.y, L.again.w, L.again.h));
 
+    /* Grid */
     for (int r = 0; r < WL_ROWS; r++) {
         for (int c = 0; c < WL_COLS; c++) {
-            int x = gx + c * (CELL + CGAP);
-            int y = gy + r * (CELL + CGAP);
-            unsigned char fill = app_field;
-            unsigned char ink = app_text;
-            unsigned char edge = grid[r][c] ? app_text_dim : app_border;
-            /* Exact cube colors keep the meaning identical in every theme. */
-            if (mark[r][c] == MK_EXACT)
-                fill = gfx_rgb(0x40, 0xC0, 0x80);
-            else if (mark[r][c] == MK_PRESENT)
-                fill = gfx_rgb(0xFF, 0xC0, 0x40);
-            else if (mark[r][c] == MK_MISS)
-                fill = gfx_gray(0x50);
-            if (mark[r][c] != MK_NONE) {
-                ink = mark[r][c] == MK_MISS ? WL_WHITE : gfx_gray(0x10);
-                edge = fill;
+            int x = L.gx + c * (CELL + CGAP);
+            int y = L.gy + r * (CELL + CGAP);
+            int m = mark[r][c];
+            char s[2] = {grid[r][c], 0};
+            if (m != MK_NONE) {
+                kit_fill(x, y, CELL, CELL, r6, mark_fill(m), 1);
+                kit_text_center(s, x, y + (CELL - UI_FONT_H) / 2, CELL, mark_ink(m), 1);
+            } else {
+                int current = state == 0 && r == cur_row;
+                uint8_t edge = grid[r][c] ? TK_LINE_STRONG : current ? TK_LINE : TK_LINE_SUBTLE;
+                kit_box(x, y, CELL, CELL, r6, TK_RAISED, edge);
+                if (grid[r][c]) kit_text_center(s, x, y + (CELL - UI_FONT_H) / 2, CELL, TK_TEXT, 1);
+                else if (current && c == cur_col) kit_fill(x + CELL / 2 - 6, y + CELL - 9, 12, 2, KIT_R_SQUARE, TK_ACCENT, 0);
             }
-            draw_round_rect(x, y, CELL, CELL, 5, edge);
-            draw_round_rect(x + 1, y + 1, CELL - 2, CELL - 2, 4, fill);
-            if (grid[r][c])
-                draw_glyph(grid[r][c], x, y, CELL, CELL, ink);
         }
     }
 
-    if (caption[0]) {
-        int tw = ui_string_w(caption);
-        draw_string(caption, bx + (WORDLE_W - tw) / 2, by + CAP_Y, app_text_dim);
-    }
-
-    for (int r = 0; r < 3; r++) {
-        int n = row_len(r);
-        for (int c = 0; c < n; c++) {
-            int x, y;
-            key_rect(bx, by, r, c, &x, &y);
-            draw_round_rect(x, y, KEY_S, KEY_S, 4, app_border);
-            draw_round_rect(x + 1, y + 1, KEY_S - 2, KEY_S - 2, 3, app_chrome_dk);
-            char k = kb_rows[r][c];
-            if (k == '\n')
-                draw_key_enter(x, y);
-            else if (k == '\b')
-                draw_key_bksp(x, y);
-            else
-                draw_glyph(k, x, y, KEY_S, KEY_S, app_text);
+    if (state == 0) {
+        /* Keyboard: kit keys tinted by what each letter scored. */
+        for (int r = 0; r < 3; r++) {
+            int n = row_len(r);
+            for (int c = 0; c < n; c++) {
+                PaneRect k;
+                key_rect(&L, r, c, &k);
+                char ch = kb_rows[r][c];
+                int m = ch >= 'A' && ch <= 'Z' ? letter_mark(ch) : MK_NONE;
+                int st = pane_hot(hot, k.x, k.y, k.w, k.h);
+                uint8_t ink = TK_TEXT;
+                if (m == MK_NONE) {
+                    uint8_t fill = st & KIT_PRESSED ? TK_LINE : st & KIT_HOVER ? TK_HOVER : modern ? TK_SUNKEN : TK_BASE;
+                    kit_box(k.x, k.y, k.w, k.h, modern ? 6 : KIT_R_SQUARE, fill, modern ? 0 : TK_LINE);
+                } else {
+                    kit_fill(k.x, k.y, k.w, k.h, modern ? 6 : KIT_R_SQUARE, mark_fill(m), 1);
+                    ink = mark_ink(m);
+                }
+                if (ch == '\n')
+                    draw_key_enter(k.x + k.w / 2, k.y + k.h / 2, ink);
+                else if (ch == '\b')
+                    draw_key_bksp(k.x + k.w / 2, k.y + k.h / 2, ink);
+                else {
+                    char s[2] = {ch, 0};
+                    kit_text_center(s, k.x, kit_ty(k.y, k.h), k.w, ink, 1);
+                }
+            }
         }
+    } else {
+        if (state == 1) {
+            pane_num(buf, (unsigned)(cur_row + 1));
+            pane_join(text, sizeof text, "Solved in ", buf, cur_row ? " guesses." : " guess.");
+        }
+        pane_card(&L.card, &L.card_button, state == 1 ? "You got it!" : "Out of guesses",
+                  state == 1 ? text : caption, "New game",
+                  pane_hot(hot, L.card_button.x, L.card_button.y, L.card_button.w, L.card_button.h));
     }
+    pane_statusbar(bx, by, bw, bh,
+                   state ? "Ctrl+N or New game starts again" : "Type letters; Enter checks, Backspace deletes",
+                   TK_TEXT2, state == 1 ? "Solved" : state == 2 ? "Not solved" : 0,
+                   state == 1 ? TK_GREEN_700 : TK_RED_700);
 }

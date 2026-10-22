@@ -6,8 +6,10 @@
 #define MINES_ROWS 10
 #define MINES_CELL 30
 #define MINES_PAD  16
-/* Client width of the default window; the height depends on the style. */
+/* Client size of the default window. mines_client_h is the height in the
+ * active style; MINES_H is the height in the taller (Modern) style. */
 #define MINES_W (MINES_COLS * MINES_CELL + MINES_PAD * 2)
+#define MINES_H (43 + MINES_PAD * 2 + MINES_ROWS * MINES_CELL + 28)
 
 void mines_new(unsigned seed);
 int mines_client_h(void);
