@@ -420,6 +420,18 @@ class FatTests(unittest.TestCase):
                     if result.returncode == 0:
                         self.assertIn(result.stdout, (b'', data), name)
 
+    def test_failed_directory_growth_keeps_the_chain(self):
+        # A FAT32 folder of 512-byte clusters holds 16 entries; the 17th
+        # grows it. Fail each write of that growth, then go on and sync.
+        for k in range(1, 30):
+            with self.subTest(failing_write=k):
+                path = self.image('fat32', 'dirgrow')
+                script = 'mkdir\tD\n' + ''.join(f'mkdir\tD/S{i}\n' for i in range(14))
+                script += f'failwrite\t{k}\nmkdir\tD/LAST\nput\tD/after.txt\t4\t3000\t0\nsync\n'
+                self.tool('script', path, stdin=script.encode(), check=False)
+                check_structure(self, path.read_bytes())
+                self.fsck(path)
+
     def test_full_volume(self):
         path = self.image('fat12', 'full')
         script = ''.join(f'put\tfile{i}\t{i}\t300000\t0\n' for i in range(6))

@@ -617,8 +617,15 @@ static int slot_lba(FatVolume *v, uint32_t first, uint32_t slot, uint32_t *lba, 
         if (!next) {
             if (!grow) return 1;
             if ((result = take_cluster(v, &next))) return result;
-            if ((result = zero_cluster(v, next)) || (result = entry_set(v, v->walk_cluster, next)) ||
-                (result = window_flush(v))) {
+            int linked = 0;
+            if (!(result = zero_cluster(v, next)) && !(result = entry_set(v, v->walk_cluster, next))) {
+                linked = 1;
+                result = window_flush(v);
+            }
+            if (result) {
+                /* The old tail ends the chain again before the new cluster
+                 * is free, so no later flush can leave it pointing there. */
+                if (linked) entry_set(v, v->walk_cluster, end_mark(v));
                 entry_set(v, next, 0);
                 if (v->free_count != NONE) ++v->free_count;
                 return result;
