@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from test_editor_binding import function
+from desktop_source import block, chrome_defines, defines
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,13 +31,19 @@ class NativeLaunchTests(unittest.TestCase):
             end = source.index('static LaunchItem launch_items', start)
             launch_errors = source[source.index('enum { NATIVE_LAUNCH_WINDOW='):
                                    source.index('static const char *native_launch_error')]
-            (directory / 'native_launch_types.inc').write_text(source[start:end] + launch_errors)
-            names = ('win_close', 'fm_vis_count', 'fm_row_id', 'fm_refresh', 'file_extension',
+            # Work-area geometry of the installed style for window placement,
+            # and the Open/Save As browser state with its Save As types.
+            geometry = chrome_defines(source) + defines(source, ('TASKBAR_H', 'TASKBAR_Y'))
+            picker = block(source, 'static FileViewOptions pick_view;', 'static int name_target_valid(void)',
+                           include_end=False)
+            (directory / 'native_launch_types.inc').write_text(geometry + source[start:end] + launch_errors + picker)
+            placement = block(source, '/* New windows cascade from the top left', '\n}\n')
+            names = ('name_target_valid', 'win_close', 'fm_vis_count', 'fm_row_id', 'fm_refresh', 'file_extension',
                      'native_launch_error', 'native_window_start', 'native_file_mode',
                      'open_native_file', 'open_fs_file', 'fm_open_selected',
-                     'od_row_enabled', 'od_next_enabled', 'od_refresh', 'od_open_selected',
-                     'str_has', 'launcher_refresh', 'launcher_close', 'launcher_run')
-            (directory / 'native_launch_ops.inc').write_text(''.join(function(source, name) for name in names))
+                     'od_row_enabled', 'od_next_enabled', 'od_refresh', 'pick_go', 'od_open_selected',
+                     'str_has', 'name_before', 'launcher_refresh', 'launcher_close', 'launcher_run')
+            (directory / 'native_launch_ops.inc').write_text(placement + ''.join(function(source, name) for name in names))
             self.compile_run('native_launch_host', directory,
                              [ROOT / 'tests/net_stub.c', ROOT / 'src/kernel/download.c', ROOT / 'src/apps/file_view.c', '-DDOWNLOAD_HOST_TEST'])
 
@@ -53,7 +60,9 @@ class NativeLaunchTests(unittest.TestCase):
                                   source.index('static const char *native_launch_error')]
             names = ('native_launch_error', 'native_window_start', 'native_file_mode',
                      'terminal_native_launch', 'open_native_file')
-            code = declarations + ''.join(function(source, name) for name in names)
+            code = chrome_defines(source) + defines(source, ('TASKBAR_H', 'TASKBAR_Y')) + declarations
+            code += block(source, '/* New windows cascade from the top left', '\n}\n')
+            code += ''.join(function(source, name) for name in names)
             (directory / 'native_window_factory.inc').write_text(code)
             process = process.replace('int process_probe_launch(', 'static int process_probe_launch(')
             code = ''.join(function(process, name) for name in

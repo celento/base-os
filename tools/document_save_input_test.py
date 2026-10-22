@@ -167,12 +167,50 @@ class WhiteUiText:
         return found
 
 
-def name_field_bounds(width, height):
-    """Union of ordinary/PDF fields from the unchanged namedlg geometry."""
-    source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
-    menubar = int(re.search(r'^#define MENUBAR_H\s+(\d+)\s*$', source, re.M)[1])
-    left = (width - 420) // 2 + 22
-    bounds = (left, menubar + 140 + 64, left + 420 - 44, menubar + 140 + 108 + 34)
+def theme_metrics(style='classic'):
+    """One style's UiTheme metrics and token colors from src/ui/theme.c."""
+    source = (ROOT / 'src/ui/theme.c').read_text()
+    body = re.search(r'static const UiTheme ' + style + r'_metrics = \{(.*?)\n\};', source, re.S)
+    assert body, 'Production style metrics changed'
+    metrics = {key: int(value) for key, value in re.findall(r'\.(\w+) = (-?\d+)', body[1])}
+    tokens = re.search(r'static const uint32_t ' + style + r'_tokens\[32\] = \{(.*?)\};', source, re.S)
+    header = (ROOT / 'src/ui/theme.h').read_text()
+    names = re.search(r'enum \{\s*(TK_RAISED = PAL_TOKEN.*?)\};', header, re.S)
+    assert tokens and names, 'Production theme tokens changed'
+    names = re.findall(r'\b(TK_\w+)\b', re.sub(r'/\*.*?\*/', '', names[1], flags=re.S))
+    values = [int(value, 16) for value in re.findall(r'0x([0-9A-Fa-f]{6})', tokens[1])]
+    assert len(names) == len(values) == 32
+    metrics['tokens'] = {name: ((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255)
+                         for name, rgb in zip(names, values)}
+    return metrics
+
+
+def name_fields(width, height, style='classic'):
+    """Ordinary and PDF Save As name fields, (x, y, w, h, text_x, text_y),
+    from the production namedlg_geom/namedlg_field/kit_field geometry."""
+    m = theme_metrics(style)
+    modern = style == 'modern'
+    font = (ROOT / 'src/kernel/font.h').read_text()
+    font_h = int(re.search(r'^#define\s+UI_FONT_H\s+(\d+)\s*$', font, re.M)[1])
+    menubar = m['topbar_h']
+    title_bar = m['border'] + m['title_h'] + (0 if m['menu_h'] else 1)
+    avail = height - menubar - 64
+    w = width - 16 if width - 16 < 640 else 640
+    fields = []
+    for pdf in (0, 1):
+        h = min(500 + (34 if pdf else 0), avail)
+        x, y = (width - w) // 2, menubar + 8 + (avail - h) // 2
+        fx, fy = x + 92, y + title_bar + (9 if modern else 10)
+        fw, fh = w - 92 - (16 if modern else 12), m['control_h']
+        fields.append((fx, fy, fw, fh, fx + (10 if modern else 6) + 1, fy + (fh - font_h) // 2))
+    return fields
+
+
+def name_field_bounds(width, height, style='classic'):
+    """Union of ordinary/PDF fields from the production namedlg geometry."""
+    fields = name_fields(width, height, style)
+    bounds = (min(f[0] for f in fields), min(f[1] for f in fields),
+              max(f[0] + f[2] for f in fields), max(f[1] + f[3] for f in fields))
     assert 0 <= bounds[0] < bounds[2] <= width and 0 <= bounds[1] < bounds[3] <= height
     return bounds
 
@@ -498,15 +536,16 @@ class Session(DesktopSession):
                 self.white_ui_text = WhiteUiText(ROOT / 'src/kernel/font.h')
             path = self.directory / pathlib.Path(event['screenshot']).name
             with Image.open(path) as image:
-                foreground = (32, 32, 32) if filename else (255, 255, 255)
+                foreground = theme_metrics()['tokens']['TK_TEXT'] if filename else (255, 255, 255)
                 bounds = name_field_bounds(image.width, image.height) if filename else (0, 0, image.width, image.height)
                 positions = self.white_ui_text.find(image.crop(bounds).convert('RGB'), text, foreground)
                 positions = [[x + bounds[0], y + bounds[1]] for x, y in positions]
                 if filename:
-                    # Name strings start at field+12, at ordinary or PDF y+8.
-                    # This also rejects a suffix token in a longer field value.
-                    positions = [[x, y] for x, y in positions if x == bounds[0] + 12 and
-                                 y in (bounds[1] + 8, bounds[1] + 44 + 8)]
+                    # Name strings start at the field's text inset, at the
+                    # ordinary or PDF field's text row. This also rejects a
+                    # suffix token in a longer field value.
+                    origins = [list(field[4:]) for field in name_fields(image.width, image.height)]
+                    positions = [position for position in positions if position in origins]
             existing = dict(text=text, positions=positions,
                             font_sha256=self.white_ui_text.font_sha256,
                             foreground_rgb=list(foreground), bounds=list(bounds),
