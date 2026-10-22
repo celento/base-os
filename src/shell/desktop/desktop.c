@@ -150,7 +150,7 @@ static int saver_enabled = 1;
 static int saver_on = 0;
 static uint32_t last_input_frame = 0;
 static int launcher_on = 0;
-static char launch_buf[24];
+static char launch_buf[FS_NAME_LEN];
 static int launch_len = 0;
 static int launch_sel = 0;
 static int launch_scroll;
@@ -372,6 +372,7 @@ enum {
     ICON_PLAYER,
     ICON_WRITER,
     ICON_SPREADSHEET,
+    ICON_HELP,
     ICON_DESK_TRASH,
     ICON_DESK_COUNT
 };
@@ -412,6 +413,7 @@ static void icons_init(void) {
     icon_set(ICON_PLAYER, "Media Player", ICON_APP_PLAYER);
     icon_set(ICON_WRITER, "Writer", ICON_APP_WRITER);
     icon_set(ICON_SPREADSHEET, "Spreadsheet", ICON_APP_SHEET);
+    icon_set(ICON_HELP, "Help", ICON_APP_HELP);
     icon_set(ICON_DESK_TRASH, "Trash", ICON_APP_TRASH);
 
     static const char *const names[DESK_COUNT] = {"System", "Home", "Trash"};
@@ -791,6 +793,7 @@ static int act_checked(int act);
 static void act_run(int act);
 static void desk_open(int i);
 static void settings_key(void);
+static void switcher_cancel(void);
 static void win_kbd_begin(void);
 static void display_click(void);
 static void launcher_open(void);
@@ -4217,11 +4220,11 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *h = 262;
         break;
     case WK_ABOUT:
-        *w = 520;
-        *h = 344;
+        *w = 460;
+        *h = 260;
         break;
     case WK_SETTINGS:
-        *w = 560;
+        *w = 800;
         *h = settings_window_h();
         break;
     case WK_FILES:
@@ -6196,6 +6199,7 @@ static void icon_open(int id) {
     case ICON_PLAYER: open_player(-1); break;
     case ICON_WRITER: open_writer(-1); break;
     case ICON_SPREADSHEET: open_spreadsheet(-1); break;
+    case ICON_HELP: win_open(WK_HELP); break;
     case ICON_DESK_TRASH: open_files(trash_id >= 0 ? trash_id : fs_root()); break;
     default: break;
     }
@@ -6758,8 +6762,12 @@ typedef struct {
     unsigned identity;
 } LaunchItem;
 
-static LaunchItem launch_items[24];
-static int launch_n = 0;
+/* Every app plus up to 24 matching files. */
+#define LAUNCH_MAX (ICON_DESK_COUNT + 24)
+static LaunchItem launch_items[LAUNCH_MAX];
+static int launch_n = 0, launch_apps = 0;
+static int launch_recent_view;  /* the Recent files list is showing */
+static int launch_recent_sel;
 
 static int str_has(const char *hay, const char *needle) {
     if (!needle[0])
@@ -6780,43 +6788,53 @@ static int str_has(const char *hay, const char *needle) {
     return 0;
 }
 
+static int name_before(const char *a, const char *b) {
+    for (;; a++, b++) {
+        char x = *a >= 'A' && *a <= 'Z' ? (char)(*a + 32) : *a;
+        char y = *b >= 'A' && *b <= 'Z' ? (char)(*b + 32) : *b;
+        if (x != y || !x) return x < y;
+    }
+}
+
+/* Apps in name order, then, while searching, matching files. */
 static void launcher_refresh(void) {
     launch_n = 0;
     launch_buf[launch_len] = 0;
-    for (int i = 0; i < ICON_DESK_TRASH && launch_n < 24; i++) {
-        if (str_has(icons[i].label, launch_buf)) {
-            kstrcpy(launch_items[launch_n].name, icons[i].label);
-            launch_items[launch_n].identity = 0;
-            launch_items[launch_n].icon = i;
-            launch_items[launch_n].file = -1;
-            launch_n++;
-        }
+    for (int i = 0; i < ICON_DESK_TRASH && launch_n < LAUNCH_MAX; i++) {
+        if (!str_has(icons[i].label, launch_buf)) continue;
+        LaunchItem it = {{0}, i, -1, 0};
+        kstrcpy(it.name, icons[i].label);
+        int at = launch_n++;
+        while (at > 0 && name_before(it.name, launch_items[at - 1].name)) { launch_items[at] = launch_items[at - 1]; at--; }
+        launch_items[at] = it;
     }
-    for (int id = 0; id < fs_node_slots() && launch_n < 24; id++) {
-        if (!fs_valid(id) || fs_is_app(id) || fs_is_dir(id))
+    launch_apps = launch_n;
+    for (int id = 0; launch_len && id < fs_node_slots() && launch_n < LAUNCH_MAX; id++) {
+        if (!fs_valid(id) || fs_is_app(id) || fs_is_dir(id) || !str_has(fs_name(id), launch_buf))
             continue;
-        if (launch_len == 0 && launch_n >= 8)
-            break;
-        if (str_has(fs_name(id), launch_buf)) {
-            kstrcpy(launch_items[launch_n].name, fs_name(id));
-            launch_items[launch_n].identity = fs_identity(id);
-            launch_items[launch_n].icon = -1;
-            launch_items[launch_n].file = id;
-            launch_n++;
-        }
+        kstrcpy(launch_items[launch_n].name, fs_name(id));
+        launch_items[launch_n].identity = fs_identity(id);
+        launch_items[launch_n].icon = -1;
+        launch_items[launch_n].file = id;
+        launch_n++;
     }
     if (launch_sel >= launch_n)
         launch_sel = launch_n ? launch_n - 1 : 0;
-    if (launch_sel < 0)
+    if (launch_sel < 0 && launch_len)
         launch_sel = 0;
 }
 
 static void launcher_open(void) {
+    if (switcher_on) switcher_cancel();
     launcher_on = 1;
     launch_len = 0;
     launch_sel = 0;
     launch_scroll = 0;
+    launch_recent_view = 0;
+    volume_on = 0;
     open_menu = MENU_NONE;
+    popup_n = 0;
+    recent_prune();
     launcher_refresh();
     dirty = 1;
 }
@@ -6826,58 +6844,83 @@ static void launcher_close(void) {
     dirty = 1;
 }
 
-/* App launcher: a centered glass panel with a search field over a grid of
- * applications. Typing filters applications and files; the grid scrolls by
- * rows when it does not fit. */
-#define LP_CELL_W 108
-#define LP_CELL_H 92
-#define LP_FIELD_H 34
-#define LP_PAD 24
-#define LP_FOOT 44
-#define LP_HEAD (LP_PAD + LP_FIELD_H + 18)
-static int launcher_cols(void) {
-    int c = (fb_w - 80 - 2 * LP_PAD) / LP_CELL_W;
-    return c > 6 ? 6 : c < 3 ? 3 : c;
-}
-static int launcher_fit(void) {
-    int rows = (TASKBAR_Y - 40 - LP_HEAD - 12 - LP_FOOT) / LP_CELL_H;
-    return rows < 2 ? 2 : rows;
-}
-static int launcher_total_rows(void) { int c = launcher_cols(); return (launch_n + c - 1) / c; }
-static int launcher_rows(void) {
-    int total = launcher_total_rows(), fit = launcher_fit();
-    return total < fit ? total : fit;
-}
+/* Launcher panel. Classic: 400 wide, 4px above the taskbar at the left.
+ * Modern: 480 wide, centered 8px above the dock. A search field, the
+ * Recent files row, the app grid (or matching files while searching), and
+ * a footer with Settings, Restart and Shut down. */
+static int lp_pad(void) { return MODERN ? 14 : 12; }
+static int lp_field_h(void) { return MODERN ? 34 : 26; }
+static int lp_cols(void) { return MODERN ? 5 : 4; }
+static int lp_tile_h(void) { return MODERN ? 88 : 84; }
+static int lp_foot_h(void) { return MODERN ? 49 : 41; }
+static int lp_row_h(void) { return MODERN ? 30 : 24; }
+static int lp_section_h(void) { return MODERN ? 30 : 28; }
+
 static void launcher_geom(int *x, int *y, int *w, int *h) {
-    int rows = launcher_rows();
-    *w = launcher_cols() * LP_CELL_W + 2 * LP_PAD;
-    *h = LP_HEAD + (rows ? rows * LP_CELL_H : 40) + 12 + LP_FOOT;
-    *x = (fb_w - *w) / 2;
-    *y = (TASKBAR_Y - *h) / 2;
-    if (*y < 16) *y = 16;
+    int work = TASKBAR_Y - MENUBAR_H;
+    if (MODERN) {
+        *w = 480;
+        *h = work - 16 < 480 ? work - 16 : 480;
+        *x = (fb_w - *w) / 2;
+        *y = tb_dock.y - 8 - *h;
+    } else {
+        *w = 400;
+        *h = work - 8 < 460 ? work - 8 : 460;
+        *x = 4;
+        *y = TASKBAR_Y - 4 - *h;
+    }
 }
-static void launcher_cell(int x, int y, int i, int *cx, int *cy) {
-    int c = launcher_cols(), k = i - launch_scroll * c;
-    *cx = x + LP_PAD + (k % c) * LP_CELL_W;
-    *cy = y + LP_HEAD + (k / c) * LP_CELL_H;
+static int lp_field_y(int y) { return y + lp_pad(); }
+/* Top of the Recent files row (no search) or of the results. */
+static int lp_body_y(int y) { return lp_field_y(y) + lp_field_h() + (MODERN ? 10 : 8); }
+static int lp_recent_h(void) { return MODERN ? 40 : 36; }
+static int lp_grid_y(int y) {
+    int top = lp_body_y(y);
+    if (!launch_len) top += lp_recent_h() + (MODERN ? 6 : 0);
+    return top + lp_section_h();
 }
+static int lp_grid_bottom(int y, int h) { return y + h - lp_foot_h() - 4; }
+static int lp_grid_x(int x) { return x + (MODERN ? 12 : 8); }
+static int lp_grid_w(int w) { return w - (MODERN ? 12 + 4 + 10 : 8 + 8 + 12); }
+static int lp_cell_w(int w) { return (lp_grid_w(w) - (lp_cols() - 1) * 4) / lp_cols(); }
+
+static int launcher_visible_rows(void) {
+    int x, y, w, h;
+    launcher_geom(&x, &y, &w, &h);
+    int rows = (lp_grid_bottom(y, h) - lp_grid_y(y)) / (lp_tile_h() + 4);
+    return rows < 1 ? 1 : rows;
+}
+static int launcher_total_rows(void) { int c = lp_cols(); return (launch_apps + c - 1) / c; }
 static void launcher_clamp_scroll(void) {
-    int rows = launcher_rows(), total = launcher_total_rows();
+    int rows = launcher_visible_rows(), total = launcher_total_rows();
     if (launch_scroll > total - rows) launch_scroll = total - rows;
     if (launch_scroll < 0) launch_scroll = 0;
 }
 static void launcher_reveal(void) {
-    int c = launcher_cols(), row = launch_sel / c, rows = launcher_rows();
+    if (launch_sel < 0 || launch_sel >= launch_apps) return;
+    int row = launch_sel / lp_cols(), rows = launcher_visible_rows();
     launcher_clamp_scroll();
     if (row < launch_scroll) launch_scroll = row;
-    if (rows && row >= launch_scroll + rows) launch_scroll = row - rows + 1;
+    if (row >= launch_scroll + rows) launch_scroll = row - rows + 1;
 }
 static void launcher_scroll(int amount) {
     launch_scroll += amount;
     launcher_clamp_scroll();
     dirty = 1;
 }
-static int launcher_footer_x(int x, int w, int button) { return x + w - 16 - (4 - button) * 36; }
+static void launcher_cell(int x, int y, int w, int i, int *cx, int *cy) {
+    int c = lp_cols(), k = i - launch_scroll * c, cw = lp_cell_w(w);
+    *cx = lp_grid_x(x) + (k % c) * (cw + 4);
+    *cy = lp_grid_y(y) + (k / c) * (lp_tile_h() + 4);
+}
+/* Files matching a search are listed under the app grid rows that fit. */
+static int lp_files_y(int x, int y, int w) {
+    int rows = (launch_apps + lp_cols() - 1) / lp_cols();
+    int vis = launcher_visible_rows();
+    (void)x; (void)w;
+    if (rows > vis) rows = vis;
+    return lp_grid_y(y) + rows * (lp_tile_h() + 4) + (launch_apps ? 4 : 0) + lp_section_h();
+}
 
 static void launcher_run(int i) {
     if (i < 0 || i >= launch_n)
@@ -6891,30 +6934,53 @@ static void launcher_run(int i) {
     else
         icon_open(it.icon);
 }
+static void launcher_run_recent(int i) {
+    if (!recent_valid(i)) { recent_prune(); dirty = 1; return; }
+    int id = recent[i].id;
+    launcher_close();
+    open_fs_file(id);
+}
 
 static void launcher_key(void) {
-    int c = launcher_cols();
+    int c = lp_cols();
+    if (launch_recent_view) {
+        if (key_sc == KEY_ESC || key_sc == KEY_LEFT || key_sc == KEY_BACKSPACE) launch_recent_view = 0;
+        else if (key_sc == KEY_UP && launch_recent_sel > 0) launch_recent_sel--;
+        else if (key_sc == KEY_DOWN && launch_recent_sel + 1 < recent_n) launch_recent_sel++;
+        else if (key_sc == KEY_ENTER) { launcher_run_recent(launch_recent_sel); return; }
+        dirty = 1;
+        return;
+    }
     if (key_sc == KEY_ESC) {
+        if (launch_len) { launch_len = 0; launch_sel = 0; launcher_refresh(); dirty = 1; return; }
         launcher_close();
         return;
     } else if (key_sc == KEY_ENTER) {
+        if (launch_sel < 0) { launch_recent_view = 1; launch_recent_sel = 0; dirty = 1; return; }
         launcher_run(launch_sel);
         return;
     } else if (key_sc == KEY_LEFT) {
         if (launch_sel > 0) launch_sel--;
     } else if (key_sc == KEY_RIGHT) {
-        if (launch_sel + 1 < launch_n) launch_sel++;
+        if (launch_sel < 0) { launch_recent_view = 1; launch_recent_sel = 0; }
+        else if (launch_sel + 1 < launch_n) launch_sel++;
     } else if (key_sc == KEY_UP) {
-        if (launch_sel - c >= 0) launch_sel -= c;
+        if (launch_sel >= launch_apps) launch_sel = launch_sel > launch_apps ? launch_sel - 1 : launch_apps - 1;
+        else if (launch_sel - c >= 0) launch_sel -= c;
+        else if (!launch_len) launch_sel = -1;
     } else if (key_sc == KEY_DOWN) {
-        if (launch_sel + c < launch_n) launch_sel += c;
-        else if (launch_sel / c < (launch_n - 1) / c) launch_sel = launch_n - 1;
+        if (launch_sel < 0) launch_sel = 0;
+        else if (launch_sel >= launch_apps) { if (launch_sel + 1 < launch_n) launch_sel++; }
+        else if (launch_sel + c < launch_apps) launch_sel += c;
+        else if (launch_apps < launch_n) launch_sel = launch_apps;
+        else if (launch_sel / c < (launch_apps - 1) / c) launch_sel = launch_apps - 1;
     } else if (key_sc == KEY_BACKSPACE) {
         if (launch_len > 0)
             launch_len--;
         launcher_refresh();
-    } else if (key_char && launch_len < 22) {
+    } else if (key_char && launch_len < (int)sizeof launch_buf - 2) {
         launch_buf[launch_len++] = key_char;
+        launch_sel = 0;
         launcher_refresh();
     } else return;
     launcher_reveal();
@@ -6926,63 +6992,171 @@ static int launcher_item_icon(int i) {
     return file_extension(launch_items[i].name, ".bex") ? AI_NATIVE : AI_DOCUMENT;
 }
 
+/* A tile label on up to two centered lines, split at the last space that
+ * fits the first line. */
+static void tile_label(const char *s, int x, int y, int w, uint8_t ink, int bold) {
+    int n = kstrlen(s);
+    if (kit_text_w(s, bold) <= w) { kit_text_center(s, x, y, w, ink, bold); return; }
+    char first[FS_NAME_LEN];
+    int cut = -1;
+    for (int i = 0; i < n && i < FS_NAME_LEN - 1; i++) {
+        if (s[i] != ' ') continue;
+        kmemcpy(first, s, i); first[i] = 0;
+        if (kit_text_w(first, bold) <= w) cut = i;
+    }
+    if (cut < 0) {
+        int tw = kit_text_w(s, bold) < w ? kit_text_w(s, bold) : w;
+        kit_text(s, x + (w - tw) / 2, y, ink, w, bold);
+        return;
+    }
+    kmemcpy(first, s, cut); first[cut] = 0;
+    kit_text_center(first, x, y, w, ink, bold);
+    const char *rest = s + cut + 1;
+    int tw = kit_text_w(rest, bold) < w ? kit_text_w(rest, bold) : w;
+    kit_text(rest, x + (w - tw) / 2, y + CHAR_H + 1, ink, w, bold);
+}
+
+static int lp_hover(int x, int y, int w, int h) { return hit(mouse_x, mouse_y, x, y, w, h); }
+
+static void lp_list_item(int x, int y, int w, int icon, const char *name, const char *detail, int sel) {
+    int h = lp_row_h(), hov = lp_hover(x, y, w, h);
+    if (sel || hov) kit_fill(x, y, w, h, MODERN ? 6 : KIT_R_SQUARE, sel ? TK_ACCENT_100 : (MODERN ? TK_HOVER : TK_ACCENT_50), 1);
+    app_icon_draw(icon, x + (MODERN ? 10 : 8), y + (h - 16) / 2, AI_SMALL);
+    int tx = x + (MODERN ? 10 : 8) + 16 + (MODERN ? 8 : 6);
+    int dw = detail ? kit_text_w(detail, 0) : 0;
+    kit_text(name, tx, kit_ty(y, h), TK_TEXT, x + w - tx - dw - 16, 0);
+    if (detail) kit_text_right(detail, x + w - (MODERN ? 10 : 8), kit_ty(y, h), TK_TEXT2, 0);
+}
+
+static const char *const lp_foot_labels[3] = {"Settings", "Restart", "Shut down"};
+static const int lp_foot_icons[3] = {UI_ICON_GEAR, UI_ICON_RESTART, UI_ICON_POWER};
+static void lp_foot_geom(int x, int y, int w, int h, int b, int *bx, int *by, int *bw, int *bh) {
+    *bh = MODERN ? 30 : 26;
+    *by = y + h - lp_foot_h() + (lp_foot_h() - *bh) / 2 + (MODERN ? 0 : 1);
+    int ws[3];
+    for (int i = 0; i < 3; i++) ws[i] = kit_text_w(lp_foot_labels[i], 0) + 16 + 6 + (MODERN ? 20 : 24);
+    int pad = MODERN ? 10 : 8;
+    if (b == 0) *bx = x + pad;
+    else if (b == 2) *bx = x + w - pad - ws[2];
+    else *bx = x + w - pad - ws[2] - (MODERN ? 4 : 6) - ws[1];
+    *bw = ws[b];
+}
+
 static void draw_launcher(void) {
     if (!launcher_on)
         return;
     int x, y, w, h;
     launcher_geom(&x, &y, &w, &h);
     launcher_clamp_scroll();
-    shade_rect(0, 0, fb_w, TASKBAR_Y, 1);
-    draw_shadow(x, y, w, h);
-    glass_round(x, y, w, h, 14, 1, COLOR_WHITE, 205, 215);
-    draw_round_frame(x - 1, y - 1, w + 2, h + 2, 15, INK(14));
-    draw_round_frame(x, y, w, h, 14, INK(0));
-    int fx = x + LP_PAD, fy = y + LP_PAD, fw = w - 2 * LP_PAD, fh = LP_FIELD_H;
-    draw_round_rect(fx, fy, fw, fh, 8, INK(0));
-    draw_round_frame(fx, fy, fw, fh, 8, launch_len ? ui_accent : INK(12));
-    icon_draw(ICON_SEARCH, fx + 11, fy + (fh - ICON_SIZE) / 2, INK(16));
+    uint8_t panel = MODERN ? TK_46 : TK_RAISED;
+    if (MODERN) {
+        kit_shadow(x, y, w, h, 12);
+        kit_box(x, y, w, h, 12, panel, TK_LINE_STRONG);
+    } else {
+        kit_shadow(x, y, w, h, 0);
+        kit_box(x, y, w, h, KIT_R_SQUARE, panel, TK_TEXT2);
+    }
+    /* Search */
+    int pad = lp_pad(), fx = x + pad, fy = lp_field_y(y), fw = w - 2 * pad, fh = lp_field_h();
     launch_buf[launch_len] = 0;
-    int tx = fx + 36;
-    int ty = fy + (fh - CHAR_H) / 2;
-    if (launch_len)
-        draw_string(launch_buf, tx, ty, ui_text);
-    else
-        draw_string("Search apps and files", tx, ty, INK(15));
-    int cx = tx + ui_string_w(launch_buf);
-    if ((frame_count / 35) & 1)
-        draw_rect(cx + 1, fy + 8, 1, fh - 16, INK(28));
-    int c = launcher_cols(), rows = launcher_rows();
-    int first = launch_scroll * c, last = first + rows * c;
-    if (last > launch_n) last = launch_n;
-    for (int i = first; i < last; i++) {
-        int gx, gy;
-        launcher_cell(x, y, i, &gx, &gy);
-        int sel = i == launch_sel;
-        if (sel) {
-            draw_round_rect(gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6, 10, INK(3));
-            draw_round_frame(gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6, 10, TK_ACCENT);
+    int tx = kit_search(fx, fy, fw, fh, launch_buf, "Search apps and files", KIT_FOCUS);
+    if (!launch_recent_view && ((frame_count / 35) & 1) == 0)
+        kit_caret(tx + kit_text_w(launch_buf, 0) + (launch_len ? 1 : -2), fy + (fh - 17) / 2);
+    int body = lp_body_y(y);
+    char count[12];
+    if (launch_recent_view) {
+        /* Recent files list */
+        int rh = MODERN ? 40 : 37, bx = x + (MODERN ? 12 : 8);
+        kit_icon_button(bx, body + (rh - (MODERN ? 30 : 26)) / 2 - (MODERN ? 0 : 2), MODERN ? 30 : 26, UI_ICON_BACK,
+                        lp_hover(bx, body, 30, rh) ? KIT_HOVER : 0);
+        draw_string_bold("Recent files", bx + (MODERN ? 36 : 30), kit_ty(body, rh - 4), TK_TEXT);
+        int cw = kit_text_w("Clear", 0) + 20, cx = x + w - (MODERN ? 12 : 8) - cw;
+        kit_button(cx, body + (rh - 26) / 2 - (MODERN ? 0 : 2), cw, MODERN ? 30 : 26, "Clear", -1, KB_FLAT,
+                   lp_hover(cx, body, cw, rh) ? KIT_HOVER : 0);
+        if (!MODERN) draw_hline(x + 1, body + rh - 1, w - 2, TK_LINE_SUBTLE);
+        int ly = body + rh + 4, lx = x + (MODERN ? 8 : 4), lw = w - 2 * (MODERN ? 8 : 4);
+        recent_prune();
+        if (!recent_n) kit_text("No recent files", lx + 10, ly + 6, TK_TEXT2, lw, 0);
+        for (int i = 0; i < recent_n && ly + lp_row_h() < y + h - lp_foot_h(); i++, ly += lp_row_h())
+            lp_list_item(lx, ly, lw, AI_DOCUMENT, fs_name(recent[i].id), recent_folder(recent[i].id), i == launch_recent_sel);
+    } else {
+        if (!launch_len) {
+            /* Recent files row */
+            int rx = x + (MODERN ? 12 : 4), rw = w - 2 * (MODERN ? 12 : 4), rh = MODERN ? 40 : 32;
+            int sel = launch_sel < 0, hov = lp_hover(rx, body, rw, rh);
+            if (MODERN) kit_box(rx, body, rw, rh, 8, sel ? TK_ACCENT_50 : hov ? TK_HOVER : ui_theme.content, sel ? TK_ACCENT : TK_LINE_SUBTLE);
+            else if (sel || hov) draw_rect(rx, body, rw, rh, sel ? TK_ACCENT_100 : TK_ACCENT_50);
+            ui_icon_draw(UI_ICON_RECENT, rx + (MODERN ? 12 : 8), body + (rh - 16) / 2, 16, TK_ICON, MODERN ? ui_theme.content : panel);
+            kit_text("Recent files", rx + (MODERN ? 12 : 8) + 16 + (MODERN ? 10 : 8), kit_ty(body, rh), TK_TEXT, rw - 100, MODERN);
+            fmt_uint(count, (unsigned)recent_n);
+            int cxr = rx + rw - (MODERN ? 12 : 8) - 16;
+            ui_icon_draw(UI_ICON_RIGHT, cxr, body + (rh - 16) / 2, 16, TK_ICON, MODERN ? ui_theme.content : panel);
+            if (MODERN) {
+                int pw = kit_text_w(count, 0) + 14, px = cxr - 10 - pw;
+                kit_fill(px, body + (rh - 20) / 2, pw, 20, 10, TK_HOVER, 1);
+                kit_text_center(count, px, kit_ty(body + (rh - 20) / 2, 20), pw, TK_ICON, 0);
+            } else kit_text_right(count, cxr - 12, kit_ty(body, rh), TK_TEXT2, 0);
+            if (!MODERN) draw_hline(x + 1, body + lp_recent_h() - 1, w - 2, TK_LINE_SUBTLE);
         }
-        app_icon_draw(launcher_item_icon(i), gx + (LP_CELL_W - AI_BIG) / 2, gy + 10, AI_BIG);
-        const char *label = launch_items[i].name;
-        int lw = ui_string_w(label);
-        if (lw > LP_CELL_W - 12) lw = LP_CELL_W - 12;
-        draw_string_clip(label, gx + (LP_CELL_W - lw) / 2, gy + 10 + AI_BIG + 8, sel ? INK(31) : INK(27), gx + LP_CELL_W - 6);
+        /* All apps */
+        int sy = lp_grid_y(y) - lp_section_h(), sx = x + (MODERN ? 18 : 12), sr = x + w - (MODERN ? 18 : 12);
+        kit_text(launch_len ? "Apps" : "All apps", sx, kit_ty(sy, lp_section_h()), TK_TEXT2, 200, 1);
+        fmt_uint(count, (unsigned)launch_apps);
+        kit_text_right(count, sr, kit_ty(sy, lp_section_h()), TK_TEXT2, 0);
+        int c = lp_cols(), rows = launcher_visible_rows(), cw = lp_cell_w(w), th = lp_tile_h();
+        int first = launch_scroll * c, last = first + rows * c;
+        if (last > launch_apps) last = launch_apps;
+        for (int i = first; i < last; i++) {
+            int gx, gy;
+            launcher_cell(x, y, w, i, &gx, &gy);
+            int sel = i == launch_sel, hov = !sel && lp_hover(gx, gy, cw, th);
+            if (sel) {
+                if (MODERN) {
+                    kit_fill(gx, gy, cw, th, 8, TK_ACCENT_50, 1);
+                    kit_frame(gx, gy, cw, th, 8, TK_ACCENT);
+                    kit_frame(gx + 1, gy + 1, cw - 2, th - 2, 7, TK_ACCENT);
+                } else {
+                    draw_rect(gx, gy, cw, th, TK_ACCENT_100);
+                    draw_frame(gx, gy, cw, th, TK_ACCENT);
+                }
+            } else if (hov) kit_fill(gx, gy, cw, th, MODERN ? 8 : KIT_R_SQUARE, MODERN ? TK_HOVER : TK_ACCENT_50, 1);
+            int top = MODERN ? 12 : 10;
+            app_icon_draw(launcher_item_icon(i), gx + (cw - AI_BIG) / 2, gy + top, AI_BIG);
+            tile_label(launch_items[i].name, gx + 3, gy + top + AI_BIG + (MODERN ? 6 : 4), cw - 6, TK_TEXT, 0);
+        }
+        if (!launch_apps && launch_len)
+            kit_text("No apps match", sx, lp_grid_y(y) + 6, TK_TEXT2, w, 0);
+        if (launcher_total_rows() > rows) {
+            int gy = lp_grid_y(y), len = lp_grid_bottom(y, h) - gy;
+            kit_vscroll(x + w - 1 - (MODERN ? 10 : 12), gy, len, launch_scroll, rows, launcher_total_rows(), 0);
+        }
+        /* Matching files */
+        if (launch_len && launch_n > launch_apps) {
+            int fy2 = lp_files_y(x, y, w);
+            kit_text("Files", sx, kit_ty(fy2 - lp_section_h(), lp_section_h()), TK_TEXT2, 200, 1);
+            fmt_uint(count, (unsigned)(launch_n - launch_apps));
+            kit_text_right(count, sr, kit_ty(fy2 - lp_section_h(), lp_section_h()), TK_TEXT2, 0);
+            int lx = x + (MODERN ? 8 : 4), lw = w - 2 * (MODERN ? 8 : 4);
+            for (int i = launch_apps; i < launch_n && fy2 + lp_row_h() <= y + h - lp_foot_h() - 4; i++, fy2 += lp_row_h())
+                lp_list_item(lx, fy2, lw, launcher_item_icon(i), launch_items[i].name,
+                             recent_folder(launch_items[i].file), i == launch_sel);
+        }
     }
-    if (launch_n == 0)
-        draw_string("No matches", fx + 6, y + LP_HEAD + 8, ui_text_dim);
-    if (launcher_total_rows() > rows) {
-        int track = rows * LP_CELL_H - 8, total = launcher_total_rows();
-        int thumb = track * rows / total, top = track * launch_scroll / total;
-        draw_round_rect(x + w - 10, y + LP_HEAD, 4, track, 2, INK(5));
-        draw_round_rect(x + w - 10, y + LP_HEAD + top, 4, thumb < 16 ? 16 : thumb, 2, INK(14));
+    /* Footer */
+    int foot = y + h - lp_foot_h();
+    if (MODERN) {
+        kit_fill_bottom(x + 1, foot, w - 2, lp_foot_h() - 1, 11, TK_45);
+        draw_hline(x + 1, foot, w - 2, TK_LINE_SUBTLE);
+    } else {
+        draw_rect(x + 1, foot, w - 2, lp_foot_h() - 1, TK_BASE);
+        draw_hline(x + 1, foot, w - 2, TK_LINE_SUBTLE);
     }
-    /* Footer: identity on the left; About, Settings, Sleep and Power on the right. */
-    int foot = y + h - LP_FOOT;
-    draw_hline(x + LP_PAD, foot, w - 2 * LP_PAD, INK(7));
-    draw_string_bold("BaseOS", x + LP_PAD + 4, foot + (LP_FOOT - CHAR_H) / 2, INK(18));
-    static const int foot_icon[4] = {ICON_APP_ABOUT, ICON_SETTINGS, ICON_MOON, ICON_POWER};
-    for (int b = 0; b < 4; b++)
-        tool_button(launcher_footer_x(x, w, b), foot + 8, 32, 28, foot_icon[b], 0, TB_FLAT);
+    for (int b = 0; b < 3; b++) {
+        int bx, by, bw, bh;
+        lp_foot_geom(x, y, w, h, b, &bx, &by, &bw, &bh);
+        int kind = MODERN || b == 0 ? KB_FLAT : KB_DEFAULT;
+        kit_button(bx, by, bw, bh, lp_foot_labels[b], lp_foot_icons[b], kind, lp_hover(bx, by, bw, bh) ? KIT_HOVER : 0);
+    }
 }
 
 static int launcher_click(void) {
@@ -6992,26 +7166,52 @@ static int launcher_click(void) {
         launcher_close();
         return 1;
     }
-    int foot = y + h - LP_FOOT;
-    for (int b = 0; b < 4; b++) {
-        if (!hit(mouse_x, mouse_y, launcher_footer_x(x, w, b), foot + 8, 32, 28)) continue;
+    for (int b = 0; b < 3; b++) {
+        int bx, by, bw, bh;
+        lp_foot_geom(x, y, w, h, b, &bx, &by, &bw, &bh);
+        if (!hit(mouse_x, mouse_y, bx, by, bw, bh)) continue;
         launcher_close();
-        if (b == 0) win_open(WK_ABOUT);
-        else if (b == 1) icon_open(ICON_DESK_SETTINGS);
-        else if (b == 2) saver_start();
+        if (b == 0) win_open(WK_SETTINGS);
+        else if (b == 1) do_restart();
         else do_shutdown();
         return 1;
     }
-    int c = launcher_cols(), rows = launcher_rows();
+    int pad = lp_pad(), fy = lp_field_y(y), fh = lp_field_h();
+    if (launch_len && hit(mouse_x, mouse_y, kit_search_clear_x(x + pad, w - 2 * pad), fy, 24, fh)) {
+        launch_len = 0; launch_sel = 0; launcher_refresh(); dirty = 1; return 1;
+    }
+    int body = lp_body_y(y);
+    if (launch_recent_view) {
+        int rh = MODERN ? 40 : 37;
+        if (hit(mouse_x, mouse_y, x + (MODERN ? 12 : 8), body, 30, rh)) { launch_recent_view = 0; dirty = 1; return 1; }
+        int cw = kit_text_w("Clear", 0) + 20, cx = x + w - (MODERN ? 12 : 8) - cw;
+        if (hit(mouse_x, mouse_y, cx, body, cw, rh)) { recent_n = 0; dirty = 1; return 1; }
+        int ly = body + rh + 4;
+        for (int i = 0; i < recent_n; i++, ly += lp_row_h())
+            if (hit(mouse_x, mouse_y, x, ly, w, lp_row_h())) { launcher_run_recent(i); return 1; }
+        return 1;
+    }
+    if (!launch_len && hit(mouse_x, mouse_y, x, body, w, lp_recent_h())) {
+        launch_recent_view = 1;
+        launch_recent_sel = 0;
+        dirty = 1;
+        return 1;
+    }
+    int c = lp_cols(), rows = launcher_visible_rows(), cw = lp_cell_w(w);
     int first = launch_scroll * c, last = first + rows * c;
-    if (last > launch_n) last = launch_n;
+    if (last > launch_apps) last = launch_apps;
     for (int i = first; i < last; i++) {
         int gx, gy;
-        launcher_cell(x, y, i, &gx, &gy);
-        if (hit(mouse_x, mouse_y, gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6)) {
+        launcher_cell(x, y, w, i, &gx, &gy);
+        if (hit(mouse_x, mouse_y, gx, gy, cw, lp_tile_h())) {
             launcher_run(i);
             return 1;
         }
+    }
+    if (launch_len && launch_n > launch_apps) {
+        int fy2 = lp_files_y(x, y, w);
+        for (int i = launch_apps; i < launch_n; i++, fy2 += lp_row_h())
+            if (hit(mouse_x, mouse_y, x, fy2, w, lp_row_h())) { launcher_run(i); return 1; }
     }
     return 1;
 }

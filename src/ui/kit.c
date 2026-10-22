@@ -32,11 +32,12 @@ int kit_inset(int r, int row) {
     case 12: return row < 9 ? mask12[row] : 0;
     default:
         if (row >= r) return 0;
-        /* A circle of radius r through pixel centers, in quarter pixels. */
+        /* A circle of radius r through pixel centers, in eighths of a
+         * pixel, rounded to the nearest pixel. */
         {
-            int dy = (r * 4 - row * 4 - 2);
-            int dx = isqrt(r * r * 16 - dy * dy);
-            int in = (r * 4 - dx + 2) / 4;
+            int d = r * 8, dy = d - row * 8 - 4;
+            int dx = isqrt(d * d - dy * dy);
+            int in = (d - dx + 4) / 8;
             return in < 0 ? 0 : in;
         }
     }
