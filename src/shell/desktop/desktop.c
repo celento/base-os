@@ -858,6 +858,7 @@ static void properties_key(void);
 static void handle_about_click(int wx, int wy, int ww, int wh);
 static void draw_settings(int wx, int wy, int ww, int wh, int fl);
 static int settings_window_h(void);
+static void settings_scroll_by(int dy);
 static void handle_settings_click(int wx, int wy, int ww, int wh);
 static void saver_save(void);
 static void preferences_retry(void);
@@ -1562,6 +1563,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h);
 static void win_minimum(Win *w, int *mw, int *mh) {
     if (w->kind == WK_EDIT || w->kind == WK_FILES || w->kind == WK_TERM) { *mw = 360; *mh = 200; }
     else if(w->kind==WK_NATIVE){*mw=240;*mh=180;}
+    else if (w->kind == WK_SETTINGS) { *mw = 600; *mh = 320; }  /* the page scrolls */
     else if(w->kind==WK_VIEW){*mw=IMAGE_VIEWER_MIN_W+2;*mh=IMAGE_VIEWER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_BROWSER){*mw=BROWSER_MIN_W+2;*mh=BROWSER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_PLAYER){*mw=PLAYER_MIN_W+2;*mh=PLAYER_MIN_H+TITLE_H+2;}
@@ -9295,6 +9297,7 @@ static void handle_wheel(int amount) {
     else if(w->kind==WK_VIEW)image_viewer_scroll(amount*3);
     else if(w->kind==WK_TERM)term_scroll(-amount*3);
     else if(w->kind==WK_NATIVE)native_output_scroll_by(target,-amount*3);
+    else if(w->kind==WK_SETTINGS)settings_scroll_by(amount*48);
     else if(w->kind==WK_EDIT){
         int ax,ay,aw,ah,row,col,old=edit_caret;edit_area(w->x,w->y,w->w,w->h,&ax,&ay,&aw,&ah);
         int cols=aw/EDIT_CHAR_W;if(cols<1)cols=1;edit_caret=edit_len;edit_caret_cell(cols,&row,&col);edit_caret=old;
@@ -10080,14 +10083,34 @@ static int settings_page;
 
 enum {
     SZ_PAGE = 1, SZ_STYLE, SZ_ACCENT, SZ_DESKTOP, SZ_PATTERN, SZ_WINOPT, SZ_SNAP,
-    SZ_SAVER, SZ_SAVER_DELAY, SZ_SAVER_PREVIEW, SZ_DISPLAY, SZ_CLOCK, SZ_MOUSE, SZ_RETRY
+    SZ_SAVER, SZ_SAVER_DELAY, SZ_SAVER_PREVIEW, SZ_DISPLAY, SZ_CLOCK, SZ_MOUSE, SZ_RETRY, SZ_SCROLL
 };
 typedef struct { int x, y, w, h, kind, arg; } SetZone;
 static SetZone set_zones[64];
-static int set_zone_n, set_slider_drag;
+static int set_zone_n, set_slider_drag;   /* 1 the snap slider, 2 the scroll thumb */
 static int set_snap_x, set_snap_w;
 
+/* The page scrolls inside the view [set_view_t, set_view_b). Zones drawn
+ * while the page is clipped are cut to the view, so a control scrolled out
+ * of sight takes no clicks. A key that changes a control asks for it to be
+ * revealed: the next draw scrolls until its zone is inside the view. */
+static int settings_scroll, settings_scroll_max, settings_view_h;
+static int set_view_on, set_view_t, set_view_b;
+static int set_reveal_kind, set_reveal_arg, set_reveal_y, set_reveal_h;
+static int set_sb_x, set_sb_y, set_sb_h, set_sb_total, set_scroll_grab;
+#define SET_NO_REVEAL (-0x40000000)
+/* Hover reads the zones of the previous draw, since a control asks for its
+ * hover state before it records its zone. */
+static SetZone set_prev_zones[64];
+static int set_prev_n;
+
 static void set_zone(int x, int y, int w, int h, int kind, int arg) {
+    if (set_view_on) {
+        if (kind == set_reveal_kind && arg == set_reveal_arg) { set_reveal_y = y; set_reveal_h = h; }
+        if (y < set_view_t) { h -= set_view_t - y; y = set_view_t; }
+        if (y + h > set_view_b) h = set_view_b - y;
+        if (h <= 0) return;
+    }
     if (set_zone_n < (int)(sizeof set_zones / sizeof set_zones[0]))
         set_zones[set_zone_n++] = (SetZone){x, y, w, h, kind, arg};
 }
@@ -10097,17 +10120,47 @@ static const SetZone *set_zone_at(int px, int py) {
     return 0;
 }
 static int set_hover(int kind, int arg) {
-    const SetZone *z = set_zone_at(mouse_x, mouse_y);
-    return z && z->kind == kind && z->arg == arg;
+    for (int i = set_prev_n - 1; i >= 0; i--) {
+        const SetZone *z = &set_prev_zones[i];
+        if (hit(mouse_x, mouse_y, z->x, z->y, z->w, z->h)) return z->kind == kind && z->arg == arg;
+    }
+    return 0;
 }
 
 static int settings_side_w(void) { return MODERN ? 200 : 192; }
-static int settings_window_h(void) { return MODERN ? 540 : 564; }
+static int settings_window_h(void) { return MODERN ? 588 : 580; }
 
 /* Form layout: a label column and a control column. Classic rows sit on
  * the content with a rule between sections; Modern groups rows in cards. */
 typedef struct { int x, y, w, card_y, rows; } SetForm;
 static int set_label_w(void) { return MODERN ? 150 : 152; }
+
+/* Word-wrapped help text. Draws when draw is set and returns the number of
+ * lines; a word wider than w is cut by kit_text. */
+#define SET_LINE_H 16
+static int set_wrap(const char *text, int x, int y, int w, uint8_t color, int draw) {
+    int lines = 0;
+    while (*text) {
+        char line[160];
+        int n = 0, fit = 0;
+        while (text[n] && n < (int)sizeof line - 1) {
+            line[n] = text[n];
+            line[n + 1] = 0;
+            if (n && ui_string_w(line) > w) break;
+            n++;
+            if (!text[n] || text[n] == ' ') fit = n;
+        }
+        if (!text[n]) fit = n;
+        if (!fit) fit = n;
+        kmemcpy(line, text, fit);
+        line[fit] = 0;
+        if (draw) kit_text(line, x, y + lines * SET_LINE_H, color, w, 0);
+        lines++;
+        text += fit;
+        while (*text == ' ') text++;
+    }
+    return lines;
+}
 
 static void set_heading(SetForm *f, const char *title, const char *sub) {
     draw_string_bold(title, f->x, f->y, TK_TEXT);
@@ -10186,18 +10239,21 @@ static void set_segmented(int x, int y, const char *const *labels, int n, int se
 }
 /* A check (Classic) or a toggle at the right of the row (Modern). */
 static void set_switch(SetForm *f, const char *label, const char *hint, int on, int kind, int arg) {
-    int cx, h = hint ? 40 : (MODERN ? 20 : 24);
+    int hint_x = MODERN ? f->x + 16 : f->x + set_label_w() + 16 + ui_theme.check + 8;
+    int hint_w = MODERN ? f->w - 80 : f->x + f->w - hint_x;
+    int lines = hint ? set_wrap(hint, hint_x, 0, hint_w, TK_TEXT2, 0) : 0;
+    int cx, h = hint ? 22 + lines * SET_LINE_H + 2 : (MODERN ? 20 : 24);
     int y = set_row(f, 0, h, &cx);
     if (MODERN) {
         int lx = f->x + 16;
         kit_text(label, lx, hint ? y + 2 : kit_ty(y, h), TK_TEXT, f->w - 80, 0);
-        if (hint) kit_text(hint, lx, y + 22, TK_TEXT2, f->w - 80, 0);
+        if (hint) set_wrap(hint, lx, y + 22, hint_w, TK_TEXT2, 1);
         int tx = f->x + f->w - 16 - KIT_TOGGLE_W, ty = y + (h - KIT_TOGGLE_H) / 2;
         kit_toggle(tx, ty, (on ? KIT_ON : 0) | (set_hover(kind, arg) ? KIT_HOVER : 0));
         set_zone(f->x, y - 8, f->w, h + 16, kind, arg);
     } else {
         int w = kit_check_row(cx, y, label, (on ? KIT_ON : 0) | (set_hover(kind, arg) ? KIT_HOVER : 0), 0);
-        if (hint) kit_text(hint, cx + ui_theme.check + 8, y + 24, TK_TEXT2, f->x + f->w - cx - 30, 0);
+        if (hint) set_wrap(hint, hint_x, y + 24, hint_w, TK_TEXT2, 1);
         set_zone(cx, y, w, 24, kind, arg);
     }
 }
@@ -10220,7 +10276,7 @@ static void set_slider_row(SetForm *f, const char *label, int value, int max, co
     int right = f->x + f->w - (MODERN ? 16 : 0);
     int sw = right - 60 - sx;
     if (sw > 240) sw = 240;
-    kit_slider(sx, y, sw, value, max, set_slider_drag ? KIT_PRESSED : 0);
+    kit_slider(sx, y, sw, value, max, set_slider_drag == 1 ? KIT_PRESSED : 0);
     char v[16];
     fmt_uint(v, (unsigned)value);
     kstrcpy(v + kstrlen(v), unit);
@@ -10321,15 +10377,17 @@ static void settings_display(SetForm *f) {
 }
 
 static const char *const mouse_speed_names[3] = {"Slow", "Normal", "Fast"};
-static const char *const shortcut_keys[][2] = {
-    {"Super", "Apps"}, {"Ctrl+Space", "Apps"}, {"Alt+Tab", "Switch windows"},
+/* Each row: the keys (a second key, when set, is an alternative) and what
+ * they do. */
+static const char *const shortcut_keys[][3] = {
+    {"Super", "Apps", "Ctrl+Space"}, {"Alt+Tab", "Switch windows"},
     {"Alt+F4", "Close window"}, {"Super+Arrow", "Snap or maximize"}, {"Super+D", "Show desktop"},
     {"Alt or F10", "Menu row"}, {"Alt+Space", "Window menu"},
 };
 
 static void settings_input(SetForm *f) {
     int cx, y;
-    set_heading(f, "Keyboard and Mouse", 0);
+    set_heading(f, "Keyboard and Mouse", "These shortcuts work in every app.");
     if (!MODERN) set_rule(f), f->y -= 10;
     set_card_begin(f);
     y = set_row(f, "Double-click speed", kit_segmented_h(), &cx);
@@ -10343,6 +10401,11 @@ static void settings_input(SetForm *f) {
     for (int i = 0; i < n; i++) {
         y = set_row(f, shortcut_keys[i][1], 22, &cx);
         kit_kbd(cx, y, shortcut_keys[i][0]);
+        if (shortcut_keys[i][2]) {
+            int ox = cx + kit_kbd_w(shortcut_keys[i][0]) + 8;
+            kit_text("or", ox, kit_ty(y, MODERN ? 20 : 19), TK_TEXT2, 40, 0);
+            kit_kbd(ox + kit_text_w("or", 0) + 8, y, shortcut_keys[i][2]);
+        }
         if (!MODERN) f->y -= 6;
     }
     if (!MODERN) f->y += 6;
@@ -10408,6 +10471,8 @@ static int settings_failed_pref(void) {
 
 static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
     gui_draw_window(wx, wy, ww, wh, settings_pages[settings_page], 0, fl);
+    kmemcpy(set_prev_zones, set_zones, sizeof set_zones);
+    set_prev_n = set_zone_n;
     set_zone_n = 0;
     int top = wy + TITLE_H, side = settings_side_w(), bottom = wy + wh - 1;
     /* Sidebar */
@@ -10426,28 +10491,94 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
         set_zone(x, iy, w, ih, SZ_PAGE, i);
         iy += ih + (MODERN ? 2 : 0);
     }
-    /* Page */
-    int cx = wx + 1 + side + 1, pad = MODERN ? 20 : 24;
-    SetForm f = {cx + pad, top + (MODERN ? 20 : 28), wx + ww - 1 - (MODERN ? 0 : SB) - cx - 2 * pad, 0, 0};
-    if (!MODERN) {
-        draw_rect(wx + ww - 1 - SB, top, SB, bottom - top, TK_BASE);
-        draw_vline(wx + ww - 1 - SB, top, bottom - top, TK_LINE_SUBTLE);
+    /* Page: drawn clipped to the view at the scroll offset. The page's
+     * height is known only after drawing it, so a scroll that lands out of
+     * range, or a reveal request, draws the page a second time. */
+    int cx = wx + 1 + side + 1, pad = MODERN ? 20 : 24, top_pad = MODERN ? 20 : 28;
+    int page_r = wx + ww - 1, failed = settings_failed_pref();
+    int view_b = failed >= 0 ? bottom - 16 - BTN_H - 12 : bottom;
+    int view_h = view_b - top, zones = set_zone_n, total = 0;
+    SetForm f = {0};
+    if (view_h < 1) view_h = 1;
+    settings_view_h = view_h;
+    for (int pass = 0; pass < 2; pass++) {
+        set_zone_n = zones;
+        draw_rect(cx, top, page_r - cx, view_h, ui_theme.content);
+        f = (SetForm){cx + pad, top + top_pad - settings_scroll, page_r - (MODERN ? 0 : SB) - cx - 2 * pad, 0, 0};
+        set_view_on = 1;
+        set_view_t = top;
+        set_view_b = view_b;
+        set_reveal_y = SET_NO_REVEAL;
+        gfx_clip(cx, top, page_r - (MODERN ? 0 : SB) - cx, view_h);
+        switch (settings_page) {
+        case SET_APPEARANCE: settings_appearance(&f); break;
+        case SET_DESKTOP: settings_desktop(&f); break;
+        case SET_DISPLAY: settings_display(&f); break;
+        case SET_INPUT: settings_input(&f); break;
+        case SET_TIME: settings_time(&f); break;
+        default: settings_about(&f); break;
+        }
+        gfx_unclip();
+        set_view_on = 0;
+        total = f.y + settings_scroll - top + (MODERN ? 20 : 24);
+        settings_scroll_max = total > view_h ? total - view_h : 0;
+        int want = settings_scroll;
+        if (set_reveal_kind && set_reveal_y != SET_NO_REVEAL) {
+            int ry = set_reveal_y + settings_scroll - top, margin = 12;
+            if (ry - margin < want) want = ry - margin;
+            if (ry + set_reveal_h + margin > want + view_h) want = ry + set_reveal_h + margin - view_h;
+        }
+        set_reveal_kind = 0;
+        if (want > settings_scroll_max) want = settings_scroll_max;
+        if (want < 0) want = 0;
+        if (want == settings_scroll) break;
+        settings_scroll = want;
     }
-    switch (settings_page) {
-    case SET_APPEARANCE: settings_appearance(&f); break;
-    case SET_DESKTOP: settings_desktop(&f); break;
-    case SET_DISPLAY: settings_display(&f); break;
-    case SET_INPUT: settings_input(&f); break;
-    case SET_TIME: settings_time(&f); break;
-    default: settings_about(&f); break;
+    /* The scrollbar: Classic keeps its track in the reserved column; Modern
+     * overlays a thin thumb at the page's right edge while the page overflows. */
+    set_sb_x = page_r - SB;
+    set_sb_y = top;
+    set_sb_h = view_h;
+    set_sb_total = total;
+    {
+        int sb_state = set_slider_drag == 2 ? KIT_PRESSED : set_hover(SZ_SCROLL, 0) ? KIT_HOVER : 0;
+        if (!MODERN) draw_rect(set_sb_x, top, SB, bottom - top, TK_BASE);
+        kit_vscroll(set_sb_x, top, view_h, settings_scroll, view_h, total, sb_state);
+        if (!MODERN) draw_vline(set_sb_x, top, bottom - top, TK_LINE_SUBTLE);
+        if (total > view_h) set_zone(set_sb_x, top, SB, view_h, SZ_SCROLL, 0);
     }
-    int failed = settings_failed_pref();
     if (failed >= 0) {
         int by = bottom - 16 - BTN_H, bw = kit_button_w("Retry saving", -1);
+        draw_rect(cx, view_b, page_r - (MODERN ? 0 : SB) - cx, bottom - view_b, ui_theme.content);
+        draw_hline(cx, view_b, page_r - (MODERN ? 0 : SB) - cx, TK_LINE_SUBTLE);
         kit_text(preference_message(failed), f.x, kit_ty(by, BTN_H), TK_RED_700, f.w - bw - 12, 0);
         kit_button(f.x + f.w - bw, by, bw, BTN_H, "Retry saving", -1, KB_DEFAULT, set_hover(SZ_RETRY, 0) ? KIT_HOVER : 0);
         set_zone(f.x + f.w - bw, by, bw, BTN_H, SZ_RETRY, 0);
     }
+}
+
+/* Scrolls the page by dy pixels, kept inside the range of the last draw. */
+static void settings_scroll_by(int dy) {
+    int v = settings_scroll + dy;
+    if (v > settings_scroll_max) v = settings_scroll_max;
+    if (v < 0) v = 0;
+    if (v != settings_scroll) { settings_scroll = v; dirty = 1; }
+}
+static void settings_page_set(int page) {
+    if (page != settings_page) settings_scroll = 0;
+    settings_page = page;
+}
+/* Scroll thumb geometry, as kit_vscroll draws it. */
+static void settings_thumb(int *at, int *size) {
+    kit_scroll_thumb(set_sb_h - 4, settings_scroll, set_sb_h, set_sb_total, at, size);
+    *at += set_sb_y + 2;
+}
+static void settings_scroll_drag(void) {
+    int at, size, range = set_sb_h - 4;
+    settings_thumb(&at, &size);
+    if (range <= size) return;
+    int y = mouse_y - set_scroll_grab - (set_sb_y + 2);
+    settings_scroll_by(y * settings_scroll_max / (range - size) - settings_scroll);
 }
 
 static void settings_slider_set(void) {
@@ -10459,6 +10590,12 @@ static void settings_slider_set(void) {
 }
 static void settings_drag(void) {
     if (!set_slider_drag) return;
+    if (set_slider_drag == 2) {
+        if (mouse_left) settings_scroll_drag();
+        else set_slider_drag = 0;
+        dirty = 1;
+        return;
+    }
     if (!mouse_left) {
         set_slider_drag = 0;
         preference_save(PREF_SNAP, win_snap_distance);
@@ -10473,7 +10610,15 @@ static void handle_settings_click(int wx, int wy, int ww, int wh) {
     const SetZone *z = set_zone_at(mouse_x, mouse_y);
     if (!z) return;
     switch (z->kind) {
-    case SZ_PAGE: settings_page = z->arg; break;
+    case SZ_PAGE: settings_page_set(z->arg); break;
+    case SZ_SCROLL: {
+        int at, size;
+        settings_thumb(&at, &size);
+        if (mouse_y < at) settings_scroll_by(-settings_view_h * 7 / 8);
+        else if (mouse_y >= at + size) settings_scroll_by(settings_view_h * 7 / 8);
+        else { set_slider_drag = 2; set_scroll_grab = mouse_y - at; }
+        break;
+    }
     case SZ_STYLE: style_set(z->arg); break;
     case SZ_ACCENT: accent_set(z->arg); break;
     case SZ_DESKTOP: desktop_color_set(z->arg); break;
@@ -10492,15 +10637,29 @@ static void handle_settings_click(int wx, int wy, int ww, int wh) {
     dirty = 1;
 }
 
-/* Settings keys: Tab and the arrows move between pages, 1-4 pick a display
- * mode on the Display page, R retries saving. */
+/* Settings keys: Tab and the arrows move between pages, Page Up, Page Down,
+ * Home and End scroll the page, 1-4 pick a display mode on the Display
+ * page, R retries saving. A control changed from the keyboard is scrolled
+ * into view. */
 static void settings_key(void) {
     if (key_sc == KEY_ESC) { close_front(); return; }
-    if (key_sc == KEY_TAB || key_sc == KEY_DOWN) settings_page = (settings_page + (shift_down ? SET_PAGES - 1 : 1)) % SET_PAGES;
-    else if (key_sc == KEY_UP) settings_page = (settings_page + SET_PAGES - 1) % SET_PAGES;
-    else if (key_char >= '1' && key_char <= '0' + DISPLAY_MODE_COUNT) { display_request(key_char - '1'); return; }
+    if (key_sc == KEY_TAB || key_sc == KEY_DOWN) settings_page_set((settings_page + (shift_down ? SET_PAGES - 1 : 1)) % SET_PAGES);
+    else if (key_sc == KEY_UP) settings_page_set((settings_page + SET_PAGES - 1) % SET_PAGES);
+    else if (key_sc == 0x49 || key_sc == 0x51) settings_scroll_by((key_sc == 0x49 ? -1 : 1) * settings_view_h * 7 / 8);
+    else if (key_sc == 0x47 || key_sc == 0x4f) settings_scroll_by(key_sc == 0x47 ? -settings_scroll : settings_scroll_max);
+    else if (key_char >= '1' && key_char <= '0' + DISPLAY_MODE_COUNT) {
+        if (settings_page == SET_DISPLAY) { set_reveal_kind = SZ_DISPLAY; set_reveal_arg = key_char - '1'; }
+        display_request(key_char - '1');
+        dirty = 1;
+        return;
+    }
     else if (key_char == 'r' || key_char == 'R') preferences_retry();
-    else if (key_sc == KEY_SPACE && settings_page == SET_DESKTOP) { saver_enabled = !saver_enabled; saver_save(); }
+    else if (key_sc == KEY_SPACE && settings_page == SET_DESKTOP) {
+        saver_enabled = !saver_enabled;
+        saver_save();
+        set_reveal_kind = SZ_SAVER;
+        set_reveal_arg = 0;
+    }
     dirty = 1;
 }
 
