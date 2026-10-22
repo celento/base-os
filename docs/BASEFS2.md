@@ -12,7 +12,8 @@ old volumes.
 ## Goals
 
 - No fixed node count, name length (up to 255 bytes) or file size limit other
-  than the disk.
+  than the disk (files go up to 2 GiB; past the per-file memory limit they
+  are read and written in pieces).
 - A crash or power cut at any moment leaves the volume at the last completed
   commit.
 - Every byte read back is checked: file data per extent, the node table and
@@ -142,6 +143,27 @@ the snapshot format. Growth counts in whole blocks: a file can grow into the
 rest of its last block on a full volume, and a write that needs a new block
 is refused. A new node is refused once its record would eat into the held-back
 room. A deleted file's blocks count as free once the delete is saved.
+
+### Files past the file limit
+
+A file may grow past the per-file limit (2 MiB, or 16 MiB with the large
+arenas) up to 2 GiB. Such a file never loads whole: `fs_data` returns 0 for
+it, and it is read and written in pieces with `fs_read_at`, `fs_write_at` and
+`fs_truncate` (`fs_streamed` tells which files these are). Programs reach it
+through file descriptors: a descriptor opened for writing keeps a small file
+in a buffer as before, and switches to writing through to the volume once the
+file passes the limit. Desktop apps that load whole files refuse it.
+
+A write replaces only the extents it touches. It reads an extent, changes
+it, and writes the result to free blocks at once; the old extent stays owned
+until the next commit, which records the new extent list, so a crash before
+that commit keeps the previous contents. Extents written since the last
+commit that a later write replaces are free again right away. A write is
+admitted while the next commit still fits with the volume's reserve, which
+counts these files at the file limit since they are never rewritten whole;
+when it does not fit, pending changes are saved first if that frees their old
+copies. A failure part way through a long write can leave its earlier pieces
+written. Copies go a piece at a time.
 
 ### Conversion of snapshot disks
 

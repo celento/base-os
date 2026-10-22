@@ -153,6 +153,8 @@ int app_view_start_file(int slot,int file,unsigned identity,
     if(v->binding.process&&process_status(v->binding.process)==PROCESS_TASK_DONE)app_view_close(slot);
     if(!identity||!fs_valid(file)||fs_is_dir(file)||fs_is_app(file)||fs_identity(file)!=identity)
         output_write(slot,output,"Cannot start: the selected program changed or is no longer a file.");
+    else if(fs_streamed(file))
+        output_write(slot,output,"Cannot start: the program is too large to load.");
     else if(v->binding.process)
         output_write(slot,output,"Cannot start: this terminal already has a native task.");
     else if(argument_length>PROCESS_ARGUMENT_MAX||
@@ -207,7 +209,8 @@ int app_view_start_owned_file(int slot,int file,unsigned identity,const char *ar
     if(!valid_slot(slot))return APP_VIEW_START_INVALID;
     app_storage_init();
     AppView *v=views+slot;
-    if(!identity||!fs_valid(file)||fs_is_dir(file)||fs_is_app(file)||fs_identity(file)!=identity)
+    if(!identity||!fs_valid(file)||fs_is_dir(file)||fs_is_app(file)||fs_streamed(file)||
+       fs_identity(file)!=identity)
         return APP_VIEW_START_INVALID;
     /* Results consume a real WM slot until dismissed; never replace one here. */
     if(v->binding.process||v->backend==APP_VIEW_BACKEND_OWNED)return APP_VIEW_START_BUSY;

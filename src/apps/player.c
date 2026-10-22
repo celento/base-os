@@ -114,7 +114,7 @@ int player_open_file(int id) {
     }
     int bytes = fs_size(id);
     unsigned capacity = is_video(id) ? VIDEO_MAX_FILE_BYTES : audio_capacity_bytes();
-    if (bytes <= 0 || (unsigned)bytes > capacity) {
+    if (bytes <= 0 || (unsigned)bytes > capacity || fs_streamed(id)) {
         int error = bytes <= 0 ? MEDIA_BAD_FILE : MEDIA_TOO_LARGE;
         copy_text(message, media_error_string(error), sizeof message); return error;
     }

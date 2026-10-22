@@ -4,7 +4,8 @@ python3 tools/elf_libc_test.py build
 Needs build/toolchain (python3 toolchain/build.py). Builds examples/elf/hello.c
 , hello.cpp and files.c, then boots them in the tools/elf_runtime_test.py fixture:
 stdio, malloc of 32 MiB, POSIX threads with a mutex, gmtime, C++ containers,
-static constructors and exceptions, and files, directories and pipes.
+static constructors and exceptions, and files, directories and pipes, including
+a 5 MiB file read and written in pieces.
 """
 import pathlib
 import subprocess
@@ -62,6 +63,7 @@ def run(build):
     ], disk)
     for needle in ('Hello from C on BaseOS (3 arguments)', 'malloc and memset of 32 MiB ok',
                    'read 100 lines, last 100', 'notes.txt is 792 bytes', 'entry kept.txt',
+                   'big file ok: 5242880 bytes',
                    'Hello from C++ on BaseOS: apps first, 4 words, 2 counters'):
         assert needle in text, needle
     print('ELF_LIBC_PASS: mlibc stdio, heap, pthreads, time, files and pipes; libstdc++ containers and exceptions.',
