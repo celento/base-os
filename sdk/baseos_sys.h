@@ -61,6 +61,12 @@ enum {
     BOS_SYS_FSYNC = 35,       /* (fd): write a file's contents back to the volume */
     BOS_SYS_FTRUNCATE = 36,   /* (fd, length) */
     BOS_SYS_FD_PATH = 37,     /* (fd, buffer, length) -> length including the NUL: a directory's path */
+    BOS_SYS_WINDOW_CREATE = 38,    /* (BosWindowSpec*) -> window handle */
+    BOS_SYS_WINDOW_DESTROY = 39,   /* (window) */
+    BOS_SYS_WINDOW_PRESENT = 40,   /* (window, pixels, pitch): a whole frame of 0xXXRRGGBB words */
+    BOS_SYS_WINDOW_CONFIGURE = 41, /* (window, BosWindowSpec*): new title, surface size or flags */
+    BOS_SYS_WINDOW_EVENT = 42,     /* (BosWindowEvent*, timeout ms, 0: poll, ~0: forever) -> 1 or 0 */
+    BOS_SYS_DISPLAY_INFO = 43,     /* (BosDisplayInfo*) */
     BOS_SYS_LIMIT
 };
 
@@ -166,5 +172,53 @@ typedef struct {
     unsigned int process_pages;   /* frames owned by the calling process */
     unsigned int mapped_bytes;    /* reserved user mappings, touched or not */
 } BosMemInfo;
+
+/* Windows. A window shows a surface of width x height pixels that the
+ * program draws itself and hands over whole with WINDOW_PRESENT; the
+ * desktop scales it when the window's client area differs. Events for all
+ * of a process's windows arrive through WINDOW_EVENT. */
+#define BOS_WINDOW_TITLE 64
+#define BOS_WINDOW_RESIZABLE 1u       /* the user may resize; RESIZED reports the client size */
+#define BOS_WINDOW_MAXIMIZED 2u       /* fill the screen above the taskbar */
+#define BOS_WINDOW_RELATIVE_MOUSE 4u  /* while focused: all pointer input, cursor hidden */
+#define BOS_WINDOW_HIDE_CURSOR 8u     /* no desktop cursor over the client area */
+typedef struct {
+    unsigned int width, height;   /* surface size, 1 to 4096 */
+    unsigned int flags;           /* BOS_WINDOW_* */
+    char title[BOS_WINDOW_TITLE];
+} BosWindowSpec;
+
+enum {
+    BOS_EVENT_KEY_DOWN = 1,       /* a: scancode, b: character or 0 */
+    BOS_EVENT_KEY_UP,             /* a: scancode */
+    BOS_EVENT_MOUSE_MOVE,         /* a, b: surface position; c, d: raw motion */
+    BOS_EVENT_MOUSE_DOWN,         /* a: button (1 left, 2 right, 3 middle); b, c: position */
+    BOS_EVENT_MOUSE_UP,           /* as MOUSE_DOWN */
+    BOS_EVENT_WHEEL,              /* a: notches, positive toward the user */
+    BOS_EVENT_FOCUS_IN,
+    BOS_EVENT_FOCUS_OUT,
+    BOS_EVENT_CLOSE,              /* the user asked the window to close */
+    BOS_EVENT_RESIZED,            /* a, b: client area size */
+    BOS_EVENT_SHOWN,
+    BOS_EVENT_HIDDEN              /* minimized */
+};
+/* Scancodes are PC set 1 make codes; keys with an E0 prefix add 0x100. */
+#define BOS_KEY_EXTENDED 0x100
+#define BOS_MOD_SHIFT 1u
+#define BOS_MOD_CTRL 2u
+#define BOS_MOD_ALT 4u
+typedef struct {
+    unsigned int type;            /* BOS_EVENT_* */
+    unsigned int window;
+    int a, b, c, d;
+    unsigned int modifiers;       /* BOS_MOD_* */
+    unsigned int time_ms;
+} BosWindowEvent;
+
+typedef struct {
+    unsigned int width, height;   /* the screen in pixels */
+    unsigned int work_width, work_height; /* the client area of a maximized window */
+    unsigned int refresh_hz;
+} BosDisplayInfo;
 
 #endif

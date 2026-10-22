@@ -87,6 +87,10 @@ void native_ui_cancel_all(unsigned reason,unsigned ticks,unsigned buttons){(void
 void native_ui_refresh(unsigned ticks,unsigned buttons){(void)ticks;(void)buttons;}
 void native_ui_input_loss(unsigned ticks,unsigned buttons,unsigned dropped){(void)ticks;(void)buttons;(void)dropped;}
 #endif
+/* Program windows (kernel/uwin.h) are outside this adapter's fixtures. */
+static int program_pointer_sample(const InputSample *sample,unsigned buttons){(void)sample;(void)buttons;return 0;}
+static int program_key_sample(const InputSample *sample){(void)sample;return 0;}
+static void program_cursor_update(void){}
 static uint32_t input_gesture_ticks(void);
 static int double_click(int item,int *last_item,uint32_t *last_frame);
 struct Record{char kind;int x,y,buttons,mod,value;unsigned ticks;};

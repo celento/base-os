@@ -12,7 +12,8 @@ int fb_w=1024,fb_h=768;
 static const struct {const char *label;} icons[ICON_DESK_TRASH]={{"Terminal"},{"Files"}};
 enum { WK_NONE=-1, WK_TERM, WK_EDIT, WK_CLOCK, WK_CAL, WK_MINES, WK_2048,
        WK_BREAKOUT, WK_SYSMON, WK_HELLO, WK_PROPERTIES, WK_WRITER, WK_SPREADSHEET,
-       WK_VIEW, WK_BROWSER, WK_PLAYER, WK_NATIVE };
+       WK_VIEW, WK_BROWSER, WK_PLAYER, WK_NATIVE, WK_PROGRAM };
+static int program_close(int slot){(void)slot;return 1;}
 typedef struct {int open,kind,seq,x,y,w,h;} Win;
 static Win wins[MAX_WIN];
 static unsigned window_state[MAX_WIN];

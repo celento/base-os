@@ -33,6 +33,7 @@ typedef struct {
     uint64_t serial, epoch;
     uint32_t ticks, modifiers, buttons;
     int32_t x, y, wheel;
+    int32_t dx, dy;   /* pointer motion before clamping to the screen, down positive */
     uint32_t kind, flags, scancode, character, dropped, reason;
 } InputSample;
 typedef struct {

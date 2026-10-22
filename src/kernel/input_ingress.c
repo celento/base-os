@@ -128,6 +128,7 @@ void input_mouse_byte(InputIngress *in, uint8_t byte, uint32_t ticks) {
     int dy = input_pointer_scale(in->speed, in->packet[2] - ((flags & 0x20) ? 256 : 0));
     in->x = clamp(in->x + dx, in->width); in->y = clamp(in->y - dy, in->height);
     InputSample s = snapshot(in); s.kind = INPUT_POINTER;
+    s.dx = dx; s.dy = -dy;
     if (in->packet_bytes == 4) {
         s.wheel = in->mouse_type == 4 ? in->packet[3] & 15 : (int8_t)in->packet[3];
         if (in->mouse_type == 4 && s.wheel >= 8) s.wheel -= 16;
