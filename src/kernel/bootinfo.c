@@ -139,13 +139,13 @@ _Static_assert(GFX_CACHE_BASE >= APPS_BASE && GFX_CACHE_BASE + GFX_CACHE_CAPACIT
 _Static_assert(PRESENT_BASE + PRESENT_CAPACITY <= NET_BASE, "presenter overlaps network");
 _Static_assert(NET_BASE + NET_CAPACITY <= BROWSER_BASE, "network overlaps browser");
 _Static_assert(BROWSER_BASE + BROWSER_CAPACITY <= RAM_REQUIRED_END, "browser exceeds RAM");
-_Static_assert(BROWSER_BASE + BROWSER_CAPACITY <= ICON_BASE && ICON_BASE + ICON_CAPACITY <= AUDIO_WORK_BASE, "icons overlap browser or audio");
 
 _Static_assert(TASK_BASE + TASK_CAPACITY <= EDITOR_BASE, "task state overlaps editor");
 _Static_assert(EDITOR_BASE + EDITOR_CAPACITY <= VIDEO_BASE, "editor overlaps video");
 _Static_assert(VIDEO_BASE + VIDEO_CAPACITY <= RAM_REQUIRED_END, "video exceeds RAM");
 
 _Static_assert(DOWNLOAD_BASE >= APPS_BASE && DOWNLOAD_BASE + DOWNLOAD_CAPACITY <= GFX_CACHE_BASE, "download arena overlaps application cache");
+_Static_assert(ICON_BASE >= DOWNLOAD_BASE + DOWNLOAD_CAPACITY && ICON_BASE + ICON_CAPACITY <= GFX_CACHE_BASE, "icon data overlaps downloads or graphics cache");
 
 _Static_assert(PAINT_HISTORY_BASE >= APPS_BASE && PAINT_HISTORY_BASE + PAINT_HISTORY_CAPACITY <= DOWNLOAD_BASE, "paint history overlaps downloads");
 _Static_assert(GFX_CACHE_BASE + GFX_CACHE_CAPACITY <= APPS_BASE + 0x300000, "graphics cache overlaps terminals");

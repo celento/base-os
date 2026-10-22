@@ -29,7 +29,6 @@ _Static_assert(PHYS_KIND_LIMIT < CLAIM_BIT, "page kinds overlap transient claim 
     X(presentation, PRESENT_BASE, PRESENT_CAPACITY) \
     X(network_and_nic_dma, NET_BASE, NET_CAPACITY) \
     X(browser, BROWSER_BASE, BROWSER_CAPACITY) \
-    X(ui_icons, ICON_BASE, ICON_CAPACITY) \
     X(default_audio_workspace, AUDIO_WORK_BASE, AUDIO_WORK_CAPACITY) \
     X(image_viewer_and_decoder, IMAGE_BASE, IMAGE_CAPACITY) \
     X(default_fs_pool, FS_POOL_BASE, FS_POOL_CAPACITY) \

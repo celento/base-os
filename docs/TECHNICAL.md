@@ -95,6 +95,7 @@ The QEMU suite creates disposable images and checks fresh boot, reboot, timer pr
 | `0xA00000` | cached desktop background   |
 | `0xB00000`–`0xB20000` | Paint undo history |
 | `0xB30000`–`0xD40000` | download buffer reservation |
+| `0xD40000`–`0xD80000` | unpacked UI icons for the active style, within app arena |
 | `0xE00000`–`0xF00000` | independent Terminal state/script buffers |
 | `0xDF0000`–`0xE00000` | reserved graphics lookup cache within app arena |
 | `0xF00000` | page directory and user page table |
@@ -103,7 +104,6 @@ The QEMU suite creates disposable images and checks fresh boot, reboot, timer pr
 | `0x1500000` | last-presented framebuffer mirror |
 | `0x1600000`–`0x1610000` | network arena |
 | `0x1610000`–`0x1650000` | browser arena |
-| `0x1650000`–`0x1690000` | unpacked UI icons for the active style |
 | `0x1700000`–`0x1900000` | audio source/work arena |
 | `0x1900000`–`0x2000000` | reserved image decoding / owned pixels |
 | `0x2000000`–`0x2800000` | compact file-data pool (8 MiB) |

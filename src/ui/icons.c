@@ -48,7 +48,7 @@ int ui_icon_has(int id, int size) {
 }
 
 /* The active style's icon data, unpacked on first use and again after a
- * style change, into its own arena outside the kernel image and BSS. A
+ * style change, into app arena slack outside the kernel image and BSS. A
  * truncated or corrupt stream leaves the rest zeroed, which draws as
  * transparent pixels. */
 #if __STDC_HOSTED__
