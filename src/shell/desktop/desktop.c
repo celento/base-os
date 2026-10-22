@@ -549,7 +549,7 @@ enum {
     ACT_SORT_NAME, ACT_SORT_KIND, ACT_SORT_SIZE, ACT_SORT_MODIFIED, ACT_SORT_DESCENDING,
     ACT_LINE_NUMBERS, ACT_RESTORE, ACT_MOVE, ACT_SIZE, ACT_SETTINGS, ACT_EXPORT_PDF,
     ACT_RECENT_MENU, ACT_RECENT_CLEAR, ACT_COPY_PATH, ACT_NEW_GAME, ACT_REVERT, ACT_QUIT,
-    ACT_RESTART, ACT_SHUTDOWN, ACT_DESK_OPEN, ACT_DESK_PROPERTIES,
+    ACT_RESTART, ACT_SHUTDOWN, ACT_DESK_OPEN, ACT_DESK_PROPERTIES, ACT_VIEW_ICONS, ACT_VIEW_DETAILS,
     ACT_RECENT = 0x300 /* + index */
 };
 
@@ -574,6 +574,7 @@ static const MItem mi_files_edit[] = {
     MSEP, {"Copy Pat&h", "", ACT_COPY_PATH, 0}, MSEP, {"&Find", "Ctrl+F", ACT_FILTER, 0},
 };
 static const MItem mi_files_view[] = {
+    {"&Icons", "", ACT_VIEW_ICONS, KIT_MENU_RADIO}, {"De&tails", "", ACT_VIEW_DETAILS, KIT_MENU_RADIO}, MSEP,
     {"By &Name", "Ctrl+1", ACT_SORT_NAME, KIT_MENU_RADIO}, {"By &Kind", "Ctrl+2", ACT_SORT_KIND, KIT_MENU_RADIO},
     {"By &Size", "Ctrl+3", ACT_SORT_SIZE, KIT_MENU_RADIO}, {"By &Modified", "Ctrl+4", ACT_SORT_MODIFIED, KIT_MENU_RADIO},
     MSEP, {"&Descending", "", ACT_SORT_DESCENDING, KIT_MENU_CHECK}, MSEP, {"&Refresh", "F5", ACT_REFRESH, 0},
@@ -1132,6 +1133,7 @@ typedef struct {
     int files_total;
     FileViewOptions files_view;
     int filter_open, filter_focus, filter_select_all;
+    int files_details;       /* detail rows instead of icon tiles */
     int hist[12], hist_n, hist_pos;
     unsigned hist_identity[12];
     uint32_t last_click_frame;
@@ -1178,6 +1180,7 @@ _Static_assert(sizeof(WindowState) * MAX_WIN < EDITOR_CAPACITY - 2 * EDIT_BUF_SI
 #define fm_count (window_state[context_slot].count)
 #define fm_total (window_state[context_slot].files_total)
 #define fm_view (window_state[context_slot].files_view)
+#define fm_details (window_state[context_slot].files_details)
 #define fm_filter_open (window_state[context_slot].filter_open)
 #define fm_filter_focus (window_state[context_slot].filter_focus)
 #define fm_filter_select_all (window_state[context_slot].filter_select_all)
@@ -1888,15 +1891,12 @@ static int fm_has_parent(void) {
 }
 
 static int fm_vis_count(void) {
-    return fm_count + (fm_has_parent() ? 1 : 0);
+    return fm_count;
 }
 
 static int fm_row_id(int row) {
     if(!fm_cwd_valid())return -2;
-    int up = fm_has_parent() ? 1 : 0;
-    if (up && row == 0)
-        return -1; /* synthetic ".." */
-    int i = row - up;
+    int i = row;
     if (i < 0 || i >= fm_count ||
         !file_view_valid(fm_cwd,fm_ids[i],fm_ids_identity[i])) return -2;
     return fm_ids[i];
@@ -1907,14 +1907,13 @@ static void fm_refresh(void) {
      * object; filtering, deletion or node-slot reuse clears the selection. */
     int selected_id=fm_row_id(fm_selected);
     unsigned selected_identity=selected_id>=0?fs_identity(selected_id):0;
-    int parent_selected=selected_id==-1;
     fm_checked_cwd();
     fm_view.hidden[0]=fm_cwd==fs_root()?trash_id:-1;
     fm_view.hidden[1]=fm_cwd==fs_root()?prefs_id:-1;
     int capacity=window_state_reserve(&window_state[context_slot],fs_child_count(fm_cwd));
     fm_count=file_view_build(fm_cwd,&fm_view,fm_ids,fm_ids_identity,capacity,&fm_total);
     int index=file_view_find(fm_ids,fm_ids_identity,fm_count,selected_id,selected_identity);
-    fm_selected=index>=0?index+(fm_has_parent()?1:0):parent_selected&&fm_has_parent()?0:-1;
+    fm_selected=index;
 }
 
 /* The filter belongs to this folder; leaving the folder clears it. */
@@ -1972,7 +1971,7 @@ static int fm_filter_key(void) {
         if(length<FILE_VIEW_FILTER_LEN-1){fm_view.filter[length++]=key_char;fm_view.filter[length]=0;changed=1;}
     }else if(key_sc==KEY_UP||key_sc==KEY_DOWN){
         fm_filter_focus=fm_filter_select_all=0;dirty=1;
-        if(fm_selected<0&&fm_count){fm_selected=(key_sc==KEY_UP?fm_count-1:0)+(fm_has_parent()?1:0);return 1;}
+        if(fm_selected<0&&fm_count){fm_selected=key_sc==KEY_UP?fm_count-1:0;return 1;}
         return 0;
     }else return 1;
     if(changed){fm_manual_scroll=fm_first=0;fm_last_click_item=-1;fm_refresh();}
@@ -4473,7 +4472,7 @@ static void fm_navigate(int id) {
     fm_rename_cancel();
     fm_set_cwd(id);
     fm_history_sync();
-    fm_selected = 0;
+    fm_selected = -1;
     fm_refresh();
     dirty = 1;
 }
@@ -4483,12 +4482,8 @@ static void fm_open_selected(void) {
     if (vis <= 0 || fm_selected < 0 || fm_selected >= vis)
         return;
     int id = fm_row_id(fm_selected);
-    if (id == -1) {
-        fm_go_up();
-        return;
-    }
     if (id < 0) {fm_refresh();dirty=1;return;}
-    int index=fm_selected-(fm_has_parent()?1:0);
+    int index=fm_selected;
     if(fs_identity(id)!=fm_ids_identity[index]){fm_refresh();dirty=1;return;}
     if (fs_is_dir(id)) {
         fm_navigate(id);
@@ -4530,7 +4525,7 @@ static void fm_select_id(int id) {
         fm_view.filter[0]=0;fm_filter_select_all=0;fm_refresh();
     }
     int index=file_view_find(fm_ids,fm_ids_identity,fm_count,id,identity);
-    fm_selected=index>=0?index+(fm_has_parent()?1:0):-1;
+    fm_selected=index;
     fm_manual_scroll=0;
 }
 
@@ -4674,47 +4669,7 @@ static void do_empty_trash(void) {
 
 /* ---------- Drawing ---------- */
 
-static void files_title(char *title, int max) {
-    if (fm_cwd == fs_root()) {
-        kstrcpy(title, "Files");
-        return;
-    }
-    const char *nm = fs_name(fm_cwd);
-    int i = 0;
-    while (nm[i] && i < max - 1) {
-        title[i] = nm[i];
-        i++;
-    }
-    title[i] = 0;
-}
-
-static void files_info(char *info, int max) {
-    if((files_action_busy&&(int32_t)(files_message_until-frame_count)>0)||
-       (file_clipboard_status()[0]&&((int32_t)(files_message_until-frame_count)>0||file_clipboard_pending_sync()))){
-        const char *message=files_action_busy&&(int32_t)(files_message_until-frame_count)>0?
-            "Disk saving. Retry the file action.":file_clipboard_status();int i=0;
-        while(i+1<max&&message[i]){info[i]=message[i];i++;}
-        if(max>0)info[i]=0;
-    }else {
-        char number[12];int n=0;
-        fmt_uint(number,(unsigned)fm_count);
-        while(number[n]&&n+1<max){info[n]=number[n];n++;}
-        info[n]=0;
-        const char *label=fm_view.filter[0]?" of ":fm_count==1?" item | ":" items | ";
-        for(int i=0;label[i]&&n+1<max;i++)info[n++]=label[i];
-        if(fm_view.filter[0]){
-            fmt_uint(number,(unsigned)fm_total);
-            for(int i=0;number[i]&&n+1<max;i++)info[n++]=number[i];
-            label=" shown | ";
-            for(int i=0;label[i]&&n+1<max;i++)info[n++]=label[i];
-        }
-        info[n]=0;
-        if(n+1<max)fs_path(fm_cwd,info+n,max-n);
-    }
-}
-
 static int file_extension(const char *name,const char *suffix);
-/* Filled, color-coded file icons for unselected rows. */
 /* Application nodes are named after their desktop icon; a few have longer names. */
 static int app_icon_by_name(const char *name) {
     for (int i = 0; i < ICON_DESK_COUNT; i++)
@@ -4724,357 +4679,6 @@ static int app_icon_by_name(const char *name) {
     if (kstrcmp(name, "Hello") == 0) return ICON_APP_HELLO;
     return ICON_WINDOW;
 }
-static void draw_file_row_named(int x, int y, int w, const char *name,
-                               int is_dir, int is_app, int sel, int dim, int cut,
-                               const char *detail, int detail_width) {
-    uint8_t fg = dim ? ui_text_dim : (sel ? ui_on_accent : ui_text);
-    uint8_t bg = sel ? ui_accent : ui_body;
-    if (dim) {
-        sel = 0;
-        bg = ui_body;
-    }
-    if (sel)
-        draw_round_rect(x + 2, y, w - 4, ROW_H - 2, 5, ui_accent);
-    (void)bg;
-    int icon_y = y + (ROW_H - AI_SMALL) / 2;
-    app_icon_draw(is_dir ? AI_FILES : is_app ? app_icon_for(app_icon_by_name(name)) : AI_DOCUMENT, x + 4, icon_y, AI_SMALL);
-    int ty = y + (ROW_H - CHAR_H) / 2;
-    int end=x+w-12;
-    if(detail&&detail_width){
-        if(cut)detail="Cut";
-        draw_string_clip(detail,x+w-detail_width,ty,sel?ui_on_accent:ui_text_dim,x+w-10);
-        end=x+w-detail_width-12;
-    }else if(w>420){
-        const char *kind=cut?"Cut":is_dir?"Folder":(is_app?"Application":"Document");
-        draw_string(kind,x+w-110,ty,sel?ui_on_accent:ui_text_dim);
-        end=x+w-130;
-    }else if(cut){
-        draw_string("Cut",x+w-38,ty,sel?ui_on_accent:ui_text_dim);
-        end=x+w-46;
-    }
-    draw_string_clip(name, x + 28, ty, fg, end);
-}
-
-static void draw_file_row_detail(int x, int y, int w, int id, int sel, int dim,
-                                 const char *detail, int detail_width) {
-    const char *nm = fs_name(id);
-    int is_app = 0;
-    if (fs_is_app(id) || kstrcmp(nm, "Calculator") == 0) {
-        if (kstrcmp(nm, "Paint") == 0)
-            is_app = 2;
-        else if (kstrcmp(nm, "Image Viewer") == 0)
-            is_app = 3;
-        else if (kstrcmp(nm, "Snake") == 0)
-            is_app = 5;
-        else if (kstrcmp(nm, "Terminal") == 0)
-            is_app = 6;
-        else if (kstrcmp(nm, "Wordle") == 0)
-            is_app = 7;
-        else
-            is_app = 1;
-    } else if (!fs_is_dir(id) && file_extension(nm,".bex")) {
-        is_app = 6;
-    } else if (is_image_file(id)) {
-        is_app = 4;
-    }
-    int renaming = fm_renaming && id == fm_rename_id && fs_identity(id)==fm_rename_identity;
-    draw_file_row_named(x, y, w, renaming ? "" : fs_name(id),
-                        fs_is_dir(id), is_app, sel, dim,
-                        file_clipboard_mode()==FILE_CLIPBOARD_CUT&&file_clipboard_source()==id&&
-                        file_clipboard_identity()==fs_identity(id),detail,detail_width);
-    if (!renaming)
-        return;
-    int fx = x + 26;
-    int fy = y - 1;
-    int fh = ROW_H - 2;
-    int tw = ui_string_w(fm_rename_buf) + 16;
-    if (tw < 80)
-        tw = 80;
-    int fw = tw;
-    int end=x+w-(detail_width?detail_width+12:4);
-    if (fx + fw > end)
-        fw = end - fx;
-    if (fw < 24)
-        fw = 24;
-    /* Field with accent outline. */
-    draw_rect(fx, fy, fw, fh, ui_field);
-    draw_rect(fx, fy, fw, 1, ui_accent);
-    draw_rect(fx, fy + fh - 1, fw, 1, ui_accent);
-    draw_rect(fx, fy, 1, fh, ui_accent);
-    draw_rect(fx + fw - 1, fy, 1, fh, ui_accent);
-    int ty = fy + (fh - CHAR_H) / 2;
-    draw_string_clip(fm_rename_buf, fx + 4, ty, ui_text, fx + fw - 4);
-    {
-        int cw = ui_string_w(fm_rename_buf);
-        int cx = fx + 4 + cw;
-        if (cx < fx + fw - 3 && (frame_count / 35) % 2 == 0)
-            draw_rect(cx, ty, 1, CHAR_H, ui_text);
-    }
-}
-
-static void draw_file_row(int x, int y, int w, int id, int sel, int dim) {
-    draw_file_row_detail(x,y,w,id,sel,dim,0,0);
-}
-
-static const int files_sort_width[FILE_VIEW_SORT_COUNT]={60,58,52,82};
-static const char *files_sort_name[FILE_VIEW_SORT_COUNT]={"Name","Type","Size","Modified"};
-
-/* Files layout: Places sidebar on the left, toolbar (back/forward/up, path,
- * Filter) across the top of the content, column headers, list, and a footer. */
-#define FILES_TOOL_H 42
-#define FILES_FOOT_H 24
-#define FILES_PLACES 6
-static int files_side_w(int ww) {return ww>=520?164:0;}
-static int files_list_x(int wx,int ww) {return wx+files_side_w(ww)+8;}
-static int files_list_w(int ww) {return ww-files_side_w(ww)-28;}
-static int files_header_y(int wy) {return wy+TITLE_H+FILES_TOOL_H+3;}
-static int files_filter_y(int wy) {return files_header_y(wy)+30;}
-static int files_list_y(int wy) {return files_filter_y(wy)+(fm_filter_open?34:0);}
-static int files_list_bottom(int wy,int wh) {return wy+wh-FILES_FOOT_H-2;}
-static int files_rows(int wy,int wh) {return (files_list_bottom(wy,wh)-files_list_y(wy))/ROW_H;}
-static const char *files_place_name[FILES_PLACES]={"Home","Documents","Pictures","Media","Programs","Trash"};
-static int files_place_id(int i) {
-    if(i==0)return fs_root();
-    if(i==5)return fs_is_dir(trash_id)?trash_id:-1;
-    int id=fs_find_child(fs_root(),files_place_name[i]);
-    return fs_is_dir(id)?id:-1;
-}
-static int files_place_y(int wy,int i) {return wy+TITLE_H+40+i*32;}
-static int files_nav_x(int wx,int ww,int i) {return wx+files_side_w(ww)+10+i*36;}
-/* Breadcrumb segments from the root (shown as "Home") to the current folder;
- * leading segments are dropped when the path does not fit. */
-static int files_crumbs(int wx,int ww,int *xs,int *ws,int *ids) {
-    int chain[16],n=0,id=fm_cwd;
-    while(id>=0&&n<16){chain[n++]=id;if(id==fs_root())break;id=fs_parent(id);}
-    int left=files_nav_x(wx,ww,3)+6,right=wx+ww-56,count=0,x=left;
-    int first=n-1,total=0;
-    for(int k=n-1;k>=0;k--)total+=ui_string_w(chain[k]==fs_root()?"Home":fs_name(chain[k]))+22;
-    while(first>0&&total>right-left){total-=ui_string_w(chain[first]==fs_root()?"Home":fs_name(chain[first]))+22;first--;}
-    for(int k=first;k>=0&&count<16;k--){
-        const char *name=chain[k]==fs_root()?"Home":fs_name(chain[k]);
-        int w=ui_string_w(name)+10;
-        if(x+w>right)w=right-x;
-        if(w<=10)break;
-        xs[count]=x;ws[count]=w;ids[count]=chain[k];count++;
-        x+=w+12;
-    }
-    return count;
-}
-
-static void files_scroll(int rows){
-    if(rows<1)rows=1;
-    if(!fm_manual_scroll&&fm_selected>=0){
-        if(fm_selected<fm_first)fm_first=fm_selected;
-        if(fm_selected>=fm_first+rows)fm_first=fm_selected-rows+1;
-    }
-    int max=fm_vis_count()-rows;if(max<0)max=0;
-    if(fm_first>max)fm_first=max;
-    if(fm_first<0)fm_first=0;
-}
-
-static void files_modified_label(int id,char *out,int with_time) {
-    unsigned stamp=fs_modified(id);
-    if(!stamp){kstrcpy(out,"Unknown");return;}
-    unsigned days=stamp/86400,year=2000,month=1;
-    int md[]={31,28,31,30,31,30,31,31,30,31,30,31};
-    for(;;){unsigned yd=(year%4==0&&(year%100!=0||year%400==0))?366:365;
-        if(days<yd)break;
-        days-=yd;year++;}
-    md[1]=(year%4==0&&(year%100!=0||year%400==0))?29:28;
-    while(month<12&&days>=(unsigned)md[month-1])days-=md[month++-1];
-    fmt_uint(out,year);int n=kstrlen(out);out[n++]='-';fmt_pad2(out+n,month);n+=2;
-    out[n++]='-';fmt_pad2(out+n,days+1);n+=2;out[n]=0;
-    if(with_time){out[n++]=' ';fmt_pad2(out+n,stamp/3600%24);n+=2;
-        out[n++]=':';fmt_pad2(out+n,stamp/60%60);n+=2;out[n]=0;}
-}
-
-static int files_detail_width(int width) {
-    if(fm_view.sort==FILE_VIEW_MODIFIED)return width>=560?154:106;
-    if(fm_view.sort==FILE_VIEW_SIZE)return 110;
-    return width>420?110:0;
-}
-
-static void draw_files_place_icon(int i,int x,int y,uint8_t ink,uint8_t bg) {
-    (void)bg;
-    icon_draw(i==0?ICON_HOME:i==5?ICON_TRASH:ICON_FOLDER,x-3,y-3,ink);
-}
-static void draw_files_controls(int wx,int wy,int ww,int inactive) {
-    int x=files_list_x(wx,ww),y=files_header_y(wy);
-    /* Sort is a segmented control; the right-hand caption names the detail
-     * column, which follows the active sort. */
-    int seg_w=0;
-    for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++)seg_w+=files_sort_width[sort]+3;
-    draw_round_rect(x-2,y-1,seg_w+1,28,6,ui_chrome);
-    for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++){
-        int width=files_sort_width[sort],active=fm_view.sort==sort;
-        if(active){draw_round_rect(x,y+1,width,24,5,ui_field);draw_round_frame(x,y+1,width,24,5,ui_chrome_dk);}
-        draw_string(files_sort_name[sort],x+6,y+4,active?ui_text:ui_text_dim);
-        if(active){int ax=x+width-12,ay=y+10;
-            for(int n=0;n<4;n++)draw_hline(ax-n,ay+(fm_view.descending?3-n:n),2*n+1,ui_text);}
-        x+=width+3;
-    }
-    {
-        int lw=files_list_w(ww),detail=files_detail_width(lw);
-        const char *caption=fm_view.sort==FILE_VIEW_MODIFIED?"Modified":fm_view.sort==FILE_VIEW_SIZE?"Size":"Kind";
-        int cx=files_list_x(wx,ww)+lw-detail;
-        if(detail&&cx>x+12)draw_string(caption,cx,y+4,ui_text_dim);
-    }
-    draw_hline(files_list_x(wx,ww),y+29,files_list_w(ww),ui_chrome_dk);
-    int end=wx+ww-12;
-    if(!fm_filter_open)return;
-    y=files_filter_y(wy);
-    int field_x=files_list_x(wx,ww),field_w=end-field_x-76;
-    draw_round_rect(field_x,y,field_w,28,4,ui_field);
-    draw_round_frame(field_x,y,field_w,28,4,fm_filter_focus&&!inactive?ui_accent:ui_chrome_dk);
-    int text_x=field_x+7,limit=field_x+field_w-7;
-    const char *text=fm_view.filter;
-    while(*text&&ui_string_w(text)>field_w-16)text++;
-    if(fm_filter_select_all&&fm_filter_focus&&!inactive&&text[0])
-        draw_rect(text_x,y+4,ui_string_w(text),CHAR_H,ui_accent);
-    draw_string_clip(text[0]?text:"Name contains...",text_x,y+5,
-        text[0]?(fm_filter_select_all&&fm_filter_focus&&!inactive?ui_on_accent:ui_text):ui_text_dim,limit);
-    if(fm_filter_focus&&!inactive&&!fm_filter_select_all&&(frame_count/35)%2==0){
-        int caret=text_x+ui_string_w(text);
-        if(caret<limit)draw_rect(caret,y+5,1,CHAR_H,ui_text);
-    }
-    tool_button(end-68,y,32,28,ICON_CLEAR,0,TB_FLAT);
-    tool_button(end-32,y,32,28,ICON_CLOSE,0,TB_FLAT);
-}
-
-static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
-    char title[24];
-    char info[FS_PATH_LEN];
-    fm_history_sync();
-    files_title(title, 24);
-    files_info(info, FS_PATH_LEN);
-    for(int i=0;info[i];i++)if(info[i]=='|'){info[i>0?i-1:0]=0;break;}
-    gui_draw_window(wx, wy, ww, wh, title, 0, inactive ? WIN_INACTIVE : 0);
-    int side=files_side_w(ww),top=wy+TITLE_H+1;
-    /* Sidebar: places and storage */
-    if(side){
-        draw_rect(wx+1,top,side-1,wh-TITLE_H-2,INK(2));
-        draw_vline(wx+side,top,wh-TITLE_H-2,INK(5));
-        draw_string("PLACES",wx+16,wy+TITLE_H+14,ui_text_dim);
-        for(int i=0;i<FILES_PLACES;i++){
-            int id=files_place_id(i),py=files_place_y(wy,i);
-            if(id<0)continue;
-            int here=id==fm_cwd;
-            if(here)draw_round_rect(wx+8,py,side-16,28,7,INK(6));
-            if(here)draw_round_rect(wx+8,py+7,3,14,1,ui_accent);
-            draw_files_place_icon(i,wx+20,py+7,here?ui_accent:ui_text_dim,here?INK(6):INK(2));
-            draw_string_clip(files_place_name[i],wx+42,py+(28-CHAR_H)/2,here?ui_text:INK(24),wx+side-10);
-        }
-        unsigned cap=fs_capacity(),used=fs_used_bytes();
-        int sy=wy+wh-62;
-        if(cap&&sy>files_place_y(wy,FILES_PLACES)+8){
-            char line[40];fmt_uint(line,used/1024);kstrcpy(line+kstrlen(line)," KB of ");
-            fmt_uint(line+kstrlen(line),cap/1024);kstrcpy(line+kstrlen(line)," KB");
-            draw_string("STORAGE",wx+16,sy,ui_text_dim);
-            draw_round_rect(wx+16,sy+22,side-32,6,3,INK(6));
-            unsigned cap_kb=cap/1024?cap/1024:1;
-            int fill=(int)((used/1024)*(unsigned)(side-32)/cap_kb);
-            if(fill<6&&used)fill=6;
-            if(fill>side-32)fill=side-32;
-            if(fill)draw_round_rect(wx+16,sy+22,fill,6,3,ui_accent);
-            draw_string_clip(line,wx+16,sy+34,ui_text_dim,wx+side-8);
-        }
-    }
-    /* Toolbar: back, forward, up, breadcrumbs, filter */
-    int tx=wx+side+1,tw=ww-side-2;
-    draw_rect(tx,top,tw,FILES_TOOL_H-1,ui_chrome);
-    draw_hline(tx,top+FILES_TOOL_H-1,tw,INK(7));
-    static const int nav_icon[3]={ICON_BACK,ICON_FORWARD,ICON_UP};
-    for(int i=0;i<3;i++){
-        int enabled=i==0?fm_history_target(-1)>=0:i==1?fm_history_target(1)>=0:fm_has_parent();
-        tool_button(files_nav_x(wx,ww,i),top+7,30,28,nav_icon[i],0,enabled?TB_FLAT:TB_DISABLED);
-    }
-    int xs[16],widths[16],ids[16],n=files_crumbs(wx,ww,xs,widths,ids);
-    for(int k=0;k<n;k++){
-        int last=k==n-1;
-        if(last)draw_round_rect(xs[k]-2,top+8,widths[k]+4,26,6,INK(7));
-        draw_string_clip(ids[k]==fs_root()?"Home":fs_name(ids[k]),xs[k]+3,top+(FILES_TOOL_H-CHAR_H)/2-1,
-                         last?ui_text:ui_text_dim,xs[k]+widths[k]);
-        if(!last){int cx=xs[k]+widths[k]+4,cy=top+FILES_TOOL_H/2-1;
-            draw_line(cx,cy-3,cx+3,cy,INK(13));draw_line(cx+3,cy,cx,cy+3,INK(13));}
-    }
-    tool_button(wx+ww-44,top+7,32,28,ICON_FILTER,0,fm_filter_open?TB_ACTIVE:TB_FLAT);
-    draw_files_controls(wx,wy,ww,inactive);
-    /* List */
-    int lx=files_list_x(wx,ww),lw=files_list_w(ww);
-    int list_y=files_list_y(wy),rows=files_rows(wy,wh);
-    int vis=fm_vis_count(),up=fm_has_parent()?1:0;
-    files_scroll(rows);
-    for(int i=fm_first;i<vis&&i<fm_first+rows;i++){
-        int iy=list_y+(i-fm_first)*ROW_H;
-        if(up&&i==0)
-            draw_file_row_named(lx,iy,lw,"..",1,0,i==fm_selected,0,0,0,0);
-        else {
-            int id=fm_ids[i-up],detail_width=files_detail_width(lw);
-            char detail[32];
-            if(fm_view.sort==FILE_VIEW_MODIFIED)files_modified_label(id,detail,lw>=560);
-            else if(fm_view.sort==FILE_VIEW_SIZE){
-                if(fs_is_dir(id)||fs_is_app(id))kstrcpy(detail,file_view_type(id));
-                else {fmt_uint(detail,(unsigned)fs_size(id));kstrcpy(detail+kstrlen(detail)," B");}
-            }else kstrcpy(detail,file_view_type(id));
-            draw_file_row_detail(lx,iy,lw,id,i==fm_selected,0,detail,detail_width);
-        }
-    }
-    if(!fm_count){
-        int y=list_y+up*ROW_H+4;
-        if(y+CHAR_H<=files_list_bottom(wy,wh))
-            draw_string_clip(fm_view.filter[0]?"No matching names":"This folder is empty",lx+12,y,ui_text_dim,lx+lw);
-    }
-    if(vis>rows&&rows>0){
-        int track=rows*ROW_H,sx=wx+ww-11;
-        int th=track*rows/vis;if(th<24)th=24;
-        int ty=list_y+(track-th)*fm_first/(vis-rows>0?vis-rows:1);
-        draw_round_rect(sx,list_y,5,track,2,INK(3));
-        draw_round_rect(sx,ty,5,th,2,INK(11));
-    }
-    /* Footer */
-    int fy=wy+wh-FILES_FOOT_H;
-    draw_rect(tx,fy,tw,FILES_FOOT_H-1,ui_chrome);
-    draw_hline(tx,fy,tw,INK(5));
-    draw_string_clip(info,tx+12,fy+(FILES_FOOT_H-CHAR_H)/2,ui_text_dim,wx+ww-12);
-}
-
-static void draw_rename_overlay(void) {
-    int wx, wy, ww, wh, vis, iy, fx, fy, fh, tw, fw, ty;
-    if (!fm_renaming)
-        return;
-    if (!win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh))
-        return;
-    vis = fm_vis_count();
-    if (fm_selected < 0 || fm_selected >= vis)
-        return;
-    iy = files_list_y(wy) + (fm_selected-fm_first) * ROW_H;
-    fx = files_list_x(wx, ww) + 26;
-    fy = iy - 1;
-    fh = ROW_H - 2;
-    tw = ui_string_w(fm_rename_buf) + 16;
-    if (tw < 96)
-        tw = 96;
-    fw = tw;
-    int detail=files_detail_width(files_list_w(ww));
-    int end=files_list_x(wx,ww)+files_list_w(ww)-(detail?detail+12:4);
-    if (fx + fw > end)
-        fw = end - fx;
-    if (fw < 24)
-        fw = 24;
-    draw_rect(fx, fy, fw, fh, ui_field);
-    draw_rect(fx, fy, fw, 1, ui_accent);
-    draw_rect(fx, fy + fh - 1, fw, 1, ui_accent);
-    draw_rect(fx, fy, 1, fh, ui_accent);
-    draw_rect(fx + fw - 1, fy, 1, fh, ui_accent);
-    ty = fy + (fh - CHAR_H) / 2;
-    draw_string_clip(fm_rename_buf, fx + 4, ty, ui_text, fx + fw - 4);
-    {
-        int cx = fx + 4 + ui_string_w(fm_rename_buf);
-        if (cx < fx + fw - 3)
-            draw_rect(cx, ty, 1, CHAR_H, ui_text);
-    }
-}
-
 /* ---------- File browser parts ----------
  * The Places sidebar, the path bar and the detail list. Files, Open and
  * Save As draw with these and hit test the rectangles they were drawn in. */
@@ -5381,6 +4985,257 @@ static void flist_row(int x, int y, int w, int cols, int id, int state, int warn
         stamp_text(fs_modified(id), text);
         kit_text(text, dx + 8, ty, dim, x + w - dx - 12, 0);
     }
+}
+
+static void files_title(char *title, int max) {
+    const char *nm = fm_cwd == fs_root() ? "Home" : fs_name(fm_cwd);
+    int i = 0;
+    while (nm[i] && i < max - 1) {
+        title[i] = nm[i];
+        i++;
+    }
+    title[i] = 0;
+}
+
+/* Status bar: a pending file action's message, else the item count and
+ * the selection; the free space goes at the right. */
+static void files_status(char *left, int max, char *right) {
+    int n = 0;
+    if((files_action_busy&&(int32_t)(files_message_until-frame_count)>0)||
+       (file_clipboard_status()[0]&&((int32_t)(files_message_until-frame_count)>0||file_clipboard_pending_sync()))){
+        const char *message=files_action_busy&&(int32_t)(files_message_until-frame_count)>0?
+            "Disk saving. Retry the file action.":file_clipboard_status();
+        while(n+1<max&&message[n]){left[n]=message[n];n++;}
+        left[n]=0;
+    } else {
+        char number[16];
+        fmt_uint(number, (unsigned)fm_count);
+        kstrcpy(left, number);
+        if (fm_view.filter[0]) {
+            kstrcpy(left + kstrlen(left), " of ");
+            fmt_uint(number, (unsigned)fm_total);
+            kstrcpy(left + kstrlen(left), number);
+        }
+        kstrcpy(left + kstrlen(left), fm_count == 1 && !fm_view.filter[0] ? " item" : " items");
+        int id = fm_row_id(fm_selected);
+        if (id >= 0) {
+            kstrcpy(left + kstrlen(left), ", 1 selected");
+            if (!fs_is_dir(id) && !fs_is_app(id)) {
+                kstrcpy(left + kstrlen(left), " (");
+                size_text((unsigned)fs_size(id), left + kstrlen(left));
+                kstrcpy(left + kstrlen(left), ")");
+            }
+        }
+    }
+    unsigned cap = fs_capacity(), used = fs_used_bytes();
+    size_text(cap > used ? cap - used : 0, right);
+    kstrcpy(right + kstrlen(right), " free");
+}
+
+/* Files layout: Places sidebar at the left, a toolbar across the top (back,
+ * forward, up, path, view buttons and search), the items as icon tiles or
+ * detail rows, and a status bar. fm_first is the first item shown; in the
+ * icon view it starts a row. */
+#define FILES_TOOL_H (MODERN ? 44 : 34)
+#define FILES_STATUS_H (MODERN ? 28 : 24)
+#define FILES_TILE_W (MODERN ? 96 : 92)
+#define FILES_TILE_H (MODERN ? 92 : 84)
+#define FILES_GAP 4
+#define FILES_PAD 12
+static int files_side_w(int ww) { return ww >= 560 ? (MODERN ? 176 : 160) : 0; }
+static int files_tool_y(int wy) { return MODERN ? wy + TITLE_BAR - 1 : wy + TITLE_H; }
+static int files_body_y(int wy) { return files_tool_y(wy) + FILES_TOOL_H; }
+static int files_status_y(int wy, int wh) { return wy + wh - 1 - FILES_STATUS_H; }
+static int files_content_x(int wx, int ww) { return wx + 1 + files_side_w(ww); }
+static int files_content_w(int ww) { return ww - 2 - files_side_w(ww); }
+static int files_header_h(void) { return MODERN ? 32 : 24; }
+static int files_list_y(int wy) { return files_body_y(wy) + (fm_details ? files_header_h() : FILES_PAD); }
+static int files_list_bottom(int wy, int wh) { return files_status_y(wy, wh) - (fm_details ? 0 : 4); }
+static int files_cols(int ww) {
+    if (fm_details) return 1;
+    int c = (files_content_w(ww) - 2 * FILES_PAD - SB + FILES_GAP) / (FILES_TILE_W + FILES_GAP);
+    return c < 1 ? 1 : c;
+}
+static int files_item_h(void) { return fm_details ? ROW_H : FILES_TILE_H + FILES_GAP; }
+static int files_rows(int wy, int wh) {
+    int r = (files_list_bottom(wy, wh) - files_list_y(wy)) / files_item_h();
+    return r < 1 ? 1 : r;
+}
+static int files_scrolls(int ww, int wy, int wh) { return fm_vis_count() > files_rows(wy, wh) * files_cols(ww); }
+/* The rectangle of item i, when it is on screen. */
+static int files_item_rect(int wx, int wy, int ww, int wh, int i, int *x, int *y, int *w, int *h) {
+    int cols = files_cols(ww), k = i - fm_first;
+    if (i < 0 || i >= fm_vis_count() || k < 0 || k >= files_rows(wy, wh) * cols) return 0;
+    if (fm_details) {
+        *x = files_content_x(wx, ww);
+        *y = files_list_y(wy) + k * ROW_H;
+        *w = files_content_w(ww) - (files_scrolls(ww, wy, wh) ? SB : 0);
+        *h = ROW_H;
+    } else {
+        *x = files_content_x(wx, ww) + FILES_PAD + (k % cols) * (FILES_TILE_W + FILES_GAP);
+        *y = files_list_y(wy) + (k / cols) * (FILES_TILE_H + FILES_GAP);
+        *w = FILES_TILE_W;
+        *h = FILES_TILE_H;
+    }
+    return 1;
+}
+/* The item under the pointer: an index, -1 for empty space among the
+ * items, or -2 outside them. */
+static int files_item_at(int wx, int wy, int ww, int wh) {
+    int ax = files_content_x(wx, ww), ay = files_list_y(wy) - (fm_details ? 0 : FILES_PAD);
+    int aw = files_content_w(ww) - (files_scrolls(ww, wy, wh) ? SB : 0);
+    if (!hit(mouse_x, mouse_y, ax, ay, aw, files_list_bottom(wy, wh) - ay)) return -2;
+    int cols = files_cols(ww), page = files_rows(wy, wh) * cols;
+    for (int i = fm_first; i < fm_vis_count() && i < fm_first + page; i++) {
+        int x, y, w, h;
+        if (files_item_rect(wx, wy, ww, wh, i, &x, &y, &w, &h) && hit(mouse_x, mouse_y, x, y, w, h)) return i;
+    }
+    return -1;
+}
+/* The label part of an item, where a click on the selection renames. */
+static int files_label_hit(int x, int y, int w, int h) {
+    if (fm_details) return mouse_x >= x + (MODERN ? 40 : 30) && hit(mouse_x, mouse_y, x, y, w, h);
+    return hit(mouse_x, mouse_y, x, y + 46, w, h - 46);
+}
+
+static void files_scroll(int rows, int cols) {
+    if (rows < 1) rows = 1;
+    if (cols < 1) cols = 1;
+    int page = rows * cols, vis = fm_vis_count();
+    if (!fm_manual_scroll && fm_selected >= 0) {
+        if (fm_selected < fm_first) fm_first = fm_selected / cols * cols;
+        if (fm_selected >= fm_first + page) fm_first = (fm_selected / cols - rows + 1) * cols;
+    }
+    int max = (vis + cols - 1) / cols - rows;
+    if (max < 0) max = 0;
+    if (fm_first > max * cols) fm_first = max * cols;
+    if (fm_first < 0) fm_first = 0;
+    fm_first -= fm_first % cols;
+}
+
+static void tile_label(const char *s, int x, int y, int w, uint8_t ink, int bold);
+
+/* An icon tile: the 32px icon and up to two lines of name. */
+static void draw_file_tile(int x, int y, int w, int h, int id, int state, int cut) {
+    uint8_t bg = 0;
+    if (state & KIT_ON) bg = TK_ACCENT_100;
+    else if (state & KIT_HOVER) bg = MODERN ? TK_SUNKEN : TK_ACCENT_50;
+    if (bg) kit_fill(x, y, w, h, MODERN ? 8 : 0, bg, 1);
+    if ((state & KIT_ON) && !(state & KIT_UNFOCUSED) && !MODERN) kit_frame(x, y, w, h, 0, TK_ACCENT);
+    node_icon_draw(id, x + (w - 32) / 2, y + 10, 32, bg ? bg : ui_theme.content);
+    tile_label(fs_name(id), x + 4, y + 48, w - 8, cut ? TK_TEXT2 : TK_TEXT, 0);
+}
+
+static int files_is_cut(int id) {
+    return file_clipboard_mode() == FILE_CLIPBOARD_CUT && file_clipboard_source() == id &&
+           file_clipboard_identity() == fs_identity(id);
+}
+
+/* Toolbar pieces, shared by drawing and clicks. */
+static int files_search_w(int ww) { return ww >= 640 ? 200 : ww >= 480 ? 150 : 0; }
+static int files_search_x(int wx, int ww) { return wx + ww - (MODERN ? 12 : 8) - files_search_w(ww); }
+static int files_view_x(int wx, int ww) {
+    int right = files_search_w(ww) ? files_search_x(wx, ww) - 8 : wx + ww - 8;
+    return right - 2 * nav_size();
+}
+static int files_ctl_y(int wy) { return files_tool_y(wy) + (FILES_TOOL_H - 1 - BTN_H) / 2; }
+
+static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
+    char title[FS_NAME_LEN], left[FS_PATH_LEN], right[24];
+    fm_history_sync();
+    files_title(title, sizeof title);
+    gui_draw_window(wx, wy, ww, wh, title, 0, inactive ? WIN_INACTIVE : 0);
+    int ty = files_tool_y(wy), by = files_body_y(wy), sy = files_status_y(wy, wh), side = files_side_w(ww);
+    /* Toolbar */
+    kit_toolbar(wx + 1, ty, ww - 2, FILES_TOOL_H);
+    int enabled[3] = {fm_history_target(-1) >= 0, fm_history_target(1) >= 0, fm_has_parent()};
+    nav_draw(wx, ty, FILES_TOOL_H - 1, enabled);
+    int cy = files_ctl_y(wy), vx = files_view_x(wx, ww), vs = nav_size(), vy = ty + (FILES_TOOL_H - 1 - vs) / 2;
+    crumbs_draw(nav_end(wx), cy, vx - 8 - nav_end(wx), BTN_H, fm_cwd);
+    if (MODERN) kit_box(vx - 2, vy - 2, 2 * vs + 4, vs + 4, 8, TK_SUNKEN, 0);
+    kit_icon_button(vx, vy, vs, UI_ICON_LIST, fm_details ? KIT_ON : hot(vx, vy, vs, vs));
+    kit_icon_button(vx + vs, vy, vs, UI_ICON_GRID, !fm_details ? KIT_ON : hot(vx + vs, vy, vs, vs));
+    int sw = files_search_w(ww);
+    if (sw) {
+        int sx = files_search_x(wx, ww), focus = fm_filter_focus && !inactive;
+        char placeholder[FS_NAME_LEN + 8];
+        kstrcpy(placeholder, "Search ");
+        kstrcpy(placeholder + 7, title);
+        int tx = kit_search(sx, cy, sw, BTN_H, fm_view.filter, placeholder, focus ? KIT_FOCUS : 0);
+        if (focus && fm_filter_select_all && fm_view.filter[0]) {
+            int fw = kit_text_w(fm_view.filter, 0), lim = kit_search_clear_x(sx, sw) - tx - 4;
+            draw_rect(tx - 1, kit_ty(cy, BTN_H), (fw < lim ? fw : lim) + 2, UI_FONT_H, TK_ACCENT);
+            kit_text(fm_view.filter, tx, kit_ty(cy, BTN_H), TK_ON_ACCENT, lim, 0);
+        } else if (focus && ((frame_count / 35) & 1) == 0)
+            kit_caret(tx + kit_text_w(fm_view.filter, 0), kit_ty(cy, BTN_H));
+    }
+    /* Sidebar */
+    if (side) places_draw(wx + 1, by, side, sy - by, fm_cwd, 1);
+    /* Items */
+    int cx = files_content_x(wx, ww), cw = files_content_w(ww), cols = files_cols(ww), rows = files_rows(wy, wh);
+    int vis = fm_vis_count(), unfocused = inactive || fm_filter_focus ? KIT_UNFOCUSED : 0;
+    files_scroll(rows, cols);
+    if (fm_details) flist_header(cx, by, cw, FL_SIZE | FL_DATE, &fm_view);
+    for (int i = fm_first; i < vis && i < fm_first + rows * cols; i++) {
+        int x, y, w, h, id = fm_row_id(i);
+        if (id < 0 || !files_item_rect(wx, wy, ww, wh, i, &x, &y, &w, &h)) continue;
+        int renaming = fm_renaming && id == fm_rename_id && fs_identity(id) == fm_rename_identity;
+        int state = i == fm_selected ? KIT_ON | unfocused : renaming || inactive ? 0 : hot(x, y, w, h);
+        if (fm_details) {
+            flist_row(x, y, w, FL_SIZE | FL_DATE, id, state, 0);
+        } else draw_file_tile(x, y, w, h, id, state, files_is_cut(id));
+    }
+    if (!fm_count) {
+        const char *empty = fm_view.filter[0] ? "No matching names" : "This folder is empty";
+        int ey = files_list_y(wy) + (fm_details ? 8 : 24);
+        if (ey + UI_FONT_H <= sy) kit_text_center(empty, cx, ey, cw, TK_TEXT2, 0);
+    }
+    if (files_scrolls(ww, wy, wh)) {
+        int top = fm_details ? files_list_y(wy) : by + 2, len = sy - top - 2;
+        int total_rows = (vis + cols - 1) / cols;
+        kit_vscroll(cx + cw - SB, top, len, fm_first / cols, rows, total_rows, 0);
+    }
+    /* Status bar */
+    files_status(left, sizeof left, right);
+    if (MODERN) {
+        draw_hline(wx + 1, sy, ww - 2, TK_LINE_SUBTLE);
+        kit_fill_bottom(wx + 1, sy + 1, ww - 2, FILES_STATUS_H, ui_theme.r_window - 1, ui_theme.statusbar);
+    } else kit_statusbar(wx + 1, sy, ww - 2, FILES_STATUS_H);
+    int tty = kit_ty(sy + 1, FILES_STATUS_H - 1), pad = MODERN ? 12 : 8;
+    int rw = kit_text_w(right, 0);
+    kit_text(left, wx + pad, tty, TK_TEXT2, ww - pad * 3 - rw, 0);
+    kit_text_right(right, wx + ww - pad, tty, TK_TEXT2, 0);
+}
+
+/* The rename field sits over the name: in the row, or under the icon. */
+static int files_rename_rect(int wx, int wy, int ww, int wh, int *fx, int *fy, int *fw, int *fh) {
+    int row = -1;
+    for (int i = 0; i < fm_count; i++)
+        if (fm_ids[i] == fm_rename_id && fm_ids_identity[i] == fm_rename_identity) { row = i; break; }
+    int x, y, w, h;
+    if (row < 0 || !files_item_rect(wx, wy, ww, wh, row, &x, &y, &w, &h)) return 0;
+    int tw = kit_text_w(fm_rename_buf, 0) + 16;
+    if (fm_details) {
+        *fx = x + (MODERN ? 36 : 26); *fy = y + 1; *fh = h - 2;
+        *fw = tw < 120 ? 120 : tw;
+        int end = flist_name_end(x, w, FL_SIZE | FL_DATE);
+        if (*fx + *fw > end) *fw = end - *fx;
+    } else {
+        *fw = tw < w ? w : tw;
+        if (*fw > w + 40) *fw = w + 40;
+        *fx = x + (w - *fw) / 2; *fy = y + 46; *fh = 22;
+    }
+    if (*fw < 24) *fw = 24;
+    return 1;
+}
+
+static void draw_rename_overlay(void) {
+    int wx, wy, ww, wh, fx, fy, fw, fh;
+    if (!fm_renaming || !win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh)) return;
+    if (!files_rename_rect(wx, wy, ww, wh, &fx, &fy, &fw, &fh)) return;
+    int tx = kit_field(fx, fy, fw, fh, KIT_FOCUS), ty = kit_ty(fy, fh);
+    int used = kit_text(fm_rename_buf, tx, ty, TK_TEXT, fw - (tx - fx) - 4, 0);
+    if ((frame_count / 35) % 2 == 0) kit_caret(tx + used, ty);
 }
 
 /* ---------- Open and Save As ----------
@@ -6722,153 +6577,103 @@ static int max_hit(int wx, int wy, int ww) {
     return hit(mouse_x, mouse_y, max_box_x(wx, ww), cy, CAP_W, CAP_H);
 }
 
-static int fm_name_hit(int wx, int ww, int iy, int id) {
-    /* Label side of the row: past the 12px icon, not the icon itself. */
-    int nx = files_list_x(wx, ww) + 20;
-    int ny = iy;
-    int nh = ROW_H;
-    int nw;
-    if (fm_renaming && fm_rename_id == id && fs_identity(id)==fm_rename_identity) {
-        nw = ui_string_w(fm_rename_buf) + 24;
-        if (nw < 100)
-            nw = 100;
-    } else {
-        nw = ui_string_w(fs_name(id)) + 24;
-        if (nw < 100)
-            nw = 100;
-    }
-    return hit(mouse_x, mouse_y, nx, ny, nw, nh);
+static int click_on_rename_field(void) {
+    int wx, wy, ww, wh, fx, fy, fw, fh;
+    if (!fm_renaming || !win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh)) return 0;
+    return files_rename_rect(wx, wy, ww, wh, &fx, &fy, &fw, &fh) && hit(mouse_x, mouse_y, fx, fy, fw, fh);
 }
 
-static int click_on_rename_field(void) {
-    int wx, wy, ww, wh;
-    int up, row, iy, i;
-    if (!fm_renaming)
-        return 0;
-    if (!win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh))
-        return 0;
-    up = fm_has_parent() ? 1 : 0;
-    row = -1;
-    for (i = 0; i < fm_count; i++) {
-        if (fm_ids[i] == fm_rename_id && fm_ids_identity[i]==fm_rename_identity) {
-            row = i + up;
-            break;
+/* Toolbar, sidebar, column headers and scrollbar. Returns 1 when the click
+ * was one of these. */
+static int files_chrome_click(int wx, int wy, int ww, int wh) {
+    int ty = files_tool_y(wy), by = files_body_y(wy), sy = files_status_y(wy, wh), side = files_side_w(ww);
+    if (mouse_y >= sy) return 1;
+    if (mouse_y < by) {
+        if (mouse_y < ty) return 1;
+        int n = nav_hit(wx, ty, FILES_TOOL_H - 1);
+        if (n == 0 || n == 1) { fm_history_step(n == 0 ? -1 : 1); return 1; }
+        if (n == 2) { fm_rename_cancel(); fm_go_up(); return 1; }
+        int cy = files_ctl_y(wy), vx = files_view_x(wx, ww), vs = nav_size(), vy = ty + (FILES_TOOL_H - 1 - vs) / 2;
+        int id = crumbs_hit(nav_end(wx), cy, vx - 8 - nav_end(wx), BTN_H, fm_cwd);
+        if (id >= 0) { if (id != fm_cwd) fm_navigate(id); return 1; }
+        if (hit(mouse_x, mouse_y, vx, vy, 2 * vs, vs)) {
+            int details = mouse_x < vx + vs;
+            if (details != fm_details) { fm_rename_cancel(); fm_details = details; fm_first = fm_manual_scroll = 0; }
+            dirty = 1;
+            return 1;
         }
+        int sw = files_search_w(ww), sx = files_search_x(wx, ww);
+        if (sw && hit(mouse_x, mouse_y, sx, cy, sw, BTN_H)) {
+            if (fm_view.filter[0] && mouse_x >= kit_search_clear_x(sx, sw)) fm_filter_clear(0);
+            else fm_filter_show();
+            dirty = 1;
+        }
+        return 1;
     }
-    if (row < 0)
-        return 0;
-    iy = files_list_y(wy) + (row-fm_first) * ROW_H;
-    return fm_name_hit(wx, ww, iy, fm_rename_id);
+    if (side && mouse_x < wx + 1 + side) {
+        int id = places_hit(wx + 1, by, side, sy - by, 1);
+        if (id >= 0 && id != fm_cwd) fm_navigate(id);
+        return 1;
+    }
+    int cx = files_content_x(wx, ww), cw = files_content_w(ww);
+    if (fm_details) {
+        int sort = flist_header_hit(cx, by, cw, FL_SIZE | FL_DATE);
+        if (sort >= 0) { fm_sort_by(sort); return 1; }
+    }
+    if (files_scrolls(ww, wy, wh) && mouse_x >= cx + cw - SB) {
+        int rows = files_rows(wy, wh), cols = files_cols(ww), at, size;
+        int top = fm_details ? files_list_y(wy) : by + 2, len = sy - top - 2;
+        kit_scroll_thumb(len, fm_first / cols, rows, (fm_vis_count() + cols - 1) / cols, &at, &size);
+        fm_first += (mouse_y < top + at ? -rows : rows) * cols;
+        fm_manual_scroll = 1;
+        files_scroll(rows, cols);
+        dirty = 1;
+        return 1;
+    }
+    return 0;
 }
 
 static void handle_files_click(int wx, int wy, int ww, int wh) {
-    int side=files_side_w(ww),top=wy+TITLE_H+1;
     fm_history_sync();
-    if(side&&mouse_x<wx+side){
-        for(int i=0;i<FILES_PLACES;i++){
-            int id=files_place_id(i);
-            if(id>=0&&hit(mouse_x,mouse_y,wx+8,files_place_y(wy,i),side-16,28)){fm_navigate(id);return;}
-        }
+    if (files_chrome_click(wx, wy, ww, wh)) return;
+    fm_filter_focus = fm_filter_select_all = 0;
+    files_scroll(files_rows(wy, wh), files_cols(ww));
+    int i = files_item_at(wx, wy, ww, wh);
+    if (i == -2) return;
+    dirty = 1;
+    if (i < 0) {
+        fm_rename_cancel();
+        fm_selected = -1;
         return;
     }
-    if(mouse_y<top+FILES_TOOL_H){
-        for(int i=0;i<3;i++)if(hit(mouse_x,mouse_y,files_nav_x(wx,ww,i),top+7,30,28)){
-            if(i==2){fm_rename_cancel();fm_go_up();}else fm_history_step(i==0?-1:1);
-            return;
-        }
-        int xs[16],widths[16],ids[16],n=files_crumbs(wx,ww,xs,widths,ids);
-        for(int k=0;k<n-1;k++)if(hit(mouse_x,mouse_y,xs[k]-2,top+8,widths[k]+4,26)){fm_navigate(ids[k]);return;}
-        if(hit(mouse_x,mouse_y,wx+ww-44,top+7,32,28)){fm_filter_show();return;}
+    int id = fm_row_id(i);
+    if (id < 0) { fm_refresh(); return; }
+    int x, y, w, h;
+    files_item_rect(wx, wy, ww, wh, i, &x, &y, &w, &h);
+    int already = i == fm_selected;
+    int dbl = double_click(i, &fm_last_click_item, &fm_last_click_frame);
+    fm_dragging = fm_drag_active = 0;
+    fm_drag_id = -1;
+    if (dbl) {
+        fm_rename_cancel();
+        fm_selected = i;
+        fm_open_selected();
         return;
     }
-    if(mouse_y>=wy+wh-FILES_FOOT_H)return;
-    int x=files_list_x(wx,ww),y=files_header_y(wy),end=wx+ww-12;
-    for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++){
-        if(hit(mouse_x,mouse_y,x,y,files_sort_width[sort],26)){fm_sort_by(sort);return;}
-        x+=files_sort_width[sort]+3;
+    /* A click on the name of the selected item renames it in place. */
+    if (already && files_label_hit(x, y, w, h)) {
+        fm_rename_begin(id);
+        return;
     }
-    if(fm_filter_open){
-        y=files_filter_y(wy);
-        if(hit(mouse_x,mouse_y,end-68,y,32,28)){fm_filter_clear(0);return;}
-        if(hit(mouse_x,mouse_y,end-32,y,32,28)){fm_filter_clear(1);return;}
-        if(hit(mouse_x,mouse_y,files_list_x(wx,ww),y,end-files_list_x(wx,ww)-76,28)){
-            fm_rename_cancel();fm_filter_focus=1;fm_filter_select_all=fm_view.filter[0]!=0;dirty=1;return;
-        }
-    }
-    fm_filter_focus=fm_filter_select_all=0;
-    int list_y = files_list_y(wy);
-    int rows = files_rows(wy, wh);
-    int lw = files_list_w(ww);
-    int vis = fm_vis_count();
-    int up = fm_has_parent() ? 1 : 0;
-    files_scroll(rows);
-    for (int i = fm_first; i < vis && i < fm_first+rows; i++) {
-        int iy = list_y + (i-fm_first) * ROW_H;
-        if (hit(mouse_x, mouse_y, files_list_x(wx, ww), iy, lw, ROW_H)) {
-            int id = fm_row_id(i);
-            if(id < -1){fm_refresh();dirty=1;return;}
-            int already = (i == fm_selected);
-            int dbl = double_click(i, &fm_last_click_item, &fm_last_click_frame);
-            int fast = dbl;
-            dirty = 1;
-            if (up && i == 0) {
-                /* Click or double-click on ".." goes up. Synthetic row. */
-                fm_rename_cancel();
-                fm_selected = i;
-                fm_dragging = 0;
-                fm_drag_active = 0;
-                fm_drag_id = -1;
-                fm_go_up();
-                return;
-            }
-            if (fast) {
-                fm_rename_cancel();
-                fm_selected = i;
-                fm_dragging = 0;
-                fm_drag_active = 0;
-                fm_drag_id = -1;
-                fm_open_selected();
-                return;
-            }
-            /* Name of an already-selected row: rename-in-place.
-             * Hit anywhere on the label side (past the icon). */
-            if (already && id >= 0 && mouse_x >= files_list_x(wx, ww) + 20) {
-                fm_selected = i;
-                fm_dragging = 0;
-                fm_drag_active = 0;
-                fm_drag_id = -1;
-                fm_rename_begin(id);
-                return;
-            }
-            if (fm_renaming && id == fm_rename_id) {
-                fm_dragging = 0;
-                fm_drag_active = 0;
-                fm_drag_id = -1;
-                return;
-            }
-            fm_rename_cancel();
-            fm_selected = i;
-            fm_dragging = 1;
-            fm_drag_active = 0;
-            fm_drag_id = id;
-            fm_drag_identity=fs_identity(id);
-            fm_drag_parent=fm_cwd;
-            fm_drag_sx = mouse_x;
-            fm_drag_sy = mouse_y;
-            return;
-        }
-    }
+    if (fm_renaming && id == fm_rename_id) return;
     fm_rename_cancel();
-}
-
-/* The Files list row under the pointer: an index, -1 for empty list
- * space, or -2 outside the list. */
-static int files_row_at(int wx, int wy, int ww, int wh) {
-    int x = files_list_x(wx, ww), y = files_list_y(wy), lw = files_list_w(ww);
-    int rows = files_rows(wy, wh), vis = fm_vis_count();
-    if (!hit(mouse_x, mouse_y, x, y, lw, rows * ROW_H)) return -2;
-    int i = fm_first + (mouse_y - y) / ROW_H;
-    return i < vis ? i : -1;
+    fm_selected = i;
+    fm_dragging = 1;
+    fm_drag_id = id;
+    fm_drag_identity = fs_identity(id);
+    fm_drag_parent = fm_cwd;
+    fm_drag_sx = mouse_x;
+    fm_drag_sy = mouse_y;
 }
 
 static void files_drop(void) {
@@ -7303,7 +7108,7 @@ static int act_enabled(int act) {
     case ACT_COPY_PATH: return files_selected_item() >= 0;
     case ACT_NEW_FILE: case ACT_REFRESH: case ACT_FILTER:
     case ACT_SORT_NAME: case ACT_SORT_KIND: case ACT_SORT_SIZE: case ACT_SORT_MODIFIED:
-    case ACT_SORT_DESCENDING:
+    case ACT_SORT_DESCENDING: case ACT_VIEW_ICONS: case ACT_VIEW_DETAILS:
         return fk == WK_FILES;
     case ACT_GO_BACK: return fk == WK_FILES && fm_history_target(-1) >= 0;
     case ACT_GO_FORWARD: return fk == WK_FILES && fm_history_target(1) >= 0;
@@ -7328,6 +7133,8 @@ static int act_checked(int act) {
         if (act == ACT_SORT_SIZE) return fm_view.sort == FILE_VIEW_SIZE;
         if (act == ACT_SORT_MODIFIED) return fm_view.sort == FILE_VIEW_MODIFIED;
         if (act == ACT_SORT_DESCENDING) return fm_view.descending;
+        if (act == ACT_VIEW_ICONS) return !fm_details;
+        if (act == ACT_VIEW_DETAILS) return fm_details;
     }
     if (act == ACT_LINE_NUMBERS) return !!(win_options & WINOPT_LINE_NUMBERS);
     return 0;
@@ -7403,6 +7210,8 @@ static void act_run(int act) {
         break;
     }
     case ACT_SORT_DESCENDING: fm_sort_set(fm_view.sort, !fm_view.descending); break;
+    case ACT_VIEW_ICONS: case ACT_VIEW_DETAILS:
+        fm_rename_cancel(); fm_details = act == ACT_VIEW_DETAILS; fm_first = fm_manual_scroll = 0; break;
     case ACT_LINE_NUMBERS: win_options ^= WINOPT_LINE_NUMBERS; windows_save(); break;
     case ACT_RESTORE: win_arrange(f, 0); break;
     case ACT_MOVE: case ACT_SIZE:
@@ -8894,7 +8703,7 @@ static void handle_rclick(void) {
             return;
         }
         if (w->kind == WK_FILES && mouse_y >= w->y + TITLE_H) {
-            int row = files_row_at(w->x, w->y, w->w, w->h);
+            int row = files_item_at(w->x, w->y, w->w, w->h);
             if (row >= 0 && fm_row_id(row) >= 0) {
                 fm_rename_cancel();
                 fm_selected = row;
@@ -9111,7 +8920,7 @@ static void handle_wheel(int amount) {
         int cols=aw/EDIT_CHAR_W;if(cols<1)cols=1;edit_caret=edit_len;edit_caret_cell(cols,&row,&col);edit_caret=old;
         int max=row+1-ah/EDIT_LINE_H;if(max<0)max=0;
         edit_scroll+=amount*3;if(edit_scroll<0)edit_scroll=0;if(edit_scroll>max)edit_scroll=max;edit_manual_scroll=1;
-    }else if(w->kind==WK_FILES){fm_first+=amount*3;fm_manual_scroll=1;files_scroll(files_rows(w->y,w->h));}
+    }else if(w->kind==WK_FILES){int cols=files_cols(w->w);fm_first+=amount*(fm_details?3:cols);fm_manual_scroll=1;files_scroll(files_rows(w->y,w->h),cols);}
     context_set(original);dirty=1;
 }
 
@@ -9387,13 +9196,17 @@ static void handle_key(void) {
         if (key_sc == 0x3c) { act_run(ACT_RENAME); return; }
         if (key_sc == 0x53) { act_run(ACT_TRASH); return; }
         if (key_sc == 0x3f) { act_run(ACT_REFRESH); return; }
-        if (key_sc == KEY_UP) {
-            if (vis)
-                fm_selected = fm_selected<0?vis-1:(fm_selected - 1 + vis) % vis;
-            dirty = 1;
-        } else if (key_sc == KEY_DOWN) {
-            if (vis)
-                fm_selected = fm_selected<0?0:(fm_selected + 1) % vis;
+        /* Arrows move through rows, or across and down the icon grid. */
+        int step = key_sc == KEY_UP || key_sc == KEY_DOWN ? (fm_details ? 1 : files_cols(wins[context_slot].w)) :
+                   !fm_details && (key_sc == KEY_LEFT || key_sc == KEY_RIGHT) ? 1 : 0;
+        if (step) {
+            int dir = key_sc == KEY_UP || key_sc == KEY_LEFT ? -1 : 1;
+            if (vis) {
+                if (fm_selected < 0) fm_selected = dir < 0 ? vis - 1 : 0;
+                else if (fm_selected + dir * step >= 0 && fm_selected + dir * step < vis) fm_selected += dir * step;
+                else if (step == 1) fm_selected = (fm_selected + dir + vis) % vis;
+            }
+            fm_manual_scroll = 0;
             dirty = 1;
         } else if (key_sc == KEY_ENTER) {
             fm_open_selected();
