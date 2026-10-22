@@ -89,16 +89,14 @@ static int paint_test_delete(int id) { ++mutations; return fs_delete(id); }
 #undef fs_mkdir
 #undef fs_delete
 
-static FsNode saved_nodes[FS_MAX_NODES];
-static unsigned saved_identities[FS_MAX_NODES], saved_revisions[FS_MAX_NODES];
+static FsNode saved_nodes[FS_ARENA_SLOTS];
 static unsigned char saved_pool[FS_POOL_CAPACITY], saved_pixels[PAINT_W * PAINT_H];
 static unsigned char saved_history[PAINT_HISTORY_CAPACITY];
 static unsigned saved_pool_used;
 static History saved_history_state;
 static void capture(void) {
-    memcpy(saved_nodes, nodes, sizeof saved_nodes);
-    memcpy(saved_identities, identities, sizeof saved_identities);
-    memcpy(saved_revisions, content_revisions, sizeof saved_revisions);
+    assert(node_slots <= FS_ARENA_SLOTS);
+    memcpy(saved_nodes, nodes, (size_t)node_slots * sizeof *nodes);
     saved_pool_used = pool_used;
     memcpy(saved_pool, (void *)pool_base, pool_used);
     memcpy(saved_pixels, paint_pix, sizeof saved_pixels);
@@ -112,12 +110,12 @@ static void expect_canvas(void) {
     assert(!memcmp(&saved_history_state, &paint_history, sizeof paint_history));
 }
 static void expect_unchanged(void) {
-    for (int id = 0; id < FS_MAX_NODES; ++id) {
+    for (int id = 0; id < node_slots; ++id) {
         assert(nodes[id].used == saved_nodes[id].used);
         if (!nodes[id].used) continue;
-        assert(!memcmp(&nodes[id], &saved_nodes[id], sizeof(FsNode)));
-        assert(fs_identity(id) == saved_identities[id]);
-        assert(fs_content_revision(id) == saved_revisions[id]);
+        FsNode now = nodes[id];
+        now.touch = saved_nodes[id].touch; /* reads may reorder the cache */
+        assert(!memcmp(&now, &saved_nodes[id], sizeof(FsNode)));
     }
     assert(pool_used == saved_pool_used);
     assert(!memcmp(saved_pool, (void *)pool_base, pool_used));

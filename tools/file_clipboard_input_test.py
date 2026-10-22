@@ -24,7 +24,10 @@ class FilesCheck:
         raw = self.s.memory(self.s.layout['EDITOR_BASE'] + slot * self.size, self.fields['doc'])
         result = {key: struct.unpack_from('<i', raw, self.fields[key])[0]
                   for key in ('cwd', 'selected', 'first', 'count')}
-        result['ids'] = struct.unpack_from('<256i', raw, self.fields['ids'])[:result['count']]
+        # Rows live in a kernel-heap array the window state points to.
+        rows = struct.unpack_from('<I', raw, self.fields['ids'])[0]
+        count = result['count']
+        result['ids'] = struct.unpack('<%di' % count, self.s.memory(rows, 4 * count)) if count else ()
         index = result['selected'] - int(result['cwd'] != 0)
         result['selected_id'] = result['ids'][index] if 0 <= index < len(result['ids']) else -1
         return result

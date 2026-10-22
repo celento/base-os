@@ -165,8 +165,10 @@ static void system_draw(const MonitorLayout *l,const SysInfo *si){
     row(l,y,"Display",buf);y+=28;
     fmt_uint(buf,si->frames);row(l,y,"Frames rendered",buf);y+=40;
     text(l,"Storage",l->x,y,l->w,1,app_text);y+=28;
-    fmt_uint(buf,(unsigned)si->fs_nodes);append(buf," of ");fmt_uint(t,(unsigned)si->fs_max);append(buf,t);
-    row(l,y,"Files and folders",buf);y+=24;bar(l,y,si->fs_nodes,si->fs_max);y+=22;
+    /* fs_max 0: the volume has no fixed node table, so there is no bar. */
+    fmt_uint(buf,(unsigned)si->fs_nodes);
+    if(si->fs_max>0){append(buf," of ");fmt_uint(t,(unsigned)si->fs_max);append(buf,t);}
+    row(l,y,"Files and folders",buf);y+=24;if(si->fs_max>0)bar(l,y,si->fs_nodes,si->fs_max);y+=22;
     fmt_uint(buf,(unsigned)si->fs_bytes/1024);append(buf," KB of ");
     fmt_uint(t,(unsigned)si->fs_cap/1024);append(buf,t);append(buf," KB");
     row(l,y,"Data used",buf);y+=24;bar(l,y,si->fs_bytes,si->fs_cap);

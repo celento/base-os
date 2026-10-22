@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include "kernel/audio.h"
@@ -27,6 +28,10 @@ void kmemcpy(void *d,const void *s,int n){memmove(d,s,(size_t)n);}
 int kstrlen(const char *s){return (int)strlen(s);}
 int kstrcmp(const char *a,const char *b){return strcmp(a,b);}
 int fs_root(void){return 0;}
+int fs_node_count(void){return FS_MAX_NODES;}
+int fs_node_slots(void){return FS_MAX_NODES;}
+void *kmalloc(uint32_t bytes){return calloc(1,bytes?bytes:1);}
+void kfree(void *pointer){free(pointer);}
 int fs_valid(int id){return id>=0&&id<FS_MAX_NODES&&valid[id];}
 int fs_is_dir(int id){return id==0||id==1;}
 int fs_is_app(int id){(void)id;return 0;}

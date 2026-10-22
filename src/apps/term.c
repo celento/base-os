@@ -108,7 +108,7 @@ void term_complete(void){
     if(!start){for(unsigned i=0;i<sizeof commands/sizeof *commands;i++)if(prefix(commands[i].name,T.input)){match=commands[i].name;count++;}}
     else {char parent[TERM_COLS+1];int slash=start;for(int i=start;i<T.len;i++)if(T.input[i]=='/')slash=i+1;
         int cwd=term_cwd();if(slash>start){kmemcpy(parent,T.input+start,slash-start);parent[slash-start]=0;cwd=fs_resolve(cwd,parent);}start=slash;
-        int ids[FS_MAX_NODES],n=fs_list(cwd,ids,FS_MAX_NODES);for(int i=0;i<n;i++)if(prefix(fs_name(ids[i]),T.input+start)){match=fs_name(ids[i]);dir=fs_is_dir(ids[i]);count++;}}
+        for(int child=0;child<fs_node_slots();child++)if(fs_valid(child)&&child&&fs_parent(child)==cwd&&prefix(fs_name(child),T.input+start)){match=fs_name(child);dir=fs_is_dir(child);count++;}}
     if(count==1&&start+kstrlen(match)+1<=TERM_COLS){kstrcpy(T.input+start,match);T.len=kstrlen(T.input);term_char(dir?'/':' ');}else if(count>1)push("Multiple matches; type more of the name.");
 }
 static void print_number(const char *label,unsigned n){char out[81],rev[12];int p=0,r=0;while(*label&&p<65)out[p++]=*label++;do{rev[r++]='0'+n%10;n/=10;}while(n);while(r)out[p++]=rev[--r];out[p]=0;push(out);}
@@ -277,7 +277,7 @@ static int move_command(int cwd,const char *remaining){
     if(!fs_is_dir(parent)){
         push("Cannot move: destination must be an existing folder.");return -1;
     }
-    for(int app=1;app<fs_node_limit();app++)if(fs_is_app(app)&&move_within(app,id)){
+    for(int app=1;app<fs_node_slots();app++)if(fs_is_app(app)&&move_within(app,id)){
         push("Cannot move: source folder contains an app.");return -1;
     }
     if(move_within(parent,id)){
@@ -370,7 +370,7 @@ static int execute(const char *s,int depth,int *budget){
     }
     else if(!kstrcmp(cmd,"pwd")){char path[FS_PATH_LEN];fs_path(cwd,path,sizeof path);print_http_body(path,(unsigned)kstrlen(path));}
     else if(!kstrcmp(cmd,"cd")){if(!fs_is_dir(id))return -1;term_set_cwd(id);}
-    else if(!kstrcmp(cmd,"ls")){if(!fs_is_dir(id))return -1;int ids[FS_MAX_NODES],count=fs_list(id,ids,FS_MAX_NODES);for(int i=0;i<count;i++){char row[26];kstrcpy(row,fs_name(ids[i]));if(fs_is_dir(ids[i]))kstrcpy(row+kstrlen(row),"/");push(row);}}
+    else if(!kstrcmp(cmd,"ls")){if(!fs_is_dir(id))return -1;for(int child=1;child<fs_node_slots();child++){if(!fs_valid(child)||fs_parent(child)!=id)continue;char row[FS_NAME_LEN+1];kstrcpy(row,fs_name(child));if(fs_is_dir(child))kstrcpy(row+kstrlen(row),"/");push(row);}}
     else if(!kstrcmp(cmd,"cat")){if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;cat(id);}
     else if(!kstrcmp(cmd,"mkdir")||!kstrcmp(cmd,"touch")){
         if(fs_sync_busy())return FS_ERR_BUSY;
@@ -383,7 +383,7 @@ static int execute(const char *s,int depth,int *budget){
         int result=fs_delete(id);if(result<0)return result;
     }
     else if(!kstrcmp(cmd,"stat")){if(!fs_valid(id))return -1;push(fs_name(id));push(fs_is_dir(id)?"Directory":"File");print_number("Bytes: ",fs_size(id));print_number("Modified (UTC seconds since 2000; 0=unknown): ",fs_modified(id));}
-    else if(!kstrcmp(cmd,"df")){print_number("Bytes used: ",fs_used_bytes());print_number("Payload capacity: ",fs_capacity());print_number("Free node slots: ",fs_node_limit()-fs_node_count());print_number("Maximum file bytes: ",fs_file_limit());push(fs_storage_name());push("Folders also consume file slots.");push(fs_storage_status()?fs_storage_status():"Disk is synchronized.");}
+    else if(!kstrcmp(cmd,"df")){print_number("Bytes used: ",fs_used_bytes());print_number("Payload capacity: ",fs_capacity());if(fs_node_limit()<=FS_MAX_NODES)print_number("Free node slots: ",fs_node_limit()-fs_node_count());print_number("Maximum file bytes: ",fs_file_limit());push(fs_storage_name());push("Folders also consume file slots.");push(fs_storage_status()?fs_storage_status():"Disk is synchronized.");}
     else if(!kstrcmp(cmd,"run"))return script(id,depth,budget);
     else if(!kstrcmp(cmd,"tasks")){
         int found=0;TermTaskInfo info;

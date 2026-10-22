@@ -86,8 +86,19 @@ was.
 `kernel/fs.c` uses BaseFS 2 as data backend 3. A marked blank data disk (the
 v1 or v2 marker that `tools/init_data.py` writes) is formatted as BaseFS 2 on
 first boot, and a BaseFS 2 disk of any size mounts. Mount reads only the node
-table. The node count (256) and name length (23 bytes) stay as they were for
-now; lifting them is the next step.
+table.
+
+### Nodes and names
+
+On BaseFS 2 a name can be up to 255 bytes (`fs_name_max()`), and there is no
+fixed number of nodes. The node table starts in the 64 KiB metadata arena and
+moves to the kernel heap when it needs more slots, and each name is its own
+heap allocation. What bounds the count is memory and the checkpoint: a node
+is refused when the next checkpoint would no longer fit the staging arena
+(8 MiB, or 32 MiB with the large arenas), which is on the order of a hundred
+thousand nodes. Paths stay within `FS_PATH_LEN` (1,536 bytes) and 63 levels.
+The snapshot formats keep their limits of 256 nodes (64 on the floppy) and 23
+bytes per name.
 
 ### Files load on demand
 

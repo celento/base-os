@@ -75,7 +75,7 @@ static struct {
     int layout_valid, blink, last_blink, hit_affinity;
     char title[64], status[112];
 } state;
-_Static_assert(sizeof(state.export_retry) <= 72u, "Writer export retry exceeds budget");
+_Static_assert(sizeof(state.export_retry) <= 48u + FS_NAME_LEN, "Writer export retry exceeds budget");
 
 /* Default clipboard is local; the desktop supplies shared generation hooks. */
 __attribute__((weak)) unsigned writer_clipboard_set(const char *text, unsigned length) {
@@ -789,9 +789,11 @@ int writer_save_as(int parent, const char *name) {
 }
 static int export_name(int parent, const char *name, unsigned kind, unsigned option) {
     unsigned n = 0;
-    if (name) while (n < FS_NAME_LEN && name[n] && name[n] != '/') ++n;
-    if (!name || !n || n == FS_NAME_LEN || name[n]) {
-        status("Choose an export name of 1-23 characters, with no slash."); return 0;
+    unsigned longest = (unsigned)fs_name_max();
+    if (name) while (n <= longest && name[n] && name[n] != '/') ++n;
+    if (!name || !n || n > longest || name[n]) {
+        status(longest > 23 ? "Choose an export name of 1-255 characters, with no slash."
+                            : "Choose an export name of 1-23 characters, with no slash."); return 0;
     }
     if (!extension(name, kind == DOCUMENT_SAVE_PDF ? "pdf" : "rtf")) {
         status(kind == DOCUMENT_SAVE_PDF ? "PDF exports use the .pdf filename extension." : "RTF exports use the .rtf filename extension."); return 0;

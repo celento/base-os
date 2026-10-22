@@ -149,9 +149,10 @@ class Checks:
     def folder(self, owner):
         raw = self.s.memory(self.s.layout['EDITOR_BASE'] + owner * self.ws, self.wf['doc'])
         count = struct.unpack_from('<i', raw, self.wf['count'])[0]
-        assert 0 <= count <= 256
+        assert 0 <= count
         result = self.fields(raw, {k: self.wf[k] for k in ('cwd', 'selected', 'first', 'manual_files_scroll')})
-        result['ids'] = list(struct.unpack_from('<' + 'i' * count, raw, self.wf['ids']))
+        rows = struct.unpack_from('<I', raw, self.wf['ids'])[0]
+        result['ids'] = list(struct.unpack('<%di' % count, self.s.memory(rows, 4 * count))) if count else []
         return result
 
     def document(self, owner):

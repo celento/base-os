@@ -165,7 +165,8 @@ class WriterCheck:
         self.s.wait(lambda: self.o.integer('open_dlg') == 1, 'Writer Open dialog')
         for _ in range(256):
             count = self.o.integer('pick_count')
-            ids = struct.unpack('<256i', self.o.read('pick_ids'))[:count]
+            rows = self.o.integer('pick_ids')
+            ids = struct.unpack('<%di' % count, self.s.memory(rows, 4 * count)) if count else ()
             selected = self.o.integer('pick_selected')
             if 0 <= selected < count and ids[selected] == ident:
                 self.s.key('ret')

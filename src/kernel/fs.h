@@ -2,7 +2,9 @@
 #define FS_H
 
 #include "kernel/layout.h"
-#define FS_NAME_LEN  24
+/* Name buffer size, NUL included: BaseFS 2 names go up to 255 bytes. The
+ * mounted volume's limit is fs_name_max() (23 on the snapshot formats). */
+#define FS_NAME_LEN  256
 #define FS_MAX_SIZE  16384 /* Legacy floppy, command scripts and Tiny BASIC buffer limit. */
 #define FS_FILE_MAX  2097152 /* Default data-volume file limit, inclusive. */
 #define FS_LARGE_FILE_MAX 16777216 /* Explicit large-profile volume only. */
@@ -54,8 +56,13 @@ int fs_valid(int id);
 int fs_is_dir(int id);
 int fs_is_app(int id);
 int fs_node_count(void);
-/* Runtime limit: 64 on floppy, 256 on the IDE data volume. */
+/* Runtime limit: 64 on floppy, 256 on a snapshot-format IDE volume; on
+ * BaseFS 2 memory decides. */
 int fs_node_limit(void);
+/* Node ids are below this; it grows as a BaseFS 2 volume gains nodes. */
+int fs_node_slots(void);
+/* Longest name the mounted volume stores, in bytes. */
+int fs_name_max(void);
 int fs_parent(int id);
 int fs_size(int id);
 const char *fs_name(int id);

@@ -35,7 +35,7 @@ typedef struct {
     DocumentRevision revision;
     char name[FS_NAME_LEN];
 } SpreadsheetExportRetry;
-_Static_assert(sizeof(SpreadsheetExportRetry) == 64u, "Spreadsheet export retry budget changed");
+_Static_assert(sizeof(SpreadsheetExportRetry) == 40u + FS_NAME_LEN, "Spreadsheet export retry budget changed");
 typedef struct {
     Snapshot history[HISTORY];
     SheetDoc staging;

@@ -3,12 +3,13 @@
 #include "lib/video.h"
 #include "ui/app.h"
 #include "kernel/fs.h"
+#include "kernel/kheap.h"
 #include "kernel/platform.h"
 #include "ui/toolbar.h"
 
 #define PLAYER_ROW 28
-static int files[FS_MAX_NODES], file_count, selected, first_visible, visible_rows = 4;
-static unsigned identities[FS_MAX_NODES];
+static int *files, file_capacity, file_count, selected, first_visible, visible_rows = 4;
+static unsigned *identities;      /* files and identities hold file_capacity entries */
 static int source_id = -1;
 static unsigned source_identity;
 static char title[FS_NAME_LEN], message[96];
@@ -59,11 +60,21 @@ void player_refresh(void) {
     int old_id = selected >= 0 && selected < file_count ? files[selected] : -1;
     unsigned old_identity = selected >= 0 && selected < file_count ? identities[selected] : 0;
     file_count = 0; selected = -1;
+    if (fs_node_count() > file_capacity) {
+        int *more = kmalloc((uint32_t)fs_node_count() * sizeof *more);
+        unsigned *more_identities = kmalloc((uint32_t)fs_node_count() * sizeof *more_identities);
+        if (more && more_identities) {
+            kfree(files); kfree(identities);
+            files = more; identities = more_identities; file_capacity = fs_node_count();
+        } else {
+            kfree(more); kfree(more_identities);
+        }
+    }
     int trash = fs_find_child(fs_root(), "trash");
-    for (int id = 0; id < FS_MAX_NODES; ++id) {
+    for (int id = 0; id < fs_node_slots() && file_count < file_capacity; ++id) {
         if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id) || !is_media(id)) continue;
         int parent = fs_parent(id), excluded = 0;
-        for (int depth = 0; depth < FS_MAX_NODES && parent > 0; ++depth) {
+        for (int depth = 0; depth <= FS_MAX_DEPTH && parent > 0; ++depth) {
             if (parent == trash) { excluded = 1; break; }
             parent = fs_parent(parent);
         }

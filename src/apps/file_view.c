@@ -58,28 +58,43 @@ int file_view_compare(int a, int b, const FileViewOptions *options) {
     return order ? order : compare_unsigned((unsigned)a, (unsigned)b);
 }
 
+static void swap_entry(int *ids, unsigned *identities, int a, int b) {
+    int id = ids[a]; ids[a] = ids[b]; ids[b] = id;
+    unsigned identity = identities[a]; identities[a] = identities[b]; identities[b] = identity;
+}
+static void sift_down(int *ids, unsigned *identities, int root, int count,
+                      const FileViewOptions *options) {
+    for (;;) {
+        int child = 2 * root + 1;
+        if (child >= count) return;
+        if (child + 1 < count && file_view_compare(ids[child], ids[child + 1], options) < 0) ++child;
+        if (file_view_compare(ids[root], ids[child], options) >= 0) return;
+        swap_entry(ids, identities, root, child);
+        root = child;
+    }
+}
+
 int file_view_build(int directory, const FileViewOptions *options,
                     int *ids, unsigned *identities, int capacity, int *total) {
-    int raw[FS_MAX_NODES], count = 0;
-    int size = fs_list(directory, raw, FS_MAX_NODES);
-    int all=0;
-    if (capacity > FS_MAX_NODES) capacity = FS_MAX_NODES;
+    int listed = fs_child_count(directory), count = 0, all = 0;
+    int *raw = kmalloc((uint32_t)(listed ? listed : 1) * sizeof *raw);
+    int size = raw ? fs_list(directory, raw, listed) : 0;
     for (int i = 0; i < size; ++i) {
         int id = raw[i];
         if(options&&(id==options->hidden[0]||id==options->hidden[1]))continue;
         ++all;
         if(count>=capacity)continue;
         if (options && !file_view_matches(fs_name(id), options->filter)) continue;
-        /* Stable insertion sort: no allocator, recursion or borrowed FS data. */
-        int at = count;
-        while (at && file_view_compare(id, ids[at - 1], options) < 0) {
-            ids[at] = ids[at - 1];
-            identities[at] = identities[at - 1];
-            --at;
-        }
-        ids[at] = id;
-        identities[at] = fs_identity(id);
-        ++count;
+        ids[count] = id;
+        identities[count++] = fs_identity(id);
+    }
+    kfree(raw);
+    /* Heap sort: the order is total (ties end on node ID), so it needs no
+     * stability, and large folders sort in n log n without an allocator. */
+    for (int i = count / 2 - 1; i >= 0; --i) sift_down(ids, identities, i, count, options);
+    for (int end = count - 1; end > 0; --end) {
+        swap_entry(ids, identities, 0, end);
+        sift_down(ids, identities, 0, end, options);
     }
     if(total)*total=all;
     return count;

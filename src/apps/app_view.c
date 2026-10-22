@@ -5,7 +5,10 @@
 static AppView *views=((AppStorage *)TERM_MEMORY)->views;
 static AppViewLog *logs=((AppStorage *)TERM_MEMORY)->logs;
 static unsigned char (*published_canvases)[APP_CANVAS_PIXELS]=(void *)NATIVE_CANVAS_MEMORY;
-_Static_assert(APP_VIEW_NAME_LEN>=FS_NAME_LEN,"app-view filename buffer too small");
+/* Task titles show the program's name cut to APP_VIEW_NAME_LEN - 1 bytes. */
+static void copy_task_name(char out[APP_VIEW_NAME_LEN],const char *name){
+    int n=0;while(name[n]&&n<APP_VIEW_NAME_LEN-1){out[n]=name[n];n++;}out[n]=0;
+}
 static int valid_slot(int slot){return slot>=0&&slot<PROCESS_TASKS;}
 void app_view_mark(int slot,unsigned flags){if(valid_slot(slot))views[slot].task_dirty|=flags;}
 /* The trusted process adapter has already normalized/split writes into rows.
@@ -183,7 +186,7 @@ int app_view_start_file(int slot,int file,unsigned identity,
                 return -1;
             }
             v->backend=APP_VIEW_BACKEND_HOSTED;
-            kstrcpy(v->task_name,fs_name(file));v->task_started=timer_ticks();
+            copy_task_name(v->task_name,fs_name(file));v->task_started=timer_ticks();
             unsigned first=0;
             for(unsigned i=0;i<argument_length;i++)if(argument[i]=='/')first=i+1;
             unsigned n=argument_length-first;
@@ -232,7 +235,7 @@ int app_view_start_owned_file(int slot,int file,unsigned identity,const char *ar
     kmemset(v,0,offsetof(AppView,canvas));
     v->binding=io.binding;v->backend=APP_VIEW_BACKEND_OWNED;v->output=APP_VIEW_OUTPUT_LOG;
     v->executable_identity=identity;v->task_started=timer_ticks();
-    kstrcpy(v->task_name,fs_name(file));
+    copy_task_name(v->task_name,fs_name(file));
     unsigned first=0;
     for(unsigned i=0;i<argument_length;i++)if(argument[i]=='/')first=i+1;
     unsigned n=argument_length-first;

@@ -57,7 +57,7 @@ int main(void){
     for(unsigned i=0;i<strlen(source);i++){memcpy(fuzz,source,i);fuzz[i]=0;basic_run(fuzz,i,&io);}
     int dir=fs_mkdir(0,"test folder"),f=fs_create(dir,"hello.txt");fs_write(f,"contents",8);
     assert(fs_resolve(0,"/test folder/../test folder/hello.txt")==f);
-    char name[24];assert(fs_destination(0,"/test folder/new.txt",name)==dir&&!strcmp(name,"new.txt"));
+    char name[FS_NAME_LEN];assert(fs_destination(0,"/test folder/new.txt",name)==dir&&!strcmp(name,"new.txt"));
     assert(fs_destination(0,"/test folder/1234567890123456789012345",name)<0);
     term_select(0);term_reset();command("cd \"/test folder\"");assert(term_cwd()==dir);
     term_char('c');term_char('a');term_char('t');term_complete();assert(!strcmp(term_input(),"cat "));

@@ -2,8 +2,9 @@
 #define FILE_VIEW_H
 
 #include "kernel/fs.h"
+#include "kernel/kheap.h"
 
-/* A name cannot exceed 23 bytes, so longer filter input cannot match anything. */
+/* Longer filter input than a name cannot match anything. */
 #define FILE_VIEW_FILTER_LEN FS_NAME_LEN
 
 enum {

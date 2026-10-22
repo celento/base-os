@@ -5,11 +5,13 @@
 #include "kernel/fs.h"
 #include "apps/todo.h"
 
-#define TODO_FILE_MAX (TODO_MAX * (FS_NAME_LEN + 2) + 1)
-typedef struct { char text[FS_NAME_LEN]; int done; } TodoItem;
+/* Item text keeps the 23-byte limit the todo file format was built on. */
+#define TODO_TEXT_LEN 24
+#define TODO_FILE_MAX (TODO_MAX * (TODO_TEXT_LEN + 2) + 1)
+typedef struct { char text[TODO_TEXT_LEN]; int done; } TodoItem;
 static TodoItem td[TODO_MAX];
 static int td_n;
-static char td_field_buf[FS_NAME_LEN];
+static char td_field_buf[TODO_TEXT_LEN];
 static int td_field_len, td_field_on;
 
 /* Only QUEUED is automatically retried. Other failures keep the newest list
@@ -171,7 +173,7 @@ static int todo_source_supported(const char *data, int size) {
         int length=0;
         while(pos<size&&data[pos]!='\n'){
             unsigned char c=(unsigned char)data[pos++];
-            if(c<' '||c>'~'||++length>=FS_NAME_LEN)return 0;
+            if(c<' '||c>'~'||++length>=TODO_TEXT_LEN)return 0;
         }
         if(length&&++rows>TODO_MAX)return 0;
         if(pos<size)pos++;
@@ -215,7 +217,7 @@ void todo_load(void) {
         i++;
         int len = 0;
         while (i < n && buf[i] != '\n') {
-            if (len < FS_NAME_LEN - 1) td[td_n].text[len++] = buf[i];
+            if (len < TODO_TEXT_LEN - 1) td[td_n].text[len++] = buf[i];
             i++;
         }
         td[td_n].text[len] = 0;
@@ -237,7 +239,7 @@ int todo_field_active(void) { return td_field_on; }
 const char *todo_field(void) { return td_field_buf; }
 int todo_field_char(char c) {
     if (!td_field_on || c < ' ' || c > '~') return 0;
-    if (td_field_len >= FS_NAME_LEN - 1) return 0;
+    if (td_field_len >= TODO_TEXT_LEN - 1) return 0;
     td_field_buf[td_field_len++] = c;
     td_field_buf[td_field_len] = 0;
     return 1;

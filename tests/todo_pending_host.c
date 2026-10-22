@@ -313,7 +313,7 @@ static void legacy_format_and_limits(void) {
     assert(!todo_retry_save()); status(TODO_SAVED, "saved"); reboot(); assert(todo_count() == TODO_MAX);
     reset_volume(1); type("12345678901234567890123"); assert(!todo_field_char('x'));
     assert(todo_field_enter()); assert(!strcmp(todo_text(0), "12345678901234567890123"));
-    assert(!todo_retry_save()); reboot(); assert(strlen(todo_text(0)) == FS_NAME_LEN - 1);
+    assert(!todo_retry_save()); reboot(); assert(strlen(todo_text(0)) == TODO_TEXT_LEN - 1);
     puts("Todo: unchanged line format, legacy floppy, capacity/field/text boundaries passed");
 }
 static void unrelated_source_files(void) {

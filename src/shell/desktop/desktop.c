@@ -938,8 +938,9 @@ typedef struct {
     int manual_files_scroll,manual_editor_scroll;
     int selected;
     int first;
-    int ids[FS_MAX_NODES];
-    unsigned ids_identity[FS_MAX_NODES];
+    int *ids;                /* kmalloc'd; ids_capacity entries */
+    unsigned *ids_identity;
+    int ids_capacity;
     int count;
     int files_total;
     FileViewOptions files_view;
@@ -957,6 +958,28 @@ typedef struct {
 static WindowState *window_state = (WindowState *)EDITOR_BASE;
 static int context_slot;
 static void context_set(int slot) { if (slot >= 0 && slot < MAX_WIN) { context_slot = slot; term_select(slot); } }
+static void window_state_clear(int slot) {
+    kfree(window_state[slot].ids);
+    kfree(window_state[slot].ids_identity);
+    kmemset(&window_state[slot], 0, sizeof(WindowState));
+}
+/* A folder's rows: room for every child, kept when memory runs short. */
+static int window_state_reserve(WindowState *state, int count) {
+    if (count <= state->ids_capacity) return state->ids_capacity;
+    int *ids = kmalloc((uint32_t)count * sizeof *ids);
+    unsigned *identities = kmalloc((uint32_t)count * sizeof *identities);
+    if (!ids || !identities) {
+        kfree(ids);
+        kfree(identities);
+        return state->ids_capacity;
+    }
+    kfree(state->ids);
+    kfree(state->ids_identity);
+    state->ids = ids;
+    state->ids_identity = identities;
+    state->ids_capacity = count;
+    return count;
+}
 _Static_assert(sizeof(WindowState) * MAX_WIN < EDITOR_CAPACITY - 2 * EDIT_BUF_SIZE, "window arena overflow");
 #define fm_cwd (window_state[context_slot].cwd)
 #define fm_manual_scroll (window_state[context_slot].manual_files_scroll)
@@ -1160,8 +1183,9 @@ static int edit_close_valid(void) {
 }
 static int pick_cwd = 0;
 static int pick_focus, pick_first;
-static int pick_ids[FS_MAX_NODES];
-static unsigned pick_identity[FS_MAX_NODES];
+static int *pick_ids;           /* kmalloc'd; pick_capacity entries */
+static unsigned *pick_identity;
+static int pick_capacity;
 static int pick_count = 0;
 static int pick_selected = 0;
 static uint32_t pick_last_click_frame = 0;
@@ -1381,7 +1405,7 @@ static int win_open(int kind) {
     if (slot < 0)
         return -1;
     kmemset(&wins[slot], 0, sizeof(Win));
-    kmemset(&window_state[slot], 0, sizeof(WindowState));
+    window_state_clear(slot);
     context_set(slot);
     fm_set_cwd(fs_root());
     edit_file = -1;
@@ -1627,7 +1651,8 @@ static void fm_refresh(void) {
     fm_checked_cwd();
     fm_view.hidden[0]=fm_cwd==fs_root()?trash_id:-1;
     fm_view.hidden[1]=fm_cwd==fs_root()?prefs_id:-1;
-    fm_count=file_view_build(fm_cwd,&fm_view,fm_ids,fm_ids_identity,FS_MAX_NODES,&fm_total);
+    int capacity=window_state_reserve(&window_state[context_slot],fs_child_count(fm_cwd));
+    fm_count=file_view_build(fm_cwd,&fm_view,fm_ids,fm_ids_identity,capacity,&fm_total);
     int index=file_view_find(fm_ids,fm_ids_identity,fm_count,selected_id,selected_identity);
     fm_selected=index>=0?index+(fm_has_parent()?1:0):parent_selected&&fm_has_parent()?0:-1;
 }
@@ -3810,7 +3835,7 @@ static int native_window_start(int id,unsigned identity,const char *argument,uns
     int result=app_view_start_owned_file(slot,id,identity,argument,length);
     if(result)return result;
     /* START invokes no output, and no scheduler can run before publication. */
-    kmemset(&window_state[slot],0,sizeof window_state[slot]);
+    window_state_clear(slot);
     native_output_scroll[slot]=0;
     prepared.open=1;prepared.seq=++wm_seq;wins[slot]=prepared;
     win_focus(slot);return 0;
@@ -4406,8 +4431,19 @@ static int od_next_enabled(int from, int dir) {
 }
 
 static void od_refresh(void) {
-    int raw[FS_MAX_NODES];
-    int n = fs_list(pick_cwd, raw, FS_MAX_NODES);
+    int listed = fs_child_count(pick_cwd);
+    if (listed > pick_capacity) {
+        int *ids = kmalloc((uint32_t)listed * sizeof *ids);
+        unsigned *identities = kmalloc((uint32_t)listed * sizeof *identities);
+        if (ids && identities) {
+            kfree(pick_ids); kfree(pick_identity);
+            pick_ids = ids; pick_identity = identities; pick_capacity = listed;
+        } else {
+            kfree(ids); kfree(identities);
+        }
+    }
+    int *raw = kmalloc((uint32_t)(listed ? listed : 1) * sizeof *raw);
+    int n = raw ? fs_list(pick_cwd, raw, listed < pick_capacity ? listed : pick_capacity) : 0;
     pick_count = 0;
     for (int i = 0; i < n; i++) {
         if (pick_cwd == fs_root() && trash_id >= 0 && raw[i] == trash_id)
@@ -4417,6 +4453,7 @@ static void od_refresh(void) {
         pick_identity[pick_count] = fs_identity(raw[i]);
         pick_ids[pick_count++] = raw[i];
     }
+    kfree(raw);
     if (pick_selected >= pick_count)
         pick_selected = pick_count ? pick_count - 1 : 0;
     if (pick_selected < 0)
@@ -5112,7 +5149,7 @@ static void draw_window_contents(Win *w, int inactive) {
         PROP_RULE();
         PROP("Volume",fs_storage_name());
         fmt_uint(number,fs_used_bytes());kstrcpy(row,number);kstrcpy(row+kstrlen(row)," bytes");PROP("Used",row);
-        fmt_uint(number,fs_node_limit()-fs_node_count());PROP("Free slots",number);
+        if(fs_node_limit()<=FS_MAX_NODES){fmt_uint(number,fs_node_limit()-fs_node_count());PROP("Free slots",number);}
         fmt_uint(number,fs_file_limit());kstrcpy(row,number);kstrcpy(row+kstrlen(row)," bytes");PROP("Largest file",row);
         PROP("Status",fs_storage_status()?fs_storage_status():fs_needs_sync()?"Changes waiting to be saved":"Saved to disk");
         #undef PROP
@@ -5790,18 +5827,16 @@ static void launcher_refresh(void) {
             launch_n++;
         }
     }
-    int ids[FS_MAX_NODES];
-    int n = fs_list_files(ids, FS_MAX_NODES);
-    for (int i = 0; i < n && launch_n < 24; i++) {
-        if (fs_is_app(ids[i]) || fs_is_dir(ids[i]))
+    for (int id = 0; id < fs_node_slots() && launch_n < 24; id++) {
+        if (!fs_valid(id) || fs_is_app(id) || fs_is_dir(id))
             continue;
         if (launch_len == 0 && launch_n >= 8)
             break;
-        if (str_has(fs_name(ids[i]), launch_buf)) {
-            kstrcpy(launch_items[launch_n].name, fs_name(ids[i]));
-            launch_items[launch_n].identity = fs_identity(ids[i]);
+        if (str_has(fs_name(id), launch_buf)) {
+            kstrcpy(launch_items[launch_n].name, fs_name(id));
+            launch_items[launch_n].identity = fs_identity(id);
             launch_items[launch_n].icon = -1;
-            launch_items[launch_n].file = ids[i];
+            launch_items[launch_n].file = id;
             launch_n++;
         }
     }
@@ -6108,14 +6143,9 @@ static void sysinfo_fill(SysInfo *si) {
         si->win_min[k] = wins[i].min;
         si->win_n++;
     }
-    int ids[FS_MAX_NODES];
-    int total = fs_list_files(ids, FS_MAX_NODES);
-    int bytes = 0;
-    for (int i = 0; i < total; i++)
-        bytes += fs_size(ids[i]);
     si->fs_nodes = fs_node_count();
-    si->fs_max = fs_node_limit();
-    si->fs_bytes = bytes;
+    si->fs_max = fs_node_limit() <= FS_MAX_NODES ? fs_node_limit() : 0;
+    si->fs_bytes = (int)fs_used_bytes();
     si->fs_cap = fs_capacity();
     si->fb_w = fb_w;
     si->fb_h = fb_h;

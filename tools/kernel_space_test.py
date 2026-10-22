@@ -19,7 +19,7 @@ import zlib
 from layout import constants
 from qemu_session import DesktopSession
 from update_image import install_kernel, install_packed_kernel, update
-from kernel_pack import LZ4, RAW, pack_kernel, unpack_kernel
+from kernel_pack import LZMA, RAW, pack_kernel, unpack_kernel
 import volume
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -99,7 +99,7 @@ def check_runtime(session, names, kernel):
         session.command('cont')
 
 
-def boot(build, image, directory, label, names, kernel, loaded=False, codec=LZ4):
+def boot(build, image, directory, label, names, kernel, loaded=False, codec=LZMA):
     with DesktopSession(build, 'kernel-space-' + label, image=image) as session:
         session.boot()
         log = session.log.read_text()
