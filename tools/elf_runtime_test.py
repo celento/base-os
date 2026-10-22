@@ -111,16 +111,17 @@ def build_fixture(build, work, steps=None):
     (work / 'boot.img').write_bytes(image)
 
 
-def boot(build, work, steps=None, disk=None):
+def boot(build, work, steps=None, disk=None, extra=()):
     """Boot the fixture; returns the serial log once every step passed. disk
-    is an optional IDE data volume holding programs named by path."""
+    is an optional IDE data volume holding programs named by path; extra
+    adds QEMU arguments."""
     build = pathlib.Path(build).resolve()
     build_fixture(build, work, steps)
     log = work / 'serial.log'
     qemu = subprocess.Popen(['qemu-system-i386', '-m', '512M', '-vga', 'std', '-drive',
                              f'file={work / "boot.img"},format=raw,index=0,if=floppy',
                              '-display', 'none', '-serial', f'file:{log}', '-no-reboot',
-                             *(('-drive', f'file={disk},format=raw,index=0,if=ide') if disk else ())],
+                             *(('-drive', f'file={disk},format=raw,index=0,if=ide') if disk else ()), *extra],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         deadline = time.monotonic() + 180

@@ -2,10 +2,12 @@
 #include "kernel/uproc.h"
 #include "kernel/kheap.h"
 #include "kernel/fs.h"
+#include "kernel/fatvol.h"
 #include "kernel/platform.h"
 #include "../sdk/baseos_sys.h"
 
-enum { UFILE_CONSOLE = 1, UFILE_NODE, UFILE_DIRECTORY, UFILE_PIPE_READ, UFILE_PIPE_WRITE };
+enum { UFILE_CONSOLE = 1, UFILE_NODE, UFILE_DIRECTORY, UFILE_PIPE_READ, UFILE_PIPE_WRITE,
+       UFILE_FAT, UFILE_FAT_DIRECTORY };
 
 #define PIPE_BYTES 4096u
 /* Seconds from 1970 to 2000, the volume's clock origin. */
@@ -32,8 +34,23 @@ typedef struct UFile {
      * writes go to the volume as they happen. */
     int direct;
     UPipe *pipe;
+    /* FAT volume file or directory. */
+    int volume;
+    struct FatOpen *fat;       /* files: the node, shared by every open of it */
+    FatNode *fat_directory;    /* directories: this open's own copy */
+    uint32_t fat_cursor;       /* directories: where readdir goes on */
     struct UFile *next_orphan;
 } UFile;
+
+/* One FatNode per open FAT file, so every descriptor sees one size and
+ * chain, and renames through a path keep open files current. */
+typedef struct FatOpen {
+    unsigned refs;
+    int volume;
+    FatNode node;
+    struct FatOpen *next;
+} FatOpen;
+static FatOpen *fat_opens;
 
 /* Closed files whose contents the volume has not taken yet. */
 static UFile *orphans;
@@ -135,7 +152,33 @@ static int go_direct(UFile *file) {
     return 0;
 }
 
+static FatOpen *fat_open_of(int volume, const FatNode *node) {
+    for (FatOpen *open = fat_opens; open; open = open->next)
+        if (open->volume == volume && open->node.parent == node->parent && open->node.slot == node->slot)
+            return open;
+    return 0;
+}
+static FatOpen *fat_hold(int volume, const FatNode *node) {
+    FatOpen *open = fat_open_of(volume, node);
+    if (open) { ++open->refs; return open; }
+    if (!(open = kmalloc(sizeof *open))) return 0;
+    open->refs = 1;
+    open->volume = volume;
+    open->node = *node;
+    open->next = fat_opens;
+    fat_opens = open;
+    return open;
+}
+static void fat_drop(FatOpen *open) {
+    if (!open || --open->refs) return;
+    for (FatOpen **link = &fat_opens; *link; link = &(*link)->next)
+        if (*link == open) { *link = open->next; break; }
+    kfree(open);
+}
+
 static void free_file(UFile *file) {
+    fat_drop(file->fat);
+    kfree(file->fat_directory);
     kfree(file->buffer);
     kfree(file);
 }
@@ -254,6 +297,8 @@ void ufile_table_close_all(UFileTable *table) {
     kfree(table->slots);
     table->slots = 0;
     table->capacity = 0;
+    kfree(table->cwd_path);
+    table->cwd_path = 0;
 }
 
 /* ---------- paths ---------- */
@@ -280,19 +325,14 @@ static int cwd_of(Uproc *process) {
     return table->cwd;
 }
 
-static int resolve(Uproc *process, uint32_t address, int *node) {
-    char path[FS_PATH_LEN];
-    int result = path_in(process, address, path);
-    if (result) return result;
+static int resolve(Uproc *process, const char *path, int *node) {
     *node = fs_resolve(cwd_of(process), path);
     return *node < 0 ? -BOS_ENOENT : 0;
 }
 
-/* Parent directory and final name of a path that may not exist yet. */
-static int destination(Uproc *process, uint32_t address, int *parent, char *name) {
-    char path[FS_PATH_LEN];
-    int result = path_in(process, address, path);
-    if (result) return result;
+/* Parent directory and final name of a path that may not exist yet. The
+ * path may lose trailing slashes. */
+static int destination(Uproc *process, char *path, int *parent, char *name) {
     unsigned length = (unsigned)kstrlen(path);
     while (length > 1 && path[length - 1] == '/') path[--length] = 0;
     const char *last = path;
@@ -303,6 +343,250 @@ static int destination(Uproc *process, uint32_t address, int *parent, char *name
     if (*parent >= 0) return 0;
     if (!*last || !kstrcmp(last, ".") || !kstrcmp(last, "..")) return -BOS_EEXIST;
     return -BOS_ENOENT;
+}
+
+/* ---------- FAT volumes ---------- */
+
+static int fat_errno(int result) {
+    switch (result) {
+    case FAT_ERR_NOSPACE: return -BOS_ENOSPC;
+    case FAT_ERR_NOMEM: return -BOS_ENOMEM;
+    case FAT_ERR_INVALID: return -BOS_EINVAL;
+    case FAT_ERR_NOTFOUND: return -BOS_ENOENT;
+    case FAT_ERR_EXISTS: return -BOS_EEXIST;
+    case FAT_ERR_NOTDIR: return -BOS_ENOTDIR;
+    case FAT_ERR_ISDIR: return -BOS_EISDIR;
+    case FAT_ERR_NOTEMPTY: return -BOS_ENOTEMPTY;
+    case FAT_ERR_NAMETOOLONG: return -BOS_ENAMETOOLONG;
+    case FAT_ERR_FBIG: return -BOS_EFBIG;
+    case FAT_ERR_READONLY: return -BOS_EROFS;
+    default: return result < 0 ? -BOS_EIO : result;
+    }
+}
+
+/* Copies a user path and finds the volume it is on. *volume is -1 for the
+ * native volume: path then works with resolve and destination. Otherwise
+ * path is absolute and normalized and *rest is the part within the FAT
+ * volume ("" for its root). */
+static int locate(Uproc *process, uint32_t address, char *path, int *volume, const char **rest) {
+    int result = path_in(process, address, path);
+    if (result) return result;
+    const char *cwd = process->files.cwd_path;
+    int any = 0;
+    for (int i = 0; i < FATVOL_MAX; ++i) any |= fatvol_get(i) != 0;
+    if (!cwd && !any) { *volume = -1; return 0; }
+    char *joined = kmalloc(2u * FS_PATH_LEN);
+    if (!joined) return -BOS_ENOMEM;
+    unsigned length = 0;
+    if (*path != '/') {
+        if (cwd) {
+            while (cwd[length]) { joined[length] = cwd[length]; ++length; }
+        } else {
+            fs_path(cwd_of(process), joined, FS_PATH_LEN);
+            length = (unsigned)kstrlen(joined);
+        }
+        joined[length++] = '/';
+    }
+    for (unsigned i = 0; path[i]; ++i) joined[length++] = path[i];
+    joined[length] = 0;
+    /* "." and ".." are resolved here, by name. */
+    char *out = joined + FS_PATH_LEN;
+    unsigned size = 0;
+    for (const char *p = joined; *p;) {
+        while (*p == '/') ++p;
+        if (!*p) break;
+        const char *part = p;
+        while (*p && *p != '/') ++p;
+        unsigned n = (unsigned)(p - part);
+        if (n == 1 && part[0] == '.') continue;
+        if (n == 2 && part[0] == '.' && part[1] == '.') {
+            while (size && out[size - 1] != '/') --size;
+            if (size) --size;
+            continue;
+        }
+        if (size + 1 + n >= FS_PATH_LEN) { kfree(joined); return -BOS_ENAMETOOLONG; }
+        out[size++] = '/';
+        kmemcpy(out + size, part, (int)n);
+        size += n;
+    }
+    if (!size) out[size++] = '/';
+    out[size] = 0;
+    const char *within;
+    *volume = fatvol_route(out, &within);
+    if (*volume >= 0 || cwd) {
+        kmemcpy(path, out, (int)size + 1);
+        if (*volume >= 0) *rest = path + (within - out);
+    }
+    kfree(joined);
+    return 0;
+}
+
+/* Parent directory node and final name of a path within a FAT volume. */
+static int fat_parent(FatVolume *v, const char *rest, FatNode *parent, const char **name) {
+    const char *slash = rest;
+    for (const char *p = rest; *p; ++p)
+        if (*p == '/') slash = p;
+    if (!*rest || !slash[1]) return -BOS_EEXIST;      /* the volume's root */
+    *name = slash + 1;
+    char *head = kmalloc((uint32_t)(slash - rest) + 1);
+    if (!head) return -BOS_ENOMEM;
+    kmemcpy(head, rest, (int)(slash - rest));
+    head[slash - rest] = 0;
+    int result = fat_resolve(v, head, parent);
+    kfree(head);
+    if (!result && !(parent->attributes & FAT_ATTR_DIRECTORY)) result = FAT_ERR_NOTDIR;
+    return fat_errno(result);
+}
+
+static void stat_fat(int volume, const FatNode *node, BosStat *out) {
+    kmemset(out, 0, sizeof *out);
+    out->struct_size = sizeof *out;
+    int directory = (node->attributes & FAT_ATTR_DIRECTORY) != 0;
+    out->mode = directory ? BOS_S_IFDIR | 0755
+              : BOS_S_IFREG | (node->attributes & FAT_ATTR_READ_ONLY ? 0444 : 0644);
+    out->node = node->is_root ? 0xF0000000u + (unsigned)volume
+              : 0x80000000u ^ ((unsigned)volume << 28) ^ (node->parent << 12) ^ node->slot;
+    out->links = 1;
+    out->size = directory ? 0 : node->size;
+    out->modified = node->modified ? VOLUME_EPOCH + node->modified : 0;
+}
+
+/* Reads into user memory through a kernel bounce buffer. */
+static int fat_read_user(Uproc *process, UFile *file, uint32_t buffer, uint32_t length) {
+    FatVolume *v = fatvol_get(file->volume);
+    if (!v) return -BOS_EIO;
+    FatNode *node = &file->fat->node;
+    if (file->offset >= node->size) return 0;
+    if (length > node->size - file->offset) length = node->size - file->offset;
+    char *bounce = kmalloc(length < DIRECT_PIECE ? length : DIRECT_PIECE);
+    if (!bounce) return -BOS_ENOMEM;
+    uint32_t done = 0;
+    int result = 0;
+    while (done < length) {
+        uint32_t n = length - done < DIRECT_PIECE ? length - done : DIRECT_PIECE;
+        int got = fat_read(v, node, file->offset, bounce, n);
+        if (got < 0) { result = fat_errno(got); break; }
+        if (got && (result = uproc_copy_out(process, buffer + done, bounce, (uint32_t)got))) break;
+        file->offset += (uint32_t)got;
+        done += (uint32_t)got;
+        if ((uint32_t)got < n) break;
+    }
+    kfree(bounce);
+    return done ? (int)done : result;
+}
+
+static int fat_write_user(Uproc *process, UFile *file, uint32_t buffer, uint32_t length) {
+    FatVolume *v = fatvol_get(file->volume);
+    if (!v) return -BOS_EIO;
+    FatNode *node = &file->fat->node;
+    if (!length) return 0;
+    if (file->flags & BOS_O_APPEND) file->offset = node->size;
+    if (file->offset + length < file->offset) return -BOS_EFBIG;
+    char *bounce = kmalloc(length < DIRECT_PIECE ? length : DIRECT_PIECE);
+    if (!bounce) return -BOS_ENOMEM;
+    uint32_t done = 0;
+    int result = 0;
+    while (done < length) {
+        uint32_t n = length - done < DIRECT_PIECE ? length - done : DIRECT_PIECE;
+        if ((result = uproc_copy_in(process, bounce, buffer + done, n))) break;
+        if ((result = fat_errno(fat_write(v, node, file->offset, bounce, n)))) break;
+        file->offset += n;
+        done += n;
+    }
+    kfree(bounce);
+    fatvol_changed(file->volume);
+    return done ? (int)done : result;
+}
+
+static int fat_open_path(Uproc *process, int volume, const char *rest, int flags) {
+    FatVolume *v = fatvol_get(volume);
+    int access = flags & BOS_O_ACCMODE;
+    FatNode *node = kmalloc(sizeof *node);
+    if (!node) return -BOS_ENOMEM;
+    int result = fat_resolve(v, rest, node);
+    if (result == FAT_ERR_NOTFOUND && (flags & BOS_O_CREAT)) {
+        FatNode *parent = kmalloc(sizeof *parent);
+        const char *name;
+        result = parent ? fat_parent(v, rest, parent, &name) : -BOS_ENOMEM;
+        if (!result) result = fat_errno(fat_create(v, parent, name, 0, node));
+        kfree(parent);
+        if (!result) fatvol_changed(volume);
+    } else if (!result && (flags & BOS_O_CREAT) && (flags & BOS_O_EXCL)) {
+        result = -BOS_EEXIST;
+    } else {
+        result = fat_errno(result);
+    }
+    int directory = !result && (node->attributes & FAT_ATTR_DIRECTORY);
+    if (!result && directory && access != BOS_O_RDONLY) result = -BOS_EISDIR;
+    if (!result && !directory && (flags & BOS_O_DIRECTORY)) result = -BOS_ENOTDIR;
+    UFile *file = result ? 0 : new_file(directory ? UFILE_FAT_DIRECTORY : UFILE_FAT);
+    if (!result && !file) result = -BOS_ENOMEM;
+    if (result) { kfree(node); return result; }
+    file->flags = flags & (BOS_O_ACCMODE | BOS_O_APPEND);
+    file->volume = volume;
+    if (directory) {
+        file->fat_directory = node;
+    } else {
+        file->fat = fat_hold(volume, node);
+        kfree(node);
+        if (!file->fat) { free_file(file); return -BOS_ENOMEM; }
+        if ((flags & BOS_O_TRUNC) && access != BOS_O_RDONLY && file->fat->node.size) {
+            if ((result = fat_errno(fat_truncate(v, &file->fat->node, 0)))) { free_file(file); return result; }
+            fatvol_changed(volume);
+        }
+    }
+    int fd = install(&process->files, file, 0);
+    if (fd < 0) release(file, 1);
+    return fd;
+}
+
+/* Records for ".", ".." and then the directory's entries. */
+static int fat_readdir_user(Uproc *process, UFile *file, uint32_t buffer, uint32_t length) {
+    FatVolume *v = fatvol_get(file->volume);
+    if (!v) return -BOS_EIO;
+    FatNode *entry = kmalloc(sizeof *entry);
+    if (!entry) return -BOS_ENOMEM;
+    uint32_t done = 0;
+    int result = 0;
+    for (;;) {
+        const char *name;
+        uint32_t cursor = file->fat_cursor;
+        int type = BOS_DT_DIR;
+        unsigned node = 0;
+        if (file->offset == 0) name = ".";
+        else if (file->offset == 1) name = "..";
+        else {
+            int found = fat_next(v, file->fat_directory, &cursor, entry);
+            if (found <= 0) { result = fat_errno(found); break; }
+            name = entry->name;
+            BosStat stat;
+            stat_fat(file->volume, entry, &stat);
+            node = stat.node;
+            type = entry->attributes & FAT_ATTR_DIRECTORY ? BOS_DT_DIR : BOS_DT_REG;
+        }
+        unsigned name_length = (unsigned)kstrlen(name);
+        unsigned record = (8u + name_length + 1u + 3u) & ~3u;
+        if (done + record > length) {
+            if (!done) result = -BOS_EINVAL;
+            break;
+        }
+        char *bytes = kmalloc(record);
+        if (!bytes) { result = -BOS_ENOMEM; break; }
+        kmemset(bytes, 0, (int)record);
+        BosDirent *dirent = (BosDirent *)bytes;
+        dirent->node = node ? node : 0xF0000000u + (unsigned)file->volume + file->offset;
+        dirent->length = (unsigned short)record;
+        dirent->type = (unsigned char)type;
+        kmemcpy(dirent->name, name, (int)name_length + 1);
+        result = uproc_copy_out(process, buffer + done, bytes, record);
+        kfree(bytes);
+        if (result) break;
+        done += record;
+        file->fat_cursor = cursor;
+        ++file->offset;
+    }
+    kfree(entry);
+    return done ? (int)done : result;
 }
 
 /* ---------- open and close ---------- */
@@ -322,11 +606,16 @@ int ufile_open(Uproc *process, uint32_t path, int flags, int mode) {
     (void)mode;
     int access = flags & BOS_O_ACCMODE;
     if (access == 3) return -BOS_EINVAL;
-    int node, result = resolve(process, path, &node);
+    char text[FS_PATH_LEN];
+    const char *rest;
+    int volume, node, result = locate(process, path, text, &volume, &rest);
+    if (result) return result;
+    if (volume >= 0) return fat_open_path(process, volume, rest, flags);
+    result = resolve(process, text, &node);
     if (result == -BOS_ENOENT && (flags & BOS_O_CREAT)) {
         char name[FS_NAME_LEN];
         int parent;
-        if ((result = destination(process, path, &parent, name))) return result;
+        if ((result = destination(process, text, &parent, name))) return result;
         for (;;) {
             node = fs_create(parent, name);
             if (node != FS_ERR_BUSY) break;
@@ -438,7 +727,10 @@ int ufile_read(Uproc *process, int fd, uint32_t buffer, uint32_t length) {
         return result;
     }
     case UFILE_DIRECTORY:
+    case UFILE_FAT_DIRECTORY:
         return -BOS_EISDIR;
+    case UFILE_FAT:
+        return fat_read_user(process, file, buffer, length);
     case UFILE_NODE: {
         const char *data;
         uint32_t size;
@@ -491,6 +783,8 @@ int ufile_write(Uproc *process, int fd, uint32_t buffer, uint32_t length) {
         release(file, 1);
         return result;
     }
+    case UFILE_FAT:
+        return fat_write_user(process, file, buffer, length);
     case UFILE_NODE: {
         if (!length) return 0;
         if (file->flags & BOS_O_APPEND)
@@ -523,7 +817,8 @@ int ufile_seek(Uproc *process, int fd, uint32_t low, uint32_t high, int whence, 
     long long base = 0;
     if (whence == BOS_SEEK_CUR) base = file->offset;
     else if (whence == BOS_SEEK_END)
-        base = file->buffer && !file->direct ? (long long)file->size
+        base = file->kind == UFILE_FAT ? (long long)file->fat->node.size
+             : file->buffer && !file->direct ? (long long)file->size
              : (file->kind == UFILE_NODE && node_current(file) ? fs_size(file->node) : 0);
     else if (whence != BOS_SEEK_SET) return -BOS_EINVAL;
     long long position = base + offset;
@@ -536,6 +831,12 @@ int ufile_seek(Uproc *process, int fd, uint32_t low, uint32_t high, int whence, 
 
 int ufile_truncate(Uproc *process, int fd, uint32_t length) {
     UFile *file = lookup(&process->files, fd);
+    if (file && file->kind == UFILE_FAT && (file->flags & BOS_O_ACCMODE) != BOS_O_RDONLY) {
+        FatVolume *v = fatvol_get(file->volume);
+        int result = v ? fat_errno(fat_truncate(v, &file->fat->node, length)) : -BOS_EIO;
+        fatvol_changed(file->volume);
+        return result;
+    }
     if (!file || file->kind != UFILE_NODE || (!file->buffer && !file->direct)) return -BOS_EINVAL;
     if (length > FS_STREAM_MAX) return -BOS_EFBIG;
     int result = length > fs_file_limit() ? go_direct(file) : 0;
@@ -552,6 +853,7 @@ int ufile_truncate(Uproc *process, int fd, uint32_t length) {
 int ufile_fsync(Uproc *process, int fd) {
     UFile *file = lookup(&process->files, fd);
     if (!file) return -BOS_EBADF;
+    if (file->kind == UFILE_FAT) return fat_errno(fatvol_sync(file->volume));
     if (file->kind != UFILE_NODE) return 0;
     ++file->refs;
     int result = write_back(file, 1);
@@ -573,9 +875,23 @@ static void stat_node(int node, BosStat *out) {
 }
 
 int ufile_stat(Uproc *process, uint32_t path, uint32_t out) {
-    int node, result = resolve(process, path, &node);
+    char text[FS_PATH_LEN];
+    const char *rest;
+    int volume, node, result = locate(process, path, text, &volume, &rest);
     if (result) return result;
     BosStat stat;
+    if (volume >= 0) {
+        FatNode *fat = kmalloc(sizeof *fat);
+        if (!fat) return -BOS_ENOMEM;
+        result = fat_errno(fat_resolve(fatvol_get(volume), rest, fat));
+        if (!result) {
+            FatOpen *open = fat_open_of(volume, fat);
+            stat_fat(volume, open ? &open->node : fat, &stat);
+        }
+        kfree(fat);
+        return result ? result : uproc_copy_out(process, out, &stat, sizeof stat);
+    }
+    if ((result = resolve(process, text, &node))) return result;
     stat_node(node, &stat);
     return uproc_copy_out(process, out, &stat, sizeof stat);
 }
@@ -584,7 +900,9 @@ int ufile_fstat(Uproc *process, int fd, uint32_t out) {
     UFile *file = lookup(&process->files, fd);
     if (!file) return -BOS_EBADF;
     BosStat stat;
-    if (file->kind == UFILE_NODE || file->kind == UFILE_DIRECTORY) {
+    if (file->kind == UFILE_FAT || file->kind == UFILE_FAT_DIRECTORY) {
+        stat_fat(file->volume, file->kind == UFILE_FAT ? &file->fat->node : file->fat_directory, &stat);
+    } else if (file->kind == UFILE_NODE || file->kind == UFILE_DIRECTORY) {
         if (!node_current(file)) return -BOS_EIO;
         stat_node(file->node, &stat);
         if (file->buffer && !file->direct) stat.size = file->size;
@@ -607,16 +925,54 @@ int ufile_isatty(Uproc *process, int fd) {
 int ufile_readdir(Uproc *process, int fd, uint32_t buffer, uint32_t length) {
     UFile *file = lookup(&process->files, fd);
     if (!file) return -BOS_EBADF;
+    if (file->kind == UFILE_FAT_DIRECTORY) return fat_readdir_user(process, file, buffer, length);
     if (file->kind != UFILE_DIRECTORY) return -BOS_ENOTDIR;
     if (!node_current(file)) return -BOS_EIO;
     int limit = fs_child_count(file->node);
     int *children = kmalloc((uint32_t)(limit ? limit : 1) * sizeof *children);
     if (!children) return -BOS_ENOMEM;
     int count = fs_list(file->node, children, limit);
+    /* The root also lists the mounted FAT volumes, which hide native
+     * folders of the same name. */
+    int mounts[FATVOL_MAX], mounted = 0;
+    if (file->node == fs_root()) {
+        for (int i = 0; i < FATVOL_MAX; ++i)
+            if (fatvol_get(i)) mounts[mounted++] = i;
+        int kept = 0;
+        for (int i = 0; i < count; ++i) {
+            const char *rest;
+            char path[FS_NAME_LEN + 2];
+            path[0] = '/';
+            kmemcpy(path + 1, fs_name(children[i]), kstrlen(fs_name(children[i])) + 1);
+            if (fatvol_route(path, &rest) < 0) children[kept++] = children[i];
+        }
+        count = kept;
+    }
     uint32_t done = 0;
     int result = 0;
-    while (file->offset < (uint32_t)count + 2) {
+    while (file->offset < (uint32_t)count + 2 + (uint32_t)mounted) {
         unsigned index = file->offset;
+        if (index >= (unsigned)count + 2) {
+            int volume = mounts[index - (unsigned)count - 2];
+            const char *name = fatvol_name(volume);
+            unsigned name_length = (unsigned)kstrlen(name);
+            unsigned record = (8u + name_length + 1u + 3u) & ~3u;
+            if (done + record > length) {
+                if (!done) result = -BOS_EINVAL;
+                break;
+            }
+            char entry[32];
+            kmemset(entry, 0, (int)record);
+            BosDirent *dirent = (BosDirent *)entry;
+            dirent->node = 0xF0000000u + (unsigned)volume;
+            dirent->length = (unsigned short)record;
+            dirent->type = BOS_DT_DIR;
+            kmemcpy(dirent->name, name, (int)name_length + 1);
+            if ((result = uproc_copy_out(process, buffer + done, entry, record))) break;
+            done += record;
+            ++file->offset;
+            continue;
+        }
         int node = index == 0 ? file->node : index == 1 ? (file->node ? fs_parent(file->node) : 0) : children[index - 2];
         const char *name = index == 0 ? "." : index == 1 ? ".." : fs_name(node);
         unsigned name_length = (unsigned)kstrlen(name);
@@ -648,19 +1004,57 @@ int ufile_readdir(Uproc *process, int fd, uint32_t buffer, uint32_t length) {
     mutate_result_; })
 
 int ufile_mkdir(Uproc *process, uint32_t path) {
+    char text[FS_PATH_LEN];
+    const char *rest;
+    int volume, result = locate(process, path, text, &volume, &rest);
+    if (result) return result;
+    if (volume >= 0) {
+        FatVolume *v = fatvol_get(volume);
+        FatNode *nodes = kmalloc(2 * sizeof *nodes);
+        const char *name;
+        if (!nodes) return -BOS_ENOMEM;
+        if (!(result = fat_parent(v, rest, &nodes[0], &name)))
+            result = fat_errno(fat_create(v, &nodes[0], name, 1, &nodes[1]));
+        kfree(nodes);
+        if (!result) fatvol_changed(volume);
+        return result;
+    }
     int parent;
     char name[FS_NAME_LEN];
-    int result = destination(process, path, &parent, name);
-    if (result) return result;
+    if ((result = destination(process, text, &parent, name))) return result;
     if (fs_find_child(parent, name) >= 0) return -BOS_EEXIST;
     int node = MUTATE(fs_mkdir(parent, name));
     if (node < 0) return fs_node_count() >= fs_node_limit() ? -BOS_ENOSPC : -BOS_EINVAL;
     return 0;
 }
 
+/* Removes a FAT file or empty directory; an open file stays (EBUSY), as on
+ * other systems that use FAT. */
+static int fat_unlink(int volume, const FatNode *node, int flags) {
+    if (node->is_root) return -BOS_EBUSY;
+    int directory = (node->attributes & FAT_ATTR_DIRECTORY) != 0;
+    if ((flags & BOS_AT_REMOVEDIR) && !directory) return -BOS_ENOTDIR;
+    if (!(flags & BOS_AT_REMOVEDIR) && directory) return -BOS_EISDIR;
+    if (fat_open_of(volume, node)) return -BOS_EBUSY;
+    int result = fat_errno(fat_remove(fatvol_get(volume), node));
+    fatvol_changed(volume);
+    return result;
+}
+
 int ufile_unlink(Uproc *process, uint32_t path, int flags) {
-    int node, result = resolve(process, path, &node);
+    char text[FS_PATH_LEN];
+    const char *rest;
+    int volume, node, result = locate(process, path, text, &volume, &rest);
     if (result) return result;
+    if (volume >= 0) {
+        FatNode *fat = kmalloc(sizeof *fat);
+        if (!fat) return -BOS_ENOMEM;
+        result = fat_errno(fat_resolve(fatvol_get(volume), rest, fat));
+        if (!result) result = fat_unlink(volume, fat, flags);
+        kfree(fat);
+        return result;
+    }
+    if ((result = resolve(process, text, &node))) return result;
     if (!node) return -BOS_EBUSY;
     if (flags & BOS_AT_REMOVEDIR) {
         if (!fs_is_dir(node)) return -BOS_ENOTDIR;
@@ -671,13 +1065,51 @@ int ufile_unlink(Uproc *process, uint32_t path, int flags) {
     return MUTATE(fs_delete(node)) < 0 ? -BOS_EIO : 0;
 }
 
+/* Rename within one FAT volume, replacing a file (or empty directory) at
+ * the target as POSIX rename does. */
+static int fat_move(int volume, const char *from, const char *to) {
+    FatVolume *v = fatvol_get(volume);
+    FatNode *n = kmalloc(3 * sizeof *n);
+    if (!n) return -BOS_ENOMEM;
+    FatNode *node = &n[0], *parent = &n[1], *existing = &n[2];
+    const char *name;
+    int result = fat_errno(fat_resolve(v, from, node));
+    if (!result && node->is_root) result = -BOS_EBUSY;
+    if (!result) result = fat_parent(v, to, parent, &name);
+    if (!result) {
+        result = fat_lookup(v, parent, name, existing);
+        if (!result && !(existing->parent == node->parent && existing->slot == node->slot)) {
+            int dir = (node->attributes & FAT_ATTR_DIRECTORY) != 0;
+            int existing_dir = (existing->attributes & FAT_ATTR_DIRECTORY) != 0;
+            if (dir != existing_dir) result = existing_dir ? -BOS_EISDIR : -BOS_ENOTDIR;
+            else result = fat_unlink(volume, existing, dir ? BOS_AT_REMOVEDIR : 0);
+            /* fat_remove of a non-empty directory reports it. */
+        } else {
+            result = result == FAT_ERR_NOTFOUND ? 0 : fat_errno(result);
+        }
+    }
+    if (!result) {
+        FatOpen *open = fat_open_of(volume, node);
+        result = fat_errno(fat_rename(v, open ? &open->node : node, parent, name));
+        fatvol_changed(volume);
+    }
+    kfree(n);
+    return result;
+}
+
 int ufile_rename(Uproc *process, uint32_t from, uint32_t to) {
-    int node, result = resolve(process, from, &node);
+    char text[FS_PATH_LEN], target[FS_PATH_LEN];
+    const char *rest, *target_rest;
+    int volume, target_volume, node, result = locate(process, from, text, &volume, &rest);
     if (result) return result;
+    if ((result = locate(process, to, target, &target_volume, &target_rest))) return result;
+    if (volume != target_volume) return -BOS_EXDEV;
+    if (volume >= 0) return fat_move(volume, rest, target_rest);
+    if ((result = resolve(process, text, &node))) return result;
     if (!node) return -BOS_EBUSY;
     int parent;
     char name[FS_NAME_LEN];
-    if ((result = destination(process, to, &parent, name))) return result;
+    if ((result = destination(process, target, &parent, name))) return result;
     for (int walk = parent; walk > 0; walk = fs_parent(walk))
         if (walk == node) return -BOS_EINVAL;
     int existing = fs_find_child(parent, name);
@@ -693,9 +1125,29 @@ int ufile_rename(Uproc *process, uint32_t from, uint32_t to) {
 }
 
 int ufile_chdir(Uproc *process, uint32_t path) {
-    int node, result = resolve(process, path, &node);
+    char text[FS_PATH_LEN];
+    const char *rest;
+    int volume, node, result = locate(process, path, text, &volume, &rest);
     if (result) return result;
+    if (volume >= 0) {
+        FatNode *fat = kmalloc(sizeof *fat);
+        if (!fat) return -BOS_ENOMEM;
+        result = fat_errno(fat_resolve(fatvol_get(volume), rest, fat));
+        if (!result && !(fat->attributes & FAT_ATTR_DIRECTORY)) result = -BOS_ENOTDIR;
+        kfree(fat);
+        if (result) return result;
+        unsigned size = (unsigned)kstrlen(text) + 1;
+        char *copy = kmalloc(size);
+        if (!copy) return -BOS_ENOMEM;
+        kmemcpy(copy, text, (int)size);
+        kfree(process->files.cwd_path);
+        process->files.cwd_path = copy;
+        return 0;
+    }
+    if ((result = resolve(process, text, &node))) return result;
     if (!fs_is_dir(node)) return -BOS_ENOTDIR;
+    kfree(process->files.cwd_path);
+    process->files.cwd_path = 0;
     process->files.cwd = node;
     process->files.cwd_identity = fs_identity(node);
     return 0;
@@ -703,7 +1155,8 @@ int ufile_chdir(Uproc *process, uint32_t path) {
 
 int ufile_getcwd(Uproc *process, uint32_t buffer, uint32_t length) {
     char path[FS_PATH_LEN];
-    fs_path(cwd_of(process), path, sizeof path);
+    if (process->files.cwd_path) kmemcpy(path, process->files.cwd_path, kstrlen(process->files.cwd_path) + 1);
+    else fs_path(cwd_of(process), path, sizeof path);
     uint32_t size = (uint32_t)kstrlen(path) + 1;
     if (size > length) return -BOS_ERANGE;
     int result = uproc_copy_out(process, buffer, path, size);

@@ -17,6 +17,7 @@ typedef struct {
     unsigned capacity;
     int cwd;                   /* node of the working directory */
     unsigned cwd_identity;     /* fs_identity of cwd when it was set */
+    char *cwd_path;            /* working directory on a FAT volume, else 0 */
 } UFileTable;
 
 /* Descriptors 0, 1 and 2 on the console. 0 or -BOS_ENOMEM. */
