@@ -19,3 +19,10 @@ def defines(source, names):
 
 def chrome_defines(source):
     return defines(source, CHROME_MACROS)
+
+
+def block(source, start, end, include_end=True):
+    """Source text from the first start marker through the next end marker."""
+    first = source.index(start)
+    last = source.index(end, first + len(start))
+    return source[first:last + (len(end) if include_end else 0)]
