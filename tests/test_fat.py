@@ -368,6 +368,8 @@ class FatTests(unittest.TestCase):
         script = ''.join(f'put\t{name}\t1\t3\t0\n' for name in NAMES)
         script += 'put\tlower.txt\t1\t1\t0\nput\tUPPER.TXT\t1\t1\t0\nput\tMixed.TXT\t1\t1\t0\n'
         script += ''.join(f'put\tsame prefix {i}.txt\t1\t1\t0\n' for i in range(12))
+        # A basis that holds a tilde of its own still gets distinct tails.
+        script += 'put\tab~cd long one.txt\t1\t1\t0\nput\tab~cd long two.txt\t1\t1\t0\n'
         self.tool('script', path, stdin=script.encode())
         self.fsck(path)
         listing = subprocess.run(['mdir', '-i', str(path), '::'], check=True, env=ENV, capture_output=True,
@@ -376,12 +378,28 @@ class FatTests(unittest.TestCase):
         self.assertIn('SAMEPR~9 TXT', listing)
         self.assertIn('SAMEP~10 TXT', listing)
         self.assertIn('MIXED    TXT', listing)
+        self.assertIn('AB~CDL~1 TXT', listing)
+        self.assertIn('AB~CDL~2 TXT', listing)
         # A name already used as a file is written in place, whatever its case.
         self.tool('script', path, stdin=b'put\treadme.txt\t5\t2\t0\n')
         self.assertEqual(self.tool('cat', path, 'README.TXT').stdout, pattern(5, 2) + pattern(1, 3)[2:])
         errors = self.tool('script', path, stdin=b'mkdir\tREADME.TXT\nput\tbad:name\t1\t1\t0\n',
                            check=False).stdout
         self.assertEqual(errors.count(b'error'), 2)
+
+    def test_stale_entries_past_the_end_stay_hidden(self):
+        path = self.image('fat12', 'stale')
+        self.tool('script', path, stdin=b'put\tKEEP.TXT\t1\t10\t0\nput\tA.TXT\t1\t10\t0\n'
+                                       b'put\tGHOST.TXT\t2\t10\t0\n')
+        raw = bytearray(path.read_bytes())
+        raw[raw.index(b'A       TXT')] = 0      # an end marker, GHOST.TXT stale past it
+        path.write_bytes(raw)
+        self.assertEqual(set(self.listing(path, '/')), {'KEEP.TXT'})
+        self.tool('script', path, stdin=b'put\tnew.txt\t3\t10\t0\n')
+        self.assertEqual(set(self.listing(path, '/')), {'KEEP.TXT', 'new.txt'})
+        listing = subprocess.run(['mdir', '-i', str(path), '::'], check=True, env=ENV, capture_output=True,
+                                 text=True).stdout
+        self.assertNotIn('GHOST', listing)
 
     def test_full_volume(self):
         path = self.image('fat12', 'full')
