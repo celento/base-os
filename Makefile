@@ -172,6 +172,17 @@ headless: $(IMG) $(DATA_IMG)
 		-boot a -drive file=$(IMG),format=raw,index=0,if=floppy $(QEMU_DATA) \
 		-serial stdio -display none -no-reboot
 
+# DOS programs in DOSBox: a FAT disk with DOSBox and the files in DOS_APPS
+# (see docs/DOS.md). Needs the toolchain and ports built first.
+DOS_IMG ?= $(OUT)/baseos-dos.img
+DOS_APPS ?= dos-apps
+
+dos-disk:
+	$(PYTHON) tools/dos_disk.py $(DOS_IMG) $(DOS_APPS)
+
+run-dos: $(IMG) $(DATA_IMG) dos-disk
+	$(MAKE) run QEMU_MEMORY=512M QEMU_DATA="$(QEMU_DATA) -drive file=$(DOS_IMG),format=raw,index=2,if=ide"
+
 # Separate data filenames make selecting this profile non-destructive.
 run-large:
 	$(MAKE) run DATA_IMG=$(OUT)/baseos-large-data.img DATA_PROFILE=large QEMU_MEMORY=128M
@@ -192,7 +203,7 @@ headless-pocket:
 clean:
 	rm -f $(OBJS) $(OUT)/boot.bin $(OUT)/kernel.bin $(OUT)/kernel.packed $(OUT)/kernel.elf $(OUT)/linker.ld $(OUT)/layout.inc
 
-.PHONY: all run headless run-large headless-large pocket run-pocket headless-pocket clean
+.PHONY: all run headless dos-disk run-dos run-large headless-large pocket run-pocket headless-pocket clean
 
 # Image and its backups intentionally survive clean.
 test:
