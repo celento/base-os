@@ -32,6 +32,8 @@ int fs_parent(int id){assert(fs_valid(id));return 0;}
 unsigned fs_file_limit(void){return BOS_BEX2_FILE_MAX;}
 #include "native_window_probe.inc"
 
+#include "theme_metrics_host.h"
+int fb_w=1024,fb_h=768;
 #define MAX_WIN 8
 enum { WK_TERM=1,WK_NATIVE=2 };
 typedef struct {int x,y,w,h,open,kind,seq;} Win;
@@ -136,6 +138,7 @@ static void valid_gui(void){
     memcpy(gui_file,&header,sizeof header);gui_file[4096]=0xeb;gui_file[4097]=0xfe;
 }
 int main(void){
+    ui_theme_install(UI_STYLE_MODERN,0,0);
     app_storage_init();valid_gui();
     AppStorage *storage=(AppStorage *)arena;
     for(unsigned i=0;i<MAX_WIN;i++){
@@ -174,6 +177,9 @@ int main(void){
     TerminalText terminals[MAX_WIN];memcpy(terminals,storage->terminals,sizeof terminals);
     open_dlg=1;open_native_file(1);
     assert(wins[0].open&&wins[0].kind==WK_NATIVE&&!wins[1].open&&record_count()==1);
+    /* Placed on the cascade diagonal inside the style's work area. */
+    assert(wins[0].x>=48&&(wins[0].x-48)%24==0&&wins[0].y-MENUBAR_H-24==wins[0].x-48);
+    assert(wins[0].x+wins[0].w<=fb_w&&wins[0].y+wins[0].h<=TASKBAR_Y);
     assert(!open_dlg&&!native_launch_status[0]&&focused==1&&context_slot==0);
     assert(app_view_backend(0)==APP_VIEW_BACKEND_OWNED&&!terminal_windows&&!terminal_starts&&!terminal_lines);
     assert(!memcmp(terminals,storage->terminals,sizeof terminals));
