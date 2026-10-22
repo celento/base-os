@@ -11,6 +11,7 @@ typedef struct {
     int head,count,len,cwd,hcount,hpos,scroll,rows,view_count,input_overflow;
     int input_invalid,draft_invalid;
     unsigned cwd_identity;
+    unsigned char echo[TERM_LINES]; /* 1: the line echoes a command with its prompt */
 } TerminalText;
 typedef struct {
     ProcessBinding binding;

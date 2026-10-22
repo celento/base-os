@@ -92,9 +92,10 @@ The QEMU suite creates disposable images and checks fresh boot, reboot, timer pr
 | `0x600000`–`0x680000` | eight published native canvas frames (512,000 bytes used) |
 | `0x700000` | disk DMA bounce buffer      |
 | `0x710000`–`0x720000` | SB16 ISA DMA ring          |
-| `0xA00000` | cached desktop wallpaper    |
+| `0xA00000` | cached desktop background   |
 | `0xB00000`–`0xB20000` | Paint undo history |
 | `0xB30000`–`0xD40000` | download buffer reservation |
+| `0xD40000`–`0xD80000` | unpacked UI icons for the active style, within app arena |
 | `0xE00000`–`0xF00000` | independent Terminal state/script buffers |
 | `0xDF0000`–`0xE00000` | reserved graphics lookup cache within app arena |
 | `0xF00000` | page directory and user page table |
@@ -135,7 +136,7 @@ Linker assertions independently bound the plain bootstrap, low stack, staging, c
 
 ## Palette
 
-The 256-entry palette is laid out as 16 fixed base colors, a 32-step gray ramp, a 64-entry wallpaper ramp and 16-entry accent ramp that are rewritten whenever the theme changes, and a 5×5×5 color cube for everything else. Gradients dither only between neighboring ramp entries, which keeps them smooth without visible noise.
+The 256-entry palette is laid out as 16 fixed base colors, theme bands that are rewritten whenever the style or accent changes (32 UI tokens at 16, 16 icon colors at 48, 16 terminal colors at 64 and 16 extra icon colors at 112), a fixed 32-step gray ramp at 80 for images, and a 5×5×5 color cube at 128 for everything else. Images and native programs only use the fixed entries. See [the design guide](DESIGN.md) for the tokens.
 
 ## Rendering and terminal help
 

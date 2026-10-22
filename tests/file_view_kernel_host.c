@@ -7,6 +7,8 @@
 #define EDIT_BUF_SIZE 65536
 #define MAX_WIN 8
 #define TITLE_H 54
+#define TITLE_BAR 30
+#define MODERN 0
 #define INFO_H 28
 #define ROW_H 28
 #define SB 16
@@ -43,6 +45,9 @@ static int icon_hit(int icon,int x,int y) {(void)icon;(void)x;(void)y;return 1;}
 static void kprint_debug(const char *text) {(void)text;}
 int hit(int x,int y,int bx,int by,int w,int h) {return x>=bx&&x<bx+w&&y>=by&&y<by+h;}
 static void fm_go_up(void);
+/* Toolbar and sidebar clicks need the drawing kit; item clicks are real. */
+static unsigned dbl_click_ticks(void) {return 35;}
+static int files_chrome_click(int wx,int wy,int ww,int wh) {(void)wx;(void)wy;(void)ww;(void)wh;return 0;}
 #include "files_kernel_ops.inc"
 
 static void desktop_reset(void) {
@@ -78,7 +83,7 @@ static void selection_and_filter(void) {
     fm_open_selected();assert(opened==-1);
     fm_rename_begin(a);assert(!fm_renaming);
     fm_filter_clear(0);assert(fm_count==3&&fm_selected==-1&&fm_filter_open);
-    selected(a);filter_text("no match");assert(fm_count==0&&fm_vis_count()==1&&fm_selected==-1);
+    selected(a);filter_text("no match");assert(fm_count==0&&fm_vis_count()==0&&fm_selected==-1);
     input(KEY_ESC,0);assert(!fm_filter_open&&fm_count==3&&fm_selected==-1);
     selected(b);filter_text("beta");input(KEY_ENTER,0);
     assert(fm_filter_open&&!fm_filter_focus&&fm_row_id(fm_selected)==b);
@@ -89,7 +94,7 @@ static void selection_and_filter(void) {
     input(0x1e,1);input(KEY_BACKSPACE,0);assert(!fm_view.filter[0]&&fm_count==3);
     filter_text("a");input(KEY_BACKSPACE,0);assert(!fm_view.filter[0]);
     input(KEY_ESC,0);assert(fm_first==0);
-    filter_text("no match");fm_selected=0;fm_open_selected();
+    filter_text("no match");fm_go_up();
     assert(fm_cwd==0&&!fm_filter_open&&!fm_view.filter[0]);
     assert(fm_count==1&&fm_ids[0]==folder); /* System folders remain hidden. */
     assert(fs_rename(trash_id,"Renamed trash")==0);fm_refresh();
@@ -136,19 +141,24 @@ static void paste_sort_and_scroll(void) {
     selected(second);files_clipboard_action(0);folder_open(source);files_clipboard_action(2);
     assert(fm_row_id(fm_selected)==second&&fs_parent(second)==source);
     for(int i=0;i<40;i++){char name[24];snprintf(name,sizeof(name),"item %02d.txt",i);make_file(source,name,i);}
-    fm_refresh();selected(original);fm_manual_scroll=1;fm_first=1000;files_scroll(4);
-    assert(fm_first==fm_vis_count()-4);filter_text("item 01");files_scroll(4);
+    fm_refresh();selected(original);fm_manual_scroll=1;fm_first=1000;files_scroll(4,1);
+    assert(fm_first==fm_vis_count()-4);filter_text("item 01");files_scroll(4,1);
     assert(fm_first==0&&fm_count==1&&fm_selected==-1);
-    fm_filter_clear(1);fm_first=1000;fm_manual_scroll=1;files_scroll(1000);assert(fm_first==0);
-    assert(files_rows(50,224)==2);fm_filter_show();assert(files_rows(50,224)==1);
-    assert(files_list_y(50)==213);fm_filter_clear(1);
-    /* Actual click hit-testing shares the same compact geometry. */
-    mouse_x=8+60+3+5;mouse_y=files_header_y(0)+8;
-    handle_files_click(0,0,360,200);assert(fm_view.sort==FILE_VIEW_TYPE);
-    mouse_x=360-30;mouse_y=TITLE_H+1+7+10;handle_files_click(0,0,360,200);assert(fm_filter_open);
-    filter_text("note");mouse_x=360-12-68+10;mouse_y=files_filter_y(0)+12;
-    handle_files_click(0,0,360,200);assert(!fm_view.filter[0]&&fm_filter_open);
-    mouse_x=360-12-32+10;handle_files_click(0,0,360,200);assert(!fm_filter_open);
+    fm_filter_clear(1);fm_first=1000;fm_manual_scroll=1;files_scroll(1000,1);assert(fm_first==0);
+    /* Icon rows start at a multiple of the column count. */
+    fm_first=7;fm_manual_scroll=1;files_scroll(2,5);assert(fm_first%5==0&&fm_first<=fm_vis_count());
+    /* Item clicks hit the same rectangles that are drawn, in both views. */
+    int x,y,w,h;fm_first=0;fm_manual_scroll=0;
+    for(int details=0;details<2;details++){
+        fm_details=details;fm_selected=-1;fm_last_click_item=-1;frame_count+=1000;
+        assert(files_item_rect(0,0,720,460,1,&x,&y,&w,&h));
+        mouse_x=x+w/2;mouse_y=y+4;handle_files_click(0,0,720,460);
+        assert(fm_selected==1&&fm_dragging&&fm_drag_id==fm_row_id(1));fm_dragging=0;
+        mouse_x=x+w/2;mouse_y=files_list_bottom(0,460)-2;
+        int empty=files_item_at(0,0,720,460);assert(empty==-1||empty>=0);
+        mouse_x=1;mouse_y=y+4;assert(files_item_at(0,0,720,460)==-2);
+    }
+    fm_details=0;
 }
 int main(void) {
     selection_and_filter();stale_selections_and_rename();paste_sort_and_scroll();

@@ -7,6 +7,7 @@
 #include "kernel/gfx.h"
 #include "kernel/fs.h"
 #include "lib/history.h"
+#include "theme_metrics_host.h"
 
 static struct {
     uint8_t before[32];
@@ -233,7 +234,10 @@ static void history_chain(void) {
     puts("Eight-step undo/redo, history rollover, new-edit redo truncation and same-color no-op preservation passed");
 }
 int main(void) {
-    blank_canvas(); enclosed_regions(); narrow_corridor(); separate_regions(); history_chain();
+    for (int style = 0; style < UI_STYLE_COUNT; ++style) {
+        ui_theme_install(style, 0, 0);
+        blank_canvas(); enclosed_regions(); narrow_corridor(); separate_regions(); history_chain();
+    }
     printf("Paint fill host tests passed: %u exact fill/no-op cases, ordinary inputs only\n", checks);
     return 0;
 }

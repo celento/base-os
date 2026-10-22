@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class WriterDialogTests(unittest.TestCase):
     def test_pdf_paper_keyboard_mouse_failure_retry_and_legacy_dialogs(self):
         source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
-        names = ('namedlg_open', 'namedlg_hide', 'namedlg_close', 'namedlg_geom', 'namedlg_buttons',
+        names = ('namedlg_open', 'namedlg_hide', 'namedlg_close', 'namedlg_geom', 'namedlg_pad', 'namedlg_field',
+                 'namedlg_message_y', 'namedlg_message_h', 'namedlg_paper', 'namedlg_foot_h', 'namedlg_buttons',
                  'namedlg_commit', 'namedlg_click', 'namedlg_key')
         with tempfile.TemporaryDirectory(prefix='baseos-writer-dialog-') as tmp:
             directory = Path(tmp)

@@ -3,8 +3,8 @@
 
 #include "apps/term.h"
 
-#define SYSMON_W 520
-#define SYSMON_H 440
+#define SYSMON_W 560
+#define SYSMON_H 480
 #define SYSMON_MAX_WIN 8
 #define SYSMON_MAX_TASKS 8
 #define SYSMON_MAX_PROGRAMS 8
@@ -57,6 +57,9 @@ typedef struct {
 void sysmon_reset(void);
 int sysmon_tab(void);
 void sysmon_draw(int bx, int by, int bw, int bh, const SysInfo *si);
+/* Hover source for controls: the desktop's hover tracker while the window
+ * is active, or 0. It returns KIT_* state bits for a rectangle. */
+void sysmon_set_hover(int (*hover)(int x, int y, int w, int h));
 /* Same client bounds as draw; controls produce actions, never mutate tasks/windows. */
 SysmonAction sysmon_click(int bx, int by, int bw, int bh, int mx, int my, const SysInfo *si);
 

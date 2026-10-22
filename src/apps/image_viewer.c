@@ -3,7 +3,10 @@
 #include "apps/image_viewer.h"
 #include "kernel/layout.h"
 #include "kernel/platform.h"
-#include "ui/toolbar.h"
+#include "ui/icon_draw.h"
+#include "ui/icons.h"
+#include "ui/kit.h"
+#include "ui/ui_icons.h"
 
 /* The integration commit adds these to the shared E820-checked memory map. */
 #ifndef IMAGE_BASE
@@ -13,9 +16,8 @@
 #define IMAGE_CAPACITY 0x700000
 #endif
 #define IMAGE_PIXELS_BYTES IMAGE_MAX_PIXELS
-#define TOOL_H 40
-#define FOOT_H 48
-#define PAD 10
+#define MODERN (ui_theme.style == UI_STYLE_MODERN)
+#define SB (ui_theme.scrollbar)
 #define ZOOM_COUNT 10
 static const unsigned zooms[ZOOM_COUNT] = {10, 25, 50, 75, 100, 125, 150, 200, 300, 400};
 
@@ -30,6 +32,7 @@ _Static_assert(IMAGE_PIXELS_BYTES < IMAGE_CAPACITY, "image workspace missing");
 static struct {
     unsigned width, height, format, scale;
     int loaded, fit, pan_x, pan_y, viewport_w, viewport_h;
+    int client_w, client_h, hbar, vbar;
     char title[96], status[160];
 } viewer;
 
@@ -159,15 +162,25 @@ int image_viewer_open(const void *file, unsigned bytes, const char *name) {
     return IMAGE_OK;
 }
 
+/* Layout: a toolbar (Fit / 1:1, zoom out, zoom level, zoom in), the
+ * viewport, and a status bar. In Modern the toolbar continues the window
+ * header. Scrollbars appear along the viewport when the image is larger
+ * than it; they shrink the viewport, so geometry settles them first. */
+static int tool_h(void) { return MODERN ? 44 : 34; }
+static int status_h(void) { return MODERN ? 28 : 24; }
+static int icon_size(void) { return MODERN ? 30 : 26; }
+
 static void geometry(int w, int h) {
-    viewer.viewport_w = w - 2 * PAD;
-    viewer.viewport_h = h - TOOL_H - FOOT_H;
-    if (viewer.viewport_w < 1) viewer.viewport_w = 1;
-    if (viewer.viewport_h < 1) viewer.viewport_h = 1;
+    viewer.client_w = w; viewer.client_h = h;
+    int full_w = w, full_h = h - tool_h() - status_h();
+    if (full_w < 1) full_w = 1;
+    if (full_h < 1) full_h = 1;
+    viewer.viewport_w = full_w; viewer.viewport_h = full_h;
+    viewer.hbar = viewer.vbar = 0;
     if (!viewer.loaded) return;
     if (viewer.fit) {
-        unsigned xs = (unsigned)viewer.viewport_w * 100 / viewer.width;
-        unsigned ys = (unsigned)viewer.viewport_h * 100 / viewer.height;
+        unsigned xs = (unsigned)full_w * 100 / viewer.width;
+        unsigned ys = (unsigned)full_h * 100 / viewer.height;
         viewer.scale = minimum(xs, ys);
         /* Never shrink away a one-pixel side; tiny Paint drawings can grow. */
         if (viewer.scale < 1) viewer.scale = 1;
@@ -175,35 +188,69 @@ static void geometry(int w, int h) {
     }
     int sw = (int)(viewer.width * viewer.scale / 100);
     int sh = (int)(viewer.height * viewer.scale / 100);
+    /* A bar on one side can make the other side overflow too. */
+    for (int pass = 0; pass < 2; pass++) {
+        viewer.hbar = sw > viewer.viewport_w && full_h > 2 * SB;
+        viewer.vbar = sh > viewer.viewport_h && full_w > 2 * SB;
+        viewer.viewport_w = full_w - (viewer.vbar ? SB : 0);
+        viewer.viewport_h = full_h - (viewer.hbar ? SB : 0);
+    }
     viewer.pan_x = clamp(viewer.pan_x, 0, sw > viewer.viewport_w ? sw - viewer.viewport_w : 0);
     viewer.pan_y = clamp(viewer.pan_y, 0, sh > viewer.viewport_h ? sh - viewer.viewport_h : 0);
     set_status();
 }
+static void regeometry(void) { geometry(viewer.client_w, viewer.client_h); }
 
 /* Toolbar geometry, shared by drawing and hit testing: Fit and 1:1 form a
- * labelled toggle group (their icons alone look alike), then a divider, then
- * zoom out, the zoom percentage, zoom in. */
+ * segmented pair (their icons alone look alike), then a divider, zoom out,
+ * the zoom percentage and zoom in. Segment widths match kit_segmented. */
 enum { VB_FIT, VB_ACTUAL, VB_ZOOM_OUT, VB_ZOOM_IN, VB_COUNT };
-#define TOOL_Y 5
 #define ZOOM_TEXT_W 52
-static const char *const tool_labels[VB_COUNT] = { "Fit", "1:1", 0, 0 };
-static int tool_w(int index) { return tool_button_w(tool_labels[index]); }
-static int tool_divider_x(int x) { return x + PAD + tool_w(VB_FIT) + 4 + tool_w(VB_ACTUAL) + 8; }
-static int tool_x(int x, int index) {
+typedef struct { int x, y, w, h; } ViewRect;
+static const char *const tool_labels[2] = { "Fit", "1:1" };
+static int segment_w(int index) { return uib_string_w(tool_labels[index]) + 24; }
+static int segment_x(int x) { return x + (MODERN ? 12 : 8); }
+static int segment_y(int y) { return y + (tool_h() - 1 - kit_segmented_h()) / 2; }
+static int tool_divider_x(int x) {
+    int seam = MODERN ? 2 : 1;
+    return segment_x(x) + 2 * seam + seam + segment_w(VB_FIT) + segment_w(VB_ACTUAL) + 10;
+}
+static ViewRect tool_rect(int x, int y, int index) {
+    int seam = MODERN ? 2 : 1, s = icon_size(), iy = y + (tool_h() - 1 - s) / 2;
+    int inner = MODERN ? 2 : 1, sy = segment_y(y) + inner, sh = kit_segmented_h() - 2 * inner;
     switch (index) {
-    case VB_FIT: return x + PAD;
-    case VB_ACTUAL: return x + PAD + tool_w(VB_FIT) + 4;
-    case VB_ZOOM_OUT: return tool_divider_x(x) + 9;
-    default: return tool_divider_x(x) + 9 + TB_ICON_W + 4 + ZOOM_TEXT_W + 4;
+    case VB_FIT: return (ViewRect){segment_x(x) + seam, sy, segment_w(VB_FIT), sh};
+    case VB_ACTUAL: return (ViewRect){segment_x(x) + 2 * seam + segment_w(VB_FIT), sy, segment_w(VB_ACTUAL), sh};
+    case VB_ZOOM_OUT: return (ViewRect){tool_divider_x(x) + 11, iy, s, s};
+    default: return (ViewRect){tool_divider_x(x) + 11 + s + ZOOM_TEXT_W, iy, s, s};
     }
 }
 static int tool_hit(int x, int y, int mx, int my) {
-    for (int i = 0; i < VB_COUNT; i++) if (hit(mx, my, tool_x(x, i), y + TOOL_Y, tool_w(i), TB_H)) return i;
+    for (int i = 0; i < VB_COUNT; i++) {
+        ViewRect r = tool_rect(x, y, i);
+        if (hit(mx, my, r.x, r.y, r.w, r.h)) return i;
+    }
     return -1;
 }
+/* The desktop passes its hover tracker while the window is active, so
+ * pointer motion over a control repaints it. Without one nothing hovers. */
+static int (*hover_fn)(int x, int y, int w, int h);
+void image_viewer_set_hover(int (*fn)(int x, int y, int w, int h)) { hover_fn = fn; }
+static int hover(ViewRect r) { return hover_fn ? hover_fn(r.x, r.y, r.w, r.h) : 0; }
 
-static void message_lines(const char *text, int x, int y, int width, int height) {
-    while (*text && height >= 20 && width > 16) {
+/* A flat toolbar tool with a toolbar glyph: no fill until hovered. */
+static void icon_tool(ViewRect r, int glyph, int state) {
+    int dis = state & KIT_DISABLED;
+    if (!dis && (state & (KIT_HOVER | KIT_PRESSED)))
+        kit_fill(r.x, r.y, r.w, r.h, MODERN ? ui_theme.r_control : KIT_R_SQUARE,
+                 (state & KIT_PRESSED) ? TK_LINE_SUBTLE : TK_HOVER, 1);
+    icon_draw(glyph, r.x + (r.w - ICON_SIZE) / 2, r.y + (r.h - ICON_SIZE) / 2,
+              dis ? (MODERN ? TK_LINE_STRONG : TK_LINE) : TK_ICON);
+}
+
+static int message_lines(const char *text, int x, int y, int width, int height, int draw) {
+    int lines = 0;
+    while (*text && height >= UI_FONT_H && width > 16) {
         char line[160]; unsigned used = 0, split = 0;
         while (text[used] && used + 1 < sizeof line) {
             line[used] = text[used]; line[used + 1] = 0;
@@ -214,35 +261,68 @@ static void message_lines(const char *text, int x, int y, int width, int height)
         if (text[used] && split) used = split;
         if (!used) break;
         line[used] = 0;
-        draw_string(line, x, y, app_text_dim);
+        if (draw) kit_text_center(line, x, y, width, TK_TEXT2, 0);
         text += used;
         while (*text == ' ') text++;
-        y += 22; height -= 22;
+        y += 20; height -= 20; lines++;
     }
+    return lines;
+}
+
+/* No image, or an image that failed: a large icon, a title and a hint,
+ * centred in the viewport. */
+static void empty_state(int vx, int vy, int vw, int vh) {
+    int failed = viewer.title[0] != 0;
+    const char *heading = failed ? "Image could not be opened" : "No image open";
+    const char *hint = failed ? (viewer.status[0] ? viewer.status : "The file could not be decoded.") :
+        "Open an image from Files. JPEG, PNG, BMP, GIF and BaseOS Paint are supported.";
+    int tw = vw - 48 < 420 ? vw - 48 : 420;
+    int lines = message_lines(hint, 0, 0, tw, vh, 0);
+    int need = 32 + 14 + UI_FONT_H + 8 + lines * 20, y = vy + (vh - need) / 2;
+    if (y < vy + 8) y = vy + 8;
+    if (vw < 64 || y + 32 > vy + vh) return;
+    uint8_t well = MODERN ? TK_SUNKEN : TK_BASE;
+    ui_icon_draw(failed ? UI_ICON_A_ERR : UI_ICON_A_IMG, vx + (vw - 32) / 2, y, 32, TK_ICON, well);
+    y += 46;
+    if (y + UI_FONT_H > vy + vh) return;
+    kit_text_center(heading, vx + 8, y, vw - 16, TK_TEXT, 1);
+    y += UI_FONT_H + 8;
+    message_lines(hint, vx + (vw - tw) / 2, y, tw, vy + vh - y, 1);
 }
 
 void image_viewer_draw(int x, int y, int w, int h) {
     if (w < 1 || h < 1) return;
     geometry(w, h);
-    uint8_t well = app_field;
-    draw_rect(x, y, w, h, app_chrome);
-    int loaded = viewer.loaded, ty = y + TOOL_Y;
-    tool_button(tool_x(x, VB_FIT), ty, tool_w(VB_FIT), TB_H, ICON_FIT, tool_labels[VB_FIT],
-                !loaded ? TB_DISABLED : viewer.fit ? TB_ACTIVE : TB_FLAT);
-    tool_button(tool_x(x, VB_ACTUAL), ty, tool_w(VB_ACTUAL), TB_H, ICON_ACTUAL, tool_labels[VB_ACTUAL],
-                !loaded ? TB_DISABLED : !viewer.fit && viewer.scale == 100 ? TB_ACTIVE : TB_FLAT);
-    tool_divider(tool_divider_x(x), ty, TB_H);
-    tool_button(tool_x(x, VB_ZOOM_OUT), ty, TB_ICON_W, TB_H, ICON_ZOOM_OUT, 0, loaded ? TB_NORMAL : TB_DISABLED);
+    draw_rect(x, y, w, h, ui_theme.content);
+    if (w < 200 || h < tool_h() + status_h() + 16) return;
+    int loaded = viewer.loaded;
+    /* Toolbar */
+    kit_toolbar(x, y, w, tool_h());
+    int sel = !loaded ? -1 : viewer.fit ? VB_FIT : viewer.scale == 100 ? VB_ACTUAL : -1, hot = -1;
+    for (int i = VB_FIT; i <= VB_ACTUAL; i++) if (loaded && i != sel && (hover(tool_rect(x, y, i)) & KIT_HOVER)) hot = i;
+    kit_segmented(segment_x(x), segment_y(y), tool_labels, 2, sel, hot, 0, 0);
+    if (!loaded) {
+        /* Disabled: draw the labels over the track in the disabled ink. */
+        for (int i = VB_FIT; i <= VB_ACTUAL; i++) {
+            ViewRect r = tool_rect(x, y, i);
+            kit_fill(r.x, r.y, r.w, r.h, MODERN ? 6 : KIT_R_SQUARE, MODERN ? TK_HOVER : TK_RAISED, 1);
+            kit_text_center(tool_labels[i], r.x, kit_ty(r.y, r.h), r.w, TK_LINE_STRONG, 1);
+        }
+    }
+    int dx = tool_divider_x(x), s = icon_size();
+    kit_vseparator(dx, y + (tool_h() - 1 - s) / 2 + 4, s - 8);
+    ViewRect out = tool_rect(x, y, VB_ZOOM_OUT), in = tool_rect(x, y, VB_ZOOM_IN);
+    icon_tool(out, ICON_ZOOM_OUT, loaded && viewer.scale > zooms[0] ? hover(out) : KIT_DISABLED);
+    icon_tool(in, ICON_ZOOM_IN, loaded && viewer.scale < zooms[ZOOM_COUNT - 1] ? hover(in) : KIT_DISABLED);
     char percent[16] = "";
     if (loaded) { append_number(percent, sizeof percent, viewer.scale); append(percent, sizeof percent, "%"); }
     else copy(percent, sizeof percent, "--");
-    int text_x = tool_x(x, VB_ZOOM_OUT) + TB_ICON_W + 4;
-    draw_string(percent, text_x + (ZOOM_TEXT_W - ui_string_w(percent)) / 2, ty + (TB_H - TB_TEXT_H) / 2,
-                loaded ? app_text : app_text_dim);
-    tool_button(tool_x(x, VB_ZOOM_IN), ty, TB_ICON_W, TB_H, ICON_ZOOM_IN, 0, loaded ? TB_NORMAL : TB_DISABLED);
-    int vx = x + PAD, vy = y + TOOL_H;
+    kit_text_center(percent, out.x + out.w, kit_ty(out.y, out.h), ZOOM_TEXT_W, loaded ? TK_TEXT : TK_LINE_STRONG, 0);
+    /* Viewport */
+    int vx = x, vy = y + tool_h();
     int vw = viewer.viewport_w, vh = viewer.viewport_h;
-    draw_rect(vx, vy, vw, vh, well);
+    uint8_t well = MODERN ? TK_SUNKEN : TK_BASE;
+    draw_rect(vx, vy, w, h - tool_h() - status_h(), well);
     if (viewer.loaded) {
         int sw = (int)(viewer.width * viewer.scale / 100);
         int sh = (int)(viewer.height * viewer.scale / 100);
@@ -250,6 +330,8 @@ void image_viewer_draw(int x, int y, int w, int h) {
         if (sh < 1) sh = 1;
         int left = vx + (sw < vw ? (vw - sw) / 2 : -viewer.pan_x);
         int top = vy + (sh < vh ? (vh - sh) / 2 : -viewer.pan_y);
+        /* A hairline frame separates a whole image from the well. */
+        if (sw + 2 <= vw && sh + 2 <= vh) draw_frame(left - 1, top - 1, sw + 2, sh + 2, TK_LINE_SUBTLE);
         int x0 = left > vx ? left : vx, y0 = top > vy ? top : vy;
         int x1 = left + sw < vx + vw ? left + sw : vx + vw;
         int y1 = top + sh < vy + vh ? top + sh : vy + vh;
@@ -260,21 +342,27 @@ void image_viewer_draw(int x, int y, int w, int h) {
             unsigned sy = (unsigned)(dy - top) * viewer.height / (unsigned)sh;
             const uint8_t *source = IMAGE_MEMORY + sy * viewer.width;
             uint8_t *destination = fb + dy * fb_w;
-            for (int dx = x0; dx < x1; dx++) {
-                unsigned sx = (unsigned)(dx - left) * viewer.width / (unsigned)sw;
-                destination[dx] = source[sx];
+            for (int dx2 = x0; dx2 < x1; dx2++) {
+                unsigned sx = (unsigned)(dx2 - left) * viewer.width / (unsigned)sw;
+                destination[dx2] = source[sx];
             }
         }
-    } else {
-        const char *heading = viewer.title[0] ? "Image could not be opened" : "Open an image from Files";
-        draw_string_clip(heading, vx + 16, vy + 22, app_text, vx + vw - 12);
-        message_lines(viewer.status[0] ? viewer.status : "JPEG, PNG, BMP, GIF and BaseOS Paint",
-                      vx + 16, vy + 48, vw - 32, vh - 56);
-    }
-    const char *status = viewer.status[0] ? viewer.status : "No image open";
-    draw_string_clip(status, x + PAD, y + h - FOOT_H + 7, app_text, x + w - PAD);
-    draw_string_clip("F: fit   1: actual   +/-: zoom   Arrows / wheel: pan",
-                     x + PAD, y + h - 22, app_text_dim, x + w - PAD);
+        if (viewer.vbar) kit_vscroll(vx + vw, vy, vh, viewer.pan_y, vh, sh, 0);
+        if (viewer.hbar) kit_hscroll(vx, vy + vh, vw, viewer.pan_x, vw, sw, 0);
+        if (viewer.vbar && viewer.hbar) draw_rect(vx + vw, vy + vh, SB, SB, MODERN ? well : TK_BASE);
+    } else empty_state(vx, vy, vw, vh);
+    /* Status bar */
+    int sy = y + h - status_h();
+    if (MODERN) {
+        draw_hline(x, sy, w, TK_LINE_SUBTLE);
+        kit_fill_bottom(x, sy + 1, w, status_h() - 1, ui_theme.r_window > 1 ? ui_theme.r_window - 1 : 0, ui_theme.statusbar);
+    } else kit_statusbar(x, sy, w, status_h());
+    int ty = kit_ty(sy + 1, status_h() - 1), pad = MODERN ? 12 : 8;
+    const char *status = viewer.loaded ? viewer.status : viewer.title[0] ? "Not opened" : "No image open";
+    int lw = kit_text(status, x + pad, ty, TK_TEXT2, w - 2 * pad, 0);
+    const char *keys = "F: fit   1: actual size   +/-: zoom   Arrows: pan";
+    int kw = kit_text_w(keys, 0);
+    if (viewer.loaded && kw <= w - 3 * pad - lw) kit_text(keys, x + w - pad - kw, ty, TK_TEXT2, kw, 0);
 }
 
 static int set_zoom(unsigned scale, int fit) {
@@ -293,7 +381,7 @@ static int set_zoom(unsigned scale, int fit) {
             ((int)(viewer.height * scale / 100) - viewer.viewport_h) / 2 :
             (int)((unsigned)center_y * scale / old) - viewer.viewport_h / 2;
     }
-    geometry(viewer.viewport_w + 2 * PAD, viewer.viewport_h + TOOL_H + FOOT_H);
+    regeometry();
     return 1;
 }
 static int step_zoom(int direction) {
@@ -309,7 +397,7 @@ static int step_zoom(int direction) {
 static int pan(int dx, int dy) {
     if (!viewer.loaded || viewer.fit) return 0;
     viewer.pan_x += dx; viewer.pan_y += dy;
-    geometry(viewer.viewport_w + 2 * PAD, viewer.viewport_h + TOOL_H + FOOT_H);
+    regeometry();
     return 1;
 }
 int image_viewer_key(int sc, char ch) {
@@ -326,14 +414,29 @@ int image_viewer_key(int sc, char ch) {
     if (sc == 0x47) { viewer.pan_x = viewer.pan_y = 0; return viewer.loaded; } /* Home */
     return 0;
 }
+/* A click on a scrollbar track centres the view on that point. */
+static int scroll_click(int x, int y, int mx, int my) {
+    int vx = x, vy = y + tool_h(), vw = viewer.viewport_w, vh = viewer.viewport_h;
+    int sw = (int)(viewer.width * viewer.scale / 100), sh = (int)(viewer.height * viewer.scale / 100);
+    if (viewer.vbar && hit(mx, my, vx + vw, vy, SB, vh)) {
+        viewer.pan_y = (int)((unsigned)(my - vy) * (unsigned)sh / (unsigned)vh) - vh / 2;
+        regeometry(); return 1;
+    }
+    if (viewer.hbar && hit(mx, my, vx, vy + vh, vw, SB)) {
+        viewer.pan_x = (int)((unsigned)(mx - vx) * (unsigned)sw / (unsigned)vw) - vw / 2;
+        regeometry(); return 1;
+    }
+    return 0;
+}
 int image_viewer_click(int x, int y, int w, int h, int mx, int my) {
     geometry(w, h);
+    if (w < 200 || h < tool_h() + status_h() + 16) return 0;
     switch (tool_hit(x, y, mx, my)) {
     case VB_FIT: return set_zoom(viewer.scale, 1);
     case VB_ACTUAL: return set_zoom(100, 0);
     case VB_ZOOM_OUT: return step_zoom(-1);
     case VB_ZOOM_IN: return step_zoom(1);
-    default: return 0;
+    default: return viewer.loaded ? scroll_click(x, y, mx, my) : 0;
     }
 }
 int image_viewer_scroll(int lines) { return pan(0, clamp(lines, -32, 32) * 36); }

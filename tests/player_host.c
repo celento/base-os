@@ -14,6 +14,8 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
+#include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 
 static char names[FS_MAX_NODES][FS_NAME_LEN];
 static unsigned generations[FS_MAX_NODES];
@@ -70,9 +72,18 @@ void fmt_pad2(char *s,int n){sprintf(s,"%02d",n);}
 #include "../src/apps/player.c"
 /* Click the centre of a transport control in the current audio/video layout. */
 static int click_transport(int w,int h,int index){
-    int viewport_h,buttons_y,library_y;video_geometry(h,&viewport_h,&buttons_y,&library_y);
-    PlayerRect r[PB_COUNT];int divider;transport_layout(25,30+(video_mode?buttons_y:170),w,r,&divider);
-    return player_click(25,30,w,h,r[index].x+r[index].w/2,r[index].y+r[index].h/2);
+    PlayerLayout L;player_layout(25,30,w,h,&L);
+    return player_click(25,30,w,h,L.b[index].x+L.b[index].w/2,L.b[index].y+L.b[index].h/2);
+}
+/* Click the volume slider at a fraction (0..100) of its width. */
+static int click_volume(int w,int h,int percent){
+    PlayerLayout L;player_layout(25,30,w,h,&L);assert(L.volume.w>0);
+    return player_click(25,30,w,h,L.volume.x+(L.volume.w-1)*percent/100,L.volume.y+L.volume.h/2);
+}
+/* Click the middle of visible library row k. */
+static int click_row(int w,int h,int k){
+    PlayerLayout L;player_layout(25,30,w,h,&L);PlayerRect r=row_rect(&L,k);assert(r.w>0);
+    return player_click(25,30,w,h,r.x+r.w/2,r.y+r.h/2);
 }
 enum { TEST_W=1024, TEST_H=768, OUTSIDE=253 };
 static uint8_t back[TEST_W*TEST_H],linear[TEST_W*TEST_H*4];
@@ -131,7 +142,7 @@ static void test_tick_classification(void){
     player_refresh();expect_full_change();
     assert(player_key(KEY_UP,0));expect_full_change();
     draw_at(640,584);
-    assert(player_click(25,30,640,584,25+70,30+303));expect_full_change();
+    assert(click_row(640,584,1));expect_full_change();
     assert(player_open_file(4)==MEDIA_OK);expect_full_change();
     assert(player_open_file(FS_MAX_NODES)==MEDIA_BAD_FILE);expect_full_change();
     assert(click_transport(420,390,PB_CLEAR));expect_full_change();
@@ -163,7 +174,8 @@ static void assert_progress_equivalent(int x,int y,int width,int height,unsigned
     memcpy(before,back,sizeof back);
     fake.played_frames=position*22;
     player_draw_audio_progress(x,y,width,height);
-    assert_untouched_outside(before,x+30,y+114,width-60,16+UI_FONT_H);
+    PlayerLayout L;player_layout(x,y,width,height,&L);
+    assert_untouched_outside(before,L.strip.x,L.strip.y,L.strip.w,L.strip.h);
     memcpy(reference,back,sizeof back);
     /* Repeating an identical update must not darken antialiased glyphs or
      * rounded edges by blending against their previous drawing. */
@@ -183,9 +195,8 @@ static void test_progress_pixels(void){
     static const unsigned positions[]={0,1,99,100,999,1000,5900,59900,60000,599999,600000,0};
     static const int geometry[][4]={{25,30,420,362},{7,9,640,584},{92,103,840,640}};
     for(int theme=0;theme<3;theme++){
-        app_chrome=theme==0?COLOR_LTGRAY:theme==1?COLOR_WHITE:COLOR_NAVY;
-        app_chrome_dk=theme==2?COLOR_BLUE:COLOR_GRAY;
-        app_text_dim=theme==2?COLOR_WHITE:COLOR_GRAY;
+        /* Classic, Modern, and Modern with another accent ramp. */
+        ui_theme_install(theme?UI_STYLE_MODERN:UI_STYLE_CLASSIC,theme==2?3:0,0);
         for(unsigned g=0;g<sizeof geometry/sizeof geometry[0];g++){
             int x=geometry[g][0],y=geometry[g][1],w=geometry[g][2],h=geometry[g][3];
             for(unsigned d=0;d<sizeof durations/sizeof durations[0];d++){
@@ -207,25 +218,56 @@ static void test_progress_pixels(void){
     assert(player_open_file(2)==MEDIA_OK);
     player_draw_audio_progress(25,30,640,584);
     assert(!memcmp(back,before,sizeof back));
-    app_chrome=COLOR_LTGRAY;app_chrome_dk=app_text_dim=COLOR_GRAY;
+    ui_theme_install(UI_STYLE_CLASSIC,0,0);
 }
 static void test_transport_layout(void){
     /* Controls stay inside the client area and never overlap, including the
-     * video volume group (and its speaker icon) at the narrowest width. */
-    int widths[]={420,600,640,900};
-    for(unsigned k=0;k<sizeof widths/sizeof widths[0];k++){
-        int w=widths[k];PlayerRect r[PB_COUNT];int divider;transport_layout(25,200,w,r,&divider);
-        for(int i=0;i<PB_COUNT;i++){
-            assert(r[i].x>=25+16&&r[i].x+r[i].w<=25+w-16);
-            for(int j=0;j<i;j++)if(w>=600||(i<PB_VOL_DOWN&&j<PB_VOL_DOWN))assert(r[i].x+r[i].w<=r[j].x||r[j].x+r[j].w<=r[i].x);
+     * volume group (and its speaker icon) at the narrowest width; the list,
+     * strip and status bar stack without overlapping either. */
+    int widths[]={420,600,640,900},heights[]={362,390,540,700};
+    for(int video=0;video<2;video++)for(unsigned k=0;k<sizeof widths/sizeof widths[0];k++)
+    for(unsigned m=0;m<sizeof heights/sizeof heights[0];m++){
+        int w=widths[k],h=heights[m];video_mode=video;
+        PlayerLayout L;player_layout(25,200,w,h,&L);assert(L.ok);
+        PlayerRect all[PB_COUNT+2];int n=0;
+        for(int i=0;i<PB_COUNT;i++)all[n++]=L.b[i];
+        if(L.volume.w)all[n++]=(PlayerRect){L.volume.x-22,L.volume.y,L.volume.w+22+6+VOL_TEXT_W,L.volume.h};
+        for(int i=0;i<n;i++){
+            assert(all[i].x>=25+side_pad()&&all[i].x+all[i].w<=25+w-side_pad());
+            for(int j=0;j<i;j++)assert(all[i].x+all[i].w<=all[j].x||all[j].x+all[j].w<=all[i].x);
         }
-        assert(r[PB_STOP].x+r[PB_STOP].w<divider&&divider<r[PB_CLEAR].x);
-        if(w>=600)assert(r[PB_CLEAR].x+r[PB_CLEAR].w+8<=r[PB_VOL_DOWN].x-4-ICON_SIZE);
+        assert(L.b[PB_STOP].x+L.b[PB_STOP].w<L.divider&&L.divider<L.b[PB_CLEAR].x);
+        assert(L.volume.w>0||!volume_shown());
+        if(L.volume.w)assert(L.b[PB_CLEAR].x+L.b[PB_CLEAR].w+8<=L.volume.x-22);
+        assert(L.strip.y+L.strip.h<=L.b[PB_PLAY].y&&L.b[PB_PLAY].y+L.b[PB_PLAY].h<=L.library.y);
+        assert(L.library.y+L.library.h<=L.list.y&&L.list.y+L.list.h<=L.status.y&&L.status.y+L.status.h==200+h);
+        if(video)assert(L.viewport.h>=68&&L.viewport.y+L.viewport.h<=L.strip.y);
+    }
+    video_mode=0;
+}
+static void snapshot(const char *prefix){
+    for(int video=0;video<2;video++)for(int style=0;style<2;style++){
+        ui_theme_install(style?UI_STYLE_MODERN:UI_STYLE_CLASSIC,0,0);
+        for(int i=2;i<12;i++)valid[i]=1;
+        strcpy(message,"");player_refresh();
+        assert(player_open_file(video?2:3)==0);
+        if(!video){fake.played_frames=9000;fake.total_frames=22050*4;}
+        memset(back,OUTSIDE,sizeof back);player_draw(0,0,640,540);
+        char path[512];snprintf(path,sizeof path,"%s-%s-%s.ppm",prefix,video?"video":"audio",style?"modern":"classic");
+        FILE *f=fopen(path,"wb");assert(f);fprintf(f,"P6\n640 540\n255\n");
+        for(int y=0;y<540;y++)for(int x=0;x<640;x++){uint32_t c=pal32[back[y*TEST_W+x]];fputc((c>>16)&255,f);fputc((c>>8)&255,f);fputc(c&255,f);}
+        fclose(f);
     }
 }
+static void run(void);
 int main(void){
-    test_transport_layout();
     gfx_init(back,linear,TEST_W,TEST_H,32,TEST_W*4);
+    ui_theme_install(UI_STYLE_CLASSIC,0,0);
+    run();
+    return 0;
+}
+static void run(void){
+    test_transport_layout();
     assert(!player_tick());
     valid[0]=valid[1]=1;strcpy(names[0],"/");strcpy(names[1],"trash");
     for(int i=2;i<34;i++){valid[i]=1;generations[i]=(unsigned)i;snprintf(names[i],FS_NAME_LEN,"Track %02d.%s",34-i,i&1?"MP3":"wav");}
@@ -238,8 +280,9 @@ int main(void){
     assert(player_key(KEY_SPACE,0));assert(fake.state==AUDIO_PLAYING);
     assert(player_key(0,'-'));assert(fake.volume==70);
     assert(player_key(0,'+'));assert(fake.volume==75);
-    assert(player_click(25,30,420,390,25+96,30+224));assert(fake.volume==0);
-    assert(player_click(25,30,420,390,25+420-80,30+224));assert(fake.volume==100);
+    assert(click_volume(420,390,0));assert(fake.volume==0);
+    assert(click_volume(420,390,100));assert(fake.volume==100);
+    assert(click_volume(420,390,50));assert(fake.volume>=45&&fake.volume<=55);fake.volume=75;
     assert(click_transport(420,390,PB_STOP));assert(fake.state==AUDIO_STOPPED);
     assert(player_tick());assert(!player_tick());now+=TIMER_HZ;assert(player_tick());
     fake.error=MEDIA_NO_DEVICE;assert(player_tick()&&message[0]);
@@ -250,8 +293,8 @@ int main(void){
     fake_video.audio_enabled=1;fake_video.audio_sample_rate=44100;fake_video.audio_channels=2;
     draw_at(640,584);draw_at(420,390);
     unsigned volume_before=fake.volume;
-    assert(click_transport(640,584,PB_VOL_DOWN));assert(fake.volume==volume_before-5);
-    assert(click_transport(640,584,PB_VOL_UP));assert(fake.volume==volume_before);
+    assert(click_volume(640,584,0));assert(fake.volume==0);
+    assert(click_volume(640,584,100));assert(fake.volume==100);fake.volume=volume_before;
     assert(player_key(KEY_SPACE,0));assert(fake_video.state==VIDEO_PAUSED);
     assert(player_key(KEY_SPACE,0));assert(fake_video.state==VIDEO_PLAYING);
     fake_video.displayed_frames=18;assert(player_tick());draw_at(640,584);
@@ -267,5 +310,11 @@ int main(void){
     assert(player_key(KEY_ENTER,0));assert(message[0]);
     assert(player_tick()==PLAYER_CHANGED);assert(!player_tick());
     assert(player_key(KEY_SPACE,0));assert(player_tick()==PLAYER_CHANGED);
-    puts("Player list, transport, conservative tick classification, real-pixel progress equivalence, and client bounds passed.");
+    /* Modern: the layout checks and client bounds hold as well. */
+    ui_theme_install(UI_STYLE_MODERN,0,0);test_transport_layout();
+    valid[2]=valid[3]=1;player_refresh();draw_at(640,540);draw_at(420,362);
+    assert(player_open_file(2)==0&&video_mode);draw_at(640,540);draw_at(420,362);
+    if(getenv("PLAYER_SNAPSHOT"))snapshot(getenv("PLAYER_SNAPSHOT"));
+    player_close();
+    puts("Player (Classic and Modern) list, transport, conservative tick classification, real-pixel progress equivalence, and client bounds passed.");
 }

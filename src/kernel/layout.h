@@ -78,6 +78,9 @@
 #define PAINT_HISTORY_CAPACITY 0x20000
 #define DOWNLOAD_BASE 0xB30000
 #define DOWNLOAD_CAPACITY 0x210000
+/* The active style's unpacked UI icon data (src/ui/icons.c), in app arena slack. */
+#define ICON_BASE 0xD40000
+#define ICON_CAPACITY 0x40000
 #define GFX_CACHE_BASE 0xDF0000
 #define GFX_CACHE_CAPACITY 0x10000
 #define FS_POOL_BASE 0x2000000

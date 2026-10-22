@@ -11,13 +11,9 @@ static unsigned char presented[FB_CAPACITY];
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
+#include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 #include "ui/app.h"
-/* Theme tokens normally owned by kernel.c's theme_apply. The fixture keeps the
- * classic light mapping so pixel assertions stay literal and distinct. */
-uint8_t app_accent = COLOR_BLUE, app_accent_dk = COLOR_BLACK, app_on_accent = COLOR_WHITE;
-uint8_t app_text = COLOR_DKGRAY, app_text_dim = COLOR_GRAY;
-uint8_t app_chrome = COLOR_LTGRAY, app_chrome_dk = COLOR_LTGRAY, app_border = COLOR_GRAY;
-uint8_t app_body = COLOR_LTGRAY, app_field = COLOR_WHITE, app_paper = COLOR_WHITE;
 
 static unsigned polls, ticks, clipboard_generation, clipboard_length;
 static unsigned char clipboard[WRITER_TEXT_MAX + 1];
@@ -487,11 +483,11 @@ static void test_search(void) {
     check_text("dogs dogs\ndogs\nend x"); assert(writer_document()->style[19] == prior.style[15]);
     /* Case sensitivity is a real control, shared by drawing and hit testing. */
     load_fixture("Cat cat CAT"); search_fields("cat", "dog"); writer_draw(0,0,420,260);
-    assert(writer_click(0,0,420,260,338,179,0) & WRITER_CHANGED);
+    assert(writer_click(0,0,420,260,300,183,0) & WRITER_CHANGED);
     key(0x1c, WRITER_MOD_CTRL | WRITER_MOD_SHIFT); key(0x01, 0); check_text("Cat dog CAT");
     /* Exact case control is persistent; switch back for subsequent checks. */
     key(0x23, WRITER_MOD_CTRL); writer_draw(0,0,420,260);
-    assert(writer_click(0,0,420,260,338,179,0) & WRITER_CHANGED); key(0x01, 0);
+    assert(writer_click(0,0,420,260,300,183,0) & WRITER_CHANGED); key(0x01, 0);
     /* Empty replacement keeps empty paragraphs and their heading/alignment. */
     load_fixture("cat\ncat\n"); select_range(4,7); key(0x02,WRITER_MOD_CTRL); key(0x13,WRITER_MOD_CTRL);
     search_fields("cat", ""); key(0x1c, WRITER_MOD_CTRL | WRITER_MOD_SHIFT); key(0x01, 0);
@@ -529,15 +525,17 @@ static void test_viewport_reveal(void) {
     load_fixture("Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10\nLine 11\nLine 12\nLine 13\nLine 14\nLine 15\nLine 16\nLine 17\nLine 18\nLine 19\nLine 20\ntarget");
     writer_draw(0,0,420,260); key(0x4f,WRITER_MOD_CTRL);
     key(0x21,WRITER_MOD_CTRL); key(0x1e,WRITER_MOD_CTRL); type("target"); key(0x1c,0);
+    /* The page area lies between the toolbar (64px when wrapped, no ruler in
+     * a short window) and the docked find bar or status bar. */
     writer_draw(0,0,420,260);
-    assert(colored_pixels(22,50,380,200,COLOR_BLUE) > 10);
+    assert(colored_pixels(22,64,380,134,TK_ACCENT) > 10);
     key(0x01,0); key(0x02,WRITER_MOD_CTRL); writer_draw(0,0,420,260);
-    assert(colored_pixels(22,50,380,200,COLOR_BLUE) > 10);
+    assert(colored_pixels(22,64,380,172,TK_ACCENT) > 10);
     /* A deliberate scroll away from selection survives a larger resize. */
     writer_scroll(-100); writer_draw(0,0,720,520);
-    assert(!colored_pixels(22,74,680,412,COLOR_BLUE));
-    key(0x4f,WRITER_MOD_CTRL); writer_draw(0,0,720,520);
-    assert(colored_pixels(22,74,680,412,COLOR_BLACK) > 10);
+    assert(!colored_pixels(22,74,680,412,TK_ACCENT));
+    key(0x4f,WRITER_MOD_CTRL); key(0x47,WRITER_MOD_SHIFT); writer_draw(0,0,720,520);
+    assert(colored_pixels(22,74,680,412,TK_ACCENT) > 10);
     puts("Writer viewport: Find-bar shrink and style reflow reveal selection; manual scrolling survives resize");
 }
 static void test_heading_coverage(void) {
@@ -554,8 +552,11 @@ static void test_heading_coverage(void) {
         for (int sy = 0; sy < 2; sy++) for (int sx = 0; sx < 2; sx++)
             sum += glyph_level(bits,bpr,(4*y+2*sy+1)/6,(4*x+2*sx+1)/6);
         int level = (sum + 2) / 4;
-        unsigned char expected = level >= 15 ? COLOR_DKGRAY : gfx_mix(COLOR_WHITE,COLOR_DKGRAY,(level*256+7)/15);
-        assert(back[(76+y)*800+22+x] == expected);
+        unsigned char expected = level >= 15 ? TK_TEXT : gfx_mix(TK_RAISED,TK_TEXT,(level*256+7)/15);
+        /* Text origin: 64px toolbar, 12px desk gap and 24px page margin;
+         * glyphs sit 2px into their line. */
+        /* Compare colors: the page token and palette white share an RGB. */
+        assert(pal32[back[(102+y)*800+36+x]] == pal32[expected]);
         if (level != glyph_level(bits,bpr,y*2/3,x*2/3)) mixed++;
     }
     assert(mixed > 8);
@@ -568,8 +569,10 @@ static void test_drawing(const char *path) {
     select_range(65, 78); key(0x17, WRITER_MOD_CTRL); key(0x16, WRITER_MOD_CTRL);
     select_range(17, 31);
     const int boxes[][4] = {{30,20,720,520},{30,20,420,260},{-12,-10,420,260},{730,540,420,260},{30,20,160,120}};
-    for (unsigned b = 0; b < sizeof boxes / sizeof boxes[0]; b++) {
-        int x=boxes[b][0], y=boxes[b][1], w=boxes[b][2], h=boxes[b][3];
+    for (unsigned b = 0; b < 2 * sizeof boxes / sizeof boxes[0]; b++) {
+        /* Every box in Classic, then again in Modern. */
+        ui_theme_install(b < sizeof boxes / sizeof boxes[0] ? UI_STYLE_CLASSIC : UI_STYLE_MODERN, 0, 0);
+        int x=boxes[b % 5][0], y=boxes[b % 5][1], w=boxes[b % 5][2], h=boxes[b % 5][3];
         memset(back, COLOR_MAGENTA, sizeof back); writer_draw(x,y,w,h);
         for (int py = 0; py < 600; py++) for (int px = 0; px < 800; px++)
             if (px < x || px >= x+w || py < y || py >= y+h) assert(back[py*800+px] == COLOR_MAGENTA);
@@ -581,6 +584,7 @@ static void test_drawing(const char *path) {
             key(0x01, 0);
         }
     }
+    ui_theme_install(UI_STYLE_CLASSIC, 0, 0);
     memset(back, COLOR_LTGRAY, sizeof back); writer_draw(30,20,720,520);
     /* Shared toolbar geometry: B click toggles current selection, no text hit. */
     unsigned before = writer_document()->style[17];
@@ -593,16 +597,16 @@ static void test_drawing(const char *path) {
     assert(!writer_drag(30,20,720,520,200,180));
     for (int width = WRITER_MIN_W; width <= WRITER_W; width += WRITER_W - WRITER_MIN_W) {
         assert(ui_string_w("Tab: focus   Arrows/Space: paper   Esc: cancel") <= 376);
-        /* Wide windows use one TB_H toolbar row; the minimum width wraps the
-         * history/file groups onto a second 28px row. RTF and PDF are icon +
-         * label buttons separated by a 4px gap that hits nothing. */
-        int wide = width == WRITER_W, top = wide ? 8 : 35, bottom = top + (wide ? 26 : 28) - 1;
-        int rtf = wide ? 412 : 117, pdf = rtf + 66;
+        /* Wide windows use one 34px toolbar row; the minimum width wraps the
+         * history/file groups onto a second row 30px lower. RTF and PDF are
+         * icon + label buttons separated by a 4px gap that hits nothing. */
+        int wide = width == WRITER_W, top = wide ? 3 : 33, bottom = top + 26 - 1;
+        int rtf = wide ? 374 : 107, pdf = rtf + 72;
         assert(writer_click(30,20,width,260,30+rtf,20+top,0) == WRITER_REQUEST_EXPORT);
-        assert(writer_click(30,20,width,260,30+rtf+61,20+bottom,0) == WRITER_REQUEST_EXPORT);
+        assert(writer_click(30,20,width,260,30+rtf+67,20+bottom,0) == WRITER_REQUEST_EXPORT);
         assert(writer_click(30,20,width,260,30+pdf,20+top,0) == WRITER_REQUEST_PDF);
-        assert(writer_click(30,20,width,260,30+pdf+63,20+bottom,0) == WRITER_REQUEST_PDF);
-        assert(writer_click(30,20,width,260,30+rtf+64,20+top+5,0) == 0);
+        assert(writer_click(30,20,width,260,30+pdf+69,20+bottom,0) == WRITER_REQUEST_PDF);
+        assert(writer_click(30,20,width,260,30+rtf+69,20+top+5,0) == 0);
     }
     assert(writer_key(0x19, 0, WRITER_MOD_CTRL | WRITER_MOD_SHIFT) == WRITER_REQUEST_PDF);
     assert(writer_key(0x19, 0, WRITER_MOD_CTRL) == 0);
@@ -689,6 +693,9 @@ static void test_storage_busy(void) {
 int main(int argc, char **argv) {
     files[0].valid = files[0].folder = 1; files[0].identity = 1;
     gfx_init(back, linear, 800, 600, 32, 3200);
+    /* Drawing assertions use the Classic style's tokens; the clipping checks
+     * also run in Modern. */
+    ui_theme_install(UI_STYLE_CLASSIC, 0, 0);
     test_storage_busy(); writer_close();
     test_editing(); test_history(); test_files(); test_binding_fingerprints(); test_pdf_export(); test_layout(); test_search(); test_viewport_reveal(); test_heading_coverage(); test_drawing(argc > 1 ? argv[1] : NULL);
     assert(polls > 100); assert(sync_count >= 4);

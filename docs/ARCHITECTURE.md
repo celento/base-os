@@ -26,7 +26,7 @@ above it in this table, never a layer below it.
 | Layer | Directory | Owns |
 | --- | --- | --- |
 | Core | `src/kernel/`, `src/lib/` | Boot, memory, storage, devices, input stream, framebuffer and drawing primitives, processes (BEX and ELF, see PLATFORM_V2.md), network, audio, downloads; pure models and codecs (sheet, writer, media, BASIC) |
-| UI kit | `src/ui/` | Icon art and drawing, shared theme tokens (`app_*` colors), toolbar helpers |
+| UI kit | `src/ui/` | Theme tokens and metrics (`ui_theme`, `TK_*`), the control kit, icon art and drawing, toolbar helpers |
 | Apps | `src/apps/` | App components: model plus drawing and input handlers, with no knowledge of windows |
 | Shell | `src/shell/<name>/` | Screens or windows, launching, input routing, app hosting, preferences, boot UI |
 
@@ -85,8 +85,8 @@ the core.
 
 Hooks run the other way where the core needs a shell decision. The terminal's
 program I/O uses `term_set_program_io`, native windows use
-`native_ui_init(&hooks)`, and the icon palette is supplied with
-`icon_palette_install()` from `ui/icons.c`. A shell that never sets a hook gets
+`native_ui_init(&hooks)`, and the theme palette bands are installed with
+`ui_theme_install()` from `ui/theme.c`. A shell that never sets a hook gets
 a safe default.
 
 ## Memory a shell may use
@@ -108,8 +108,9 @@ same starting disk.
 1. Create `src/shell/<name>/` with one or more `.c` files.
 2. Include only `kernel/`, `lib/`, `ui/` and `apps/` headers.
 3. Define `const Shell baseos_shell = {"<name>", prepare, start, turn};`.
-4. In `prepare`, call `icon_palette_install()` if you draw color icons, set the
-   `app_*` theme tokens apps draw with, and call `provision_system_files`.
+4. In `prepare`, call `ui_theme_install(style, accent, desktop)`, which sets the
+   palette bands, the `ui_theme` metrics and the `app_*` tokens apps draw
+   with, and call `provision_system_files`.
 5. In `turn`, pop input from `device_input`, take kernel events, draw, and
    return nonzero while anything is animating or waiting to be drawn.
 6. Build with `make BASEOS_SHELL=<name>`. Output goes to `build/<name>/`, so it

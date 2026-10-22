@@ -14,9 +14,10 @@ void feature_test(void){
     open_edit();editor_type("One fish\ntwo FISH\nred fish\n");
     ctrl_down=1;key_sc=0x21;key_char=0;handle_key();ctrl_down=0;
     editor_check(edit_search.open&&edit_search.focus,"Ctrl+F opens search");editor_type("fish");
-    key_sc=KEY_ENTER;key_char=0;handle_key();editor_check(edit_sel_a==4&&edit_sel_b==8,"find wraps");
-    key_sc=0x3d;handle_key();editor_check(edit_sel_a==13,"F3 next match");
-    shift_down=1;handle_key();shift_down=0;editor_check(edit_sel_a==4,"Shift+F3 previous");
+    editor_check(edit_sel_a==4&&edit_sel_b==8,"find as you type wraps to the first hit");
+    key_sc=KEY_ENTER;key_char=0;handle_key();editor_check(edit_sel_a==13,"Enter next match");
+    key_sc=0x3d;handle_key();editor_check(edit_sel_a==22,"F3 next match");
+    shift_down=1;handle_key();shift_down=0;editor_check(edit_sel_a==13,"Shift+F3 previous");
     ctrl_down=1;key_sc=0x23;handle_key();ctrl_down=0;
     key_sc=KEY_TAB;handle_key();editor_type("bird");
     ctrl_down=shift_down=1;key_sc=KEY_ENTER;key_char=0;handle_key();ctrl_down=shift_down=0;

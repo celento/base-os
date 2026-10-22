@@ -5,9 +5,11 @@
 #include "kernel/fs.h"
 #include "kernel/kheap.h"
 #include "kernel/platform.h"
-#include "ui/toolbar.h"
+#include "ui/icon_draw.h"
+#include "ui/icons.h"
+#include "ui/kit.h"
+#include "ui/ui_icons.h"
 
-#define PLAYER_ROW 28
 static int *files, file_capacity, file_count, selected, first_visible, visible_rows = 4;
 static unsigned *identities;      /* files and identities hold file_capacity entries */
 static int source_id = -1;
@@ -175,110 +177,263 @@ static const char *state_string(int state) {
     default: return "Ready";
     }
 }
-/* Transport bar geometry, shared by drawing and hit testing. row_y is the top
- * of the 32 px control row; the round primary Play/Pause button overhangs it
- * by 3 px above and below. Volume -/+ are laid out only for video. */
-enum { PB_PLAY, PB_STOP, PB_CLEAR, PB_REFRESH, PB_VOL_DOWN, PB_VOL_UP, PB_COUNT };
+/* Layout, shared by drawing, the compositor fast paths and hit testing.
+ * Audio: a Now Playing card (art, title, format, state and the progress
+ * strip), the transport row (Play, Stop, Clear error, volume, Refresh), an
+ * optional message, the media library and a status bar. Video replaces the
+ * card with a title row, the viewport and the progress strip. */
+#define MODERN (ui_theme.style == UI_STYLE_MODERN)
+#define SB (ui_theme.scrollbar)
+enum { PB_PLAY, PB_STOP, PB_CLEAR, PB_REFRESH, PB_COUNT };
 typedef struct { int x, y, w, h; } PlayerRect;
-#define PLAY_D 38
-#define VOL_TEXT_W 44
-static void transport_layout(int x, int row_y, int w, PlayerRect r[PB_COUNT], int *divider) {
-    int by = row_y + 1;
-    r[PB_PLAY] = (PlayerRect){x+16, row_y-3, PLAY_D, PLAY_D};
-    r[PB_STOP] = (PlayerRect){x+16+PLAY_D+8, by, TB_ICON_W, TB_H};
-    *divider = r[PB_STOP].x + TB_ICON_W + 8;
-    r[PB_CLEAR] = (PlayerRect){*divider+9, by, tool_button_w("Clear error"), TB_H};
-    r[PB_REFRESH] = (PlayerRect){x+w-16-TB_ICON_W, by, TB_ICON_W, TB_H};
-    r[PB_VOL_UP] = (PlayerRect){r[PB_REFRESH].x-17-TB_ICON_W, by, TB_ICON_W, TB_H};
-    r[PB_VOL_DOWN] = (PlayerRect){r[PB_VOL_UP].x-4-VOL_TEXT_W-4-TB_ICON_W, by, TB_ICON_W, TB_H};
+typedef struct {
+    int ok, video, divider, divider2, row_h, rows_y;
+    PlayerRect card, art, heading, viewport, strip, b[PB_COUNT], volume, message;
+    PlayerRect library, up, down, list, scroll, status;
+} PlayerLayout;
+#define PLAY_D 40
+#define TRANSPORT_H 40
+#define STRIP_H (18 + UI_FONT_H)
+#define VOL_TEXT_W 40
+static int side_pad(void) { return MODERN ? 16 : 12; }
+static int status_h(void) { return MODERN ? 28 : 24; }
+static int list_inset(void) { return MODERN ? 4 : 1; }
+static int message_h(void) { return MODERN ? 36 : 32; }
+static int volume_shown(void) { return !video_mode || video_status()->audio_enabled; }
+static void player_layout(int x, int y, int w, int h, PlayerLayout *L) {
+    *L = (PlayerLayout){0};
+    L->ok = w >= 420 && h >= 362;
+    L->video = video_mode;
+    int pad = side_pad(), gap = 12, cs = ui_theme.control_h, cx = x + pad, cw = w - 2 * pad, cy = y + pad;
+    L->row_h = ui_theme.row_h;
+    L->status = (PlayerRect){x, y + h - status_h(), w, status_h()};
+    int msg = message[0] ? message_h() + 8 : 0, lib_h = cs + 6;
+    if (!video_mode) {
+        L->card = (PlayerRect){cx, cy, cw, 16 + 64 + 12 + STRIP_H + 12};
+        L->art = (PlayerRect){cx + 16, cy + 16, 64, 64};
+        L->strip = (PlayerRect){cx + 16, cy + 16 + 64 + 12, cw - 32, STRIP_H};
+        cy += L->card.h + gap;
+    } else {
+        L->heading = (PlayerRect){cx, cy, cw, 2 * UI_FONT_H + 6};
+        cy += L->heading.h + 8;
+        /* The viewport takes two thirds of what the fixed rows leave. */
+        int avail = L->status.y - gap - cy - (8 + STRIP_H + gap) - (TRANSPORT_H + gap) - msg - lib_h;
+        int list_h = avail / 3, min_list = 2 * L->row_h + 2 * list_inset();
+        if (list_h < min_list) list_h = min_list;
+        int vh = avail - list_h;
+        if (vh < 68) vh = 68;
+        L->viewport = (PlayerRect){cx, cy, cw, vh};
+        cy += vh + 8;
+        L->strip = (PlayerRect){cx, cy, cw, STRIP_H};
+        cy += STRIP_H + gap;
+    }
+    /* Transport */
+    int by = cy + (TRANSPORT_H - cs) / 2;
+    L->b[PB_PLAY] = (PlayerRect){cx, cy, PLAY_D, PLAY_D};
+    L->b[PB_STOP] = (PlayerRect){cx + PLAY_D + 10, by, cs, cs};
+    L->divider = L->b[PB_STOP].x + cs + 8;
+    L->b[PB_CLEAR] = (PlayerRect){L->divider + 9, by, 12 + 16 + 6 + ui_string_w("Clear error") + 12, cs};
+    L->b[PB_REFRESH] = (PlayerRect){cx + cw - cs, by, cs, cs};
+    L->divider2 = L->b[PB_REFRESH].x - 9;
+    /* Volume: speaker, slider and percentage, when there is room. */
+    int left = L->b[PB_CLEAR].x + L->b[PB_CLEAR].w + 16 + 22, right = L->divider2 - 9 - VOL_TEXT_W;
+    if (volume_shown() && right - left >= 48) L->volume = (PlayerRect){left, cy + (TRANSPORT_H - 18) / 2, right - left, 18};
+    cy += TRANSPORT_H + gap;
+    if (msg) { L->message = (PlayerRect){cx, cy, cw, message_h()}; cy += msg; }
+    /* Library */
+    L->library = (PlayerRect){cx, cy, cw, lib_h};
+    L->down = (PlayerRect){cx + cw - cs, cy + (lib_h - cs) / 2, cs, cs};
+    L->up = (PlayerRect){L->down.x - cs - 4, L->down.y, cs, cs};
+    cy += lib_h;
+    L->list = (PlayerRect){cx, cy, cw, L->status.y - gap - cy};
+    if (L->list.h < 0) L->list.h = 0;
+    L->rows_y = L->list.y + list_inset();
+    visible_rows = (L->list.h - 2 * list_inset()) / L->row_h;
+    if (visible_rows < 1) visible_rows = 1;
+    if (file_count > visible_rows)
+        L->scroll = (PlayerRect){L->list.x + L->list.w - 1 - SB, L->list.y + 1, SB, L->list.h - 2};
+}
+/* The rectangle of visible library row k (0 = first shown), or w 0. */
+static PlayerRect row_rect(const PlayerLayout *L, int k) {
+    PlayerRect r = {L->list.x + 1, L->rows_y + k * L->row_h, L->list.w - 2 - (L->scroll.w ? SB : 0), L->row_h};
+    if (r.y + r.h > L->list.y + L->list.h - list_inset()) r.w = 0;
+    return r;
+}
+
+/* The desktop passes its hover tracker while the window is active, so
+ * pointer motion over a control repaints it. Without one nothing hovers. */
+static int (*hover_fn)(int x, int y, int w, int h);
+void player_set_hover(int (*fn)(int x, int y, int w, int h)) { hover_fn = fn; }
+static int hover(PlayerRect r) { return hover_fn && r.w > 0 ? hover_fn(r.x, r.y, r.w, r.h) : 0; }
+
+/* A one-color eighth note in a 16 px box, for rows on the accent fill where
+ * the colored music icon would not read. */
+static void note_glyph(int x, int y, uint8_t ink) {
+    kit_fill(x + 3, y + 10, 6, 5, 2, ink, 1);
+    draw_rect(x + 8, y + 2, 1, 10, ink);
+    draw_rect(x + 9, y + 2, 1, 10, ink);
+    draw_rect(x + 10, y + 3, 2, 1, ink);
+    draw_rect(x + 11, y + 4, 2, 1, ink);
+    draw_rect(x + 12, y + 5, 1, 3, ink);
+}
+
+/* A bordered tool with a toolbar glyph and an optional label. */
+static void tool(PlayerRect r, int glyph, const char *label, int state) {
+    int dis = state & KIT_DISABLED;
+    kit_button(r.x, r.y, r.w, r.h, "", -1, KB_DEFAULT, state);
+    uint8_t ink = dis ? TK_LINE_STRONG : TK_ICON;
+    int dy = (state & KIT_PRESSED) && !dis && !MODERN ? 1 : 0, iy = r.y + (r.h - ICON_SIZE) / 2 + dy;
+    if (label) {
+        int content = ICON_SIZE + 6 + ui_string_w(label), ix = r.x + (r.w - content) / 2;
+        icon_draw(glyph, ix, iy, ink);
+        kit_text(label, ix + ICON_SIZE + 6, kit_ty(r.y, r.h) + dy, dis ? TK_LINE_STRONG : TK_TEXT, r.x + r.w - 4 - ix - ICON_SIZE - 6, 0);
+    } else icon_draw(glyph, r.x + (r.w - ICON_SIZE) / 2, iy, ink);
+}
+/* A flat tool: no fill until hovered. */
+static void flat_tool(PlayerRect r, int glyph, int state) {
+    int dis = state & KIT_DISABLED;
+    if (!dis && (state & (KIT_HOVER | KIT_PRESSED)))
+        kit_fill(r.x, r.y, r.w, r.h, MODERN ? ui_theme.r_control : KIT_R_SQUARE, (state & KIT_PRESSED) ? TK_LINE_SUBTLE : TK_HOVER, 1);
+    icon_draw(glyph, r.x + (r.w - ICON_SIZE) / 2, r.y + (r.h - ICON_SIZE) / 2, dis ? (MODERN ? TK_LINE_STRONG : TK_LINE) : TK_ICON);
 }
 static void play_button(PlayerRect r, int playing, int enabled) {
-    draw_round_rect(r.x, r.y, r.w, r.h, r.w/2, enabled ? app_accent : app_chrome_dk);
-    uint8_t ink = enabled ? app_on_accent : app_text_dim;
+    int state = enabled ? hover(r) : KIT_DISABLED;
+    uint8_t fill = !enabled ? (MODERN ? TK_HOVER : TK_BASE) : (state & KIT_PRESSED) ? TK_ACCENT_700 :
+        (state & KIT_HOVER) ? TK_ACCENT_600 : TK_ACCENT;
+    if (MODERN) kit_fill(r.x, r.y, r.w, r.h, r.w / 2, fill, 1);
+    else kit_box(r.x, r.y, r.w, r.h, KIT_R_NOTCH, fill, enabled ? TK_ACCENT_700 : TK_LINE_SUBTLE);
     /* The play triangle sits 1 px right of centre so it looks optically centred. */
-    icon_draw(playing ? ICON_PAUSE : ICON_PLAY, r.x+(r.w-ICON_SIZE)/2+(playing?0:1), r.y+(r.h-ICON_SIZE)/2, ink);
+    icon_draw(playing ? ICON_PAUSE : ICON_PLAY, r.x + (r.w - ICON_SIZE) / 2 + (playing ? 0 : 1), r.y + (r.h - ICON_SIZE) / 2,
+              enabled ? TK_ON_ACCENT : TK_LINE_STRONG);
 }
-static void draw_transport(int x, int row_y, int w, int playing, int play_enabled, int error, int volume) {
-    PlayerRect r[PB_COUNT]; int divider;
-    transport_layout(x, row_y, w, r, &divider);
-    play_button(r[PB_PLAY], playing, play_enabled);
-    tool_button(r[PB_STOP].x, r[PB_STOP].y, r[PB_STOP].w, r[PB_STOP].h, ICON_STOP_SQUARE, 0, TB_NORMAL);
-    tool_divider(divider, r[PB_STOP].y, TB_H);
-    tool_button(r[PB_CLEAR].x, r[PB_CLEAR].y, r[PB_CLEAR].w, r[PB_CLEAR].h, ICON_CLEAR, "Clear error", error ? TB_NORMAL : TB_DISABLED);
-    tool_button(r[PB_REFRESH].x, r[PB_REFRESH].y, r[PB_REFRESH].w, r[PB_REFRESH].h, ICON_REFRESH, 0, TB_NORMAL);
-    if (volume >= 0) {
+static void draw_transport(const PlayerLayout *L, int playing, int play_enabled, int error) {
+    play_button(L->b[PB_PLAY], playing, play_enabled);
+    tool(L->b[PB_STOP], ICON_STOP_SQUARE, 0, hover(L->b[PB_STOP]));
+    kit_vseparator(L->divider, L->b[PB_STOP].y + 5, L->b[PB_STOP].h - 10);
+    tool(L->b[PB_CLEAR], ICON_CLEAR, "Clear error", error ? hover(L->b[PB_CLEAR]) : KIT_DISABLED);
+    tool(L->b[PB_REFRESH], ICON_REFRESH, 0, hover(L->b[PB_REFRESH]));
+    if (L->volume.w) {
         char text[8];
-        icon_draw(ICON_VOLUME, r[PB_VOL_DOWN].x-4-ICON_SIZE, r[PB_VOL_DOWN].y+(TB_H-ICON_SIZE)/2, app_text_dim);
-        tool_button(r[PB_VOL_DOWN].x, r[PB_VOL_DOWN].y, TB_ICON_W, TB_H, ICON_MINUS, 0, TB_NORMAL);
-        fmt_uint(text, (unsigned)volume); append(text, "%", sizeof text);
-        int text_x = r[PB_VOL_DOWN].x + TB_ICON_W + 4;
-        draw_string(text, text_x + (VOL_TEXT_W-ui_string_w(text))/2, r[PB_VOL_DOWN].y+(TB_H-TB_TEXT_H)/2, app_text);
-        tool_button(r[PB_VOL_UP].x, r[PB_VOL_UP].y, TB_ICON_W, TB_H, ICON_PLUS, 0, TB_NORMAL);
-        tool_divider(r[PB_REFRESH].x-9, r[PB_REFRESH].y, TB_H);
+        unsigned volume = audio_status()->volume;
+        PlayerRect v = L->volume;
+        icon_draw(ICON_VOLUME, v.x - 22, v.y + (v.h - ICON_SIZE) / 2, TK_ICON);
+        kit_slider(v.x, v.y + (MODERN ? 1 : 0), v.w, (int)volume, 100, hover(v));
+        fmt_uint(text, volume); append(text, "%", sizeof text);
+        kit_text_right(text, v.x + v.w + 6 + VOL_TEXT_W, kit_ty(v.y, v.h), TK_TEXT, 0);
+        kit_vseparator(L->divider2, L->b[PB_REFRESH].y + 5, L->b[PB_REFRESH].h - 10);
     }
 }
-/* Library scroll arrows beside the "Media files" heading. */
-static void scroll_layout(int x, int heading_y, int w, PlayerRect *up, PlayerRect *down) {
-    *up = (PlayerRect){x+w-76, heading_y-4, 28, 24};
-    *down = (PlayerRect){x+w-46, heading_y-4, 28, 24};
+/* Volume from a pointer x on the slider, matching kit_slider's travel. */
+static unsigned volume_at(const PlayerLayout *L, int mx) {
+    int knob = MODERN ? 16 : 12, travel = L->volume.w - knob;
+    int v = travel > 0 ? (mx - L->volume.x - knob / 2) * 100 / travel : 0;
+    return (unsigned)(v < 0 ? 0 : v > 100 ? 100 : v);
 }
-static void draw_scroll_arrows(int x, int heading_y, int w) {
-    PlayerRect up, down; scroll_layout(x, heading_y, w, &up, &down);
+static int hit_rect(int mx, int my, PlayerRect r) { return r.w > 0 && hit(mx, my, r.x, r.y, r.w, r.h); }
+/* The progress strip: bar and times on an opaque background, so the fast
+ * path can repaint it alone and match a full draw pixel for pixel. */
+static void draw_strip(PlayerRect s, unsigned position, unsigned duration, uint8_t bg) {
+    char text[32];
+    draw_rect(s.x, s.y, s.w, s.h, bg);
+    unsigned scale = duration / 65535u + 1;
+    unsigned progress = duration ? (position / scale) * (unsigned)s.w / (duration / scale) : 0;
+    if (progress > (unsigned)s.w) progress = (unsigned)s.w;
+    kit_progress(s.x, s.y + (MODERN ? 2 : 0), s.w, (int)progress, s.w);
+    time_string(text, position); kit_text(text, s.x, s.y + 18, TK_TEXT2, s.w / 2, 0);
+    time_string(text, duration); kit_text_right(text, s.x + s.w, s.y + 18, TK_TEXT2, 0);
+}
+/* A one-line notice above the library: amber, or red for a device or
+ * decoder error. */
+static void draw_message(PlayerRect m, int error) {
+    uint8_t fill = error ? TK_RED_50 : TK_AMBER_50;
+    if (MODERN) kit_box(m.x, m.y, m.w, m.h, 8, fill, 0);
+    else kit_box(m.x, m.y, m.w, m.h, KIT_R_SQUARE, fill, error ? TK_RED : TK_AMBER);
+    ui_icon_draw(error ? UI_ICON_ERR : UI_ICON_WARN, m.x + 12, m.y + (m.h - 16) / 2, 16, TK_ICON, fill);
+    kit_text(message, m.x + 12 + 16 + 8, kit_ty(m.y, m.h), TK_TEXT, m.w - 12 - 16 - 8 - 12, 0);
+}
+/* A state pill at the right of a title row; returns its x. */
+static int state_pill(int right, int y, const char *state, int active) {
+    int pw = kit_text_w(state, 1) + 18, ph = MODERN ? 22 : 20;
+    kit_fill(right - pw, y, pw, ph, MODERN ? 11 : KIT_R_SQUARE, active ? TK_ACCENT_100 : (MODERN ? TK_HOVER : TK_BASE), 1);
+    kit_text(state, right - pw + 9, kit_ty(y, ph), active ? TK_ACCENT_700 : TK_TEXT2, pw, 1);
+    return right - pw;
+}
+static const char *format_name(int id) {
+    return is_video(id) ? "MPEG" : extension(fs_name(id), ".mp3") ? "MP3" : "WAV";
+}
+static void draw_library(const PlayerLayout *L) {
+    char text[32], number[12];
+    PlayerRect lib = L->library;
+    int ty = kit_ty(lib.y, lib.h);
+    int tw = kit_text(video_mode ? "Library" : "Media files", lib.x, ty, TK_TEXT, lib.w / 2, 1);
+    fmt_uint(number, (unsigned)file_count);
+    copy_text(text, number, sizeof text); append(text, file_count == 1 ? " file" : " files", sizeof text);
+    kit_text(text, lib.x + tw + 10, ty, TK_TEXT2, L->up.x - lib.x - tw - 18, 0);
     /* The arrows move the selection, exactly like the Up/Down keys. */
-    tool_button(up.x, up.y, up.w, up.h, ICON_CHEVRON_UP, 0, selected > 0 ? TB_FLAT : TB_DISABLED);
-    tool_button(down.x, down.y, down.w, down.h, ICON_CHEVRON_DOWN, 0, selected+1 < file_count ? TB_FLAT : TB_DISABLED);
+    flat_tool(L->up, ICON_CHEVRON_UP, selected > 0 ? hover(L->up) : KIT_DISABLED);
+    flat_tool(L->down, ICON_CHEVRON_DOWN, selected + 1 < file_count ? hover(L->down) : KIT_DISABLED);
+    PlayerRect list = L->list;
+    if (list.h < 8) return;
+    if (MODERN) kit_box(list.x, list.y, list.w, list.h, 8, TK_RAISED, TK_LINE_SUBTLE);
+    else kit_box(list.x, list.y, list.w, list.h, KIT_R_SQUARE, TK_RAISED, TK_LINE);
+    keep_selection_visible();
+    if (!file_count) {
+        int need = 32 + 12 + 2 * UI_FONT_H + 4, ey = list.y + (list.h - need) / 2;
+        if (ey >= list.y + 4) {
+            ui_icon_draw(UI_ICON_A_MUSIC, list.x + (list.w - 32) / 2, ey, 32, TK_ICON, TK_RAISED);
+            kit_text_center("No media files", list.x + 8, ey + 44, list.w - 16, TK_TEXT, 1);
+            kit_text_center("Import a WAV, MP3 or MPEG-1 file to begin.", list.x + 8, ey + 44 + UI_FONT_H + 4, list.w - 16, TK_TEXT2, 0);
+        } else if (list.h >= UI_FONT_H + 4)
+            kit_text("No media files yet.", list.x + 10, kit_ty(list.y, list.h), TK_TEXT2, list.w - 20, 0);
+        return;
+    }
+    for (int k = 0; k < visible_rows && first_visible + k < file_count; ++k) {
+        PlayerRect r = row_rect(L, k);
+        if (!r.w) break;
+        int index = first_visible + k, id = files[index];
+        int state = index == selected ? KIT_ON : hover(r) & KIT_HOVER;
+        uint8_t ink = kit_row(r.x, r.y, r.w, r.h, state), dim = kit_row_dim(state);
+        uint8_t paper = (state & KIT_ON) ? TK_ACCENT : (state & KIT_HOVER) ? (MODERN ? TK_SUNKEN : TK_ACCENT_50) : TK_RAISED;
+        int current = id == source_id && fs_identity(id) == source_identity, ix = r.x + (MODERN ? 14 : 8);
+        if (current) icon_draw(ICON_PLAY, ix, r.y + (r.h - ICON_SIZE) / 2, (state & KIT_ON) ? TK_ON_ACCENT : TK_ACCENT);
+        else if ((state & KIT_ON) && !is_video(id)) note_glyph(ix, r.y + (r.h - 16) / 2, TK_ON_ACCENT);
+        else ui_icon_draw(is_video(id) ? UI_ICON_SCREEN : UI_ICON_A_MUSIC, ix, r.y + (r.h - 16) / 2, 16,
+                          (state & KIT_ON) ? TK_ON_ACCENT : TK_ICON, paper);
+        const char *format = format_name(id);
+        int fx = r.x + r.w - (MODERN ? 14 : 8) - kit_text_w(format, 0);
+        kit_text(fs_name(id), ix + 24, kit_ty(r.y, r.h), ink, fx - ix - 24 - 12, current);
+        kit_text(format, fx, kit_ty(r.y, r.h), dim, r.w, 0);
+    }
+    if (L->scroll.w) kit_vscroll(L->scroll.x, L->scroll.y, L->scroll.h, first_visible, visible_rows, file_count, hover(L->scroll));
 }
-static int hit_rect(int mx, int my, PlayerRect r) { return hit(mx, my, r.x, r.y, r.w, r.h); }
-static void video_geometry(int h, int *viewport_height, int *buttons_y, int *library_y) {
-    *viewport_height = h - 294;
-    if (*viewport_height < 68) *viewport_height = 68;
-    *buttons_y = 76 + *viewport_height + 46;
-    *library_y = *buttons_y + 62;
+static void draw_status(const PlayerLayout *L, const char *left, const char *right) {
+    PlayerRect s = L->status;
+    if (MODERN) {
+        draw_hline(s.x, s.y, s.w, TK_LINE_SUBTLE);
+        kit_fill_bottom(s.x, s.y + 1, s.w, s.h - 1, ui_theme.r_window > 1 ? ui_theme.r_window - 1 : 0, ui_theme.statusbar);
+    } else kit_statusbar(s.x, s.y, s.w, s.h);
+    int ty = kit_ty(s.y + 1, s.h - 1), pad = MODERN ? 12 : 8;
+    int lw = kit_text(left, s.x + pad, ty, TK_TEXT2, s.w - 2 * pad, 0), rw = kit_text_w(right, 0);
+    if (rw <= s.w - 3 * pad - lw) kit_text(right, s.x + s.w - pad - rw, ty, TK_TEXT2, rw, 0);
 }
 void player_draw_audio_progress(int x, int y, int w, int h) {
-    if (video_mode || w < 420 || h < 362) return;
-    char text[32];
-    int bar_width = w-60;
-    /* Both rounded corners and glyphs blend with their background. Clear the
-     * entire strip, including old text and a shrinking/reset progress fill. */
-    draw_rect(x+30, y+114, bar_width, 16+UI_FONT_H, app_chrome);
-    draw_round_rect(x+30, y+114, bar_width, 6, 3, app_chrome_dk);
-    unsigned position = audio_position_ms(), duration = audio_duration_ms();
-    unsigned scale = duration / 65535u + 1;
-    unsigned progress = duration ? (position/scale)*(unsigned)bar_width/(duration/scale) : 0;
-    if (progress > (unsigned)bar_width) progress = (unsigned)bar_width;
-    if (progress) draw_rect(x+30, y+114, (int)progress, 6, app_accent);
-    time_string(text, position); draw_string(text, x+30, y+130, app_text_dim);
-    time_string(text, duration); draw_string(text, x+w-30-ui_string_w(text), y+130, app_text_dim);
-}
-static void draw_video_progress(int x,int y,int w,int viewport_h) {
-    char text[32];
-    unsigned position=video_position_ms(),duration=video_duration_ms();
-    int bar_y=76+viewport_h+10,bar_width=w-32;
-    draw_round_rect(x+16,y+bar_y,bar_width,6,3,app_chrome_dk);
-    unsigned scale=duration/65535u+1;
-    unsigned progress=duration?(position/scale)*(unsigned)bar_width/(duration/scale):0;
-    if (progress>(unsigned)bar_width) progress=(unsigned)bar_width;
-    if (progress) draw_rect(x+16,y+bar_y,(int)progress,6,app_accent);
-    draw_rect(x+16,y+bar_y+12,w-32,18,app_body);
-    time_string(text,position);draw_string(text,x+16,y+bar_y+12,app_text_dim);
-    time_string(text,duration);draw_string(text,x+w-16-ui_string_w(text),y+bar_y+12,app_text_dim);
+    if (video_mode) return;
+    PlayerLayout L; player_layout(x, y, w, h, &L);
+    if (!L.ok) return;
+    draw_strip(L.strip, audio_position_ms(), audio_duration_ms(), TK_RAISED);
 }
 void player_draw_playback(int x,int y,int w,int h) {
-    if (!video_mode || w<420 || h<362) return;
-    int viewport_h,buttons_y,library_y;
-    video_geometry(h,&viewport_h,&buttons_y,&library_y);
-    video_draw(x+16,y+86,w-32,viewport_h-10);
-    draw_video_progress(x,y,w,viewport_h);
+    if (!video_mode) return;
+    PlayerLayout L; player_layout(x, y, w, h, &L);
+    if (!L.ok) return;
+    video_draw(L.viewport.x, L.viewport.y, L.viewport.w, L.viewport.h);
+    draw_strip(L.strip, video_position_ms(), video_duration_ms(), ui_theme.content);
 }
-static void draw_video(int x, int y, int w, int h) {
+static void draw_video(const PlayerLayout *L) {
     const VideoStatus *status = video_status();
-    int viewport_h, buttons_y, library_y;
-    video_geometry(h, &viewport_h, &buttons_y, &library_y);
-    draw_string_bold("Now Playing", x+16, y+12, app_text);
-    const char *state = state_string(status->state);
-    draw_string(state, x+w-16-ui_string_w(state), y+12, app_text_dim);
-    draw_string_bold_clip(title[0] ? title : "Choose a video", x+16, y+40, app_text, x+w-16);
+    PlayerRect hd = L->heading;
+    int px = state_pill(hd.x + hd.w, hd.y, state_string(status->state), status->state == VIDEO_PLAYING);
+    kit_text(title[0] ? title : "Choose a video", hd.x, hd.y, TK_TEXT, px - hd.x - 12, 1);
     char text[96], number[20];
     if (status->audio_enabled) {
         copy_text(text,"MPEG-1 + MP2 / ",sizeof text);
@@ -290,145 +445,82 @@ static void draw_video(int x, int y, int w, int h) {
         append(text, " / ", sizeof text); fmt_uint(number,status->width); append(text,number,sizeof text);
         append(text," x ",sizeof text); fmt_uint(number,status->height); append(text,number,sizeof text);
     }
-    draw_string_clip(text,x+16,y+62,app_text_dim,x+w-16);
-    video_draw(x+16,y+86,w-32,viewport_h-10);
-    draw_video_progress(x,y,w,viewport_h);
-    draw_transport(x,y+buttons_y,w,status->state==VIDEO_PLAYING || status->state==VIDEO_LOADING,1,
-        status->error || message[0],status->audio_enabled && w>=600 ? (int)audio_status()->volume : -1);
-    const char *hint=message[0]?message:status->audio_enabled?
-        "Space: play/pause   Enter: open   +/-: volume   S: stop":
-        status->audio_error==MEDIA_UNSUPPORTED?"Unsupported MPEG audio; playing video only.":
+    kit_text(text, hd.x, hd.y + UI_FONT_H + 6, TK_TEXT2, hd.w, 0);
+    video_draw(L->viewport.x, L->viewport.y, L->viewport.w, L->viewport.h);
+    draw_strip(L->strip, video_position_ms(), video_duration_ms(), ui_theme.content);
+    draw_transport(L, status->state==VIDEO_PLAYING || status->state==VIDEO_LOADING, 1, status->error || message[0]);
+    if (L->message.w) draw_message(L->message, status->error != 0);
+    draw_library(L);
+    const char *hint = status->audio_enabled ? "Space: play/pause   Enter: open   +/-: volume   S: stop" :
+        status->audio_error == MEDIA_UNSUPPORTED ? "Unsupported MPEG audio; playing video only" :
         "Space: play/pause   Enter: open   S: stop";
-    draw_string_clip(hint,x+16,y+buttons_y+38,message[0]?gfx_rgb(240,98,88):app_text_dim,x+w-16);
-    copy_text(text,"Media files (",sizeof text);fmt_uint(number,(unsigned)file_count);
-    append(text,number,sizeof text);append(text,")",sizeof text);
-    draw_string_bold(text,x+16,y+library_y,app_text);
-    int list_y=library_y+24,list_h=h-list_y-30;
-    visible_rows=list_h/PLAYER_ROW;
-    if (visible_rows<1) visible_rows=1;
-    keep_selection_visible();
-    draw_scroll_arrows(x,y+library_y,w);
-    draw_round_frame(x+16,y+list_y,w-32,list_h,6,app_chrome_dk);
-    if (!file_count) draw_string_clip("Import a WAV, MP3 or MPEG-1 file.",x+26,y+list_y+5,app_text_dim,x+w-26);
-    else for (int row=0;row<visible_rows && first_visible+row<file_count;++row) {
-        int index=first_visible+row,id=files[index],row_y=y+list_y+row*PLAYER_ROW;
-        if (index==selected) draw_rect(x+18,row_y+1,w-36,PLAYER_ROW-1,app_chrome_dk);
-        draw_string_clip(fs_name(id),x+26,row_y+5,app_text,x+w-86);
-        draw_string(is_video(id)?"MPEG":extension(fs_name(id),".mp3")?"MP3":"WAV",x+w-72,row_y+5,app_text_dim);
-    }
-    draw_string_clip(status->audio_enabled?"MPEG-1 video + MP2 audio / Sound Blaster 16 / 2 MiB":
-        "MPEG-1 video / 2 MiB / up to 640 x 480 / no audio",x+16,y+h-24,app_text_dim,x+w-16);
+    draw_status(L, status->audio_enabled ? "MPEG-1 video + MP2 audio / Sound Blaster 16 / 2 MiB" :
+        "MPEG-1 video / 2 MiB / up to 640 x 480 / no audio", hint);
 }
 void player_draw(int x, int y, int w, int h) {
     player_init();
-    draw_rect(x, y, w, h, app_body);
-    if (w < 420 || h < 362) {
-        draw_string_clip("Enlarge Media Player to show its controls.", x+8, y+12, app_text, x+w-8); return;
+    draw_rect(x, y, w, h, ui_theme.content);
+    PlayerLayout L; player_layout(x, y, w, h, &L);
+    if (!L.ok) {
+        if (w >= 200 && h >= 40) kit_text("Enlarge Media Player to show its controls.", x+12, y+12, TK_TEXT2, w-24, 0);
+        return;
     }
-    if (video_mode) { draw_video(x,y,w,h); return; }
+    if (video_mode) { draw_video(&L); return; }
     const AudioStatus *status = audio_status();
-    draw_string_bold("Now Playing", x+16, y+12, app_text);
-    const char *device = status->available ? "Sound Blaster 16" : "No audio device";
-    draw_string(device, x+w-16-ui_string_w(device), y+12, app_text_dim);
-    draw_round_rect(x+16, y+42, w-32, 116, 8, app_chrome);
-    draw_string_bold_clip(title[0] ? title : "Choose a track", x+30, y+56, app_text, x+w-128);
-    const char *state = state_string(status->state);
-    draw_string(state, x+w-30-ui_string_w(state), y+56, status->state==AUDIO_PLAYING ? app_accent_dk : app_text_dim);
+    PlayerRect c = L.card, a = L.art;
+    if (MODERN) kit_box(c.x, c.y, c.w, c.h, 10, TK_RAISED, TK_LINE_SUBTLE);
+    else kit_box(c.x, c.y, c.w, c.h, KIT_R_SQUARE, TK_RAISED, TK_LINE_SUBTLE);
+    kit_fill(a.x, a.y, a.w, a.h, MODERN ? 8 : KIT_R_SQUARE, TK_ACCENT_50, 1);
+    ui_icon_draw(UI_ICON_A_MUSIC, a.x + 16, a.y + 16, 32, TK_ICON, TK_ACCENT_50);
+    int tx = a.x + a.w + 16, right = c.x + c.w - 16;
+    int px = state_pill(right, a.y + 2, state_string(status->state), status->state == AUDIO_PLAYING);
+    kit_text(title[0] ? title : "Choose a track", tx, a.y + 4, TK_TEXT, px - tx - 12, 1);
     char text[96] = {0}, number[20];
     if (title[0]) {
         copy_text(text, status->format==AUDIO_FORMAT_MP3 ? "MP3" : "PCM WAV", sizeof text);
         append(text, status->channels==2 ? " / Stereo / " : " / Mono / ", sizeof text);
         fmt_uint(number, status->sample_rate); append(text, number, sizeof text); append(text, " Hz", sizeof text);
     } else copy_text(text, "Your music, played directly by BaseOS.", sizeof text);
-    draw_string_clip(text, x+30, y+84, app_text_dim, x+w-30);
-    player_draw_audio_progress(x,y,w,h);
-    draw_transport(x, y+170, w, status->state==AUDIO_PLAYING || status->state==AUDIO_LOADING,
-        status->state!=AUDIO_LOADING, status->error || message[0], -1);
-    icon_draw(ICON_VOLUME, x+16, y+216, app_text_dim);
-    draw_string("Volume", x+16+ICON_SIZE+4, y+216, app_text_dim);
-    int volume_width = w-176;
-    draw_round_rect(x+96, y+222, volume_width, 6, 3, app_chrome_dk);
-    int volume_pixels = (int)(status->volume*(unsigned)volume_width/100);
-    if (volume_pixels) draw_rect(x+96, y+222, volume_pixels, 6, app_accent);
-    draw_round_rect(x+91+volume_pixels, y+217, 10, 16, 4, app_accent_dk);
-    fmt_uint(text, status->volume); append(text, "%", sizeof text);
-    draw_string(text, x+w-64, y+216, app_text);
-    const char *hint = message[0] ? message : "Space: play/pause   Enter: open   +/-: volume";
-    draw_string_clip(hint, x+16, y+244, message[0] ? gfx_rgb(240,98,88) : app_text_dim, x+w-16);
-    copy_text(text, "Media files (", sizeof text); fmt_uint(number, (unsigned)file_count);
-    append(text, number, sizeof text); append(text, ")", sizeof text);
-    draw_string_bold(text, x+16, y+272, app_text);
-    int list_y = y+298, list_h = h-334;
-    visible_rows = list_h/PLAYER_ROW;
-    if (visible_rows < 1) visible_rows = 1;
-    keep_selection_visible();
-    draw_scroll_arrows(x, y+272, w);
-    draw_round_frame(x+16, list_y, w-32, list_h, 6, app_chrome_dk);
-    if (!file_count) {
-        draw_string_clip("Import a WAV, MP3 or MPEG-1 video to begin.", x+26, list_y+10, app_text_dim, x+w-26);
-    } else for (int row = 0; row < visible_rows && first_visible+row < file_count; ++row) {
-        int index = first_visible+row, id = files[index], row_y = list_y+row*PLAYER_ROW;
-        if (index == selected) draw_rect(x+18, row_y+1, w-44, PLAYER_ROW-1, app_chrome_dk);
-        int current = id == source_id && fs_identity(id) == source_identity;
-        draw_round_rect(x+27, row_y+10, 6, 6, 3, current ? app_accent : app_chrome_dk);
-        draw_string_clip(fs_name(id), x+43, row_y+5, app_text, x+w-100);
-        const char *format = is_video(id) ? "MPEG" : extension(fs_name(id), ".mp3") ? "MP3" : "WAV";
-        draw_string(format, x+w-80, row_y+5, app_text_dim);
-    }
-    if (file_count > visible_rows) {
-        int track = list_h-4, thumb = track*visible_rows/file_count;
-        if (thumb < 8) thumb = 8;
-        int offset = (track-thumb)*first_visible/(file_count-visible_rows);
-        draw_round_rect(x+w-24, list_y+2+offset, 4, thumb, 2, app_chrome_dk);
-    }
+    kit_text(text, tx, a.y + 4 + UI_FONT_H + 4, TK_TEXT2, right - tx, 0);
+    kit_text(status->available ? "Sound Blaster 16" : "No audio device", tx, a.y + 4 + 2 * (UI_FONT_H + 4),
+             status->available ? TK_TEXT2 : TK_AMBER_700, right - tx, 0);
+    draw_strip(L.strip, audio_position_ms(), audio_duration_ms(), TK_RAISED);
+    draw_transport(&L, status->state==AUDIO_PLAYING || status->state==AUDIO_LOADING,
+        status->state!=AUDIO_LOADING, status->error || message[0]);
+    if (L.message.w) draw_message(L.message, status->error != 0);
+    draw_library(&L);
     copy_text(text, "WAV + MP3 / ", sizeof text); fmt_uint(number, audio_capacity_bytes()/1024);
     append(text, number, sizeof text); append(text, " KiB playback limit", sizeof text);
-    draw_string_clip(text, x+16, y+h-24, app_text_dim, x+w-16);
+    draw_status(&L, text, "Space: play/pause   Enter: open   +/-: volume");
 }
 int player_click(int x, int y, int w, int h, int mx, int my) {
     player_init();
-    if (w < 420 || h < 362) return 0;
-    if (video_mode) {
-        int viewport_h,buttons_y,library_y;
-        video_geometry(h,&viewport_h,&buttons_y,&library_y);
-        PlayerRect r[PB_COUNT], up, down; int divider;
-        transport_layout(x,y+buttons_y,w,r,&divider);
-        if (hit_rect(mx,my,r[PB_PLAY])) return play_pause();
-        if (hit_rect(mx,my,r[PB_STOP])) { video_stop(); return 1; }
-        if (hit_rect(mx,my,r[PB_CLEAR])) { redraw_pending=1;message[0]=0;video_clear_error();return 1; }
-        if (hit_rect(mx,my,r[PB_REFRESH])) { player_refresh();return 1; }
-        if (video_status()->audio_enabled && w>=600) {
-            if (hit_rect(mx,my,r[PB_VOL_DOWN])) return player_key(0,'-');
-            if (hit_rect(mx,my,r[PB_VOL_UP])) return player_key(0,'+');
-        }
-        scroll_layout(x,y+library_y,w,&up,&down);
-        if (hit_rect(mx,my,up)) return player_key(KEY_UP,0);
-        if (hit_rect(mx,my,down)) return player_key(KEY_DOWN,0);
-        int list_y=library_y+24;
-        if (hit(mx,my,x+16,y+list_y,w-32,h-list_y-30)) {
-            int row=(my-(y+list_y))/PLAYER_ROW;
-            if (row<visible_rows && first_visible+row<file_count) { redraw_pending=1;selected=first_visible+row;return 1; }
-        }
-        return 0;
+    PlayerLayout L; player_layout(x, y, w, h, &L);
+    if (!L.ok) return 0;
+    if (hit_rect(mx,my,L.b[PB_PLAY])) return play_pause();
+    if (hit_rect(mx,my,L.b[PB_STOP])) { if (video_mode) video_stop(); else audio_stop(); return 1; }
+    if (hit_rect(mx,my,L.b[PB_CLEAR])) {
+        redraw_pending=1; message[0]=0;
+        if (video_mode) video_clear_error(); else audio_clear_error();
+        return 1;
     }
-    PlayerRect r[PB_COUNT], up, down; int divider;
-    transport_layout(x, y+170, w, r, &divider);
-    if (hit_rect(mx,my,r[PB_PLAY])) return play_pause();
-    if (hit_rect(mx,my,r[PB_STOP])) { audio_stop(); return 1; }
-    if (hit_rect(mx,my,r[PB_CLEAR])) { redraw_pending=1;message[0]=0; audio_clear_error(); return 1; }
-    if (hit_rect(mx,my,r[PB_REFRESH])) { player_refresh(); return 1; }
-    if (hit(mx,my,x+91,y+210,w-166,30)) {
-        int volume = (mx-(x+96))*100/(w-176);
-        audio_set_volume((unsigned)(volume<0 ? 0 : volume>100 ? 100 : volume)); return 1;
+    if (hit_rect(mx,my,L.b[PB_REFRESH])) { player_refresh(); return 1; }
+    if (L.volume.w && hit(mx,my,L.volume.x-4,L.volume.y-6,L.volume.w+8,L.volume.h+12)) {
+        audio_set_volume(volume_at(&L, mx)); return 1;
     }
-    scroll_layout(x, y+272, w, &up, &down);
-    if (hit_rect(mx,my,up)) return player_key(KEY_UP,0);
-    if (hit_rect(mx,my,down)) return player_key(KEY_DOWN,0);
-    if (hit(mx,my,x+16,y+298,w-32,h-334)) {
-        int row = (my-(y+298))/PLAYER_ROW;
-        if (row<visible_rows && first_visible+row<file_count) {
-            redraw_pending=1;selected=first_visible+row; return 1;
-        }
+    if (hit_rect(mx,my,L.up)) return player_key(KEY_UP,0);
+    if (hit_rect(mx,my,L.down)) return player_key(KEY_DOWN,0);
+    /* The scrollbar track selects the file at that point of the list. */
+    if (hit_rect(mx,my,L.scroll) && file_count) {
+        int index = (my - L.scroll.y) * file_count / (L.scroll.h > 0 ? L.scroll.h : 1);
+        if (index >= file_count) index = file_count - 1;
+        if (index < 0) index = 0;
+        redraw_pending=1; selected=index; keep_selection_visible(); return 1;
+    }
+    for (int k = 0; k < visible_rows && first_visible + k < file_count; ++k) {
+        PlayerRect r = row_rect(&L, k);
+        if (!r.w) break;
+        if (hit_rect(mx,my,r)) { redraw_pending=1; selected=first_visible+k; return 1; }
     }
     return 0;
 }

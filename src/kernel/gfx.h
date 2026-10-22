@@ -20,14 +20,20 @@
 #define COLOR_WINE     14
 #define COLOR_WHITE    15
 
-#define PAL_GRAY       16
+/* Palette layout. The base colors (0-15) and the cube (128-252) never
+ * change: native programs and stored images use them. The UI layer owns the
+ * theme bands (tokens, icon colors, terminal colors, extra icon colors) and
+ * sets them with gfx_set_color; 80-111 is a neutral gray ramp for images. */
+#define PAL_TOKEN      16  /* UI tokens, see ui/theme.h */
+#define PAL_TOKEN_N    32
+#define PAL_ICON       48  /* icon colors and Settings presets */
+#define PAL_ICON_N     16
+#define PAL_ANSI       64  /* terminal colors */
+#define PAL_ANSI_N     16
+#define PAL_GRAY       80  /* black to white */
 #define PAL_GRAY_N     32
-#define PAL_DESK       48  /* wallpaper colors, set per theme */
-#define PAL_DESK_N     16
-#define PAL_ICON       64  /* fixed colors of the app icon set */
-#define PAL_ICON_N     48
-#define PAL_ACCENT     112
-#define PAL_ACCENT_N   16
+#define PAL_ICON_X     112 /* extra icon colors */
+#define PAL_ICON_X_N   16
 #define PAL_CUBE       128
 
 #define RAMP_END(n)    (((n) - 1) * 16)
@@ -43,18 +49,20 @@ extern uint32_t pal32[256];
 void gfx_init(uint8_t *backbuf, uint8_t *linear, int w, int h, int bpp, int pitch);
 void gfx_set_flip_hook(void (*fn)(void));
 
-/* Closest palette index to a 24-bit colour (cube + grey ramp). */
+/* Closest palette index to a 24-bit colour, searched over every entry. */
 uint8_t gfx_rgb(int r, int g, int b);
 uint8_t gfx_gray(int v);
 void gfx_set_ramp(int base, int n, uint32_t c0, uint32_t c1);
 void gfx_pal_commit(void);
-/* Fill the PAL_ICON band (PAL_ICON_N colors). The UI layer supplies the art. */
-void gfx_set_icon_palette(const uint32_t *rgb);
 uint8_t gfx_mix(uint8_t a, uint8_t b, int t);   /* t 0..256 toward b */
 uint8_t gfx_darker(uint8_t c, int pct);
 uint8_t gfx_lighter(uint8_t c, int pct);
 int gfx_luma(uint8_t c);
 
+/* Limit all drawing to a rectangle (intersected with the screen) until
+ * gfx_unclip. Clips do not nest. */
+void gfx_clip(int x, int y, int w, int h);
+void gfx_unclip(void);
 void put_pixel(int x, int y, uint8_t color);
 uint8_t get_pixel(int x, int y);
 void draw_rect(int x, int y, int w, int h, uint8_t color);
@@ -96,7 +104,8 @@ void draw_string_shadow(const char *str, int x, int y, uint8_t color, uint8_t sh
 
 int hit(int px, int py, int x, int y, int w, int h);
 
-/* One palette entry (0xRRGGBB); commit with gfx_pal_commit. */
+/* One palette entry (0xRRGGBB); commit with gfx_pal_commit. Entries in the
+ * theme bands keep their value across display mode changes. */
 void gfx_set_color(int index, uint32_t rgb);
 /* Glass: blend what is already drawn toward `tint`, from strength t0 at
  * the top row to t1 at the bottom (0..256), inside a rounded rectangle. */

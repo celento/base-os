@@ -26,9 +26,6 @@ class FileViewKernelTests(unittest.TestCase):
             first = source.index("/* A folder's rows: room for every child")
             last = source.index('static void edit_fingerprint', first)
             operations = source[first:last]
-            first = source.index('static const int files_sort_width')
-            last = source.index(';', first) + 1
-            operations += source[first:last] + '\n'
             # Sidebar/toolbar layout and per-window history are whole blocks.
             first = source.index('/* Files layout: Places sidebar')
             last = source.index('static void files_scroll(', first)

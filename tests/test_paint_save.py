@@ -15,7 +15,7 @@ class PaintSaveTests(unittest.TestCase):
         source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         implementation = ''.join(function(source, name) for name in
                                  ('paint_init', 'unique_untitled_pbm',
-                                  'paint_write_named', 'paint_save'))
+                                  'paint_write_in', 'paint_save'))
         with tempfile.TemporaryDirectory(prefix='baseos-paint-save-') as temporary:
             directory = Path(temporary)
             (directory / 'paint_kernel.inc').write_text(implementation)
