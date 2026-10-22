@@ -44,6 +44,7 @@ int ata_write(unsigned lba, const void *buf, int count) {
 int ata_flush(void) { return 0; }
 #include "kernel/display.h"
 #include "theme_metrics_host.h"
+#include "ui/wallpaper.h"
 #define MAX_WIN 8
 /* Appearance, window, saver, clock and mouse globals with their production
  * defaults (preference_globals.inc), then the fixtures they act on. */
@@ -62,6 +63,8 @@ int display_set_mode(int mode) {
 static void cursor_restore(void) {}
 static void display_refresh_layout(void) { dirty = 1; }
 static void theme_apply(void) { ui_theme_install(ui_style, ui_accent_id, ui_desktop_id); ++theme_applies; }
+static int wall_palettes;
+static void wall_palette(void) { ++wall_palettes; }
 static void icons_init(void) { ++icon_layouts; }
 static void win_clamp(Win *w) { assert(w->open); ++clamps; }
 static unsigned preference_writes, preference_requests, preference_mutations;
@@ -96,6 +99,7 @@ static void reset_settings(void) {
     preference_writes = preference_requests = preference_mutations = 0;
     prefs_id = -1; dirty = display_pending = current_mode = 0;
     ui_style = UI_STYLE_CLASSIC; ui_accent_id = ui_desktop_id = ui_pattern = 0;
+    ui_wall_kind = ui_gradient = ui_gradient_shape = 0; wall_palettes = 0;
     win_options = WINOPT_DOUBLE_CLICK | WINOPT_SNAP | WINOPT_LINE_NUMBERS; win_snap_distance = 8;
     saver_enabled = 1; saver_delay = 0; clock_flags = 0; dbl_click_speed = 1;
     memset(wins, 0, sizeof wins); theme_applies = icon_layouts = clamps = 0;
@@ -172,14 +176,16 @@ static void ordinary_and_coalesced(void) {
  * bytes outside the range. */
 static const char *const expected_names[PREF_COUNT] = {
     "style", "accent", "desktop", "pattern", "windows", "snap",
-    "saver", "saverdelay", "display", "clock", "mouse"
+    "saver", "saverdelay", "display", "clock", "mouse",
+    "wallpaper", "gradient", "shape"
 };
 static const int expected_counts[PREF_COUNT] = {
     UI_STYLE_COUNT, UI_ACCENT_N, UI_DESKTOP_N, UI_PATTERN_N, 16, SNAP_DISTANCE_MAX + 1,
-    2, SAVER_DELAY_N, DISPLAY_MODE_COUNT, 4, 3
+    2, SAVER_DELAY_N, DISPLAY_MODE_COUNT, 4, 3,
+    UI_WALL_KIND_N, UI_GRADIENT_N, UI_SHAPE_N
 };
 static void all_preferences(void) {
-    assert(PREF_COUNT == 11);
+    assert(PREF_COUNT == 14);
     for (int i = 0; i < PREF_COUNT; ++i) {
         assert(!strcmp(preference_names[i], expected_names[i]) && preference_counts[i] == expected_counts[i]);
         assert(preference_valid(i, '0') && preference_valid(i, (char)('0' + expected_counts[i] - 1)));
@@ -204,6 +210,17 @@ static void all_preferences(void) {
     desktop_color_set(-1); assert(ui_desktop_id == 3);
     desk_cache_theme = 7; pattern_set(UI_PATTERN_GRID); assert(ui_pattern == UI_PATTERN_GRID && desk_cache_theme == -1);
     pattern_set(UI_PATTERN_N); assert(ui_pattern == UI_PATTERN_GRID);
+    /* Wallpaper kind, gradient and shape; the gradient band is reloaded on
+     * every change that rewrites the palette. */
+    int palettes = wall_palettes;
+    desk_cache_theme = 7; wall_kind_set(UI_WALL_PICTURE);
+    assert(ui_wall_kind == UI_WALL_PICTURE && desk_cache_theme == -1 && wall_palettes == palettes + 1);
+    wall_kind_set(UI_WALL_KIND_N); assert(ui_wall_kind == UI_WALL_PICTURE);
+    gradient_set(UI_GRADIENT_N - 1); assert(ui_gradient == UI_GRADIENT_N - 1 && wall_palettes == palettes + 2);
+    gradient_set(UI_GRADIENT_N); assert(ui_gradient == UI_GRADIENT_N - 1);
+    desk_cache_theme = 7; gradient_shape_set(UI_SHAPE_RADIAL);
+    assert(ui_gradient_shape == UI_SHAPE_RADIAL && desk_cache_theme == -1);
+    gradient_shape_set(UI_SHAPE_N); assert(ui_gradient_shape == UI_SHAPE_RADIAL);
     win_options = WINOPT_DRAG_CONTENTS | WINOPT_LINE_NUMBERS; windows_save();
     win_snap_distance = SNAP_DISTANCE_MAX; preference_save(PREF_SNAP, win_snap_distance);
     saver_enabled = 0; saver_save();
@@ -211,7 +228,7 @@ static void all_preferences(void) {
     assert(display_request(DISPLAY_MODE_COUNT - 1)); display_keep();
     clock_flags = CLOCK_12H | CLOCK_NO_DATE; preference_save(PREF_CLOCK, clock_flags);
     dbl_click_speed = 2; preference_save(PREF_MOUSE, dbl_click_speed);
-    const char bytes[PREF_COUNT] = {'1', '5', '3', '2', '9', 'P', '0', '4', '3', '3', '2'};
+    const char bytes[PREF_COUNT] = {'1', '5', '3', '2', '9', 'P', '0', '4', '3', '3', '2', '2', '7', '2'};
     for (int i = 0; i < PREF_COUNT; ++i) {
         assert_value(i, bytes[i]); assert_status(i, PREF_RAM, "RAM");
         assert(preference_read(i) == bytes[i] - '0');
@@ -226,9 +243,10 @@ static void all_preferences(void) {
     assert(ui_pattern == UI_PATTERN_GRID && win_options == (WINOPT_DRAG_CONTENTS | WINOPT_LINE_NUMBERS));
     assert(win_snap_distance == SNAP_DISTANCE_MAX && !saver_enabled && saver_delay == SAVER_DELAY_N - 1);
     assert(current_mode == DISPLAY_MODE_COUNT - 1 && clock_flags == (CLOCK_12H | CLOCK_NO_DATE) && dbl_click_speed == 2);
+    assert(ui_wall_kind == UI_WALL_PICTURE && ui_gradient == UI_GRADIENT_N - 1 && ui_gradient_shape == UI_SHAPE_RADIAL);
     /* An out-of-range or malformed byte keeps the default and is never
      * overwritten: Settings reports the path as occupied. */
-    const char bad[PREF_COUNT] = {'2', '6', '6', '3', '@', 'Q', '2', '5', '4', '4', '3'};
+    const char bad[PREF_COUNT] = {'2', '6', '6', '3', '@', 'Q', '2', '5', '4', '4', '3', '3', '8', '3'};
     for (int i = 0; i < PREF_COUNT; ++i) {
         int id = preference_file(i); assert(fs_write(id, bad + i, 1) == 1);
         assert(preference_read(i) < 0);
@@ -237,10 +255,11 @@ static void all_preferences(void) {
     reset_settings(); boot_load();
     assert(ui_style == UI_STYLE_CLASSIC && !ui_accent_id && !ui_desktop_id && !ui_pattern && saver_enabled);
     assert(win_snap_distance == 8 && !saver_delay && !clock_flags && dbl_click_speed == 1 && !current_mode);
+    assert(!ui_wall_kind && !ui_gradient && !ui_gradient_shape);
     style_set(UI_STYLE_MODERN); assert(ui_style == UI_STYLE_MODERN);
     assert_status(PREF_STYLE, PREF_PATH_FAILED, "occupied");
     assert(fs_data(preference_file(PREF_STYLE))[0] == '2' && !preference_mutations);
-    puts("Settings: eleven one-byte preferences, fixed names, setters, value ranges, reboot and malformed bytes passed");
+    puts("Settings: fourteen one-byte preferences, fixed names, setters, value ranges, reboot and malformed bytes passed");
 }
 static void fixed_paths_and_rejections(void) {
     reset_volume(1);

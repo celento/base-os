@@ -100,6 +100,7 @@ uint8_t gfx_rgb(int r, int g, int b) {
     int best = 0;
     int bd = 0x7FFFFFFF;
     for (int i = 0; i < PAL_CUBE + 125; i++) {
+        if (i == PAL_WALL) i += PAL_WALL_N;
         uint32_t c = pal32[i];
         int dr = r - (int)((c >> 16) & 255);
         int dg = g - (int)((c >> 8) & 255);

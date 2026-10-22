@@ -23,7 +23,9 @@
 /* Palette layout. The base colors (0-15) and the cube (128-252) never
  * change: native programs and stored images use them. The UI layer owns the
  * theme bands (tokens, icon colors, terminal colors, extra icon colors) and
- * sets them with gfx_set_color; 80-111 is a neutral gray ramp for images. */
+ * sets them with gfx_set_color; 80-111 is a neutral gray ramp for images.
+ * The wallpaper band holds a gradient ramp; color lookups never return it,
+ * so a new wallpaper cannot recolor anything else on screen. */
 #define PAL_TOKEN      16  /* UI tokens, see ui/theme.h */
 #define PAL_TOKEN_N    32
 #define PAL_ICON       48  /* icon colors and Settings presets */
@@ -33,7 +35,9 @@
 #define PAL_GRAY       80  /* black to white */
 #define PAL_GRAY_N     32
 #define PAL_ICON_X     112 /* extra icon colors */
-#define PAL_ICON_X_N   16
+#define PAL_ICON_X_N   9
+#define PAL_WALL       121 /* wallpaper gradient ramp */
+#define PAL_WALL_N     7
 #define PAL_CUBE       128
 
 #define RAMP_END(n)    (((n) - 1) * 16)

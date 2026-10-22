@@ -38,6 +38,8 @@ SS = 4
 INK, PAPER = 255, 254
 INK_RGB, PAPER_RGB = 0xFF00FF, 0x00FFFF
 PAL_TOKEN, PAL_ICON, PAL_GRAY, PAL_ICON_X, PAL_CUBE = 16, 48, 80, 112, 128
+# 121-127 is the wallpaper band, so icons get 9 extra colors.
+PAL_ICON_X_N = 9
 TK_DESKTOP = 26
 LOGO_SIZES = (16, 20, 24, 32, 48, 128)
 
@@ -215,8 +217,8 @@ def main():
                     mapping[c] = near
                     continue
                 band.append(c)
-            if len(band) > 16:
-                sys.exit(f"{style}: {len(band)} extra icon colors, the band holds 16")
+            if len(band) > PAL_ICON_X_N:
+                sys.exit(f"{style}: {len(band)} extra icon colors, the band holds {PAL_ICON_X_N}")
             for i, c in enumerate(band):
                 mapping[c] = PAL_ICON_X + i
             extras[style] = (band + [0x808080] * 16)[:16], mapping

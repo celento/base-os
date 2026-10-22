@@ -2,7 +2,7 @@
 
 A small hobby operating system written from scratch in C and x86 assembly. It boots directly into a graphical desktop with persistent files, document editing, HTTP browsing, media playback, and small protected native applications.
 
-BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. ELF programs can use every frame above the fixed kernel areas, up to 4 GiB. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased Geist type. It has two visual styles, switched in Settings: Classic, with accent title bars, a menu row inside each window and a taskbar along the bottom, and Modern, with light rounded windows, a global top bar that holds the front app's menus, and a floating dock. Both share one set of palette tokens, a control kit and two icon sets, and each comes with six accent colors and six desktop colors with optional patterns; see [the design guide](docs/DESIGN.md). Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
+BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. ELF programs can use every frame above the fixed kernel areas, up to 4 GiB. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased Geist type. It has two visual styles, switched in Settings: Classic, with accent title bars, a menu row inside each window and a taskbar along the bottom, and Modern, with light rounded windows, a global top bar that holds the front app's menus, and a floating dock. Both share one set of palette tokens, a control kit and two icon sets, and each comes with six accent colors, and the desktop can be a color with an optional pattern, one of eight dithered gradients, or a picture from disk; see [the design guide](docs/DESIGN.md). Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
 
 ![Files and Editor running side by side in BaseOS](screenshots/gallery/desktop.png)
 
@@ -89,7 +89,7 @@ Wordle and 2048 running together. Snake, Mines, and Breakout are available from 
 
 ### Appearance and utilities
 
-Settings sets the style, accent, desktop color and pattern, window behavior, screen saver, display mode, clock format and mouse speed. Everyday utilities include Clock, which reads the machine's real-time clock, and System Monitor, which reports the OS's resource and window information.
+Settings sets the style, accent, desktop background (color and pattern, gradient, or picture), window behavior, screen saver, display mode, clock format and mouse speed. Everyday utilities include Clock, which reads the machine's real-time clock, and System Monitor, which reports the OS's resource and window information.
 
 ![Appearance settings and the analog clock](screenshots/gallery/themes.png)
 

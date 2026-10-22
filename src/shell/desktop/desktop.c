@@ -28,6 +28,7 @@
 #include "lib/image_decode.h"
 #include "ui/app_icons.h"
 #include "ui/theme.h"
+#include "ui/wallpaper.h"
 #include "ui/kit.h"
 #include "ui/ui_icons.h"
 #include "kernel/platform.h"
@@ -99,6 +100,9 @@
 /* Appearance preferences. */
 static int ui_style = UI_STYLE_CLASSIC;
 static int ui_accent_id, ui_desktop_id, ui_pattern;
+/* Desktop background: a color (with an optional pattern), a gradient preset
+ * in one of three shapes, or a picture file named in /prefs/picture. */
+static int ui_wall_kind, ui_gradient, ui_gradient_shape;
 /* Window behavior: outline drag unless contents are shown, double-click on a
  * title bar maximizes, windows snap to screen edges within snap distance. */
 #define WINOPT_DRAG_CONTENTS 1
@@ -179,8 +183,14 @@ static uint8_t ink_token(int i) {
 #define INK(i) ink_token(i)
 
 static void menu_bar_init(void);
+/* A gradient lives in its own palette band and sets TK_DESKTOP, so it is
+ * reloaded whenever the theme rewrites the palette. */
+static void wall_palette(void) {
+    if (ui_wall_kind == UI_WALL_GRADIENT) ui_gradient_install(ui_gradient);
+}
 static void theme_apply(void) {
     ui_theme_install(ui_style, ui_accent_id, ui_desktop_id);
+    wall_palette();
     desk_cache_theme = -1;
     menu_bar_init();
 }
@@ -491,6 +501,14 @@ static int app_icon_for(int glyph) {
 
 static const int desk_ui_icon[DESK_COUNT] = {UI_ICON_A_DISK, UI_ICON_A_FILES, UI_ICON_A_TRASH};
 
+/* Labels on a dark gradient or picture turn white with a shadow. */
+static int desk_dark(int x, int y, int w, int h) {
+    int sum = 0, n = 0;
+    for (int j = 0; j < h; j += 4)
+        for (int i = 0; i < w; i += 4, n++) sum += gfx_luma(get_pixel(x + i, y + j));
+    return n && sum / n < 112;
+}
+
 static void draw_desktop_icons(int selected) {
     for (int i = 0; i < DESK_COUNT; i++) {
         int sel = (i == selected);
@@ -499,15 +517,92 @@ static void draw_desktop_icons(int selected) {
         int iw = desk_icon_w();
         if (sel && MODERN) kit_fill(desk[i].x, desk[i].y, iw, ly + CHAR_H + 6 - desk[i].y, 8, TK_LINE, 1);
         ui_icon_draw(desk_ui_icon[i], desk[i].x + (iw - 32) / 2, desk[i].y + (MODERN ? 6 : 4), 32, TK_ICON, TK_DESKTOP);
+        int tx = lx + (MODERN ? 6 : 4), ty = ly + (MODERN ? 1 : 0);
         if (sel) kit_fill(lx, ly, lw, CHAR_H + (MODERN ? 2 : 0), MODERN ? 4 : KIT_R_SQUARE, TK_ACCENT, 1);
-        draw_string(desk[i].label, lx + (MODERN ? 6 : 4), ly + (MODERN ? 1 : 0), sel ? TK_ON_ACCENT : TK_TEXT);
+        if (!sel && desk_dark(lx, ly, lw, CHAR_H)) {
+            draw_string(desk[i].label, tx + 1, ty + 1, COLOR_BLACK);
+            draw_string(desk[i].label, tx, ty, COLOR_WHITE);
+        } else draw_string(desk[i].label, tx, ty, sel ? TK_ON_ACCENT : TK_TEXT);
     }
 }
 
-/* The desktop is one token fill with an optional pattern drawn a step
- * darker. Changing the desktop preset rewrites the token, so the cached
- * frame only needs rebuilding when the style or pattern changes. */
+/* ---------- Wallpaper pictures ----------
+ * The chosen picture is kept as a path in /prefs/picture. It is decoded
+ * straight into the back buffer and lives on in the desktop cache, which
+ * holds only fixed palette entries for it, so switching style or accent
+ * reuses the cache and only a new screen size or file decodes again. */
+static int is_image_file(int id);
+static char wall_picture_path[FS_PATH_LEN];
+static const char *wall_picture_status = "";
+static int wall_picture_read, wall_picture_unsaved;
+static unsigned wall_picture_serial = 1;
+/* The picture in the desktop cache, and the last restore attempt. */
+static int wall_cached_w, wall_cached_h, wall_tried_w, wall_tried_h;
+static unsigned wall_cached_serial, wall_tried_serial;
+
+static int wall_picture_cached(void) {
+    return ui_wall_kind == UI_WALL_PICTURE && wall_cached_w == fb_w && wall_cached_h == fb_h &&
+           wall_cached_serial == wall_picture_serial;
+}
+static void wall_picture_mark(int *w, int *h, unsigned *serial) {
+    *w = fb_w; *h = fb_h; *serial = wall_picture_serial;
+}
+static int wall_picture_render(int id) {
+    if (!is_image_file(id)) return IMAGE_BAD_FILE;
+    int error = ui_picture_render(fs_data(id), (unsigned)fs_size(id));
+    if (error == IMAGE_OK) wall_picture_mark(&wall_cached_w, &wall_cached_h, &wall_cached_serial);
+    return error;
+}
+static void wall_picture_name_load(void) {
+    if (wall_picture_read) return;
+    wall_picture_read = 1;
+    wall_picture_path[0] = 0;
+    int dir = fs_find_child(fs_root(), "prefs");
+    int id = fs_is_dir(dir) ? fs_find_child(dir, "picture") : -1;
+    int n = id >= 0 && !fs_is_dir(id) && !fs_is_app(id) ? fs_size(id) : 0;
+    if (n <= 0 || n >= (int)sizeof wall_picture_path) return;
+    kmemcpy(wall_picture_path, fs_data(id), n);
+    wall_picture_path[n] = 0;
+}
+/* Writes the path; a busy disk leaves it for the next frame. */
+static void wall_picture_name_save(void) {
+    int dir = fs_find_child(fs_root(), "prefs");
+    if (dir < 0) dir = fs_mkdir(fs_root(), "prefs");
+    int id = fs_is_dir(dir) ? fs_find_child(dir, "picture") : -1;
+    if (id < 0 && fs_is_dir(dir)) id = fs_create(dir, "picture");
+    int n = kstrlen(wall_picture_path);
+    int result = id >= 0 && !fs_is_dir(id) && !fs_is_app(id) ? fs_write(id, wall_picture_path, n) : -1;
+    wall_picture_unsaved = result == FS_ERR_BUSY;
+    if (result != n && !wall_picture_unsaved) wall_picture_status = "The picture choice could not be saved.";
+}
+/* Draws the saved picture, trying once per screen size and file. A failure
+ * leaves the desktop color and says why in Settings. */
+static int wall_picture_restore(void) {
+    if (wall_tried_w == fb_w && wall_tried_h == fb_h && wall_tried_serial == wall_picture_serial) return 0;
+    wall_picture_mark(&wall_tried_w, &wall_tried_h, &wall_tried_serial);
+    wall_picture_name_load();
+    if (!wall_picture_path[0]) { wall_picture_status = "No picture chosen yet."; return 0; }
+    int id = fs_resolve(fs_root(), wall_picture_path);
+    if (id < 0) { wall_picture_status = "The picture file was moved or deleted."; return 0; }
+    int error = wall_picture_render(id);
+    wall_picture_status = error == IMAGE_OK ? "" : image_error_string(error);
+    return error == IMAGE_OK;
+}
+static void wall_picture_tick(void) {
+    if (wall_picture_unsaved && !fs_sync_busy()) wall_picture_name_save();
+}
+
+/* The desktop is a token fill with an optional pattern drawn a step darker,
+ * a dithered gradient, or a picture. Changing the color or gradient preset
+ * only rewrites palette entries, so the cached frame is rebuilt when the
+ * style, pattern, kind, shape or picture changes. */
 static void desktop_render(void) {
+    if (ui_wall_kind == UI_WALL_GRADIENT) {
+        ui_gradient_fill(0, 0, fb_w, fb_h, ui_gradient_shape);
+        return;
+    }
+    wall_cached_w = 0;
+    if (ui_wall_kind == UI_WALL_PICTURE && wall_picture_restore()) return;
     draw_rect(0, 0, fb_w, fb_h, TK_DESKTOP);
     if (ui_pattern == UI_PATTERN_NONE) return;
     uint8_t ink = gfx_mix(TK_DESKTOP, TK_TEXT, 36);
@@ -524,13 +619,14 @@ static void desktop_render(void) {
 void draw_desktop(void) {
     uint8_t *cache = (uint8_t *)DESK_CACHE;
     int n = fb_w * fb_h;
-    int key = (ui_style << 8) | (ui_pattern << 4) | ui_desktop_id;
-    if (desk_cache_theme != key) {
+    int key = (ui_wall_kind << 16) | (ui_gradient_shape << 12) | (ui_style << 8) | (ui_pattern << 4) | ui_desktop_id;
+    if (desk_cache_theme != key && !wall_picture_cached()) {
         desktop_render();
         kmemcpy(cache, fb, n);
         desk_cache_theme = key;
         return;
     }
+    desk_cache_theme = key;
     kmemcpy(fb, cache, n);
 }
 
@@ -564,7 +660,7 @@ enum {
     ACT_LINE_NUMBERS, ACT_RESTORE, ACT_MOVE, ACT_SIZE, ACT_SETTINGS, ACT_EXPORT_PDF,
     ACT_RECENT_MENU, ACT_RECENT_CLEAR, ACT_COPY_PATH, ACT_NEW_GAME, ACT_REVERT, ACT_QUIT, ACT_DOC_PROPERTIES, ACT_TERM_CLEAR, ACT_TERM_BOTTOM,
     ACT_RESTART, ACT_SHUTDOWN, ACT_DESK_OPEN, ACT_DESK_PROPERTIES, ACT_VIEW_ICONS, ACT_VIEW_DETAILS,
-    ACT_OPEN_WITH_MENU,
+    ACT_OPEN_WITH_MENU, ACT_SET_WALLPAPER,
     ACT_RECENT = 0x300 /* + index */,
     ACT_OPEN_WITH = 0x380 /* + OW_* app */
 };
@@ -667,7 +763,8 @@ static const MItem mi_calc_file[] = { {"&Close Window", "Ctrl+W", ACT_CLOSE, 0} 
 static const MItem mi_calc_edit[] = { {"&Copy", "Ctrl+C", ACT_COPY, 0}, {"&Paste", "Ctrl+V", ACT_PASTE, 0} };
 static const MMenu mb_calc[] = { MN("&File", mi_calc_file), MN("&Edit", mi_calc_edit), MN("&Help", mi_help) };
 static const MItem mi_viewer_file[] = {
-    {"&Open...", "Ctrl+O", ACT_OPEN, 0}, MSEP, {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
+    {"&Open...", "Ctrl+O", ACT_OPEN, 0}, MSEP, {"Use as Desktop &Background", "", ACT_SET_WALLPAPER, 0},
+    MSEP, {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
 };
 static const MMenu mb_viewer[] = { MN("&File", mi_viewer_file), MN("&Help", mi_help) };
 static const MItem mi_save_file[] = {
@@ -1418,6 +1515,8 @@ static int pick_selected = 0;
 static uint32_t pick_last_click_frame = 0;
 static int pick_last_click_item = -1;
 static int pick_pics_only = 0;
+static int pick_wallpaper;   /* the picture opens as the desktop background */
+static void wall_picture_set(int id);
 static int pick_writer, pick_sheet, pick_owner = -1, pick_owner_seq;
 
 static uint32_t icon_last_frame = 0;
@@ -3615,10 +3714,20 @@ static int is_image_file(int id) {
            image_probe(fs_data(id),(unsigned)fs_size(id))!=IMAGE_FORMAT_NONE;
 }
 
+/* The file Image Viewer shows, for Use as Desktop Background. */
+static int view_file = -1;
+static unsigned view_identity;
+static int view_file_valid(void) {
+    return find_open_kind(WK_VIEW) >= 0 && fs_valid(view_file) && fs_identity(view_file) == view_identity;
+}
+
 static void open_view(int file_id) {
     if(!fs_valid(file_id)||fs_is_dir(file_id)||fs_is_app(file_id)||fs_streamed(file_id))return;
     if(win_open(WK_VIEW)<0)return;
-    image_viewer_open(fs_data(file_id),(unsigned)fs_size(file_id),fs_name(file_id));
+    view_file=-1;
+    if(image_viewer_open(fs_data(file_id),(unsigned)fs_size(file_id),fs_name(file_id))==IMAGE_OK){
+        view_file=file_id;view_identity=fs_identity(file_id);
+    }
     open_dlg=0;dirty=1;
 }
 
@@ -5977,7 +6086,7 @@ static int chooser_click(const Chooser *c) {
 }
 
 static void open_title(char *out) {
-    kstrcpy(out, pick_pics_only ? "Open Picture" : "Open");
+    kstrcpy(out, pick_wallpaper ? "Choose Background" : pick_pics_only ? "Open Picture" : "Open");
 }
 static const char *open_filter_name(void) {
     if (pick_pics_only) return "Image files";
@@ -6059,6 +6168,7 @@ static void draw_open_dialog(void) {
 static void start_open_dialog(int pics_only) {
     open_dlg = 1;
     pick_pics_only = pics_only;
+    pick_wallpaper = 0;
     pick_owner = win_front();
     pick_writer = pick_owner >= 0 && wins[pick_owner].kind == WK_WRITER && !pics_only;
     pick_sheet = pick_owner >= 0 && wins[pick_owner].kind == WK_SPREADSHEET && !pics_only;
@@ -6091,7 +6201,8 @@ static void od_open_selected(void) {
         return;
     }
     open_dlg = 0;
-    if (pick_writer || pick_sheet) {
+    if (pick_wallpaper) wall_picture_set(id);
+    else if (pick_writer || pick_sheet) {
         if (pick_owner >= 0 && wins[pick_owner].open &&
             wins[pick_owner].kind == (pick_sheet ? WK_SPREADSHEET : WK_WRITER) &&
             wins[pick_owner].seq == pick_owner_seq) document_request(pick_owner, DOCUMENT_OPEN, id);
@@ -7729,6 +7840,7 @@ static int act_enabled(int act) {
         return fs_valid(ow_target) && fs_identity(ow_target) == ow_identity && ow_can(ow_target, act - ACT_OPEN_WITH);
     if (act >= 0x100 && act < 0x200) return menu_item_enabled((act >> 4) & 15, act & 15);
     if (open_dlg) return act == ACT_ABOUT || act == ACT_HELP;
+    if (act == ACT_SET_WALLPAPER) return view_file_valid();
     int fk = front_kind(), f = win_front(), id;
     switch (act) {
     case ACT_NEW_WINDOW: return fk == WK_EDIT || fk == WK_FILES || fk == WK_TERM;
@@ -7865,6 +7977,7 @@ static void act_run(int act) {
         win_kbd_begin();
         break;
     case ACT_SETTINGS: win_open(WK_SETTINGS); break;
+    case ACT_SET_WALLPAPER: if (view_file_valid()) wall_picture_set(view_file); break;
     case ACT_RECENT_CLEAR: recent_n = 0; break;
     case ACT_COPY_PATH: {
         char path[FS_PATH_LEN];
@@ -10248,7 +10361,8 @@ static void handle_key(void) {
  * one byte, '0' plus its value. */
 enum {
     PREF_STYLE, PREF_ACCENT, PREF_DESKTOP, PREF_PATTERN, PREF_WINDOWS, PREF_SNAP,
-    PREF_SAVER, PREF_SAVER_DELAY, PREF_DISPLAY, PREF_CLOCK, PREF_MOUSE, PREF_COUNT
+    PREF_SAVER, PREF_SAVER_DELAY, PREF_DISPLAY, PREF_CLOCK, PREF_MOUSE,
+    PREF_WALL, PREF_GRADIENT, PREF_SHAPE, PREF_COUNT
 };
 enum { PREF_IDLE, PREF_QUEUED, PREF_RAM, PREF_SAVED, PREF_WRITE_FAILED, PREF_SYNC_FAILED, PREF_PATH_FAILED, PREF_FULL_FAILED };
 enum { PREF_ERR_PATH = -4, PREF_ERR_FULL = -5 };
@@ -10256,11 +10370,13 @@ typedef struct { char choice; int state, file; unsigned identity; } PendingPrefe
 static PendingPreference preferences[PREF_COUNT];
 static const char *const preference_names[PREF_COUNT] = {
     "style", "accent", "desktop", "pattern", "windows", "snap",
-    "saver", "saverdelay", "display", "clock", "mouse"
+    "saver", "saverdelay", "display", "clock", "mouse",
+    "wallpaper", "gradient", "shape"
 };
 static const int preference_counts[PREF_COUNT] = {
     UI_STYLE_COUNT, UI_ACCENT_N, UI_DESKTOP_N, UI_PATTERN_N, 16, SNAP_DISTANCE_MAX + 1,
-    2, SAVER_DELAY_N, DISPLAY_MODE_COUNT, 4, 3
+    2, SAVER_DELAY_N, DISPLAY_MODE_COUNT, 4, 3,
+    UI_WALL_KIND_N, UI_GRADIENT_N, UI_SHAPE_N
 };
 static FsSyncTicket preference_sync_ticket;
 static int preference_sync_active, preference_retry_requested;
@@ -10425,6 +10541,9 @@ static void theme_load(void) {
     if ((v = preference_read(PREF_SNAP)) >= 0) win_snap_distance = v;
     if ((v = preference_read(PREF_CLOCK)) >= 0) clock_flags = v;
     if ((v = preference_read(PREF_MOUSE)) >= 0) dbl_click_speed = v;
+    if ((v = preference_read(PREF_WALL)) >= 0) ui_wall_kind = v;
+    if ((v = preference_read(PREF_GRADIENT)) >= 0) ui_gradient = v;
+    if ((v = preference_read(PREF_SHAPE)) >= 0) ui_gradient_shape = v;
 }
 
 /* Switching style changes metrics, so windows are clamped to the new work
@@ -10442,6 +10561,7 @@ static void accent_set(int accent) {
     if (accent < 0 || accent >= UI_ACCENT_N) return;
     ui_accent_id = accent;
     ui_theme_set_accent(accent);
+    wall_palette();
     preference_save(PREF_ACCENT, accent);
     dirty = 1;
 }
@@ -10449,6 +10569,7 @@ static void desktop_color_set(int desktop) {
     if (desktop < 0 || desktop >= UI_DESKTOP_N) return;
     ui_desktop_id = desktop;
     ui_theme_set_desktop(desktop);
+    wall_palette();
     desk_cache_theme = -1;
     preference_save(PREF_DESKTOP, desktop);
     dirty = 1;
@@ -10458,6 +10579,31 @@ static void pattern_set(int pattern) {
     ui_pattern = pattern;
     desk_cache_theme = -1;
     preference_save(PREF_PATTERN, pattern);
+    dirty = 1;
+}
+/* A picture background is chosen through the Open dialog; this only
+ * switches between kinds. Leaving a gradient puts the color back. */
+static void wall_kind_set(int kind) {
+    if (kind < 0 || kind >= UI_WALL_KIND_N) return;
+    ui_wall_kind = kind;
+    ui_theme_set_desktop(ui_desktop_id);
+    wall_palette();
+    desk_cache_theme = -1;
+    preference_save(PREF_WALL, kind);
+    dirty = 1;
+}
+static void gradient_set(int gradient) {
+    if (gradient < 0 || gradient >= UI_GRADIENT_N) return;
+    ui_gradient = gradient;
+    wall_palette();
+    preference_save(PREF_GRADIENT, gradient);
+    dirty = 1;
+}
+static void gradient_shape_set(int shape) {
+    if (shape < 0 || shape >= UI_SHAPE_N) return;
+    ui_gradient_shape = shape;
+    desk_cache_theme = -1;
+    preference_save(PREF_SHAPE, shape);
     dirty = 1;
 }
 
@@ -10532,7 +10678,8 @@ static int settings_page;
 
 enum {
     SZ_PAGE = 1, SZ_STYLE, SZ_ACCENT, SZ_DESKTOP, SZ_PATTERN, SZ_WINOPT, SZ_SNAP,
-    SZ_SAVER, SZ_SAVER_DELAY, SZ_SAVER_PREVIEW, SZ_DISPLAY, SZ_CLOCK, SZ_MOUSE, SZ_RETRY, SZ_SCROLL
+    SZ_SAVER, SZ_SAVER_DELAY, SZ_SAVER_PREVIEW, SZ_DISPLAY, SZ_CLOCK, SZ_MOUSE, SZ_RETRY, SZ_SCROLL,
+    SZ_WALL, SZ_GRADIENT, SZ_SHAPE, SZ_PICTURE
 };
 typedef struct { int x, y, w, h, kind, arg; } SetZone;
 static SetZone set_zones[64];
@@ -10670,6 +10817,25 @@ static void set_swatches(int x, int y, int n, int sel, int kind, int accent) {
         }
     }
 }
+/* Gradient presets in the shape currently chosen, sized like the color
+ * swatches. */
+static void set_gradient_swatches(int x, int y) {
+    for (int i = 0; i < UI_GRADIENT_N; i++) {
+        if (MODERN) {
+            int sx = x + i * 32, sy = y + 2;
+            if (i == ui_gradient) { kit_fill(sx - 4, sy - 4, 30, 30, 15, TK_ACCENT, 1); kit_fill(sx - 2, sy - 2, 26, 26, 13, ui_theme.content, 1); }
+            ui_gradient_swatch(sx, sy, 22, 22, i, ui_gradient_shape, 1);
+            kit_frame(sx, sy, 22, 22, 11, TK_LINE_SUBTLE);
+            set_zone(sx - 4, sy - 4, 30, 30, SZ_GRADIENT, i);
+        } else {
+            int sx = x + i * 36;
+            if (i == ui_gradient) { draw_frame(sx, y, 26, 26, TK_TEXT); draw_frame(sx + 1, y + 1, 24, 24, TK_TEXT); }
+            ui_gradient_swatch(sx + 3, y + 3, 20, 20, i, ui_gradient_shape, 0);
+            draw_frame(sx + 3, y + 3, 20, 20, TK_LINE_STRONG);
+            set_zone(sx, y, 26, 26, SZ_GRADIENT, i);
+        }
+    }
+}
 static void set_value_label(SetForm *f, int y, int h, const char *text, int pill, int after_x) {
     if (MODERN) {
         int right = f->x + f->w - 16;
@@ -10736,8 +10902,66 @@ static void set_slider_row(SetForm *f, const char *label, int value, int max, co
     set_zone(sx - 4, y - 4, sw + 8, 26, kind, 0);
 }
 
+/* Decodes before switching, so a file that fails leaves the background as
+ * it was. */
+static void wall_picture_set(int id) {
+    int error = wall_picture_render(id);
+    if (error != IMAGE_OK) { wall_picture_status = image_error_string(error); dirty = 1; return; }
+    wall_cached_serial = ++wall_picture_serial;
+    wall_picture_mark(&wall_tried_w, &wall_tried_h, &wall_tried_serial);
+    kmemcpy((uint8_t *)DESK_CACHE, fb, fb_w * fb_h);
+    fs_path(id, wall_picture_path, sizeof wall_picture_path);
+    wall_picture_read = 1;
+    wall_picture_status = "";
+    wall_picture_name_save();
+    ui_wall_kind = UI_WALL_PICTURE;
+    preference_save(PREF_WALL, UI_WALL_PICTURE);
+    desk_cache_theme = -1;
+    dirty = 1;
+}
 static const char *const pattern_names[UI_PATTERN_N] = {"None", "Dots", "Grid"};
 static const char *const style_names[UI_STYLE_COUNT] = {"Classic", "Modern"};
+static const char *const wall_kind_names[UI_WALL_KIND_N] = {"Color", "Gradient", "Picture"};
+static const char *const shape_names[UI_SHAPE_N] = {"Linear", "Diagonal", "Radial"};
+
+static void wall_picture_choose(void) {
+    start_open_dialog(1);
+    pick_wallpaper = 1;
+    int pictures = fs_find_child(fs_root(), "Pictures");
+    if (fs_is_dir(pictures)) pick_reset(pictures, 0);
+}
+
+/* The background rows under Desktop: the kind, then that kind's choices. */
+static void settings_background(SetForm *f) {
+    int cx, y, sw_h = MODERN ? 30 : 26;
+    y = set_row(f, "Background", kit_segmented_h(), &cx);
+    set_segmented(cx, y, wall_kind_names, UI_WALL_KIND_N, ui_wall_kind, SZ_WALL);
+    if (ui_wall_kind == UI_WALL_GRADIENT) {
+        y = set_row(f, "Gradient", sw_h, &cx);
+        set_gradient_swatches(cx, y);
+        set_value_label(f, y, sw_h, ui_gradient_name(ui_gradient), 0, cx + UI_GRADIENT_N * 36 + 2);
+        y = set_row(f, "Shape", kit_segmented_h(), &cx);
+        set_segmented(cx, y, shape_names, UI_SHAPE_N, ui_gradient_shape, SZ_SHAPE);
+    } else if (ui_wall_kind == UI_WALL_PICTURE) {
+        wall_picture_name_load();
+        const char *status = wall_picture_cached() ? "" : wall_picture_status;
+        y = set_row(f, "Picture", *status ? BTN_H + 22 : BTN_H, &cx);
+        int bw = kit_button_w("Choose...", -1);
+        kit_button(cx, y, bw, BTN_H, "Choose...", -1, KB_DEFAULT, set_hover(SZ_PICTURE, 0) ? KIT_HOVER : 0);
+        set_zone(cx, y, bw, BTN_H, SZ_PICTURE, 0);
+        const char *name = wall_picture_path[0] ? wall_picture_path : "None";
+        for (const char *p = name; *p; p++) if (*p == '/' && p[1]) name = p + 1;
+        int right = f->x + f->w - (MODERN ? 16 : 0);
+        kit_text(name, cx + bw + 12, kit_ty(y, BTN_H), TK_TEXT, right - (cx + bw + 12), 0);
+        if (*status) kit_text(status, cx, y + BTN_H + 6, TK_RED_700, right - cx, 0);
+    } else {
+        y = set_row(f, "Color", sw_h, &cx);
+        set_swatches(cx, y, UI_DESKTOP_N, ui_desktop_id, SZ_DESKTOP, 0);
+        set_value_label(f, y, sw_h, ui_desktop_name(ui_style, ui_desktop_id), 0, cx + UI_DESKTOP_N * 36 + 2);
+        y = set_row(f, "Pattern", kit_segmented_h(), &cx);
+        set_segmented(cx, y, pattern_names, UI_PATTERN_N, ui_pattern, SZ_PATTERN);
+    }
+}
 
 static void settings_appearance(SetForm *f) {
     int cx, y;
@@ -10749,11 +10973,12 @@ static void settings_appearance(SetForm *f) {
     y = set_row(f, "Accent color", MODERN ? 30 : 26, &cx);
     set_swatches(cx, y, UI_ACCENT_N, ui_accent_id, SZ_ACCENT, 1);
     set_value_label(f, y, MODERN ? 30 : 26, ui_accent_name(ui_style, ui_accent_id), 1, cx + UI_ACCENT_N * 36 + 2);
-    y = set_row(f, "Desktop color", MODERN ? 30 : 26, &cx);
-    set_swatches(cx, y, UI_DESKTOP_N, ui_desktop_id, SZ_DESKTOP, 0);
-    set_value_label(f, y, MODERN ? 30 : 26, ui_desktop_name(ui_style, ui_desktop_id), 0, cx + UI_DESKTOP_N * 36 + 2);
-    y = set_row(f, "Desktop pattern", kit_segmented_h(), &cx);
-    set_segmented(cx, y, pattern_names, UI_PATTERN_N, ui_pattern, SZ_PATTERN);
+    set_card_end(f);
+    set_rule(f);
+    draw_string_bold("Desktop", f->x, f->y, TK_TEXT);
+    f->y += MODERN ? 24 : 32;
+    set_card_begin(f);
+    settings_background(f);
     set_card_end(f);
     set_rule(f);
     draw_string_bold("Windows", f->x, f->y, TK_TEXT);
@@ -11074,6 +11299,15 @@ static void handle_settings_click(int wx, int wy, int ww, int wh) {
     case SZ_ACCENT: accent_set(z->arg); break;
     case SZ_DESKTOP: desktop_color_set(z->arg); break;
     case SZ_PATTERN: pattern_set(z->arg); break;
+    case SZ_WALL:
+        wall_tried_w = 0;   /* a picture that failed before gets another try */
+        wall_kind_set(z->arg);
+        wall_picture_name_load();
+        if (z->arg == UI_WALL_PICTURE && !wall_picture_path[0]) wall_picture_choose();
+        break;
+    case SZ_GRADIENT: gradient_set(z->arg); break;
+    case SZ_SHAPE: gradient_shape_set(z->arg); break;
+    case SZ_PICTURE: wall_picture_choose(); break;
     case SZ_WINOPT: win_options ^= z->arg; windows_save(); break;
     case SZ_SNAP: set_slider_drag = 1; settings_slider_set(); break;
     case SZ_SAVER: saver_enabled = !saver_enabled; saver_save(); break;
@@ -12145,6 +12379,7 @@ static int desktop_turn(void) {
     if (kernel_events_take(KERNEL_EVENT_STORAGE)) dirty = 1;
     document_persistence_poll();
     preferences_tick();
+    wall_picture_tick();
     if(todo_tick()&&find_open_kind(WK_TODO)>=0)dirty=1;
     if(cal_agenda_tick()&&find_open_kind(WK_CAL)>=0)dirty=1;
     poll_time();
