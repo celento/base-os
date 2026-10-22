@@ -31,6 +31,12 @@ int writer_click(int x, int y, int w, int h, int mx, int my, int modifiers);
 int writer_drag(int x, int y, int w, int h, int mx, int my);
 void writer_release(void);
 int writer_scroll(int lines);
+/* The desktop reports window focus before drawing (an inactive window shows
+ * an unfocused selection, no caret and no hover). writer_hover returns kit
+ * hover/press state bits for an absolute control rectangle; the desktop
+ * overrides the weak no-hover default and repaints when the target changes. */
+void writer_set_active(int active);
+int writer_hover(int x, int y, int w, int h);
 int writer_tick(void);
 /* Top-level desktop completion collection, never inside device/IRQ polling. */
 int writer_persistence_poll(void);

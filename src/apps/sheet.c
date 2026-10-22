@@ -1278,3 +1278,5 @@ int spreadsheet_drag(int x, int y, int w, int h, int mx, int my) {
     if (at != snapshot()->caret) state.click_valid = 0;
     snapshot()->caret = at; return SPREADSHEET_CHANGED;
 }
+__attribute__((weak)) int spreadsheet_hover(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; return 0; }
+void spreadsheet_set_active(int active) { (void)active; }
