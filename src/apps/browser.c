@@ -7,7 +7,13 @@
 #include "kernel/fs.h"
 #include "kernel/layout.h"
 #include "kernel/net.h"
-#include "ui/toolbar.h"
+#include "ui/icon_draw.h"
+#include "ui/icons.h"
+#include "ui/kit.h"
+#include "ui/ui_icons.h"
+
+#define MODERN (ui_theme.style == UI_STYLE_MODERN)
+#define SB (ui_theme.scrollbar)
 
 #ifndef BROWSER_BASE
 #define BROWSER_BASE 0x1610000
@@ -24,7 +30,6 @@
 #define TITLE_MAX 96
 #define STATUS_MAX 160
 #define ROW_H 22
-#define FOOT_H 28
 #define PAD 14
 #define STYLE_BOLD 1
 #define STYLE_PRE 2
@@ -45,7 +50,8 @@ typedef struct {
     unsigned text_len, body_len, request_id, received;
     int link_count, anchor_count, line_count, history_count, history_pos;
     int scroll, rows, width, focus, cursor, selected, address_start, focused_link;
-    int loading, request_state, redirects, truncated, html, body_complete;
+    int loading, request_state, redirects, truncated, html, body_complete, error_page;
+    char error_message[STATUS_MAX];
     /* Only an accepted request ID grants control over the download service.
      * This small presentation snapshot never contains response bytes. */
     unsigned download_id, download_received, download_limit;
@@ -263,7 +269,7 @@ static void attribute(const char *s,unsigned n,const char *name,char *out,unsign
 }
 static void document_reset(void) {
     B.text_len=0;B.text[0]=0;B.link_count=0;B.anchor_count=0;B.line_count=0;
-    B.truncated=0;B.title[0]=0;B.width=0;B.scroll=0;B.focused_link=0;
+    B.truncated=0;B.title[0]=0;B.width=0;B.scroll=0;B.focused_link=0;B.error_page=0;
 }
 static void parse_document(const char *s,unsigned n,int html) {
     document_reset();int bold=0,heading=0,pre=0,active_link=0,in_head=0,in_title=0,title_pos=0,list=0,pending_space=0;
@@ -365,7 +371,8 @@ static void reflow(int width) {
     clamp_scroll();
 }
 static int tool_height(int w);
-static void geometry(int w,int h) { B.rows=(h-tool_height(w)-FOOT_H-16)/ROW_H;if(B.rows<1)B.rows=1;reflow(w-2*PAD-14);clamp_scroll(); }
+static int status_h(void){return MODERN?28:24;}
+static void geometry(int w,int h) { B.rows=(h-tool_height(w)-status_h()-16)/ROW_H;if(B.rows<1)B.rows=1;reflow(w-2*PAD-SB);clamp_scroll(); }
 static void save_scroll(void){if(B.history_pos>=0&&B.history_pos<B.history_count)B.history_scroll[B.history_pos]=B.scroll;}
 static void history_add(const char *url) {
     if(B.history_pos>=0&&equal(B.history[B.history_pos],url))return;
@@ -379,7 +386,7 @@ static void stop_request(void) {
     B.loading=0;
 }
 static void error_document(const char *title,const char *message) {
-    B.body_complete=0;document_reset();copy(B.title,sizeof B.title,title);emit_string(title,STYLE_BOLD,0);newline(1);emit_string(message,0,0);
+    B.body_complete=0;document_reset();B.error_page=1;copy(B.error_message,sizeof B.error_message,message);copy(B.title,sizeof B.title,title);emit_string(title,STYLE_BOLD,0);newline(1);emit_string(message,0,0);
     newline(1);emit_string("Use Back to return, or enter another address.",0,0);set_status(message);
 }
 static int open_internal(const char *input,int add_history);
@@ -389,7 +396,7 @@ static int jump_fragment(const char *url) {
     fragment++;
     if(!*fragment){B.scroll=0;return 1;}
     for(int i=0;i<B.anchor_count;i++)if(equal(fragment,B.anchors[i].name)) {
-        if(!B.width)reflow(BROWSER_W-2*PAD-14);
+        if(!B.width)reflow(BROWSER_W-2*PAD-SB);
         for(int j=0;j<B.line_count;j++)if(B.lines[j].start+B.lines[j].length>=B.anchors[i].position){B.scroll=j;clamp_scroll();return 1;}
     }
     return 0;
@@ -696,77 +703,183 @@ int browser_key(int sc,char ch,int modifiers) {
 
 /* Navigation bar geometry, shared by drawing and hit testing. Wide windows
  * get one row: navigation | address Go | download tools | Save. Narrow
- * windows move the address field and Go to a second row. */
+ * windows move the address field and Go to a second row. Tools are flat
+ * icon buttons at the style's control size; in Modern the bar continues the
+ * window header. */
 enum{BT_BACK,BT_FORWARD,BT_RELOAD,BT_STOP,BT_HOME,BT_GO,BT_DOWNLOAD,BT_PICK,BT_CANCEL,BT_PROGRESS,BT_SAVE,BT_COUNT};
 static const int tool_icons[BT_COUNT]={ICON_BACK,ICON_FORWARD,ICON_RELOAD,ICON_STOP,ICON_HOME,ICON_GO,ICON_DOWNLOAD,ICON_LINK,ICON_CLOSE,ICON_LIST,ICON_SAVE};
 typedef struct{int x,y,w,h;}ToolRect;
 typedef struct{ToolRect b[BT_COUNT],address;int divider[3],dividers;}ToolLayout;
-#define TOOL_PAD 8
-#define TOOL_GAP 4
-#define TOOL_SPLIT (TOOL_PAD*2+1)
+#define TOOL_PAD (MODERN?12:8)
+#define TOOL_GAP (MODERN?4:2)
+#define TOOL_SPLIT (MODERN?17:13)
 #define TOOL_ADDRESS_MIN 240
+static int tool_size(void){return ui_theme.control_h;}
+static int tool_vpad(void){return MODERN?7:4;}
 /* Width of nav (5) + downloads (4) + Save with dividers and padding. */
 static int tool_buttons_w(int bw){return 2*TOOL_PAD+10*bw+7*TOOL_GAP+2*TOOL_SPLIT;}
-static int tool_wide(int w){return w>=tool_buttons_w(TB_ICON_W)+TOOL_SPLIT+TOOL_ADDRESS_MIN+TOOL_GAP+TB_ICON_W;}
-static int tool_height(int w){return tool_wide(w)?TB_H+2*TOOL_PAD:2*TB_H+2*TOOL_PAD+6;}
+static int tool_wide(int w){return w>=tool_buttons_w(tool_size())+TOOL_SPLIT+TOOL_ADDRESS_MIN+TOOL_GAP+tool_size();}
+static int tool_height(int w){
+    int one=tool_size()+2*tool_vpad()+1;
+    return tool_wide(w)?one:one+tool_size()+6;
+}
 static void tool_layout(int x,int y,int w,ToolLayout *L) {
-    int wide=tool_wide(w),bw=wide||w>=tool_buttons_w(TB_ICON_W)?TB_ICON_W:28,row=y+TOOL_PAD,px=x+TOOL_PAD,rx=x+w-TOOL_PAD;
+    /* At the narrowest sizes the buttons narrow to keep one row of tools. */
+    int wide=tool_wide(w),bh=tool_size(),bw=bh,row=y+tool_vpad(),px=x+TOOL_PAD,rx=x+w-TOOL_PAD,half=TOOL_SPLIT/2;
+    if(w<tool_buttons_w(bw))bw=(w-tool_buttons_w(0))/10;
     L->dividers=0;
-    for(int i=BT_BACK;i<=BT_HOME;i++){L->b[i]=(ToolRect){px,row,bw,TB_H};px+=bw+TOOL_GAP;}
-    px+=TOOL_PAD-TOOL_GAP;L->divider[L->dividers++]=px;px+=1+TOOL_PAD;
-    rx-=bw;L->b[BT_SAVE]=(ToolRect){rx,row,bw,TB_H};
-    rx-=TOOL_PAD+1;L->divider[L->dividers++]=rx;rx-=TOOL_PAD;
-    for(int i=BT_PROGRESS;i>=BT_DOWNLOAD;i--){rx-=bw;L->b[i]=(ToolRect){rx,row,bw,TB_H};rx-=TOOL_GAP;}
+    for(int i=BT_BACK;i<=BT_HOME;i++){L->b[i]=(ToolRect){px,row,bw,bh};px+=bw+TOOL_GAP;}
+    px+=half-TOOL_GAP;L->divider[L->dividers++]=px;px+=TOOL_SPLIT-half;
+    rx-=bw;L->b[BT_SAVE]=(ToolRect){rx,row,bw,bh};
+    rx-=TOOL_SPLIT-half;L->divider[L->dividers++]=rx;rx-=half;
+    for(int i=BT_PROGRESS;i>=BT_DOWNLOAD;i--){rx-=bw;L->b[i]=(ToolRect){rx,row,bw,bh};rx-=TOOL_GAP;}
     rx+=TOOL_GAP;
     if(wide) {
-        rx-=TOOL_PAD+1;L->divider[L->dividers++]=rx;rx-=TOOL_PAD;
-        rx-=bw;L->b[BT_GO]=(ToolRect){rx,row,bw,TB_H};rx-=TOOL_GAP;
-        L->address=(ToolRect){px,row,rx-px,TB_H};
+        rx-=TOOL_SPLIT-half;L->divider[L->dividers++]=rx;rx-=half;
+        rx-=bw;L->b[BT_GO]=(ToolRect){rx,row,bw,bh};rx-=TOOL_GAP;
+        L->address=(ToolRect){px,row,rx-px,bh};
     } else {
-        row+=TB_H+6;
-        L->b[BT_GO]=(ToolRect){x+w-TOOL_PAD-TB_ICON_W,row,TB_ICON_W,TB_H};
-        L->address=(ToolRect){x+TOOL_PAD,row,w-2*TOOL_PAD-TB_ICON_W-TOOL_GAP,TB_H};
+        row+=bh+6;
+        L->b[BT_GO]=(ToolRect){x+w-TOOL_PAD-bh,row,bh,bh};
+        L->address=(ToolRect){x+TOOL_PAD,row,w-2*TOOL_PAD-bh-TOOL_GAP,bh};
     }
 }
 static int tool_enabled(int index){return index==BT_BACK?B.history_pos>0:index==BT_FORWARD?B.history_pos+1<B.history_count:index==BT_STOP?B.loading:
     index==BT_SAVE?browser_can_save():index==BT_CANCEL?own_download_active():index==BT_PICK?B.link_count>0:1;}
-static int tool_state(int index){
-    if(!tool_enabled(index))return TB_DISABLED;
-    if(index==BT_GO)return TB_PRIMARY;
-    if((index==BT_PICK&&B.pick_link)||(index==BT_PROGRESS&&B.download_visible))return TB_ACTIVE;
-    return TB_NORMAL;
+static int tool_toggled(int index){return (index==BT_PICK&&B.pick_link)||(index==BT_PROGRESS&&B.download_visible);}
+/* The desktop passes its hover tracker while the window is active, so
+ * pointer motion over a control repaints it. Without one nothing hovers. */
+static int (*hover_fn)(int x,int y,int w,int h);
+void browser_set_hover(int (*fn)(int x,int y,int w,int h)){hover_fn=fn;}
+static int hover(ToolRect r){return hover_fn?hover_fn(r.x,r.y,r.w,r.h):0;}
+/* One tool: flat until hovered, tinted while toggled, accent for Go. */
+static void tool_draw(const ToolRect *r,int index) {
+    int state=tool_enabled(index)?hover(*r):KIT_DISABLED,rr=MODERN?ui_theme.r_control:KIT_R_SQUARE;
+    uint8_t ink=TK_ICON;
+    if(state&KIT_DISABLED)ink=MODERN?TK_LINE_STRONG:TK_LINE;
+    else if(index==BT_GO){
+        kit_box(r->x,r->y,r->w,r->h,MODERN?rr:KIT_R_NOTCH,(state&KIT_PRESSED)?TK_ACCENT_700:(state&KIT_HOVER)?TK_ACCENT_600:TK_ACCENT,
+                MODERN?0:TK_ACCENT_700);
+        ink=TK_ON_ACCENT;
+    }else if(tool_toggled(index)){
+        if(MODERN){kit_fill(r->x,r->y,r->w,r->h,rr,TK_ACCENT_100,1);ink=TK_ACCENT_700;}
+        else kit_box(r->x,r->y,r->w,r->h,KIT_R_NOTCH,TK_RAISED,TK_LINE);
+    }else if(state&(KIT_HOVER|KIT_PRESSED))kit_fill(r->x,r->y,r->w,r->h,rr,(state&KIT_PRESSED)?TK_LINE_SUBTLE:TK_HOVER,1);
+    icon_draw(tool_icons[index],r->x+(r->w-ICON_SIZE)/2,r->y+(r->h-ICON_SIZE)/2,ink);
 }
+/* Address text inset from the field edge, matching kit_field. */
+static int address_inset(void){return (MODERN?10:6)+1;}
 static void fit_address(int w) {
+    int room=w-2*address_inset();
     if(B.address_start>B.cursor)B.address_start=B.cursor;
     int pixels=0;for(int i=B.address_start;i<B.cursor;i++)pixels+=ui_advance(B.address[i]);
-    while(pixels>w-16&&B.address_start<B.cursor)pixels-=ui_advance(B.address[B.address_start++]);
-    while(B.address_start>0&&pixels+ui_advance(B.address[B.address_start-1])<w-24)pixels+=ui_advance(B.address[--B.address_start]);
+    while(pixels>room&&B.address_start<B.cursor)pixels-=ui_advance(B.address[B.address_start++]);
+    while(B.address_start>0&&pixels+ui_advance(B.address[B.address_start-1])<room-8)pixels+=ui_advance(B.address[--B.address_start]);
+}
+/* Classic: a white field. Modern: a soft fill that turns into a white
+ * field with a focus ring while editing. */
+static void address_draw(const ToolRect *a) {
+    if(MODERN&&!B.focus)kit_fill(a->x,a->y,a->w,a->h,ui_theme.r_control,TK_HOVER,1);
+    else kit_field(a->x,a->y,a->w,a->h,B.focus?KIT_FOCUS:0);
+    fit_address(a->w);
+    int tx=a->x+address_inset(),ty=kit_ty(a->y,a->h),limit=a->x+a->w-address_inset();
+    if(B.focus&&B.selected&&B.address[0]){
+        int sw=0;for(int i=B.address_start;B.address[i];i++)sw+=ui_advance(B.address[i]);
+        if(sw>limit-tx)sw=limit-tx;
+        draw_rect(tx-1,ty,sw+2,UI_FONT_H,TK_ACCENT);
+    }
+    draw_string_clip(B.address+B.address_start,tx,ty,B.focus&&B.selected?TK_ON_ACCENT:TK_TEXT,limit);
+    if(B.focus&&!B.selected){int cursor=tx;for(int i=B.address_start;i<B.cursor;i++)cursor+=ui_advance(B.address[i]);if(cursor<limit)kit_caret(cursor,ty);}
+}
+static int content_top(int y,int w){return y+tool_height(w)+8;}
+static int content_bottom(int y,int h){return y+h-status_h()-8;}
+/* Length of the next wrapped line of p no wider than w, breaking at a
+ * space when one fits. */
+static int wrap_next(const char *p,int w,int cap) {
+    int used=0,n=0,split=0;
+    while(p[n]&&n+1<cap&&used+ui_advance(p[n])<=w){if(p[n]==' ')split=n;used+=ui_advance(p[n]);n++;}
+    if(p[n]&&split)n=split;
+    return n;
+}
+/* Error pages: a large icon, the title and the message, centred. */
+static void error_draw(int x,int top,int w,int bottom) {
+    char line[STATUS_MAX];
+    int tw=w-64<460?w-64:460,lines=0;
+    if(tw<80)return;
+    const char *m=B.error_message;
+    /* Count wrapped lines first, so the block centres vertically. */
+    for(const char *p=m;*p;lines++){
+        int n=wrap_next(p,tw,(int)sizeof line);
+        if(!n)break;
+        p+=n;while(*p==' ')p++;
+    }
+    int need=32+14+UI_FONT_H+10+lines*20+10+UI_FONT_H,y=top+(bottom-top-need)/3;
+    if(y<top)y=top;
+    if(y+32>bottom)return;
+    ui_icon_draw(UI_ICON_A_ERR,x+(w-32)/2,y,32,TK_ICON,TK_RAISED);y+=46;
+    if(y+UI_FONT_H>bottom)return;
+    kit_text_center(B.title,x+16,y,w-32,TK_TEXT,1);y+=UI_FONT_H+10;
+    int lx=x+(w-tw)/2;
+    for(const char *p=m;*p&&y+UI_FONT_H<=bottom;y+=20){
+        int n=wrap_next(p,tw,(int)sizeof line);
+        if(!n)break;
+        for(int i=0;i<n;i++)line[i]=p[i];
+        line[n]=0;kit_text_center(line,lx,y,tw,TK_TEXT2,0);
+        p+=n;while(*p==' ')p++;
+    }
+    y+=10;
+    if(y+UI_FONT_H<=bottom)kit_text_center("Use Back to return, or enter another address.",x+16,y,w-32,TK_TEXT2,0);
+}
+static void status_draw(int x,int y,int w,int h) {
+    int sy=y+h-status_h();
+    if(MODERN){
+        draw_hline(x,sy,w,TK_LINE_SUBTLE);
+        kit_fill_bottom(x,sy+1,w,status_h()-1,ui_theme.r_window>1?ui_theme.r_window-1:0,ui_theme.statusbar);
+    }else kit_statusbar(x,sy,w,status_h());
+    int ty=kit_ty(sy+1,status_h()-1),pad=MODERN?12:8,right=x+w-pad;
+    /* A running download stays visible at the right while reading. */
+    if(own_download_active()&&!B.download_visible){
+        char text[40]="Downloading ",digits[12];number(digits,B.download_received);append(text,sizeof text,digits);append(text,sizeof text," bytes");
+        int tw=kit_text_w(text,0);
+        if(tw+16+6<w/2){
+            kit_text(text,right-tw,ty,TK_TEXT2,tw,0);right-=tw+6+16;
+            icon_draw(ICON_DOWNLOAD,right,sy+1+(status_h()-1-ICON_SIZE)/2,TK_ACCENT);right-=12;
+        }
+    }
+    int lx=x+pad;
+    if(B.loading){
+        icon_draw(ICON_RELOAD,lx,sy+1+(status_h()-1-ICON_SIZE)/2,TK_ACCENT);lx+=ICON_SIZE+6;
+    }else if(B.error_page){
+        ui_icon_draw(UI_ICON_ERR,lx,sy+1+(status_h()-1-16)/2,16,TK_ICON,ui_theme.statusbar);lx+=22;
+    }
+    kit_text(B.status,lx,ty,TK_TEXT2,right-lx,0);
 }
 void browser_draw(int x,int y,int w,int h) {
     browser_init();if(w<BROWSER_MIN_W||h<BROWSER_MIN_H)return;geometry(w,h);
-    uint8_t paper=app_paper,ink=app_text,border=app_border,link_color=app_accent_dk;
+    uint8_t paper=TK_RAISED,ink=TK_TEXT,link_color=TK_ACCENT_700;
     int tool_h=tool_height(w);ToolLayout L;tool_layout(x,y,w,&L);
-    draw_rect(x,y,w,h,paper);draw_rect(x,y,w,tool_h,app_chrome);draw_hline(x,y+tool_h-1,w,border);
-    for(int i=0;i<BT_COUNT;i++)tool_button(L.b[i].x,L.b[i].y,L.b[i].w,L.b[i].h,tool_icons[i],0,tool_state(i));
-    for(int i=0;i<L.dividers;i++)tool_divider(L.divider[i],L.b[BT_BACK].y,TB_H);
-    int ax=L.address.x,ay=L.address.y,aw=L.address.w,ty=ay+(TB_H-TB_TEXT_H)/2;
-    draw_round_rect(ax,ay,aw,TB_H,7,app_field);draw_round_frame(ax,ay,aw,TB_H,7,B.focus?app_accent:border);
-    fit_address(aw);int tx=ax+8,limit=ax+aw-8;
-    if(B.focus&&B.selected)draw_rect(tx,ty,aw-16,TB_TEXT_H,app_accent);
-    draw_string_clip(B.address+B.address_start,tx,ty,B.focus&&B.selected?app_on_accent:ink,limit);
-    if(B.focus&&!B.selected){int cursor=tx;for(int i=B.address_start;i<B.cursor;i++)cursor+=ui_advance(B.address[i]);if(cursor<limit)draw_vline(cursor,ty,TB_TEXT_H,app_accent);}
-    int cy=y+tool_h+8,content_right=x+w-PAD-14;
+    draw_rect(x,y,w,h,paper);
+    kit_toolbar(x,y,w,tool_h);
+    for(int i=0;i<BT_COUNT;i++)tool_draw(&L.b[i],i);
+    for(int i=0;i<L.dividers;i++)kit_vseparator(L.divider[i],L.b[BT_BACK].y+5,tool_size()-10);
+    address_draw(&L.address);
+    int cy=content_top(y,w),content_right=x+w-PAD-SB;
     if(B.download_visible){
-        download_summary();download_reflow(w-2*PAD-14);
+        download_summary();download_reflow(w-2*PAD-SB);
         for(int row=0;row<B.rows;row++){int index=B.download_scroll+row;if(index>=B.download_line_count)break;BrowserLine line=B.download_lines[index];int px=x+PAD;
-            for(unsigned p=line.start;p<(unsigned)line.start+line.length;p++){draw_char(B.download_text[p],px,cy+row*ROW_H,ink);px+=ui_advance(B.download_text[p]);}}
+            for(unsigned p=line.start;p<(unsigned)line.start+line.length;p++){
+                int step=ui_advance(B.download_text[p]);if(px+step>content_right)break;
+                draw_char(B.download_text[p],px,cy+row*ROW_H,ink);px+=step;
+            }}
+    } else if(B.error_page) {
+        error_draw(x,cy,w-SB,content_bottom(y,h));
     } else for(int row=0;row<B.rows;row++) {
         int index=B.scroll+row;if(index>=B.line_count)break;BrowserLine line=B.lines[index];int px=x+PAD,py=cy+row*ROW_H;
         unsigned end=(unsigned)line.start+line.length;
         for(unsigned p=line.start;p<end;p++) {
             int step=advance(p);if(px+step>content_right)break;
             unsigned char style=B.style[p],link=B.link[p];uint8_t color=link?link_color:ink;
-            if(link&&link==B.focused_link)draw_rect(px,py,step,UI_FONT_H+1,app_chrome_dk);
+            if(link&&link==B.focused_link)draw_rect(px,py-1,step,UI_FONT_H+2,TK_ACCENT_100);
             if(style&STYLE_PRE)draw_edit_char(B.text[p],px,py,color);
             else if(style&STYLE_BOLD){char c[2]={B.text[p],0};draw_string_bold(c,px,py,color);}
             else draw_char(B.text[p],px,py,color);
@@ -775,9 +888,9 @@ void browser_draw(int x,int y,int w,int h) {
         }
     }
     int line_count=B.download_visible?B.download_line_count:B.line_count,scroll=B.download_visible?B.download_scroll:B.scroll;
-    if(line_count>B.rows){int sy=cy,sh=B.rows*ROW_H;draw_round_rect(x+w-10,sy,4,sh,2,app_chrome);int thumb=sh*B.rows/line_count;if(thumb<16)thumb=16;if(thumb>sh)thumb=sh;
-        int ty=sy+(sh-thumb)*scroll/(line_count-B.rows);draw_round_rect(x+w-10,ty,4,thumb,2,app_border);}
-    int fy=y+h-FOOT_H;draw_rect(x,fy,w,FOOT_H,app_chrome);draw_hline(x,fy,w,border);draw_string_clip(B.status,x+10,fy+5,app_text_dim,x+w-10);
+    int sy=y+tool_h,sh=y+h-status_h()-sy;
+    if(line_count>B.rows&&!(B.error_page&&!B.download_visible))kit_vscroll(x+w-SB,sy,sh,scroll,B.rows,line_count,0);
+    status_draw(x,y,w,h);
 }
 int browser_click(int x,int y,int w,int h,int mx,int my) {
     browser_init();if(w<BROWSER_MIN_W||h<BROWSER_MIN_H)return 0;geometry(w,h);
@@ -799,18 +912,19 @@ int browser_click(int x,int y,int w,int h,int mx,int my) {
         }
     }
     if(hit(mx,my,L.address.x,L.address.y,L.address.w,L.address.h)) {
-        B.focus=1;B.selected=0;fit_address(L.address.w);int px=L.address.x+8;B.cursor=B.address_start;
+        B.focus=1;B.selected=0;fit_address(L.address.w);int px=L.address.x+address_inset();B.cursor=B.address_start;
         while(B.address[B.cursor]&&px+ui_advance(B.address[B.cursor])/2<mx)px+=ui_advance(B.address[B.cursor++]);
         return 1;
     }
-    int cy=y+tool_height(w)+8;
-    if(B.download_visible){download_reflow(w-2*PAD-14);if(hit(mx,my,x+w-15,cy,15,B.rows*ROW_H)&&B.download_line_count>B.rows){B.download_scroll=(my-cy)*B.download_line_count/(B.rows*ROW_H);download_reflow(w-2*PAD-14);return 1;}return 0;}
-    if(hit(mx,my,x+w-15,cy,15,B.rows*ROW_H)&&B.line_count>B.rows) {
-        int old=B.scroll;B.scroll=(my-cy)*B.line_count/(B.rows*ROW_H);clamp_scroll();B.focus=0;return old!=B.scroll;
+    /* The scrollbar runs between the toolbar and the status bar. */
+    int cy=content_top(y,w),sy=y+tool_height(w),sh=y+h-status_h()-sy;
+    if(B.download_visible){download_reflow(w-2*PAD-SB);if(hit(mx,my,x+w-SB,sy,SB,sh)&&B.download_line_count>B.rows){B.download_scroll=(my-sy)*B.download_line_count/sh-B.rows/2;download_reflow(w-2*PAD-SB);return 1;}return 0;}
+    if(hit(mx,my,x+w-SB,sy,SB,sh)&&B.line_count>B.rows&&!B.error_page) {
+        int old=B.scroll;B.scroll=(my-sy)*B.line_count/sh-B.rows/2;clamp_scroll();B.focus=0;return old!=B.scroll;
     }
-    if(hit(mx,my,x+PAD,cy,w-2*PAD-14,B.rows*ROW_H)) {
+    if(hit(mx,my,x+PAD,cy,w-2*PAD-SB,B.rows*ROW_H)) {
         B.focus=0;B.selected=0;int row=B.scroll+(my-cy)/ROW_H;
-        if(row<B.line_count){BrowserLine line=B.lines[row];int px=x+PAD;
+        if(row<B.line_count&&!B.error_page){BrowserLine line=B.lines[row];int px=x+PAD;
             for(unsigned p=line.start;p<(unsigned)line.start+line.length;p++){int step=advance(p);if(mx>=px&&mx<px+step&&B.link[p]){if(B.pick_link){B.focused_link=B.link[p];B.pick_link=0;set_status("Selected link | Download or Ctrl+D saves it");return 1;}return open_internal(B.links[B.link[p]-1],1);}px+=step;}}
         B.focused_link=0;return 1;
     }

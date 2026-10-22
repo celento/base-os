@@ -15,6 +15,9 @@
 void browser_init(void);
 void browser_draw(int x, int y, int w, int h);
 int browser_key(int sc, char ch, int modifiers);
+/* Hover source for toolbar controls: the desktop's hover tracker while the
+ * window is active, or 0. It returns KIT_* state bits for a rectangle. */
+void browser_set_hover(int (*hover)(int x, int y, int w, int h));
 int browser_click(int x, int y, int w, int h, int mx, int my);
 int browser_scroll(int lines);
 int browser_tick(void);
