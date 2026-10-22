@@ -4,6 +4,7 @@ import json
 import pathlib
 import struct
 import tempfile
+import time
 
 from elf_debug import DebugInfo
 from volume import load, resolve, commit
@@ -28,7 +29,7 @@ class FilesCheck:
         rows = struct.unpack_from('<I', raw, self.fields['ids'])[0]
         count = result['count']
         result['ids'] = struct.unpack('<%di' % count, self.s.memory(rows, 4 * count)) if count else ()
-        index = result['selected'] - int(result['cwd'] != 0)
+        index = result['selected']
         result['selected_id'] = result['ids'][index] if 0 <= index < len(result['ids']) else -1
         return result
 
@@ -52,10 +53,15 @@ class FilesCheck:
                     'file clipboard operation completed')
 
     def select(self, ident):
+        # The icon view steps one item with Right and a row with Down; the
+        # details view steps one row with Down and ignores Right.
         for _ in range(257):
-            if self.state()['selected_id'] == ident:
+            before = self.state()
+            if before['selected_id'] == ident:
                 return
-            self.s.key('down')
+            self.s.key('right'); time.sleep(0.3)
+            if self.state()['selected'] == before['selected']:
+                self.s.key('down')
         raise AssertionError('File was not selectable')
 
     def root(self):
@@ -135,12 +141,8 @@ def run(build):
         assert rich_copy!=8 and nodes[rich_copy]['name'].endswith('.bwr')
         session.key('ret'); assert check.ui.content()['text']==b'Native copy document'
         session.key('ctrl-w'); check.focus(owner); check.select(8)
-        session.key('f10')
-        for _ in range(8):
-            if check.ui.o.integer('menu_sel')==5: break
-            session.key('down')
-        assert check.ui.o.integer('menu_sel')==5
-        session.key('ret')
+        # F10 focuses the menu row, Down opens File, and D picks Duplicate.
+        session.key('f10'); session.key('down'); session.key('d')
         session.wait(lambda: check.state()['selected_id']!=8 and check.ui.o.integer('fs_touched')==0,
                      'Duplicate synchronized')
         duplicate_rich=check.state()['selected_id']; nodes=load(disk.read_bytes())[2]
