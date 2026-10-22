@@ -559,6 +559,28 @@ int main(void) {
     assert(fs_sync() == 0 && mount() == 0 && fs_size(fs_find_child(0, "large.bin")) == 5);
     assert(fs_delete(fs_find_child(0, "large.bin")) == 0 && fs_sync() == 0 && mount() == 0);
     assert(bfs.free_blocks == blocks_before);
+    /* An empty file truncated straight past the limit lives on disk only. */
+    int grown = fs_create(0, "grown.bin");
+    assert(fs_truncate(grown, FS_FILE_MAX + 1) == 0 && fs_streamed(grown) && pool_used == 0);
+    assert(fs_write(grown, "x", 1) == 1 && fs_delete(grown) == 0 && pool_used == 0);
+    /* Overwriting a saved big file on a nearly full volume saves along the
+     * way to free the extents it replaced. */
+    large = fs_create(0, "again.bin");
+    assert(fs_write_at(large, 0, huge, HUGE) == (int)HUGE && fs_sync() == 0);
+    int filler = fs_create(0, "filler.bin");
+    assert(fs_write_at(filler, 0, huge, HUGE) == (int)HUGE);
+    assert(fs_write_at(filler, HUGE, huge, 2u << 20) == (int)(2u << 20) && fs_sync() == 0);
+    assert(bfs.free_blocks * BFS_BLOCK < HUGE);
+    for (unsigned i = 0; i < HUGE; ++i) back[i] = (unsigned char)(huge[i] + 1);
+    assert(fs_write_at(large, 0, back, HUGE) == (int)HUGE && fs_sync() == 0 && mount() == 0);
+    assert(fs_read_at(fs_find_child(0, "again.bin"), 0, huge + 0, 0) == 0);
+    {
+        static unsigned char check_copy[HUGE];
+        assert(fs_read_at(fs_find_child(0, "again.bin"), 0, check_copy, HUGE) == (int)HUGE);
+        assert(!memcmp(check_copy, back, HUGE));
+    }
+    assert(fs_delete(fs_find_child(0, "again.bin")) == 0 && fs_delete(fs_find_child(0, "filler.bin")) == 0);
+    assert(fs_sync() == 0 && mount() == 0);
     /* A write that does not fit is refused once the volume is full. */
     large = fs_create(0, "fill.bin");
     unsigned filled = 0;

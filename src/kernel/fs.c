@@ -853,11 +853,13 @@ static int stream_replace(int id, uint32_t first, uint32_t last, const unsigned 
     for (uint32_t k = 0; k < first; ++k) list[k] = nodes[id].extents[k];
     for (uint32_t k = 0; k < added; ++k) list[first + k] = fresh[k];
     for (uint32_t k = last; k < count; ++k) list[first + added + k - last] = nodes[id].extents[k];
-    bfs_let_go(nodes[id].extents + first, last - first);
+    if (last > first) bfs_let_go(nodes[id].extents + first, last - first);
     kfree(nodes[id].extents);
     kfree(fresh);
     nodes[id].extents = list;
     nodes[id].extent_count = total;
+    /* A later piece may need a save for room, and it must include this. */
+    fs_touched = 1;
     return 0;
 }
 /* Writes len bytes at offset <= size, through the extent that holds offset
@@ -909,6 +911,8 @@ static int stream_begin(int id) {
     }
     nodes[id].dirty = 0;
     if (nodes[id].size && !nodes[id].absent) evict(id);
+    /* Even when empty: the bytes about to be written live only on disk. */
+    nodes[id].absent = 1;
     return 0;
 }
 int fs_read_at(int id, unsigned offset, void *out, unsigned len) {
@@ -986,7 +990,7 @@ static int write_at(int id, unsigned offset, const void *data, unsigned len, int
         if (length && (!chunk || bfs_read(&bfs, &record, p, chunk, length) != BFS_OK)) result = -1;
         else if (length) result = stream_replace(id, k, count, chunk, length);
         else {
-            bfs_let_go(nodes[id].extents + k, count - k);
+            if (count > k) bfs_let_go(nodes[id].extents + k, count - k);
             nodes[id].extent_count = k;
         }
         kfree(chunk);
