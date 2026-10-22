@@ -205,7 +205,6 @@ static void utoa(unsigned v, char *out) {
     out[i] = 0;
 }
 
-static int btn_w(const char *label) { return kit_button_w(label, -1); }
 /* App icon (AI_*) shown in the title bar of the window being drawn, or -1,
  * and the kind whose menu model the window row shows. */
 static int chrome_icon = -1;
@@ -217,6 +216,24 @@ static int chrome_flags;  /* WIN_MAXED and WIN_DIALOG for the window being drawn
 static int ctl_state(int x, int y, int w, int h) {
     if (!hit(mouse_x, mouse_y, x, y, w, h)) return 0;
     return mouse_left ? KIT_HOVER | KIT_PRESSED : KIT_HOVER;
+}
+
+typedef struct { int x, y, w, h; } Rect;
+
+/* Hover targets: drawing registers each control that reacts to the
+ * pointer, and pointer motion repaints only when the target under it
+ * changes. */
+#define HOT_MAX 96
+static Rect hot_rect[HOT_MAX];
+static int hot_n, hot_last = -1;
+static int hot(int x, int y, int w, int h) {
+    if (hot_n < HOT_MAX) hot_rect[hot_n++] = (Rect){x, y, w, h};
+    return ctl_state(x, y, w, h);
+}
+static int hot_index(void) {
+    for (int i = hot_n - 1; i >= 0; i--)
+        if (hit(mouse_x, mouse_y, hot_rect[i].x, hot_rect[i].y, hot_rect[i].w, hot_rect[i].h)) return i;
+    return -1;
 }
 
 /* ---------- Shared desktop controls ---------- */
@@ -822,6 +839,9 @@ static int fm_history_target(int dir);
 static void fm_navigate(int id);
 static void theme_load(void);
 static void draw_about(int wx, int wy, int ww, int wh, int fl);
+static int properties_h(void);
+static void handle_properties_click(int wx, int wy, int ww, int wh);
+static void properties_key(void);
 static void handle_about_click(int wx, int wy, int ww, int wh);
 static void draw_settings(int wx, int wy, int ww, int wh, int fl);
 static int settings_window_h(void);
@@ -1325,6 +1345,11 @@ static const CalcKey calc_keys[] = {
 static int open_dlg = 0;
 static int name_dlg = 0;
 static int name_failed;
+static int name_target = 0;
+static char name_buf[FS_NAME_LEN];
+static int name_len = 0, name_sel;
+static int name_focus, name_owner, name_owner_seq;
+static unsigned name_pdf_paper;
 static const char *name_failure_message;
 /* A close request owns a window incarnation, never whichever app draws last. */
 static int edit_close_owner = -1, edit_close_seq, edit_close_kind;
@@ -3237,14 +3262,16 @@ static int unique_untitled_pbm(int parent, char *out) {
     return -1;
 }
 
-static int paint_write_named(const char *name) {
+/* Save the picture in parent, or in Pictures (made when missing) when
+ * parent is not a folder. */
+static int paint_write_in(int parent, const char *name) {
     name_failure_message=0;
     if (fs_sync_busy()) {
         name_failure_message="Disk saving. Retry Save shortly.";
         return 0;
     }
     paint_init();
-    int pics = fs_find_child(fs_root(), "Pictures");
+    int pics = fs_is_dir(parent) ? parent : fs_find_child(fs_root(), "Pictures");
     if (pics >= 0 && !fs_is_dir(pics)) {
         name_failure_message="Pictures is not a folder.";
         return 0;
@@ -4210,7 +4237,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     case WK_PLAYER:
         *w=PLAYER_W+2;*h=PLAYER_H+TITLE_H+2;break;
     case WK_PROPERTIES:
-        *x=300;*y=140;*w=500;*h=380;break;
+        *w=380;*h=properties_h();break;
     case WK_HELLO:
         *w = 520;
         *h = 170;
@@ -4645,100 +4672,6 @@ static void do_empty_trash(void) {
     dirty = 1;
 }
 
-static int od_row_enabled(int id) {
-    if (pick_sheet) return fs_is_dir(id) || (!fs_is_app(id) &&
-        (file_extension(fs_name(id),".bsh") || file_extension(fs_name(id),".csv")));
-    if (pick_writer) return !fs_is_app(id);
-    if (!pick_pics_only)
-        return 1;
-    return fs_is_dir(id) || is_image_file(id);
-}
-
-/* Selection never rests on a row the dialog would refuse to open. */
-static int od_next_enabled(int from, int dir) {
-    for (int n = 0; n < pick_count; n++) {
-        int i = (from + dir * (n + 1)) % pick_count;
-        if (i < 0)
-            i += pick_count;
-        if (od_row_enabled(pick_ids[i]))
-            return i;
-    }
-    return -1;
-}
-
-static void od_refresh(void) {
-    int listed = fs_child_count(pick_cwd);
-    if (listed > pick_capacity) {
-        int *ids = kmalloc((uint32_t)listed * sizeof *ids);
-        unsigned *identities = kmalloc((uint32_t)listed * sizeof *identities);
-        if (ids && identities) {
-            kfree(pick_ids); kfree(pick_identity);
-            pick_ids = ids; pick_identity = identities; pick_capacity = listed;
-        } else {
-            kfree(ids); kfree(identities);
-        }
-    }
-    int *raw = kmalloc((uint32_t)(listed ? listed : 1) * sizeof *raw);
-    int n = raw ? fs_list(pick_cwd, raw, listed < pick_capacity ? listed : pick_capacity) : 0;
-    pick_count = 0;
-    for (int i = 0; i < n; i++) {
-        if (pick_cwd == fs_root() && trash_id >= 0 && raw[i] == trash_id)
-            continue;
-        if (pick_cwd == fs_root() && prefs_id >= 0 && raw[i] == prefs_id)
-            continue;
-        pick_identity[pick_count] = fs_identity(raw[i]);
-        pick_ids[pick_count++] = raw[i];
-    }
-    kfree(raw);
-    if (pick_selected >= pick_count)
-        pick_selected = pick_count ? pick_count - 1 : 0;
-    if (pick_selected < 0)
-        pick_selected = 0;
-    if (pick_count && !od_row_enabled(pick_ids[pick_selected]))
-        pick_selected = od_next_enabled(pick_selected, 1);
-}
-
-static void start_open_dialog(int pics_only) {
-    open_dlg = 1;
-    pick_focus=0;pick_first=0;
-    pick_pics_only = pics_only;
-    pick_owner = win_front();
-    pick_writer = pick_owner >= 0 && wins[pick_owner].kind == WK_WRITER && !pics_only;
-    pick_sheet = pick_owner >= 0 && wins[pick_owner].kind == WK_SPREADSHEET && !pics_only;
-    pick_owner_seq = pick_owner >= 0 ? wins[pick_owner].seq : 0;
-    pick_cwd = fs_root();
-    pick_selected = 0;
-    od_refresh();
-    dirty = 1;
-}
-
-static void close_open_dialog(void) {
-    open_dlg = 0;
-    dirty = 1;
-}
-
-static void od_open_selected(void) {
-    if (pick_count <= 0 || pick_selected < 0 || pick_selected >= pick_count)
-        return;
-    int id = pick_ids[pick_selected];
-    if(fs_identity(id)!=pick_identity[pick_selected]){od_refresh();dirty=1;return;}
-    if (!od_row_enabled(id))
-        return;
-    if (fs_is_dir(id)) {
-        pick_cwd = id;
-        pick_selected = 0;
-        od_refresh();
-        dirty = 1;
-        return;
-    }
-    open_dlg = 0;
-    if (pick_writer || pick_sheet) {
-        if (pick_owner >= 0 && wins[pick_owner].open &&
-            wins[pick_owner].kind == (pick_sheet ? WK_SPREADSHEET : WK_WRITER) &&
-            wins[pick_owner].seq == pick_owner_seq) document_request(pick_owner, DOCUMENT_OPEN, id);
-    } else open_fs_file(id);
-}
-
 /* ---------- Drawing ---------- */
 
 static void files_title(char *title, int max) {
@@ -5142,56 +5075,736 @@ static void draw_rename_overlay(void) {
     }
 }
 
+/* ---------- File browser parts ----------
+ * The Places sidebar, the path bar and the detail list. Files, Open and
+ * Save As draw with these and hit test the rectangles they were drawn in. */
+
+#define PLACE_MAX 10
+typedef struct { const char *name; int id, icon; } Place;
+static const char *const place_folders[] = {"Desktop", "Documents", "Downloads", "Pictures", "Media", "Programs"};
+
+/* Folders first, then devices from *devices on. */
+static int places_build(Place *p, int *devices, int with_trash) {
+    int n = 0;
+    p[n++] = (Place){"Home", fs_root(), UI_ICON_HOME};
+    for (unsigned i = 0; i < sizeof place_folders / sizeof *place_folders; i++) {
+        int id = fs_find_child(fs_root(), place_folders[i]);
+        if (fs_is_dir(id)) p[n++] = (Place){place_folders[i], id, i == 0 ? UI_ICON_DESK : UI_ICON_FOLDER};
+    }
+    *devices = n;
+    p[n++] = (Place){"System", fs_root(), UI_ICON_DISK};
+    if (with_trash && fs_is_dir(trash_id)) p[n++] = (Place){"Trash", trash_id, UI_ICON_TRASH};
+    return n;
+}
+
+static int places_head_h(void) { return MODERN ? 28 : 26; }
+static int places_row_y(int y, int k, int devices) {
+    int ry = y + 4 + places_head_h() + k * ROW_H;
+    return k >= devices ? ry + 6 + places_head_h() : ry;
+}
+
+static void places_draw(int x, int y, int w, int h, int cwd, int with_trash) {
+    Place p[PLACE_MAX];
+    int dev, n = places_build(p, &dev, with_trash), lit = -1;
+    for (int k = 0; k < n && lit < 0; k++) if (p[k].id == cwd) lit = k;
+    int hh = places_head_h(), hx = x + (MODERN ? 18 : 12);
+    int ix = x + (MODERN ? 10 : 12), tx = ix + (MODERN ? 26 : 20);
+    draw_rect(x, y, w - 1, h, ui_theme.sidebar);
+    draw_vline(x + w - 1, y, h, TK_LINE_SUBTLE);
+    for (int k = 0; k < n; k++) {
+        int ry = places_row_y(y, k, dev);
+        if (ry + ROW_H > y + h) break;
+        if (k == 0 || k == dev)
+            kit_text(k ? "Devices" : "Places", hx, kit_ty(ry - hh + 2, hh), TK_TEXT2, w - 24, 1);
+        uint8_t paper = ui_theme.sidebar, ink = TK_TEXT;
+        int on = k == lit;
+        if (on) {
+            paper = TK_ACCENT_100;
+            if (MODERN) { kit_fill(x + 4, ry, w - 20, ROW_H, 6, paper, 1); ink = TK_ACCENT_700; }
+            else draw_rect(x + 1, ry, w - 9, ROW_H, paper);
+        } else if (hot(x, ry, w - 8, ROW_H) & KIT_HOVER) {
+            paper = TK_HOVER;
+            if (MODERN) kit_fill(x + 4, ry, w - 20, ROW_H, 6, paper, 1);
+            else draw_rect(x + 1, ry, w - 9, ROW_H, paper);
+        }
+        ui_icon_draw(p[k].icon, ix, ry + (ROW_H - 16) / 2, 16, TK_ICON, paper);
+        kit_text(p[k].name, tx, kit_ty(ry, ROW_H), ink, x + w - 10 - tx, on);
+    }
+}
+
+static int places_hit(int x, int y, int w, int h, int with_trash) {
+    if (!hit(mouse_x, mouse_y, x, y, w, h)) return -1;
+    Place p[PLACE_MAX];
+    int dev, n = places_build(p, &dev, with_trash);
+    for (int k = 0; k < n; k++) {
+        int ry = places_row_y(y, k, dev);
+        if (ry + ROW_H > y + h) break;
+        if (hit(mouse_x, mouse_y, x, ry, w, ROW_H)) return p[k].id;
+    }
+    return -1;
+}
+
+/* Path bar: a Home icon and the folder names split by chevrons. Classic
+ * draws it in a field, Modern flat on the toolbar. Leading folders drop out
+ * when the path does not fit. */
+#define CRUMB_MAX 16
+static const char *crumb_name(int id) { return id == fs_root() ? "Home" : fs_name(id); }
+static int crumbs_layout(int x, int w, int cwd, int *xs, int *ws, int *ids) {
+    int chain[CRUMB_MAX], cw[CRUMB_MAX], n = 0, total = 0;
+    for (int id = cwd; fs_valid(id) && n < CRUMB_MAX; id = fs_parent(id)) {
+        chain[n++] = id;
+        if (id == fs_root()) break;
+    }
+    for (int k = 0; k < n; k++) {
+        cw[k] = kit_text_w(crumb_name(chain[k]), 0) + 8 + (chain[k] == fs_root() ? 20 : 0);
+        total += cw[k] + (k ? 16 : 0);
+    }
+    int first = n - 1, count = 0, cx = x;
+    while (first > 0 && total > w) { total -= cw[first] + 16; first--; }
+    for (int k = first; k >= 0; k--) {
+        int width = cw[k];
+        if (cx + width > x + w) width = x + w - cx;
+        if (width < 16) break;
+        xs[count] = cx; ws[count] = width; ids[count++] = chain[k];
+        cx += width + 16;
+    }
+    return count;
+}
+
+static int crumbs_inner(int *x, int *w) {
+    int pad = MODERN ? 4 : 6;
+    *x += pad; *w -= pad * 2;
+    return pad;
+}
+
+static void crumbs_draw(int x, int y, int w, int h, int cwd) {
+    uint8_t paper = MODERN ? ui_theme.chrome : TK_RAISED;
+    if (!MODERN) kit_field(x, y, w, h, 0);
+    int ix = x, iw = w, xs[CRUMB_MAX], ws[CRUMB_MAX], ids[CRUMB_MAX];
+    crumbs_inner(&ix, &iw);
+    int n = crumbs_layout(ix, iw, cwd, xs, ws, ids), ty = kit_ty(y, h);
+    for (int k = 0; k < n; k++) {
+        int tx = xs[k] + 4;
+        if (ids[k] == fs_root()) {
+            ui_icon_draw(UI_ICON_HOME, tx - 2, y + (h - 16) / 2, 16, TK_ICON, paper);
+            tx += 20;
+        }
+        kit_text(crumb_name(ids[k]), tx, ty, TK_TEXT, xs[k] + ws[k] - tx, 0);
+        if (k < n - 1) ui_icon_draw(UI_ICON_RIGHT, xs[k] + ws[k], y + (h - 16) / 2, 16, TK_TEXT2, paper);
+    }
+}
+
+static int crumbs_hit(int x, int y, int w, int h, int cwd) {
+    if (!hit(mouse_x, mouse_y, x, y, w, h)) return -1;
+    int ix = x, iw = w, xs[CRUMB_MAX], ws[CRUMB_MAX], ids[CRUMB_MAX];
+    crumbs_inner(&ix, &iw);
+    int n = crumbs_layout(ix, iw, cwd, xs, ws, ids);
+    for (int k = 0; k < n; k++)
+        if (mouse_x >= xs[k] && mouse_x < xs[k] + ws[k]) return ids[k];
+    return -1;
+}
+
+/* Back, forward and up, each a square icon button. */
+static int nav_size(void) { return MODERN ? 30 : 26; }
+static int nav_x(int x, int i) { return x + (MODERN ? 12 : 8) + i * (nav_size() + (MODERN ? 4 : 2)); }
+static int nav_end(int x) { return nav_x(x, 3) + 4; }
+static void nav_draw(int x, int y, int h, const int *enabled) {
+    static const int icon[3] = {UI_ICON_BACK, UI_ICON_FWD, UI_ICON_UP};
+    int s = nav_size(), by = y + (h - s) / 2;
+    for (int i = 0; i < 3; i++)
+        kit_icon_button(nav_x(x, i), by, s, icon[i], enabled[i] ? hot(nav_x(x, i), by, s, s) : KIT_DISABLED);
+}
+static int nav_hit(int x, int y, int h) {
+    int s = nav_size(), by = y + (h - s) / 2;
+    for (int i = 0; i < 3; i++) if (hit(mouse_x, mouse_y, nav_x(x, i), by, s, s)) return i;
+    return -1;
+}
+
+/* Node icons: the app's own icon for applications, else by kind. */
+static int code_name(const char *nm) {
+    static const char *const ext[] = {".c", ".h", ".asm", ".s", ".py", ".js", ".sh", ".ld", ".mk"};
+    for (unsigned i = 0; i < sizeof ext / sizeof *ext; i++) if (file_extension(nm, ext[i])) return 1;
+    return 0;
+}
+static void node_icon_draw(int id, int x, int y, int size, uint8_t paper) {
+    const char *nm = fs_name(id);
+    int big = size >= 32;
+    if (fs_is_app(id)) { app_icon_draw(app_icon_for(app_icon_by_name(nm)), x, y, big ? AI_BIG : AI_SMALL); return; }
+    if (!fs_is_dir(id) && file_extension(nm, ".bex")) { app_icon_draw(AI_NATIVE, x, y, big ? AI_BIG : AI_SMALL); return; }
+    int icon = big ? UI_ICON_A_DOC : UI_ICON_DOC;
+    if (id == trash_id) icon = big ? UI_ICON_A_TRASH : UI_ICON_TRASH;
+    else if (fs_is_dir(id)) icon = big ? UI_ICON_A_FILES : UI_ICON_FOLDER;
+    else if (is_image_file(id)) icon = big ? UI_ICON_A_IMG : UI_ICON_IMG;
+    else if (code_name(nm)) icon = big ? UI_ICON_A_CODE : UI_ICON_CODE;
+    ui_icon_draw(icon, x, y, size, TK_ICON, paper);
+}
+
+static void size_text(unsigned bytes, char *out) {
+    if (bytes < 1024u * 1024u) {
+        fmt_uint(out, (bytes + 1023) / 1024);
+        kstrcpy(out + kstrlen(out), " KB");
+        return;
+    }
+    unsigned tenths = (unsigned)(((unsigned long long)bytes * 10 + 524288) / 1048576);
+    fmt_uint(out, tenths / 10);
+    int n = kstrlen(out);
+    if (tenths < 1000) { out[n++] = '.'; out[n++] = (char)('0' + tenths % 10); }
+    kstrcpy(out + n, " MB");
+}
+
+/* "4 KB", "3 items" or "App". */
+static void node_size_text(int id, char *out) {
+    if (fs_is_dir(id)) {
+        int n = fs_child_count(id);
+        fmt_uint(out, (unsigned)n);
+        kstrcpy(out + kstrlen(out), n == 1 ? " item" : " items");
+    } else if (fs_is_app(id)) kstrcpy(out, "App");
+    else size_text((unsigned)fs_size(id), out);
+}
+
+static int leap_year(unsigned y) { return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0); }
+/* Timestamps count seconds from 2000-01-01. */
+static unsigned day_number(int year, int month, int day) {
+    unsigned n = 0;
+    for (int y = 2000; y < year; y++) n += leap_year((unsigned)y) ? 366 : 365;
+    for (int m = 1; m < month; m++) n += (unsigned)rtc_days_in_month(year, m);
+    return n + (unsigned)day - 1;
+}
+static void day_date(unsigned days, int *year, int *month, int *day) {
+    unsigned y = 2000;
+    for (;;) {
+        unsigned yd = leap_year(y) ? 366 : 365;
+        if (days < yd) break;
+        days -= yd; y++;
+    }
+    int m = 1;
+    while (m < 12 && days >= (unsigned)rtc_days_in_month((int)y, m)) days -= (unsigned)rtc_days_in_month((int)y, m++);
+    *year = (int)y; *month = m; *day = (int)days + 1;
+}
+/* "14:30" or "2:30 PM", following the clock setting. */
+static void clock_text(int hour, int min, char *out) {
+    int n = 0;
+    if (clock_flags & CLOCK_12H) {
+        int h = hour % 12 ? hour % 12 : 12;
+        fmt_uint(out, (unsigned)h);
+        n = kstrlen(out);
+    } else { fmt_pad2(out, hour); n = 2; }
+    out[n++] = ':';
+    fmt_pad2(out + n, min); n += 2;
+    if (clock_flags & CLOCK_12H) { kstrcpy(out + n, hour < 12 ? " AM" : " PM"); n += 3; }
+    out[n] = 0;
+}
+/* "Today 14:30", "Yesterday 18:02" or "18 Oct 2026". */
+static void stamp_text(unsigned stamp, char *out) {
+    if (!stamp) { kstrcpy(out, "Unknown"); return; }
+    RtcTime now;
+    rtc_read(&now);
+    unsigned today = day_number(now.year, now.month, now.day), day = stamp / 86400;
+    if (day == today || day + 1 == today) {
+        kstrcpy(out, day == today ? "Today " : "Yesterday ");
+        clock_text((int)(stamp / 3600 % 24), (int)(stamp / 60 % 60), out + kstrlen(out));
+        return;
+    }
+    int y, m, d;
+    day_date(day, &y, &m, &d);
+    fmt_uint(out, (unsigned)d);
+    int n = kstrlen(out);
+    out[n++] = ' ';
+    for (int i = 0; i < 3; i++) out[n++] = rtc_month_name[m - 1][i];
+    out[n++] = ' ';
+    fmt_uint(out + n, (unsigned)y);
+}
+
+/* Detail list: Name, then Size and Modified at the right when there is
+ * room. Size and date columns start at the returned x values (0: hidden). */
+enum { FL_SIZE = 1, FL_DATE = 2 };
+static int flist_head_h(void) { return MODERN ? 32 : 24; }
+static void flist_columns(int x, int w, int cols, int *name_x, int *size_x, int *date_x) {
+    int dw = (cols & FL_DATE) && w >= 360 ? (MODERN ? 128 : 124) : 0;
+    int sw = (cols & FL_SIZE) && w >= 420 ? 72 : 0;
+    *name_x = x + (MODERN ? 16 : 8);
+    *date_x = dw ? x + w - dw : 0;
+    *size_x = sw ? (dw ? *date_x : x + w) - sw : 0;
+}
+static int flist_name_end(int x, int w, int cols) {
+    int nx, sx, dx;
+    flist_columns(x, w, cols, &nx, &sx, &dx);
+    return (sx ? sx : dx ? dx : x + w) - 8;
+}
+
+static void sort_arrow(int x, int y, int up) {
+    for (int r = 0; r < 4; r++) draw_hline(x + r, up ? y + r : y + 3 - r, 7 - 2 * r, TK_TEXT2);
+}
+
+static void flist_header(int x, int y, int w, int cols, const FileViewOptions *v) {
+    int h = flist_head_h(), nx, sx, dx, ty = kit_ty(y, h);
+    flist_columns(x, w, cols, &nx, &sx, &dx);
+    kit_list_header(x, y, w, h);
+    static const int sorts[3] = {FILE_VIEW_NAME, FILE_VIEW_SIZE, FILE_VIEW_MODIFIED};
+    static const char *const names[3] = {"Name", "Size", "Modified"};
+    int at[3] = {nx, sx ? sx + 8 : 0, dx ? dx + 8 : 0};
+    for (int c = 0; c < 3; c++) {
+        if (!at[c]) continue;
+        if (!MODERN && c) draw_vline(at[c] - 8, y + 4, h - 8, TK_LINE_SUBTLE);
+        int tw = kit_text(names[c], at[c], ty, TK_TEXT, x + w - at[c], 1);
+        if (v && v->sort == sorts[c]) sort_arrow(at[c] + tw + 6, ty + 7, !v->descending);
+    }
+}
+
+/* FILE_VIEW_* for a header click, or -1. */
+static int flist_header_hit(int x, int y, int w, int cols) {
+    int nx, sx, dx;
+    if (!hit(mouse_x, mouse_y, x, y, w, flist_head_h())) return -1;
+    flist_columns(x, w, cols, &nx, &sx, &dx);
+    if (dx && mouse_x >= dx) return FILE_VIEW_MODIFIED;
+    if (sx && mouse_x >= sx) return FILE_VIEW_SIZE;
+    return FILE_VIEW_NAME;
+}
+
+/* One row. warn tints it amber (a name that would be replaced). */
+static void flist_row(int x, int y, int w, int cols, int id, int state, int warn) {
+    int h = ROW_H, nx, sx, dx;
+    flist_columns(x, w, cols, &nx, &sx, &dx);
+    if (warn && !(state & KIT_ON)) kit_fill(MODERN ? x + 6 : x, y, MODERN ? w - 12 : w, h, MODERN ? 6 : 0, TK_AMBER_50, 1);
+    uint8_t ink = kit_row(x, y, w, h, state), dim = kit_row_dim(state);
+    uint8_t paper = (state & KIT_ON) ? ((state & KIT_UNFOCUSED) ? TK_ACCENT_100 : TK_ACCENT) :
+                    warn ? TK_AMBER_50 : ui_theme.content;
+    int ty = kit_ty(y, h), tx = nx + (MODERN ? 24 : 22);
+    char text[32];
+    node_icon_draw(id, nx, y + (h - 16) / 2, 16, paper);
+    kit_text(fs_name(id), tx, ty, ink, flist_name_end(x, w, cols) - tx, 0);
+    if (sx) {
+        node_size_text(id, text);
+        kit_text_right(text, (dx ? dx : x + w) - 16, ty, dim, 0);
+    }
+    if (dx) {
+        stamp_text(fs_modified(id), text);
+        kit_text(text, dx + 8, ty, dim, x + w - dx - 12, 0);
+    }
+}
+
+/* ---------- Open and Save As ----------
+ * One browser serves both: Open hides what the app cannot open, Save As
+ * shows everything and dims other types. Both keep their own back and
+ * forward history. */
+
+static FileViewOptions pick_view;
+static int pick_hidden, pick_show_all, pick_save, pick_manual;
+static int pick_hist[16], pick_hist_n, pick_hist_pos;
+static char pick_typed[FS_NAME_LEN];
+static int pick_typed_len;
+static const char *pick_message;
+
+static const char *const saveas_exts[7] = {".txt", ".pbm", ".bwr", ".rtf", ".bsh", ".csv", ".pdf"};
+static const char *const saveas_types[7] = {
+    "Plain text (.txt)", "Picture (.pbm)", "Writer document (.bwr)", "Rich text (.rtf)",
+    "Spreadsheet (.bsh)", "CSV values (.csv)", "PDF document (.pdf)"
+};
+static int name_target_valid(void) { return name_target >= 0 && name_target < 7; }
+
+static int od_row_enabled(int id) {
+    if (pick_save) return fs_is_dir(id) || (!fs_is_app(id) && name_target_valid() &&
+                                           file_extension(fs_name(id), saveas_exts[name_target]));
+    if (pick_sheet) return fs_is_dir(id) || (!fs_is_app(id) &&
+        (file_extension(fs_name(id),".bsh") || file_extension(fs_name(id),".csv")));
+    if (pick_writer) return !fs_is_app(id);
+    if (!pick_pics_only)
+        return 1;
+    return fs_is_dir(id) || is_image_file(id);
+}
+
+/* Selection never rests on a row the dialog would refuse to open. */
+static int od_next_enabled(int from, int dir) {
+    for (int n = 0; n < pick_count; n++) {
+        int i = (from + dir * (n + 1)) % pick_count;
+        if (i < 0)
+            i += pick_count;
+        if (od_row_enabled(pick_ids[i]))
+            return i;
+    }
+    return -1;
+}
+
+static void od_refresh(void) {
+    if (!fs_is_dir(pick_cwd)) pick_cwd = fs_root();
+    int listed = fs_child_count(pick_cwd);
+    if (listed > pick_capacity) {
+        int *ids = kmalloc((uint32_t)listed * sizeof *ids);
+        unsigned *identities = kmalloc((uint32_t)listed * sizeof *identities);
+        if (ids && identities) {
+            kfree(pick_ids); kfree(pick_identity);
+            pick_ids = ids; pick_identity = identities; pick_capacity = listed;
+        } else {
+            kfree(ids); kfree(identities);
+        }
+    }
+    pick_view.hidden[0] = pick_cwd == fs_root() ? trash_id : -1;
+    pick_view.hidden[1] = pick_cwd == fs_root() ? prefs_id : -1;
+    int total = 0, n = pick_ids ? file_view_build(pick_cwd, &pick_view, pick_ids, pick_identity, pick_capacity, &total) : 0;
+    pick_count = pick_hidden = 0;
+    for (int i = 0; i < n; i++) {
+        if (!pick_save && !pick_show_all && !od_row_enabled(pick_ids[i])) { pick_hidden++; continue; }
+        pick_ids[pick_count] = pick_ids[i];
+        pick_identity[pick_count++] = pick_identity[i];
+    }
+    if (pick_selected >= pick_count)
+        pick_selected = pick_count - 1;
+    if (pick_selected < 0)
+        pick_selected = pick_save ? -1 : 0;
+    if (pick_selected >= 0 && pick_count && !od_row_enabled(pick_ids[pick_selected]))
+        pick_selected = pick_save ? -1 : od_next_enabled(pick_selected, 1);
+}
+
+static void pick_go(int id, int record) {
+    if (!fs_is_dir(id)) return;
+    if (record && id != pick_cwd) {
+        if (pick_hist_n == 0) { pick_hist[0] = pick_cwd; pick_hist_n = 1; pick_hist_pos = 0; }
+        pick_hist_n = pick_hist_pos + 1;
+        if (pick_hist_n == 16) {
+            for (int i = 1; i < 16; i++) pick_hist[i - 1] = pick_hist[i];
+            pick_hist_n--;
+        }
+        pick_hist[pick_hist_n++] = id;
+        pick_hist_pos = pick_hist_n - 1;
+    }
+    pick_cwd = id;
+    pick_first = pick_manual = 0;
+    pick_selected = pick_save ? -1 : 0;
+    pick_view.filter[0] = 0;
+    pick_typed_len = 0; pick_typed[0] = 0;
+    pick_message = 0;
+    od_refresh();
+    dirty = 1;
+}
+
+static void pick_history_step(int dir) {
+    int p = pick_hist_pos + dir;
+    if (p < 0 || p >= pick_hist_n || !fs_is_dir(pick_hist[p])) return;
+    pick_hist_pos = p;
+    pick_go(pick_hist[p], 0);
+}
+
+static void pick_reset(int cwd, int save) {
+    pick_save = save;
+    pick_manual = 0;
+    pick_focus = pick_first = 0;
+    pick_show_all = 0;
+    pick_view.filter[0] = 0;
+    pick_view.sort = FILE_VIEW_NAME;
+    pick_view.descending = 0;
+    pick_hist_n = pick_hist_pos = 0;
+    pick_last_click_item = -1;
+    pick_cwd = fs_is_dir(cwd) ? cwd : fs_root();
+    pick_selected = save ? -1 : 0;
+    pick_typed_len = 0; pick_typed[0] = 0;
+    pick_message = 0;
+    od_refresh();
+}
+
+static int pick_row_id(int row) {
+    if (row < 0 || row >= pick_count) return -1;
+    return fs_identity(pick_ids[row]) == pick_identity[row] ? pick_ids[row] : -1;
+}
+
+static void pick_sort(int sort) {
+    if (pick_view.sort == sort) pick_view.descending = !pick_view.descending;
+    else { pick_view.sort = sort; pick_view.descending = sort == FILE_VIEW_MODIFIED; }
+    int id = pick_row_id(pick_selected);
+    od_refresh();
+    for (int i = 0; i < pick_count; i++) if (pick_ids[i] == id) pick_selected = i;
+    dirty = 1;
+}
+
+static void pick_scroll(int rows, int visible) {
+    int max = pick_count - visible;
+    if (max < 0) max = 0;
+    pick_first += rows;
+    pick_manual = 1;
+    if (pick_first > max) pick_first = max;
+    if (pick_first < 0) pick_first = 0;
+    dirty = 1;
+}
+
+/* Shared layout of the two dialogs. band is the height above the toolbar
+ * (Save As puts its name field there), foot the height of the footer. */
+typedef struct {
+    int x, y, w, h, band_y, tool_y, tool_h, body_y, body_h, side_w, list_x, list_w, rows_y, rows, foot_y, foot_h;
+} Chooser;
+
+static void chooser_layout(Chooser *c, int x, int y, int w, int h, int band, int foot) {
+    c->x = x; c->y = y; c->w = w; c->h = h;
+    c->band_y = y + TITLE_BAR - (MODERN ? 1 : 0);
+    c->tool_y = c->band_y + band;
+    c->tool_h = MODERN ? 44 : 34;
+    c->body_y = c->tool_y + c->tool_h;
+    c->foot_h = foot;
+    c->foot_y = y + h - foot;
+    c->body_h = c->foot_y - c->body_y;
+    c->side_w = w >= 520 ? (MODERN ? 156 : 148) : 0;
+    c->list_x = x + 1 + c->side_w;
+    c->list_w = w - 2 - c->side_w;
+    c->rows_y = c->body_y + flist_head_h();
+    c->rows = (c->foot_y - c->rows_y - 4) / ROW_H;
+    if (c->rows < 1) c->rows = 1;
+}
+
+static int chooser_cols(void) { return pick_save ? FL_DATE : FL_SIZE | FL_DATE; }
+static int chooser_row_w(const Chooser *c) { return c->list_w - (pick_count > c->rows ? SB : 0); }
+static int chooser_right_w(void) { return pick_save ? kit_button_w("New Folder", UI_ICON_NEWF) : 168; }
+static int chooser_right_x(const Chooser *c) { return c->x + c->w - (MODERN ? 12 : 8) - chooser_right_w(); }
+static int chooser_ctl_y(const Chooser *c) { return c->tool_y + (c->tool_h - 1 - BTN_H) / 2; }
+
+/* Footer band: Classic paints the base color, Modern the chrome color with
+ * the window's rounded bottom. */
+static void dlg_footer(int x, int w, int fy, int fh) {
+    if (MODERN) {
+        draw_hline(x + 1, fy, w - 2, TK_LINE);
+        kit_fill_bottom(x + 1, fy + 1, w - 2, fh - 2, ui_theme.r_window - 1, ui_theme.chrome);
+    } else {
+        draw_hline(x + 1, fy, w - 2, TK_LINE_SUBTLE);
+        draw_rect(x + 1, fy + 1, w - 2, fh - 2, TK_BASE);
+    }
+}
+
+/* The name of a row that would be replaced, for Save As. */
+static int saveas_existing(void) {
+    if (!pick_save || !name_len) return -1;
+    for (int i = 0; i < pick_count; i++)
+        if (kstrcmp(fs_name(pick_ids[i]), name_buf) == 0) return i;
+    return -1;
+}
+
+static void chooser_draw(const Chooser *c) {
+    int x = c->x, w = c->w;
+    kit_toolbar(x + 1, c->tool_y, w - 2, c->tool_h);
+    int enabled[3] = {pick_hist_pos > 0, pick_hist_pos < pick_hist_n - 1, pick_cwd != fs_root()};
+    nav_draw(x, c->tool_y, c->tool_h - 1, enabled);
+    int cy = chooser_ctl_y(c), rx = chooser_right_x(c);
+    crumbs_draw(nav_end(x), cy, rx - 8 - nav_end(x), BTN_H, pick_cwd);
+    if (pick_save) kit_button(rx, cy, chooser_right_w(), BTN_H, "New Folder", UI_ICON_NEWF, KB_DEFAULT,
+                              hot(rx, cy, chooser_right_w(), BTN_H));
+    else kit_search(rx, cy, chooser_right_w(), BTN_H, pick_view.filter, "Search",
+                    pick_focus == 3 ? KIT_FOCUS : 0);
+    if (!pick_save && pick_focus == 3 && ((frame_count / 35) & 1) == 0)
+        kit_caret(rx + (MODERN ? 11 : 7) + 21 + kit_text_w(pick_view.filter, 0), kit_ty(cy, BTN_H));
+    if (c->side_w) places_draw(x + 1, c->body_y, c->side_w, c->body_h, pick_cwd, 0);
+    int cols = chooser_cols(), rw = chooser_row_w(c);
+    flist_header(c->list_x, c->body_y, c->list_w, cols, &pick_view);
+    if (pick_selected >= 0 && !pick_manual) {
+        if (pick_selected < pick_first) pick_first = pick_selected;
+        if (pick_selected >= pick_first + c->rows) pick_first = pick_selected - c->rows + 1;
+    }
+    if (pick_first > pick_count - c->rows) pick_first = pick_count - c->rows;
+    if (pick_first < 0) pick_first = 0;
+    int warn = saveas_existing(), y = c->rows_y;
+    for (int i = pick_first; i < pick_count && i < pick_first + c->rows; i++, y += ROW_H) {
+        int id = pick_ids[i], state = 0;
+        if (!od_row_enabled(id)) state = KIT_DISABLED;
+        else if (i == pick_selected && i != warn) state = KIT_ON | (pick_focus ? KIT_UNFOCUSED : 0);
+        flist_row(c->list_x, y, rw, cols, id, state, i == warn);
+    }
+    int nx, sx, dx;
+    flist_columns(c->list_x, rw, cols, &nx, &sx, &dx);
+    if (!pick_count && !pick_hidden)
+        kit_text(pick_view.filter[0] ? "No matching names" : "This folder is empty", nx, kit_ty(y, ROW_H),
+                 TK_TEXT2, rw - 24, 0);
+    if (pick_hidden && y + ROW_H <= c->foot_y) {
+        char note[64];
+        fmt_uint(note, (unsigned)pick_hidden);
+        kstrcpy(note + kstrlen(note), pick_hidden == 1 ? " file hidden by the filter" : " files hidden by the filter");
+        kit_text(note, nx, kit_ty(y + 4, ROW_H), TK_TEXT2, rw - 24, 0);
+    }
+    if (pick_count > c->rows)
+        kit_vscroll(c->list_x + c->list_w - SB, c->rows_y, c->rows * ROW_H, pick_first, c->rows, pick_count, 0);
+}
+
+static int saveas_click_row(int i, int dbl);
+static void files_refresh_all(void);
+static void od_open_selected(void);
+
+/* Clicks in the toolbar, sidebar and list. Returns 1 when handled. */
+static int chooser_click(const Chooser *c) {
+    int n = nav_hit(c->x, c->tool_y, c->tool_h - 1);
+    if (n == 0) { pick_history_step(-1); return 1; }
+    if (n == 1) { pick_history_step(1); return 1; }
+    if (n == 2) { if (pick_cwd != fs_root()) pick_go(fs_parent(pick_cwd), 1); return 1; }
+    int cy = chooser_ctl_y(c), rx = chooser_right_x(c), id;
+    if ((id = crumbs_hit(nav_end(c->x), cy, rx - 8 - nav_end(c->x), BTN_H, pick_cwd)) >= 0) {
+        if (id != pick_cwd) pick_go(id, 1);
+        return 1;
+    }
+    if (hit(mouse_x, mouse_y, rx, cy, chooser_right_w(), BTN_H)) {
+        if (!pick_save) {
+            if (pick_view.filter[0] && mouse_x >= kit_search_clear_x(rx, chooser_right_w())) {
+                pick_view.filter[0] = 0; od_refresh();
+            }
+            pick_focus = 3; dirty = 1;
+            return 1;
+        }
+        if (fs_sync_busy()) { pick_message = "Disk saving. Retry New Folder shortly."; dirty = 1; return 1; }
+        char name[FS_NAME_LEN];
+        int made = fs_unique_dir(pick_cwd, name) < 0 ? -1 : fs_mkdir(pick_cwd, name);
+        if (made < 0) { pick_message = "Could not create a folder here."; dirty = 1; return 1; }
+        pick_message = 0;
+        od_refresh();
+        for (int i = 0; i < pick_count; i++) if (pick_ids[i] == made) pick_selected = i;
+        files_refresh_all();
+        dirty = 1;
+        return 1;
+    }
+    if (c->side_w && (id = places_hit(c->x + 1, c->body_y, c->side_w, c->body_h, 0)) >= 0) {
+        if (id != pick_cwd) pick_go(id, 1);
+        return 1;
+    }
+    int cols = chooser_cols(), rw = chooser_row_w(c), sort = flist_header_hit(c->list_x, c->body_y, c->list_w, cols);
+    if (sort >= 0) { pick_sort(sort); return 1; }
+    if (pick_count > c->rows && hit(mouse_x, mouse_y, c->list_x + c->list_w - SB, c->rows_y, SB, c->rows * ROW_H)) {
+        int at, size;
+        kit_scroll_thumb(c->rows * ROW_H, pick_first, c->rows, pick_count, &at, &size);
+        pick_scroll(mouse_y < c->rows_y + at ? -c->rows : c->rows, c->rows);
+        return 1;
+    }
+    if (!hit(mouse_x, mouse_y, c->list_x, c->rows_y, rw, c->foot_y - c->rows_y)) return 0;
+    int i = pick_first + (mouse_y - c->rows_y) / ROW_H;
+    if (i >= pick_count || i >= pick_first + c->rows) {
+        if (pick_save) pick_selected = -1;
+        dirty = 1;
+        return 1;
+    }
+    if (fs_identity(pick_ids[i]) != pick_identity[i]) { od_refresh(); dirty = 1; return 1; }
+    if (!od_row_enabled(pick_ids[i])) return 1;
+    int dbl = double_click(i, &pick_last_click_item, &pick_last_click_frame);
+    pick_selected = i;
+    pick_typed_len = 0; pick_typed[0] = 0;
+    if (pick_save) saveas_click_row(i, dbl);
+    else {
+        pick_focus = 0;
+        if (dbl) od_open_selected();
+    }
+    dirty = 1;
+    return 1;
+}
+
+static void open_title(char *out) {
+    kstrcpy(out, pick_pics_only ? "Open Picture" : "Open");
+}
+static const char *open_filter_name(void) {
+    if (pick_pics_only) return "Image files";
+    if (pick_sheet) return "Spreadsheets (.bsh, .csv)";
+    if (pick_writer) return "Documents";
+    return "All files";
+}
+static int open_has_filter(void) { return pick_pics_only || pick_sheet || pick_writer; }
+
 static void pick_geom(int *px, int *py, int *pw, int *ph) {
-    *pw = 480;
-    *ph = 340;
+    int top = MENUBAR_H, avail = TASKBAR_Y - top - 16;
+    *pw = fb_w - 16 < 640 ? fb_w - 16 : 640;
+    *ph = avail < 460 ? avail : 460;
     *px = (fb_w - *pw) / 2;
-    *py = (fb_h - *ph) / 2;
+    *py = top + (TASKBAR_Y - top - *ph) / 2;
+}
+
+static int open_foot_h(void) { return (MODERN ? 28 : 24) + BTN_H * 2 + 10; }
+
+static void open_layout(Chooser *c) {
+    int x, y, w, h;
+    pick_geom(&x, &y, &w, &h);
+    chooser_layout(c, x, y, w, h, 0, open_foot_h());
+}
+
+/* Footer: file name and filter on the first row, buttons on the second. */
+static void od_footer(const Chooser *c, int *lx, int *fx, int *fw, int *dx, int *dw, int *row1, int *row2) {
+    int pad = MODERN ? 16 : 12;
+    *lx = c->x + pad;
+    *fx = c->x + 92;
+    *dw = 176;
+    *dx = c->x + c->w - pad - *dw;
+    *fw = *dx - 8 - *fx;
+    *row1 = c->foot_y + (MODERN ? 14 : 12);
+    *row2 = *row1 + BTN_H + 10;
 }
 
 static void od_buttons(int px, int py, int pw, int ph, int *ox, int *oy, int *ow,
                        int *cx, int *cy, int *cw) {
-    *ow = btn_w("Open");
-    *cw = btn_w("Cancel");
-    *oy = *cy = py + ph - 16 - BTN_H;
-    *cx = px + pw - 20 - *cw;
-    *ox = *cx - 12 - *ow;
+    (void)py;
+    *ow = *cw = MODERN ? 84 : 80;
+    *oy = *cy = py + ph - (MODERN ? 14 : 12) - BTN_H;
+    *ox = px + pw - (MODERN ? 16 : 12) - *ow;
+    *cx = *ox - 8 - *cw;
 }
-
-static int od_list_y(int py) { return py + TITLE_H + 12; }
 
 static void draw_open_dialog(void) {
-    int px, py, pw, ph;
-    pick_geom(&px, &py, &pw, &ph);
-    gui_draw_window(px, py, pw, ph, "Open", 0, WIN_NOCLOSE | WIN_NOMENU);
-
+    Chooser c;
+    open_layout(&c);
+    char title[24];
+    open_title(title);
+    shade_rect(0, 0, fb_w, fb_h, 1);
+    chrome_icon = AI_FILES;
+    gui_draw_window(c.x, c.y, c.w, c.h, title, 0, WIN_NOMENU | WIN_DIALOG);
+    chrome_icon = -1;
+    hot(close_box_x(c.x, c.w), cap_y(c.y), CAP_CLOSE_W, CAP_H);
+    chooser_draw(&c);
+    dlg_footer(c.x, c.w, c.foot_y, c.foot_h);
+    int lx, fx, fw, dx, dw, r1, r2;
+    od_footer(&c, &lx, &fx, &fw, &dx, &dw, &r1, &r2);
+    kit_text("File name", lx, kit_ty(r1, BTN_H), TK_TEXT, fx - lx - 8, 0);
+    int tx = kit_field(fx, r1, fw, BTN_H, pick_focus == 0 ? KIT_FOCUS : 0);
+    int id = pick_row_id(pick_selected);
+    const char *shown = pick_typed_len ? pick_typed : id >= 0 && !fs_is_dir(id) ? fs_name(id) : "";
+    int used = kit_text(shown, tx, kit_ty(r1, BTN_H), TK_TEXT, fw - (tx - fx) - 8, 0);
+    if (pick_focus == 0 && pick_typed_len && ((frame_count / 35) & 1) == 0) kit_caret(tx + used, kit_ty(r1, BTN_H));
+    const char *filter = open_has_filter() && pick_show_all ? "All files" : open_filter_name();
+    kit_dropdown(dx, r1, dw, BTN_H, filter, open_has_filter() ? hot(dx, r1, dw, BTN_H) : KIT_DISABLED);
     int ox, oy, ow, cx, cy, cw;
-    od_buttons(px, py, pw, ph, &ox, &oy, &ow, &cx, &cy, &cw);
-    draw_default_button(ox, oy, ow, BTN_H, "Open");
-    draw_button(cx, cy, cw, BTN_H, "Cancel");
-    if(pick_focus)draw_frame((pick_focus==1?cx:ox)-3,oy-3,(pick_focus==1?cw:ow)+6,BTN_H+6,ui_accent);
+    od_buttons(c.x, c.y, c.w, c.h, &ox, &oy, &ow, &cx, &cy, &cw);
+    int can = id >= 0;
+    kit_button(cx, oy, cw, BTN_H, "Cancel", -1, KB_DEFAULT, hot(cx, oy, cw, BTN_H) | (pick_focus == 1 ? KIT_FOCUS : 0));
+    kit_button(ox, oy, ow, BTN_H, "Open", -1, KB_PRIMARY,
+               can ? hot(ox, oy, ow, BTN_H) | (pick_focus == 2 ? KIT_FOCUS : 0) : KIT_DISABLED);
+}
 
-    int ly = od_list_y(py);
-    int lb = oy - 12;
-    int rows = (lb - ly) / ROW_H;
-    int lw = pw - 16;
-    {
-        /* The band above the list names the folder being browsed. */
-        const char *where = pick_cwd == fs_root() ? "Home" : fs_name(pick_cwd);
-        int ty = py + TITLE_BAR + (ly - py - TITLE_BAR - CHAR_H) / 2;
-        draw_string("Look in", px + 16, ty, ui_text_dim);
-        draw_string_bold_clip(where, px + 26 + ui_string_w("Look in"), ty, ui_text, px + pw - 16);
-    }
-    if (pick_count == 0) {
-        draw_string("(empty)", px + 16, ly, ui_text_dim);
+static void start_open_dialog(int pics_only) {
+    open_dlg = 1;
+    pick_pics_only = pics_only;
+    pick_owner = win_front();
+    pick_writer = pick_owner >= 0 && wins[pick_owner].kind == WK_WRITER && !pics_only;
+    pick_sheet = pick_owner >= 0 && wins[pick_owner].kind == WK_SPREADSHEET && !pics_only;
+    pick_owner_seq = pick_owner >= 0 ? wins[pick_owner].seq : 0;
+    pick_reset(fs_root(), 0);
+    dirty = 1;
+}
+
+static void files_refresh_all(void) {
+    int original = context_slot;
+    for (int i = 0; i < MAX_WIN; i++)
+        if (wins[i].open && wins[i].kind == WK_FILES) { context_set(i); fm_refresh(); }
+    context_set(original);
+}
+
+static void close_open_dialog(void) {
+    open_dlg = 0;
+    dirty = 1;
+}
+
+static void od_open_selected(void) {
+    if (pick_count <= 0 || pick_selected < 0 || pick_selected >= pick_count)
+        return;
+    int id = pick_ids[pick_selected];
+    if(fs_identity(id)!=pick_identity[pick_selected]){od_refresh();dirty=1;return;}
+    if (!od_row_enabled(id))
+        return;
+    if (fs_is_dir(id)) {
+        pick_go(id, 1);
         return;
     }
-    if(pick_selected<pick_first)pick_first=pick_selected;
-    if(pick_selected>=pick_first+rows)pick_first=pick_selected-rows+1;
-    for (int i = pick_first; i < pick_count && i < pick_first+rows; i++)
-        draw_file_row(px + 8, ly + (i-pick_first) * ROW_H, lw, pick_ids[i],
-                      i == pick_selected, !od_row_enabled(pick_ids[i]));
+    open_dlg = 0;
+    if (pick_writer || pick_sheet) {
+        if (pick_owner >= 0 && wins[pick_owner].open &&
+            wins[pick_owner].kind == (pick_sheet ? WK_SPREADSHEET : WK_WRITER) &&
+            wins[pick_owner].seq == pick_owner_seq) document_request(pick_owner, DOCUMENT_OPEN, id);
+    } else open_fs_file(id);
 }
+
 
 static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
     char title[40];
@@ -5352,43 +5965,242 @@ static int kind_icon(int kind) {
     }
 }
 
+/* ---------- Properties ----------
+ * The item's icon and name (editable for ordinary files and folders), its
+ * details, the app that opens it, and for the volume root its storage. */
+
+static char prop_buf[FS_NAME_LEN];
+static int prop_len, prop_for = -1, prop_failed;
+static unsigned prop_identity;
+
+static int prop_editable(int id) {
+    return fs_valid(id) && id != fs_root() && !fs_is_app(id) && id != trash_id && id != prefs_id;
+}
+
+static void prop_sync(void) {
+    int id = properties_id;
+    if (prop_for == id && prop_identity == fs_identity(id)) return;
+    prop_for = id;
+    prop_identity = fs_identity(id);
+    prop_failed = 0;
+    prop_len = 0;
+    const char *nm = id == fs_root() ? "System" : fs_name(id);
+    while (nm[prop_len] && prop_len < FS_NAME_LEN - 1) { prop_buf[prop_len] = nm[prop_len]; prop_len++; }
+    prop_buf[prop_len] = 0;
+}
+
+/* 4198 as "4,198". */
+static void fmt_grouped(char *out, unsigned v) {
+    char digits[12];
+    fmt_uint(digits, v);
+    int n = kstrlen(digits), o = 0;
+    for (int i = 0; i < n; i++) {
+        if (i && (n - i) % 3 == 0) out[o++] = ',';
+        out[o++] = digits[i];
+    }
+    out[o] = 0;
+}
+
+static const char *kind_text(int id) {
+    const char *n = fs_name(id);
+    static const struct { const char *ext, *kind; } kinds[] = {
+        {".txt", "Plain text"}, {".bwr", "Writer document"}, {".rtf", "Rich text"},
+        {".bsh", "Spreadsheet"}, {".csv", "CSV values"}, {".pdf", "PDF document"},
+        {".bex", "Program"}, {".c", "C source"}, {".h", "C header"}, {".html", "Web page"},
+        {".htm", "Web page"}, {".wav", "Sound"}, {".mp3", "Sound"}, {".mpg", "Video"},
+        {".mpeg", "Video"}, {".log", "Log file"},
+    };
+    if (id == fs_root()) return "Volume";
+    if (fs_is_dir(id)) return "Folder";
+    if (fs_is_app(id)) return "Application";
+    for (unsigned i = 0; i < sizeof kinds / sizeof *kinds; i++) if (file_extension(n, kinds[i].ext)) return kinds[i].kind;
+    if (is_image_file(id)) return "Picture";
+    return "File";
+}
+
+/* The app open_fs_file would use; 0 when nothing opens it. */
+static const char *opens_with(int id, int *ai) {
+    const char *n = fs_name(id);
+    *ai = AI_DOCUMENT;
+    if (fs_is_dir(id)) { *ai = AI_FILES; return "Files"; }
+    if (fs_is_app(id)) return 0;
+    if (file_extension(n, ".bex")) { *ai = AI_NATIVE; return "Runs as a program"; }
+    if (file_extension(n, ".bwr")) { *ai = AI_WRITER; return "Writer"; }
+    if (file_extension(n, ".bsh") || file_extension(n, ".csv")) { *ai = AI_SHEET; return "Spreadsheet"; }
+    if (file_extension(n, ".html") || file_extension(n, ".htm")) { *ai = AI_BROWSER; return "Browser"; }
+    if (file_extension(n, ".wav") || file_extension(n, ".wave") || file_extension(n, ".mp3") ||
+        file_extension(n, ".mpg") || file_extension(n, ".mpeg")) { *ai = AI_PLAYER; return "Media Player"; }
+    if (is_image_file(id) || file_extension(n, ".jpg") || file_extension(n, ".jpeg") || file_extension(n, ".png") ||
+        file_extension(n, ".bmp") || file_extension(n, ".gif")) { *ai = AI_VIEWER; return "Image Viewer"; }
+    if (fs_size(id) >= EDIT_BUF_SIZE) return 0;
+    *ai = AI_EDITOR;
+    return "Editor";
+}
+
+static int prop_root(void) { return properties_id == fs_root(); }
+static int prop_rows(void) {
+    if (!fs_valid(properties_id)) return 1;
+    return prop_root() ? 6 : 4;
+}
+static int prop_pad(void) { return MODERN ? 20 : 16; }
+static int prop_foot_h(void) { return MODERN ? 58 : BTN_H + 28; }
+static int properties_h(void) {
+    int h = TITLE_BAR + prop_pad() + 32 + 16 + prop_rows() * (MODERN ? 26 : 24) + (MODERN ? 24 : 12);
+    if (fs_valid(properties_id) && !prop_root() && !fs_is_app(properties_id)) h += 16 + BTN_H;
+    if (properties_reason[0]) h += 28;
+    return h + 12 + prop_foot_h();
+}
+
+static void prop_buttons(int wx, int wy, int ww, int wh, int *ok, int *cancel, int *by, int *bw) {
+    (void)wy;
+    *bw = MODERN ? 84 : 80;
+    *by = wy + wh - (prop_foot_h() + BTN_H) / 2 - (MODERN ? 0 : 2);
+    *ok = wx + ww - prop_pad() - *bw;
+    *cancel = *ok - 8 - *bw;
+}
+static void prop_field(int wx, int wy, int ww, int *fx, int *fy, int *fw) {
+    *fx = wx + prop_pad() + 32 + 12;
+    *fy = wy + TITLE_BAR + prop_pad() + (32 - BTN_H) / 2;
+    *fw = ww - (*fx - wx) - prop_pad();
+}
+
+static void prop_row(int lx, int vx, int *y, int right, const char *label, const char *value) {
+    int rh = MODERN ? 26 : 24;
+    kit_text(label, lx, kit_ty(*y, rh), TK_TEXT2, vx - lx - 8, 0);
+    kit_text(value, vx, kit_ty(*y, rh), TK_TEXT, right - vx, 0);
+    *y += rh;
+}
+
+static void draw_properties(int wx, int wy, int ww, int wh, int fl) {
+    prop_sync();
+    int id = properties_id, pad = prop_pad(), valid = fs_valid(id);
+    char title[FS_NAME_LEN + 16];
+    kstrcpy(title, valid ? (prop_root() ? "System" : fs_name(id)) : "Item");
+    kstrcpy(title + kstrlen(title), " Properties");
+    if (valid) chrome_icon = fs_is_dir(id) ? AI_FILES : fs_is_app(id) ? app_icon_for(app_icon_by_name(fs_name(id))) : AI_DOCUMENT;
+    gui_draw_window(wx, wy, ww, wh, title, 0, fl | WIN_NOMENU | WIN_DIALOG);
+    int top = wy + TITLE_BAR, y = top + pad, right = wx + ww - pad;
+    if (valid) {
+        if (prop_root()) ui_icon_draw(UI_ICON_A_DISK, wx + pad, y, 32, TK_ICON, ui_theme.content);
+        else node_icon_draw(id, wx + pad, y, 32, ui_theme.content);
+    }
+    int fx, fy, fw;
+    prop_field(wx, wy, ww, &fx, &fy, &fw);
+    if (valid && prop_editable(id)) {
+        int focus = !(fl & WIN_INACTIVE);
+        int tx = kit_field(fx, fy, fw, BTN_H, (focus ? KIT_FOCUS : 0) | (prop_failed ? KIT_ERROR : 0));
+        int used = kit_text(prop_buf, tx, kit_ty(fy, BTN_H), TK_TEXT, fw - (tx - fx) - 8, 0);
+        if (focus && ((frame_count / 35) & 1) == 0) kit_caret(tx + used, kit_ty(fy, BTN_H));
+    } else kit_text(valid ? prop_buf : "This item is no longer available.", fx, kit_ty(fy, BTN_H), TK_TEXT, fw, 1);
+    y += 32 + 12;
+    int lx = wx + pad, vx = wx + pad + 108;
+    char value[FS_PATH_LEN], number[16];
+    if (MODERN) {
+        int rows = prop_rows();
+        kit_box(wx + pad, y, ww - pad * 2, rows * 26 + 16, 8, TK_RAISED, TK_LINE_SUBTLE);
+        lx += 14; vx += 14; right -= 14; y += 8;
+    } else { kit_separator(wx + pad, y, ww - pad * 2); y += 8; }
+    if (valid && !prop_root()) {
+        prop_row(lx, vx, &y, right, "Kind", kind_text(id));
+        int parent = fs_parent(id);
+        if (fs_valid(parent)) fs_path(parent, value, sizeof value);
+        else kstrcpy(value, "/");
+        prop_row(lx, vx, &y, right, "Location", value);
+        if (fs_is_dir(id)) node_size_text(id, value);
+        else {
+            size_text((unsigned)fs_size(id), value);
+            kstrcpy(value + kstrlen(value), " (");
+            fmt_grouped(number, (unsigned)fs_size(id));
+            kstrcpy(value + kstrlen(value), number);
+            kstrcpy(value + kstrlen(value), fs_size(id) == 1 ? " byte)" : " bytes)");
+        }
+        prop_row(lx, vx, &y, right, "Size", value);
+        stamp_text(fs_modified(id), value);
+        prop_row(lx, vx, &y, right, "Modified", value);
+    } else if (valid) {
+        unsigned cap = fs_capacity(), used = fs_used_bytes();
+        prop_row(lx, vx, &y, right, "Volume", fs_storage_name());
+        size_text(used, value);
+        prop_row(lx, vx, &y, right, "Used", value);
+        size_text(cap > used ? cap - used : 0, value);
+        prop_row(lx, vx, &y, right, "Free", value);
+        if (fs_node_limit() <= FS_MAX_NODES) fmt_uint(value, (unsigned)(fs_node_limit() - fs_node_count()));
+        else kstrcpy(value, "No limit");
+        prop_row(lx, vx, &y, right, "Free slots", value);
+        size_text(fs_file_limit(), value);
+        prop_row(lx, vx, &y, right, "Largest file", value);
+        prop_row(lx, vx, &y, right, "Status", fs_storage_status() ? fs_storage_status() :
+                 fs_needs_sync() ? "Changes waiting to be saved" : "Saved to disk");
+    } else prop_row(lx, vx, &y, right, "Status", "Removed or renamed elsewhere");
+    if (MODERN) { y += 8; lx -= 14; vx -= 14; right += 14; }
+    y += MODERN ? 16 : 4;
+    if (valid && !prop_root() && !fs_is_app(id)) {
+        if (!MODERN) { kit_separator(wx + pad, y, ww - pad * 2); y += 12; }
+        int ai;
+        const char *app = opens_with(id, &ai);
+        kit_text("Opens with", lx, kit_ty(y, BTN_H), TK_TEXT2, vx - lx - 8, 0);
+        int tx = kit_field(vx, y, right - vx, BTN_H, KIT_DISABLED);
+        if (app) {
+            app_icon_draw(ai, tx, y + (BTN_H - 16) / 2, AI_SMALL);
+            kit_text(app, tx + 22, kit_ty(y, BTN_H), TK_TEXT, right - tx - 30, 0);
+        } else kit_text("No app opens this file", tx, kit_ty(y, BTN_H), TK_TEXT2, right - tx - 8, 0);
+        y += BTN_H + 16;
+    }
+    if (properties_reason[0]) {
+        ui_icon_draw(UI_ICON_WARN, lx, y + 2, 16, TK_ICON, ui_theme.content);
+        kit_text(properties_reason, lx + 22, y + 2, TK_AMBER_700, right - lx - 22, 0);
+        y += 28;
+    }
+    if (prop_failed) kit_text(fs_sync_busy() ? "Disk saving. Try again shortly." : "That name cannot be used here.",
+                              wx + pad, wy + wh - prop_foot_h() - 22, TK_RED_700, ww - pad * 2, 0);
+    if (MODERN) dlg_footer(wx, ww, wy + wh - prop_foot_h(), prop_foot_h());
+    int ok, cancel, by, bw;
+    prop_buttons(wx, wy, ww, wh, &ok, &cancel, &by, &bw);
+    if (valid && prop_editable(id))
+        kit_button(cancel, by, bw, BTN_H, "Cancel", -1, KB_DEFAULT, hot(cancel, by, bw, BTN_H));
+    kit_button(ok, by, bw, BTN_H, "OK", -1, KB_PRIMARY, hot(ok, by, bw, BTN_H));
+}
+
+/* OK renames when the name changed; the window stays open on failure. */
+static void properties_commit(void) {
+    int id = properties_id;
+    prop_buf[prop_len] = 0;
+    if (prop_editable(id) && prop_for == id && prop_identity == fs_identity(id) &&
+        kstrcmp(prop_buf, fs_name(id)) != 0) {
+        if (!prop_len || fs_rename(id, prop_buf) < 0) { prop_failed = 1; dirty = 1; return; }
+        files_refresh_all();
+        if (open_dlg || name_dlg) od_refresh();
+    }
+    prop_for = -1;
+    close_front();
+}
+
+static void handle_properties_click(int wx, int wy, int ww, int wh) {
+    int ok, cancel, by, bw;
+    prop_buttons(wx, wy, ww, wh, &ok, &cancel, &by, &bw);
+    if (hit(mouse_x, mouse_y, ok, by, bw, BTN_H)) properties_commit();
+    else if (prop_editable(properties_id) && hit(mouse_x, mouse_y, cancel, by, bw, BTN_H)) { prop_for = -1; close_front(); }
+}
+
+static void properties_key(void) {
+    if (key_sc == KEY_ESC) { prop_for = -1; close_front(); return; }
+    if (key_sc == KEY_ENTER) { properties_commit(); return; }
+    if (!prop_editable(properties_id)) return;
+    prop_sync();
+    if (key_sc == KEY_BACKSPACE) { if (prop_len) prop_buf[--prop_len] = 0; }
+    else if (key_char >= 32 && key_char != '/' && prop_len < FS_NAME_LEN - 1) { prop_buf[prop_len++] = key_char; prop_buf[prop_len] = 0; }
+    else return;
+    prop_failed = 0;
+    dirty = 1;
+}
+
 static void draw_window_contents(Win *w, int inactive) {
     context_set((int)(w - wins));
     chrome_icon = app_icon_for(kind_icon(w->kind));
     int wx = w->x, wy = w->y, ww = w->w, wh = w->h;
     int fl = inactive ? WIN_INACTIVE : 0;
-    if(w->kind==WK_PROPERTIES){
-        gui_draw_window(wx,wy,ww,wh,"Properties",0,fl|WIN_NOMENU);
-        int y=wy+TITLE_BAR+20,lx=wx+24,vx=wx+176;char row[96],number[16];
-        /* Header: the item's icon and name, then label / value rows in two
-         * aligned columns, grouped into the item and its volume. */
-        #define PROP(label,text) do { draw_string_clip(label,lx,y,ui_text_dim,vx-12);draw_string_clip(text,vx,y,ui_text,wx+ww-24);y+=26; }while(0)
-        #define PROP_RULE() do { y+=6;draw_hline(lx,y,ww-48,ui_chrome_dk);y+=16; }while(0)
-        if(fs_valid(properties_id)){
-            int id=properties_id;
-            app_icon_draw(fs_is_dir(id)?AI_FILES:fs_is_app(id)?app_icon_for(app_icon_by_name(fs_name(id))):AI_DOCUMENT,lx,y-4,AI_BIG);
-            draw_string_bold_clip(fs_name(id),lx+AI_BIG+14,y+(AI_BIG-CHAR_H)/2-4,ui_text,wx+ww-24);
-            y+=AI_BIG+4;PROP_RULE();
-            PROP("Type",fs_is_dir(id)?"Folder":fs_is_app(id)?"Application":"File");
-            fmt_uint(number,fs_size(id));kstrcpy(row,number);kstrcpy(row+kstrlen(row),fs_size(id)==1?" byte":" bytes");PROP("Size",row);
-            unsigned stamp=fs_modified(id);
-            if(!stamp)PROP("Modified","Unknown (older file)");
-            else {unsigned days=stamp/86400,year=2000,month=1;int md[]={31,28,31,30,31,30,31,31,30,31,30,31};
-                for(;;){unsigned yd=(year%4==0&&(year%100!=0||year%400==0))?366:365;if(days<yd)break;days-=yd;year++;}
-                md[1]=(year%4==0&&(year%100!=0||year%400==0))?29:28;
-                while(month<12&&days>=(unsigned)md[month-1])days-=md[month++-1];
-                fmt_uint(row,year);int n=kstrlen(row);row[n++]='-';fmt_pad2(row+n,month);n+=2;row[n++]='-';fmt_pad2(row+n,days+1);n+=2;row[n++]=' ';fmt_pad2(row+n,stamp/3600%24);n+=2;row[n++]=':';fmt_pad2(row+n,stamp/60%60);n+=2;kstrcpy(row+n," UTC");PROP("Modified",row);
-            }
-        }else {draw_string_clip("This item is no longer available.",lx,y,ui_text,wx+ww-24);y+=26;}
-        if(properties_reason[0]){draw_string_clip(properties_reason,lx,y,ui_text_dim,wx+ww-24);y+=26;}
-        PROP_RULE();
-        PROP("Volume",fs_storage_name());
-        fmt_uint(number,fs_used_bytes());kstrcpy(row,number);kstrcpy(row+kstrlen(row)," bytes");PROP("Used",row);
-        if(fs_node_limit()<=FS_MAX_NODES){fmt_uint(number,fs_node_limit()-fs_node_count());PROP("Free slots",number);}
-        fmt_uint(number,fs_file_limit());kstrcpy(row,number);kstrcpy(row+kstrlen(row)," bytes");PROP("Largest file",row);
-        PROP("Status",fs_storage_status()?fs_storage_status():fs_needs_sync()?"Changes waiting to be saved":"Saved to disk");
-        #undef PROP
-        #undef PROP_RULE
+    if (w->kind == WK_PROPERTIES) {
+        draw_properties(wx, wy, ww, wh, fl);
     } else if (w->kind == WK_HELLO) {
         gui_draw_window(wx, wy, ww, wh, "Hello", 0, fl | WIN_NOMENU);
         int lw = logo_string_w("BaseOS");
@@ -5498,7 +6310,6 @@ static void launcher_close(void);
  * Classic: a 34px taskbar along the bottom (Apps, one button per window,
  * tray). Modern: a floating dock (Apps, windows, Show desktop) and a 28px top
  * bar with the system button, the front app's menus, volume and clock. */
-typedef struct { int x, y, w, h; } Rect;
 static Rect tb_apps, tb_vol, tb_clock, tb_desk, tb_dock, tb_sys, tb_appname;
 static int tb_task_y, tb_task_h;
 static int volume_on;  /* volume popup */
@@ -6142,39 +6953,98 @@ static void handle_edit_click(int wx, int wy, int ww, int wh) {
 }
 
 static void handle_open_dlg_click(void) {
-    int px, py, pw, ph;
-    pick_geom(&px, &py, &pw, &ph);
+    Chooser c;
+    open_layout(&c);
+    if (hit(mouse_x, mouse_y, close_box_x(c.x, c.w), cap_y(c.y), CAP_CLOSE_W, CAP_H)) {
+        close_open_dialog();
+        return;
+    }
     int ox, oy, ow, cx, cy, cw;
-    od_buttons(px, py, pw, ph, &ox, &oy, &ow, &cx, &cy, &cw);
-
-    /* Modal: no close box. Only Cancel dismisses (ESC is handled in keys). */
+    od_buttons(c.x, c.y, c.w, c.h, &ox, &oy, &ow, &cx, &cy, &cw);
     if (hit(mouse_x, mouse_y, cx, cy, cw, BTN_H)) {
         close_open_dialog();
         return;
     }
-    if (hit(mouse_x, mouse_y, ox - 3, oy - 3, ow + 6, BTN_H + 6)) {
+    if (hit(mouse_x, mouse_y, ox, oy, ow, BTN_H)) {
         od_open_selected();
         return;
     }
-    int ly = od_list_y(py);
-    int lb = oy - 12;
-    int rows = (lb - ly) / ROW_H;
-    int lw = pw - 16;
-    for (int i = pick_first; i < pick_count && i < pick_first+rows; i++) {
-        int iy = ly + (i-pick_first) * ROW_H;
-        if (hit(mouse_x, mouse_y, px + 8, iy, lw, ROW_H)) {
-            if (!od_row_enabled(pick_ids[i]))
-                return;
-            int dbl =
-                double_click(i, &pick_last_click_item, &pick_last_click_frame);
+    int lx, fx, fw, dx, dw, r1, r2;
+    od_footer(&c, &lx, &fx, &fw, &dx, &dw, &r1, &r2);
+    if (hit(mouse_x, mouse_y, fx, r1, fw, BTN_H)) { pick_focus = 0; dirty = 1; return; }
+    if (hit(mouse_x, mouse_y, dx, r1, dw, BTN_H)) {
+        if (open_has_filter()) { pick_show_all = !pick_show_all; od_refresh(); dirty = 1; }
+        return;
+    }
+    /* Modal: clicks outside the dialog are swallowed. */
+    if (hit(mouse_x, mouse_y, c.x, c.y, c.w, c.h)) chooser_click(&c);
+}
+
+/* Case-insensitive prefix test for type-ahead. */
+static int name_has_prefix(const char *name, const char *prefix) {
+    for (; *prefix; name++, prefix++) {
+        char a = *name, b = *prefix;
+        if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+        if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+        if (!a || a != b) return 0;
+    }
+    return 1;
+}
+
+static void pick_type_select(void) {
+    if (!pick_typed_len) return;
+    for (int i = 0; i < pick_count; i++)
+        if (od_row_enabled(pick_ids[i]) && name_has_prefix(fs_name(pick_ids[i]), pick_typed)) {
             pick_selected = i;
-            dirty = 1;
-            if (dbl)
-                od_open_selected();
             return;
         }
+}
+
+static void open_dlg_key(void) {
+    static const int order[4] = {0, 3, 1, 2};
+    if (key_sc == KEY_TAB) {
+        int k = 0;
+        while (k < 3 && order[k] != pick_focus) k++;
+        pick_focus = order[(k + (shift_down ? 3 : 1)) % 4];
+        dirty = 1;
+        return;
     }
-    /* Modal: swallow clicks on the desktop/window underneath. */
+    if (alt_down && (key_sc == KEY_LEFT || key_sc == KEY_RIGHT)) { pick_history_step(key_sc == KEY_LEFT ? -1 : 1); return; }
+    if (alt_down && key_sc == KEY_UP) { if (pick_cwd != fs_root()) pick_go(fs_parent(pick_cwd), 1); return; }
+    if (key_sc == KEY_ESC) {
+        if (pick_focus == 3 && pick_view.filter[0]) { pick_view.filter[0] = 0; od_refresh(); dirty = 1; return; }
+        close_open_dialog();
+        return;
+    }
+    if (key_sc == KEY_ENTER) {
+        if (pick_focus == 1) close_open_dialog();
+        else od_open_selected();
+        return;
+    }
+    if (key_sc == KEY_UP || key_sc == KEY_DOWN) {
+        if (pick_count) {
+            int from = pick_selected < 0 ? (key_sc == KEY_UP ? 0 : pick_count - 1) : pick_selected;
+            int next = od_next_enabled(from, key_sc == KEY_UP ? -1 : 1);
+            if (next >= 0) pick_selected = next;
+        }
+        pick_typed_len = 0; pick_typed[0] = 0;
+        pick_manual = 0;
+        dirty = 1;
+        return;
+    }
+    char *text = pick_focus == 3 ? pick_view.filter : pick_focus == 0 ? pick_typed : 0;
+    if (!text) return;
+    int n = kstrlen(text);
+    if (key_sc == KEY_BACKSPACE) {
+        if (n) text[n - 1] = 0;
+        else if (pick_focus == 0 && pick_cwd != fs_root()) { pick_go(fs_parent(pick_cwd), 1); return; }
+    } else if (key_char >= 32 && key_char != '/' && n < FS_NAME_LEN - 1) {
+        text[n] = key_char;
+        text[n + 1] = 0;
+    } else return;
+    if (pick_focus == 3) { od_refresh(); pick_first = 0; }
+    else { pick_typed_len = kstrlen(pick_typed); pick_type_select(); pick_manual = 0; }
+    dirty = 1;
 }
 
 static void icon_open(int id) {
@@ -7319,11 +8189,11 @@ static void sysinfo_fill(SysInfo *si) {
     si->redraws = redraw_count;
 }
 
-static int name_target = 0;
-static char name_buf[FS_NAME_LEN];
-static int name_len = 0;
-static int name_focus, name_owner, name_owner_seq;
-static unsigned name_pdf_paper;
+
+static void saveas_reset(void);
+static int saveas_dir(void);
+static int saveas_click(int x, int y, int w, int h);
+static int saveas_family_next(int target);
 
 static void namedlg_open(int target, const char *initial) {
     fm_checked_cwd();
@@ -7334,7 +8204,7 @@ static void namedlg_open(int target, const char *initial) {
     name_owner_seq = wins[name_owner].seq;
     name_target = target;
     name_pdf_paper = WRITER_PDF_LETTER;
-    name_len = 0;
+    name_len = name_sel = 0;
     for (int i = 0; initial && initial[i] && i < FS_NAME_LEN - 1; i++)
         name_buf[name_len++] = initial[i];
     name_buf[name_len] = 0;
@@ -7342,6 +8212,7 @@ static void namedlg_open(int target, const char *initial) {
         if (writer_export_retry_name(target == 6 ? DOCUMENT_SAVE_PDF : DOCUMENT_SAVE_RTF,
                                      name_buf, sizeof name_buf, &name_pdf_paper)) name_len = kstrlen(name_buf);
     } else if (target == 5 && spreadsheet_export_retry_name(name_buf, sizeof name_buf)) name_len = kstrlen(name_buf);
+    saveas_reset();
     dirty = 1;
 }
 
@@ -7352,18 +8223,48 @@ static void namedlg_close(void) {
     dirty = 1;
 }
 
+/* Save As: a name band (with paper choice for PDF), the folder browser and
+ * a footer with the type and the buttons. */
 static void namedlg_geom(int *x, int *y, int *w, int *h) {
-    *w = 420;
-    *h = name_target == 6 ? 260 : 168;
+    int avail = fb_h - MENUBAR_H - 64;
+    *w = fb_w - 16 < 640 ? fb_w - 16 : 640;
+    *h = 500 + (name_target == 6 ? 34 : 0);
+    if (*h > avail) *h = avail;
     *x = (fb_w - *w) / 2;
-    *y = MENUBAR_H + 140;
+    *y = MENUBAR_H + 8 + (avail - *h) / 2;
 }
 
+static int namedlg_pad(void) { return MODERN ? 16 : 12; }
+static void namedlg_field(int x, int y, int w, int *fx, int *fy, int *fw, int *fh) {
+    *fx = x + 92;
+    *fy = y + TITLE_BAR + (MODERN ? 9 : 10);
+    *fw = w - 92 - namedlg_pad();
+    *fh = BTN_H;
+}
+/* The message line under the field, then the paper row for PDF. */
+static int namedlg_message_y(int x, int y, int w) {
+    int fx, fy, fw, fh;
+    namedlg_field(x, y, w, &fx, &fy, &fw, &fh);
+    return fy + fh + 6;
+}
+static int namedlg_message_h(void) { return MODERN ? 30 : 22; }
+static void namedlg_paper(int x, int y, int w, int i, int *px, int *py, int *pw, int *ph) {
+    *px = x + 92 + i * 140;
+    *py = namedlg_message_y(x, y, w) + namedlg_message_h() + 6;
+    *pw = 132;
+    *ph = 24;
+}
+static int namedlg_band_h(void) {
+    return (MODERN ? 9 : 10) + BTN_H + 6 + namedlg_message_h() + (name_target == 6 ? 30 : 0) + (MODERN ? 10 : 8);
+}
+static int namedlg_foot_h(void) { return MODERN ? 56 : 48; }
+
 static void namedlg_buttons(int x, int y, int w, int h, int *sx, int *cx, int *by, int *bw) {
-    *bw = 96;
-    *by = y + h - 20 - BTN_H;
-    *sx = x + w - 20 - *bw;
-    *cx = *sx - 12 - *bw;
+    int fh = namedlg_foot_h();
+    *bw = MODERN ? 84 : 80;
+    *by = y + h - fh + (fh - BTN_H) / 2;
+    *sx = x + w - namedlg_pad() - *bw;
+    *cx = *sx - 8 - *bw;
 }
 
 static void namedlg_commit(void) {
@@ -7375,9 +8276,12 @@ static void namedlg_commit(void) {
     int close_after = edit_close_valid() && edit_close_owner == name_owner;
     int action = document_action, target = document_target;
     unsigned identity = document_target_identity;
+    /* The chosen folder becomes the document window's folder. */
+    int chosen = saveas_dir();
+    if (chosen >= 0 && name_target != 1) fm_set_cwd(chosen);
     int parent = fm_checked_cwd();
     int result = name_target == 0 ? edit_write_named(name_buf) :
-                 name_target == 1 ? paint_write_named(name_buf) :
+                 name_target == 1 ? paint_write_in(chosen, name_buf) :
                  name_target == 2 ? writer_save_as(parent, name_buf) :
                  name_target == 3 ? writer_export_rtf(parent, name_buf) :
                  name_target == 6 ? writer_export_pdf(parent, name_buf, name_pdf_paper) :
@@ -7400,50 +8304,94 @@ static void namedlg_commit(void) {
     } else { name_failed = 1; dirty = 1; }
 }
 
+/* ---------- Alerts ----------
+ * A 32px icon, a bold question and a line of detail; the buttons sit on the
+ * content in Classic and on a footer band in Modern. */
+
+static int alert_w(void) { return 440; }
+static int alert_body_h(void) { return MODERN ? 76 : 64; }
+static int alert_foot_h(void) { return MODERN ? 58 : BTN_H + 16; }
+static int alert_h(void) { return TITLE_BAR + alert_body_h() + alert_foot_h(); }
+static void alert_buttons_y(int y, int *by) { *by = y + alert_h() - (alert_foot_h() + BTN_H) / 2 - (MODERN ? 0 : 4); }
+
+static void draw_alert(int x, int y, int w, int h, const char *title, int app_icon, int icon,
+                       const char *heading, const char *detail) {
+    shade_rect(0, 0, fb_w, fb_h, 1);
+    chrome_icon = app_icon;
+    gui_draw_window(x, y, w, h, title, 0, WIN_NOMENU | WIN_DIALOG);
+    chrome_icon = -1;
+    hot(close_box_x(x, w), cap_y(y), CAP_CLOSE_W, CAP_H);
+    int top = y + TITLE_BAR, ix = x + (MODERN ? 20 : 16), tx = ix + 32 + (MODERN ? 14 : 16);
+    ui_icon_draw(icon, ix, top + (MODERN ? 16 : 14), 32, TK_ICON, ui_theme.content);
+    kit_text(heading, tx, top + (MODERN ? 18 : 16), TK_TEXT, x + w - 16 - tx, 1);
+    kit_text(detail, tx, top + (MODERN ? 40 : 37), TK_TEXT2, x + w - 16 - tx, 0);
+    if (MODERN) dlg_footer(x, w, y + h - alert_foot_h(), alert_foot_h());
+}
+
 static void edit_close_geom(int *x, int *y) {
-    *x = (fb_w - 460) / 2;
-    *y = (fb_h - 184) / 2;
+    *x = (fb_w - alert_w()) / 2;
+    *y = (fb_h - alert_h()) / 2;
+}
+
+/* Don't Save at the left; Cancel and Save at the right. */
+static void edit_close_button(int x, int i, int *bx, int *bw) {
+    int pad = MODERN ? 16 : 16;
+    *bw = i == 1 ? kit_button_w("Don't Save", -1) : MODERN ? 84 : 80;
+    if (i == 1) *bx = x + pad;
+    else if (i == 0) *bx = x + alert_w() - pad - *bw;
+    else *bx = x + alert_w() - pad - *bw - 8 - (MODERN ? 84 : 80);
+}
+
+static const char *edit_close_doc_name(void) {
+    const Document *doc = &window_state[edit_close_owner].doc;
+    return wins[edit_close_owner].kind == WK_SPREADSHEET ? spreadsheet_title() :
+        wins[edit_close_owner].kind == WK_WRITER ? writer_title() :
+        doc->file >= 0 && fs_identity(doc->file) == doc->identity ? fs_name(doc->file) : "untitled";
 }
 
 static void draw_edit_close(void) {
     if (!edit_close_dlg) return;
-    int x, y;
+    int x, y, w = alert_w(), h = alert_h();
     edit_close_geom(&x, &y);
-    shade_rect(0, 0, fb_w, fb_h, 1);
-    draw_shadow(x, y, 460, 184);
-    draw_round_rect(x - 1, y - 1, 462, 186, 11, ui_border);
-    draw_round_rect(x, y, 460, 184, 10, INK(1));
-    draw_string_bold(document_pending_owner ? "Saving changes..." : document_action == DOCUMENT_CLOSE ? "Save changes before closing?"
-        : "Save changes before replacing?", x + 22, y + 20, ui_text);
-    const Document *doc = &window_state[edit_close_owner].doc;
-    const char *name = wins[edit_close_owner].kind == WK_SPREADSHEET ? spreadsheet_title() :
-        wins[edit_close_owner].kind == WK_WRITER ? writer_title() :
-        doc->file >= 0 && fs_identity(doc->file) == doc->identity
-                     ? fs_name(doc->file) : "untitled";
-    draw_string_clip(name, x + 22, y + 50, ui_text, x + 438);
-    draw_string(edit_close_failed && fs_sync_busy() ? "Disk saving. Retry Save shortly."
+    char heading[FS_NAME_LEN + 48];
+    if (document_pending_owner) kstrcpy(heading, "Saving changes...");
+    else {
+        kstrcpy(heading, "Save changes to \"");
+        kstrcpy(heading + kstrlen(heading), edit_close_doc_name());
+        kstrcpy(heading + kstrlen(heading), document_action == DOCUMENT_CLOSE ? "\" before closing?" : "\" before replacing?");
+    }
+    const char *detail = edit_close_failed && fs_sync_busy() ? "Disk saving. Retry Save shortly."
                 : document_pending_owner ? "Saving to disk. Cancel keeps this document open."
                 : edit_close_failed == 3 ? "Requested file changed. Cancel and choose it again."
                 : edit_close_failed == 2 ? "Newer changes still need saving."
                 : edit_close_failed ? "Save failed. Your document is still open."
-                                 : "Your unsaved changes will be lost if discarded.",
-                x + 22, y + 82, ui_text_dim);
-    const char *labels[] = {"Save", "Discard", "Cancel"};
+                : "If you don't save, everything since your last save is lost.";
+    int kind = wins[edit_close_owner].kind;
+    draw_alert(x, y, w, h, win_app_name(kind), app_icon_for(kind_icon(kind)),
+               edit_close_failed ? UI_ICON_A_ERR : UI_ICON_A_WARN, heading, detail);
+    static const char *const labels[] = {"Save", "Don't Save", "Cancel"};
+    int by;
+    alert_buttons_y(y, &by);
     for (int i = 0; i < 3; i++) {
         if ((document_pending_owner || edit_close_failed == 3) && i != 2) continue;
-        int bx = x + 126 + 106 * i;
-        if (i == edit_close_focus) draw_default_button(bx, y + 132, 96, BTN_H, labels[i]);
-        else draw_button(bx, y + 132, 96, BTN_H, labels[i]);
+        int bx, bw;
+        edit_close_button(x, i, &bx, &bw);
+        kit_button(bx, by, bw, BTN_H, labels[i], -1, i == 0 ? KB_PRIMARY : KB_DEFAULT,
+                   hot(bx, by, bw, BTN_H) | (i == edit_close_focus ? KIT_FOCUS : 0));
     }
 }
 
 static void edit_close_click(void) {
-    int x, y;
+    int x, y, by;
     edit_close_geom(&x, &y);
-    for (int i = 0; i < 3; i++)
-        if (hit(mouse_x, mouse_y, x + 126 + 106 * i, y + 132, 96, BTN_H)) {
-            edit_close_choose(i); return;
-        }
+    alert_buttons_y(y, &by);
+    if (hit(mouse_x, mouse_y, close_box_x(x, alert_w()), cap_y(y), CAP_CLOSE_W, CAP_H)) { edit_close_choose(2); return; }
+    for (int i = 0; i < 3; i++) {
+        if ((document_pending_owner || edit_close_failed == 3) && i != 2) continue;
+        int bx, bw;
+        edit_close_button(x, i, &bx, &bw);
+        if (hit(mouse_x, mouse_y, bx, by, bw, BTN_H)) { edit_close_choose(i); return; }
+    }
     /* Outside clicks cannot silently discard or dismiss a close request. */
 }
 
@@ -7453,74 +8401,212 @@ static void edit_close_key(void) {
         edit_close_focus = document_pending_owner || edit_close_failed == 3 ? 2 : (edit_close_focus + (shift_down ? 2 : 1)) % 3;
         dirty = 1;
     } else if (key_sc == KEY_ENTER) edit_close_choose(edit_close_focus);
-}
-
-/* PDF errors must remain readable rather than disappearing beyond one line. */
-static void namedlg_pdf_message(const char *message, int x, int y, int width) {
-    for (int row = 0; row < 3 && *message; row++) {
-        char line[112]; int n = 0, last_space = -1;
-        while (message[n] && n < (int)sizeof(line) - 1) {
-            line[n] = message[n]; line[n + 1] = 0;
-            if (ui_string_w(line) > width) break;
-            if (message[n] == ' ') last_space = n;
-            n++;
-        }
-        if (message[n] && last_space > 0) n = last_space;
-        if (!n) n = 1;
-        line[n] = 0;
-        draw_string_clip(line, x, y + row * 18, ui_text_dim, x + width);
-        message += n; while (*message == ' ') message++;
+    else if (key_char == 'd' || key_char == 'D') {
+        if (!document_pending_owner && edit_close_failed != 3) edit_close_choose(1);
     }
 }
+
+/* ---------- Save As ---------- */
+
+static int saveas_dir(void) { return name_dlg && fs_is_dir(pick_cwd) ? pick_cwd : -1; }
+
+/* The folder a document would be saved next to: its own folder, else the
+ * window's folder (Paint defaults to Pictures). */
+static void saveas_reset(void) {
+    int dir = fm_checked_cwd(), file = -1;
+    if (name_target == 0 && edit_binding_valid()) file = edit_file;
+    else if (name_target == 2 || name_target == 3 || name_target == 6) file = writer_file();
+    else if (name_target == 4 || name_target == 5) file = spreadsheet_file();
+    if (file >= 0 && fs_is_dir(fs_parent(file))) dir = fs_parent(file);
+    if (name_target == 1) {
+        int pics = fs_find_child(fs_root(), "Pictures");
+        if (fs_is_dir(pics)) dir = pics;
+    }
+    pick_reset(dir, 1);
+    /* The name without its extension starts selected. */
+    name_sel = 0;
+    for (int i = 0; i < name_len; i++) if (name_buf[i] == '.') name_sel = i;
+}
+
+static Chooser saveas_layout_of(int x, int y, int w, int h) {
+    Chooser c;
+    chooser_layout(&c, x, y, w, h, namedlg_band_h(), namedlg_foot_h());
+    return c;
+}
+
+/* The file this window already owns, which Save As may replace. */
+static int saveas_own_file(void) {
+    if (name_owner < 0 || name_owner >= MAX_WIN) return -1;
+    if (name_target == 0) {
+        const Document *doc = &window_state[name_owner].doc;
+        return doc->file >= 0 && fs_identity(doc->file) == doc->identity ? doc->file : -1;
+    }
+    if (name_target == 2) return writer_file();
+    if (name_target == 4) return spreadsheet_file();
+    return -1;
+}
+
+/* Writer saves BWR or exports RTF and PDF; Spreadsheet saves BSH or
+ * exports CSV. A close request keeps the plain save. */
+static int saveas_family_next(int target) {
+    if (edit_close_valid() && edit_close_owner == name_owner) return target;
+    if (target == 2) return 3;
+    if (target == 3) return 6;
+    if (target == 6) return 2;
+    if (target == 4) return 5;
+    if (target == 5) return 4;
+    return target;
+}
+
+static void saveas_set_target(int target) {
+    if (target == name_target) return;
+    const char *ext = saveas_exts[target];
+    int dot = -1;
+    for (int i = 0; i < name_len; i++) if (name_buf[i] == '.') dot = i;
+    if (dot < 0) dot = name_len;
+    int elen = kstrlen(ext);
+    if (dot + elen < FS_NAME_LEN) { kstrcpy(name_buf + dot, ext); name_len = dot + elen; }
+    name_target = target;
+    name_sel = 0;
+    name_failed = 0;
+    name_focus = 0;
+    od_refresh();
+    dirty = 1;
+}
+
+static int saveas_click_row(int i, int dbl) {
+    int id = pick_ids[i];
+    if (fs_is_dir(id)) {
+        if (dbl) pick_go(id, 1);
+        return 0;
+    }
+    const char *nm = fs_name(id);
+    name_len = 0;
+    while (nm[name_len] && name_len < FS_NAME_LEN - 1) { name_buf[name_len] = nm[name_len]; name_len++; }
+    name_buf[name_len] = 0;
+    name_sel = 0;
+    name_failed = 0;
+    name_focus = 0;
+    if (dbl) namedlg_commit();
+    return 0;
+}
+
+static void saveas_type_rect(const Chooser *c, int *tx, int *ty, int *tw) {
+    *tx = c->x + 92;
+    *ty = c->foot_y + (c->foot_h - BTN_H) / 2;
+    *tw = 220;
+}
+
+/* Returns 1 for the close box. */
+static int saveas_click(int x, int y, int w, int h) {
+    if (hit(mouse_x, mouse_y, close_box_x(x, w), cap_y(y), CAP_CLOSE_W, CAP_H)) return 1;
+    Chooser c = saveas_layout_of(x, y, w, h);
+    int tx, ty, tw;
+    saveas_type_rect(&c, &tx, &ty, &tw);
+    if (hit(mouse_x, mouse_y, tx, ty, tw, BTN_H)) { saveas_set_target(saveas_family_next(name_target)); return 0; }
+    chooser_click(&c);
+    return 0;
+}
+
+static const char *saveas_title(void) {
+    return name_target == 6 ? "Export PDF" : name_target == 5 ? "Export CSV" :
+           name_target == 3 ? "Export Rich Text" : name_target == 1 ? "Save Picture As" : "Save As";
+}
+
+/* Message line: errors, a name that exists, or a note about the type. */
+static void saveas_message(int x, int y, int w, int existing) {
+    char text[FS_NAME_LEN + 64];
+    const char *message = 0;
+    int kind = KIT_INFO;
+    if (name_failed) {
+        message = (name_target == 4 || name_target == 5) ? spreadsheet_status() : name_target >= 2 ? writer_status() :
+                  name_failure_message ? name_failure_message : "Save failed. Check storage and file name.";
+        kind = KIT_ERROR_MSG;
+    } else if (pick_message) {
+        message = pick_message; kind = KIT_ERROR_MSG;
+    } else if (existing >= 0) {
+        kstrcpy(text, name_buf);
+        kstrcpy(text + kstrlen(text), pick_ids[existing] == saveas_own_file() ?
+                " already exists here. Saving will replace it." : " already exists here. Choose another name.");
+        message = text; kind = KIT_WARN;
+    } else if (name_target == 5) message = "Other apps may run formula-like CSV text.";
+    if (!message || !message[0]) return;
+    static const uint8_t fills[] = {TK_ACCENT_50, TK_AMBER_50, TK_RED_50, TK_GREEN_50};
+    static const uint8_t inks[] = {TK_ACCENT_700, TK_AMBER_700, TK_RED_700, TK_GREEN_700};
+    static const int icons[] = {UI_ICON_INFO_C, UI_ICON_WARN, UI_ICON_ERR, UI_ICON_OK};
+    int h = namedlg_message_h(), ix = x;
+    uint8_t paper = MODERN ? ui_theme.chrome : TK_BASE;
+    if (MODERN) { kit_fill(x, y, w, h, 6, fills[kind], 1); ix += 10; paper = fills[kind]; }
+    ui_icon_draw(icons[kind], ix, y + (h - 16) / 2, 16, TK_ICON, paper);
+    kit_text(message, ix + 22, kit_ty(y, h), inks[kind], x + w - ix - 30, 0);
+}
+
 static void draw_namedlg(void) {
     if (!name_dlg)
         return;
     int x, y, w, h;
     namedlg_geom(&x, &y, &w, &h);
-    shade_rect(0, MENUBAR_H, fb_w, TASKBAR_Y - MENUBAR_H, 1);
-    draw_shadow(x, y, w, h);
-    draw_round_rect(x - 1, y - 1, w + 2, h + 2, 11, ui_border);
-    draw_round_rect(x, y, w, h, 10, INK(1));
-    int pdf = name_target == 6;
-    draw_string_bold(pdf ? "Export PDF pages" : name_target == 5 ? "Export values (CSV)" :
-                     name_target == 4 ? "Save spreadsheet as" :
-                     name_target == 3 ? "Export rich text (RTF)" :
-                     name_target == 1 ? "Save picture as" : "Save document as",
-                     x + 22, y + 20, ui_text);
-    char location[FS_NAME_LEN + 16];
-    kstrcpy(location, "Folder: ");
-    kstrcpy(location + 8, fs_is_dir(fm_cwd) && fm_cwd != fs_root() ? fs_name(fm_cwd) : "/");
-    const char *message = name_failed ?
-        ((name_target == 4 || name_target == 5) ? spreadsheet_status() : name_target >= 2 ? writer_status() : name_failure_message ? name_failure_message :
-         "Save failed. Check storage and file name.") :
-        name_target == 5 ? "Other apps may run formula-like CSV text." :
-        name_target == 1 ? "Saved to the Pictures folder" : location;
-    if (pdf) namedlg_pdf_message(message, x + 22, y + 44, w - 44);
-    else draw_string_clip(message, x + 22, y + 20 + CHAR_H + 6, ui_text_dim, x + w - 22);
-    int fx = x + 22, fy = y + (pdf ? 108 : 64), fw = w - 44, fh = 34;
-    draw_round_rect(fx, fy, fw, fh, 7, !pdf || !name_focus ? ui_accent : ui_border);
-    draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 6, ui_field);
-    name_buf[name_len] = 0;
-    draw_string(name_buf, fx + 12, fy + (fh - CHAR_H) / 2, ui_text);
-    int cx2 = fx + 12 + ui_string_w(name_buf);
-    if ((!pdf || !name_focus) && ((frame_count / 35) & 1))
-        draw_rect(cx2 + 1, fy + 8, 2, fh - 16, ui_accent);
-    if (pdf) {
-        draw_string("Paper:", x + 22, y + 158, ui_text);
-        const char *labels[] = {"Letter (US)", "A4"};
-        for (int i = 0; i < 2; i++) {
-            int bx = x + 88 + i * 156;
-            if (name_pdf_paper == (unsigned)i) draw_default_button(bx, y + 152, 148, BTN_H, labels[i]);
-            else draw_button(bx, y + 152, 148, BTN_H, labels[i]);
-            if (name_focus == i + 1) draw_frame(bx - 3, y + 149, 154, BTN_H + 6, ui_accent);
-        }
-        draw_string("Tab: focus   Arrows/Space: paper   Esc: cancel", x + 22, y + 186, ui_text_dim);
+    Chooser c = saveas_layout_of(x, y, w, h);
+    shade_rect(0, 0, fb_w, fb_h, 1);
+    int owner_kind = name_owner >= 0 && name_owner < MAX_WIN ? wins[name_owner].kind : WK_EDIT;
+    chrome_icon = app_icon_for(kind_icon(owner_kind));
+    gui_draw_window(x, y, w, h, saveas_title(), 0, WIN_NOMENU | WIN_DIALOG);
+    chrome_icon = -1;
+    hot(close_box_x(x, w), cap_y(y), CAP_CLOSE_W, CAP_H);
+    int band = namedlg_band_h(), pad = namedlg_pad();
+    if (MODERN) {
+        draw_rect(x + 1, c.band_y, w - 2, band - 1, ui_theme.chrome);
+        draw_hline(x + 1, c.band_y + band - 1, w - 2, TK_LINE);
+    } else {
+        draw_rect(x + 1, c.band_y, w - 2, band - 1, TK_BASE);
+        draw_hline(x + 1, c.band_y + band - 1, w - 2, TK_LINE_SUBTLE);
     }
+    int pdf = name_target == 6;
+    int fx, fy, fw, fh;
+    namedlg_field(x, y, w, &fx, &fy, &fw, &fh);
+    kit_text("Name", x + pad, kit_ty(fy, fh), TK_TEXT, fx - x - pad - 8, 0);
+    int focused = !pdf || !name_focus;
+    int tx = kit_field(fx, fy, fw, fh, focused ? KIT_FOCUS : 0), ty = kit_ty(fy, fh);
+    name_buf[name_len] = 0;
+    int caret = tx;
+    if (name_sel > 0 && name_sel <= name_len && focused) {
+        char stem[FS_NAME_LEN];
+        for (int i = 0; i < name_sel; i++) stem[i] = name_buf[i];
+        stem[name_sel] = 0;
+        int sw = kit_text_w(stem, 0);
+        draw_rect(tx - 1, ty, sw + 2, UI_FONT_H, TK_ACCENT);
+        kit_text(stem, tx, ty, TK_ON_ACCENT, fw - 16, 0);
+        caret = tx + sw + kit_text(name_buf + name_sel, tx + sw, ty, TK_TEXT, fw - 16 - sw, 0);
+    } else caret = tx + kit_text(name_buf, tx, ty, TK_TEXT, fw - 16, 0);
+    if (focused && name_sel == 0 && ((frame_count / 35) & 1) == 0) kit_caret(caret, ty);
+    int existing = saveas_existing();
+    saveas_message(fx, namedlg_message_y(x, y, w), fw, existing);
+    if (pdf) {
+        static const char *const papers[] = {"Letter (US)", "A4"};
+        int px, py, pw, ph;
+        namedlg_paper(x, y, w, 0, &px, &py, &pw, &ph);
+        kit_text("Paper", x + pad, kit_ty(py, ph), TK_TEXT, fx - x - pad - 8, 0);
+        for (int i = 0; i < 2; i++) {
+            namedlg_paper(x, y, w, i, &px, &py, &pw, &ph);
+            int state = (name_pdf_paper == (unsigned)i ? KIT_ON : 0) | (name_focus == i + 1 ? KIT_FOCUS : 0);
+            kit_check_row(px, py + (ph - ui_theme.check) / 2 - 1, papers[i], state | hot(px, py, pw, ph), 1);
+        }
+    }
+    chooser_draw(&c);
+    dlg_footer(x, w, c.foot_y, c.foot_h);
+    int ttx, tty, ttw;
+    saveas_type_rect(&c, &ttx, &tty, &ttw);
+    kit_text("Type", x + pad, kit_ty(tty, BTN_H), TK_TEXT, ttx - x - pad - 8, 0);
+    int switchable = saveas_family_next(name_target) != name_target;
+    kit_dropdown(ttx, tty, ttw, BTN_H, saveas_types[name_target_valid() ? name_target : 0],
+                 switchable ? hot(ttx, tty, ttw, BTN_H) : KIT_DISABLED);
     int sx, cx, by, bw;
     namedlg_buttons(x, y, w, h, &sx, &cx, &by, &bw);
-    draw_button(cx, by, bw, BTN_H, "Cancel");
-    draw_default_button(sx, by, bw, BTN_H, pdf ? "Export" : "Save");
-    if (name_focus >= (pdf ? 3 : 1)) draw_frame((name_focus==(pdf?3:1)?cx:sx)-3,by-3,bw+6,BTN_H+6,ui_accent);
+    const char *action = name_target == 3 || name_target == 5 || pdf ? "Export" :
+                         existing >= 0 && pick_ids[existing] == saveas_own_file() ? "Replace" : "Save";
+    int stop = pdf ? 3 : 1;
+    kit_button(cx, by, bw, BTN_H, "Cancel", -1, KB_DEFAULT, hot(cx, by, bw, BTN_H) | (name_focus == stop ? KIT_FOCUS : 0));
+    kit_button(sx, by, bw, BTN_H, action, -1, KB_PRIMARY, hot(sx, by, bw, BTN_H) | (name_focus == stop + 1 ? KIT_FOCUS : 0));
 }
 
 static int namedlg_click(void) {
@@ -7533,18 +8619,27 @@ static int namedlg_click(void) {
     int sx, cx, by, bw;
     namedlg_buttons(x, y, w, h, &sx, &cx, &by, &bw);
     if (name_target == 6) {
-        for (int i = 0; i < 2; i++) if (hit(mouse_x, mouse_y, x + 88 + i * 156, y + 152, 148, BTN_H)) {
-            name_pdf_paper = (unsigned)i; name_focus = i + 1; name_failed = 0; dirty = 1; return 1;
+        for (int i = 0; i < 2; i++) {
+            int px, py, pw, ph;
+            namedlg_paper(x, y, w, i, &px, &py, &pw, &ph);
+            if (hit(mouse_x, mouse_y, px, py, pw, ph)) {
+                name_pdf_paper = (unsigned)i; name_focus = i + 1; name_failed = 0; dirty = 1; return 1;
+            }
         }
-        if (hit(mouse_x, mouse_y, x + 22, y + 108, w - 44, 34)) { name_focus = 0; dirty = 1; return 1; }
     }
+    int fx, fy, fw, fh;
+    namedlg_field(x, y, w, &fx, &fy, &fw, &fh);
+    if (hit(mouse_x, mouse_y, fx, fy, fw, fh)) { name_focus = 0; name_sel = 0; dirty = 1; return 1; }
     if (hit(mouse_x, mouse_y, sx, by, bw, BTN_H))
         namedlg_commit();
     else if (hit(mouse_x, mouse_y, cx, by, bw, BTN_H))
         namedlg_close();
+    else if (saveas_click(x, y, w, h))
+        namedlg_close();
     return 1;
 }
 
+/* Typing replaces a selected name stem; Backspace removes it. */
 static void namedlg_key(void) {
     int pdf = name_target == 6, stops = pdf ? 5 : 3;
     if (key_sc == KEY_TAB) { name_focus=(name_focus+(shift_down?stops-1:1))%stops;dirty=1;return; }
@@ -7560,13 +8655,27 @@ static void namedlg_key(void) {
         namedlg_close();
     else if (key_sc == KEY_ENTER)
         namedlg_commit();
-    else if (key_sc == KEY_BACKSPACE) {
-        if (name_len > 0)
+    else if (key_sc == KEY_LEFT || key_sc == KEY_RIGHT) {
+        name_sel = 0;
+        dirty = 1;
+    } else if (key_sc == KEY_BACKSPACE) {
+        if (name_sel > 0) {
+            for (int i = name_sel; i <= name_len; i++) name_buf[i - name_sel] = name_buf[i];
+            name_len -= name_sel;
+            name_sel = 0;
+        } else if (name_len > 0)
             name_buf[--name_len] = 0;
         dirty = 1;
     } else if (key_char && key_char != '/' && name_len < FS_NAME_LEN - 1) {
-        name_buf[name_len++] = key_char;
-        name_buf[name_len] = 0;
+        if (name_sel > 0) {
+            for (int i = name_sel; i <= name_len; i++) name_buf[i - name_sel + 1] = name_buf[i];
+            name_buf[0] = key_char;
+            name_len -= name_sel - 1;
+            name_sel = 0;
+        } else {
+            name_buf[name_len++] = key_char;
+            name_buf[name_len] = 0;
+        }
         dirty = 1;
     }
 }
@@ -7850,6 +8959,8 @@ static void window_body_click(int i) {
         handle_settings_click(w->x, w->y, w->w, w->h);
     else if (w->kind == WK_ABOUT)
         handle_about_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_PROPERTIES)
+        handle_properties_click(w->x, w->y, w->w, w->h);
     else if (w->kind == WK_PAINT)
         handle_paint_click(w->x, w->y, w->w, w->h);
     else if (w->kind == WK_WORDLE) {
@@ -7981,6 +9092,7 @@ static void handle_click(void) {
 
 static void handle_wheel(int amount) {
     if(amount&&launcher_on&&!name_dlg&&!open_dlg&&!display_pending){launcher_scroll(amount);return;}
+    if(amount&&(open_dlg||name_dlg)&&!edit_close_dlg&&!display_pending){pick_scroll(amount*3,1);return;}
     if(!amount||name_dlg||edit_close_dlg||open_dlg||launcher_on||open_menu>=0||display_pending)return;
     int target=-1;
     for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&!wins[i].min&&
@@ -8225,21 +9337,7 @@ static void handle_key(void) {
         }
     }
     if (open_dlg) {
-        if(key_sc==KEY_TAB){pick_focus=(pick_focus+(shift_down?2:1))%3;dirty=1;return;}
-        if(key_sc==KEY_ENTER&&pick_focus==1){close_open_dialog();return;}
-        if (key_sc == KEY_UP) {
-            if (pick_count)
-                pick_selected = od_next_enabled(pick_selected, -1);
-            dirty = 1;
-        } else if (key_sc == KEY_DOWN) {
-            if (pick_count)
-                pick_selected = od_next_enabled(pick_selected, 1);
-            dirty = 1;
-        } else if (key_sc == KEY_ENTER) {
-            od_open_selected();
-        } else if (key_sc == KEY_ESC) {
-            close_open_dialog();
-        }
+        open_dlg_key();
         return;
     }
 
@@ -8394,6 +9492,7 @@ static void handle_key(void) {
     }
 
     if(fk==WK_SETTINGS){ settings_key(); return; }
+    if(fk==WK_PROPERTIES){ properties_key(); return; }
     if (fk == WK_CALC) {
         /* Mouse clicks only; ESC still dismisses the window. */
         if (key_sc == KEY_ESC)
@@ -9548,6 +10647,7 @@ static void session_restore(void){
 int program_key(void){ return desktop_program_key(); }
 void program_present(void){cursor_restore();draw_ui();flip_vga();cursor_on=0;dirty=1;}
 static void render_scene(void) {
+                hot_n = 0;
                 int isel = icon_sel;
                 if (fm_drag_active && icon_hit(DESK_TRASH, mouse_x, mouse_y))
                     isel = DESK_TRASH;
@@ -9989,6 +11089,7 @@ static void desktop_pointer_sample(const InputSample *sample) {
     if(desktop_input_blocked())desktop_input_cancel(sample->buttons);
     native_ui_refresh(sample->ticks,sample->buttons);
     if(mouse_moved && dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
+    if(mouse_moved && dragging_win<0 && resizing_win<0){int h=hot_index();if(h!=hot_last){hot_last=h;dirty=1;}}
 }
 static void desktop_keyboard_loss(void) {
     /* Lost focus shortcuts make the intended Terminal owner unknowable. Keep
