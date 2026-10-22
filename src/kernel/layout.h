@@ -74,6 +74,9 @@
 #define NET_CAPACITY 0x10000
 #define BROWSER_BASE 0x1610000
 #define BROWSER_CAPACITY 0x40000
+/* The active style's unpacked UI icon data (src/ui/icons.c). */
+#define ICON_BASE 0x1650000
+#define ICON_CAPACITY 0x40000
 #define PAINT_HISTORY_BASE 0xB00000
 #define PAINT_HISTORY_CAPACITY 0x20000
 #define DOWNLOAD_BASE 0xB30000

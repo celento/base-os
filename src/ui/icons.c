@@ -8,6 +8,7 @@
 #define UI_ICONS_DEFINE_DATA
 #include "ui/ui_icons.h"
 #include "ui/theme.h"
+#include "kernel/layout.h"
 
 /* Icons: ICON_SIZE (toolbars, rows) or APP_ICON_SIZE (tiles, Start menu)
  * squares with 16 coverage levels blended over the surface. */
@@ -47,9 +48,16 @@ int ui_icon_has(int id, int size) {
 }
 
 /* The active style's icon data, unpacked on first use and again after a
- * style change. A truncated or corrupt stream leaves the rest zeroed, which
- * draws as transparent pixels. */
+ * style change, into its own arena outside the kernel image and BSS. A
+ * truncated or corrupt stream leaves the rest zeroed, which draws as
+ * transparent pixels. */
+#if __STDC_HOSTED__
+/* Host tests have no physical arenas. */
 static uint8_t icon_data[UI_ICON_DATA_MAX];
+#else
+#define icon_data ((uint8_t *)ICON_BASE)
+_Static_assert(UI_ICON_DATA_MAX <= ICON_CAPACITY, "icon data exceeds its arena");
+#endif
 static int icon_data_style = -1;
 
 static const uint8_t *ui_icon_unpacked(int style) {

@@ -103,6 +103,7 @@ The QEMU suite creates disposable images and checks fresh boot, reboot, timer pr
 | `0x1500000` | last-presented framebuffer mirror |
 | `0x1600000`–`0x1610000` | network arena |
 | `0x1610000`–`0x1650000` | browser arena |
+| `0x1650000`–`0x1690000` | unpacked UI icons for the active style |
 | `0x1700000`–`0x1900000` | audio source/work arena |
 | `0x1900000`–`0x2000000` | reserved image decoding / owned pixels |
 | `0x2000000`–`0x2800000` | compact file-data pool (8 MiB) |
