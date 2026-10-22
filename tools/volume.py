@@ -23,6 +23,7 @@ import struct
 import tempfile
 import zlib
 import basefs
+import sample_pack
 from layout import constants
 
 C = constants()
@@ -386,7 +387,7 @@ def show_info(data):
     print(f'File limit: {layout.file_limit:,} bytes')
     print(f'Snapshot payload capacity: {layout.payload_limit:,} bytes')
     print(f'Node limit: {layout.node_limit} (includes root, folders, and applications)')
-    if layout.kind == 'data' and not any(data[SECTOR_SIZE:]):
+    if layout.kind == 'data' and not any(sample_pack.without_pack(data)[SECTOR_SIZE:]):
         print('State: blank marked data disk; boot BaseOS once before importing')
         return
     slot, generation, nodes = load(data)

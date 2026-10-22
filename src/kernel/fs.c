@@ -1613,6 +1613,84 @@ static int all_zero(const unsigned char *p, unsigned n) {
     return 1;
 }
 
+/* ---------- Sample pack ----------
+ * A new data disk may carry sample files (tools/sample_pack.py): a header in
+ * the disk's last sector and the files just below it, in the tail of the
+ * second snapshot slot. Until the first save that slot still counts as
+ * blank. The boot that sets the disk up adds each file that is missing. */
+#define SAMPLE_MAGIC 0x504D5342u
+static unsigned sample_first, sample_sectors, sample_bytes, sample_crc, sample_count;
+
+static void sample_probe(void) {
+    unsigned header[SECTOR_SIZE / sizeof(unsigned)];
+    unsigned last = ata_sector_count() - 1;
+    sample_sectors = 0;
+    if (ata_read(last, header, 1) < 0) return;
+    if (header[0] != SAMPLE_MAGIC || header[1] != 1 || header[7] != crc32(header, 28) ||
+        !header[3] || header[3] >= last || header[2] != last - header[3] ||
+        header[4] > header[3] * FS_SECTOR_SIZE) return;
+    sample_first = header[2]; sample_sectors = header[3];
+    sample_bytes = header[4]; sample_crc = header[5]; sample_count = header[6];
+}
+
+/* Zeros the pack in a slot read into img, when the pack lies wholly in it
+ * after the slot's first sector. */
+static void sample_mask(unsigned lba, unsigned span, unsigned char *img) {
+    if (!data_backend || !sample_sectors || sample_first <= lba ||
+        sample_first + sample_sectors > lba + span) return;
+    kmemset(img + (sample_first - lba) * FS_SECTOR_SIZE, 0, (int)(sample_sectors * FS_SECTOR_SIZE));
+}
+
+/* Child named by the next path component of *path (advanced past it), made
+ * if want_dir and missing. -1 when it cannot be used. */
+static int sample_step(int parent, const unsigned char **path, const unsigned char *end, int want_dir) {
+    char name[FS_SNAPSHOT_NAME_LEN];
+    int length = 0;
+    while (*path < end && **path != '/') {
+        if (length == FS_SNAPSHOT_NAME_LEN - 1 || !**path) return -1;
+        name[length++] = (char)*(*path)++;
+    }
+    if (*path < end) ++*path;
+    name[length] = 0;
+    if (!length) return -1;
+    int id = fs_find_child(parent, name);
+    if (!want_dir) return id >= 0 ? -1 : fs_create(parent, name);
+    if (id >= 0) return fs_is_dir(id) ? id : -1;
+    return fs_mkdir(parent, name);
+}
+
+static void sample_import(void) {
+    unsigned sectors = sample_sectors;
+    sample_sectors = 0;
+    if (!sectors || sectors * FS_SECTOR_SIZE > image_capacity) return;
+    const unsigned char *pack = (const unsigned char *)image_base;
+    if (ata_read(sample_first, (void *)image_base, (int)sectors) < 0 ||
+        crc32(pack, sample_bytes) != sample_crc) {
+        platform_log("FS sample pack unreadable; skipped\n");
+        return;
+    }
+    unsigned pos = 0, added = 0;
+    for (unsigned n = 0; n < sample_count && sample_bytes - pos >= 8; ++n) {
+        unsigned size = pack[pos] | pack[pos + 1] << 8 | pack[pos + 2] << 16 | (unsigned)pack[pos + 3] << 24;
+        unsigned length = pack[pos + 4] | pack[pos + 5] << 8;
+        pos += 8;
+        if (length > sample_bytes - pos || size > sample_bytes - pos - length) break;
+        const unsigned char *path = pack + pos, *end = path + length;
+        const char *data = (const char *)end;
+        pos += length + size;
+        int parent = fs_root();
+        const unsigned char *slash = end;
+        while (slash > path && slash[-1] != '/') --slash;
+        while (parent >= 0 && path < slash) parent = sample_step(parent, &path, slash, 1);
+        if (parent < 0 || size > fs_file_limit()) continue;
+        int id = sample_step(parent, &path, end, 0);
+        if (id < 0) continue;
+        if (fs_write(id, data, (int)size) != (int)size) fs_delete(id);
+        else ++added;
+    }
+    platform_log(added ? "FS sample files added\n" : "FS sample files already present\n");
+}
+
 /* 0 valid, 1 wholly blank, -1 corrupt, -2 I/O error. Never modifies nodes. */
 static int read_slot(int slot, DiskHeader *h) {
     unsigned char *img = (unsigned char *)image_base;
@@ -1623,6 +1701,7 @@ static int read_slot(int slot, DiskHeader *h) {
     if (all_zero(img, FS_SECTOR_SIZE)) {
         if (volume_read(lba + 1, img + FS_SECTOR_SIZE, span - 1) < 0)
             return -2;
+        sample_mask(lba, span, img);
         return all_zero(img + FS_SECTOR_SIZE, (span - 1) * FS_SECTOR_SIZE)
                ? 1 : -1;
     }
@@ -1935,6 +2014,7 @@ int fs_load_disk(void) {
     if (fs_sync_busy()) return FS_ERR_BUSY;
     if (sync_new_incarnation() < 0) return -1;
     data_backend = data_problem = 0;
+    sample_sectors = 0;
     int probe = ata_probe();
     if (probe == 0) return load_volume();
     int profile = probe > 0 ? valid_data_marker() : 0;
@@ -1952,6 +2032,7 @@ int fs_load_disk(void) {
     } else if (profile) {
         if (profile == 2) select_large_arenas();
         data_backend = profile;
+        sample_probe();
         int result = load_volume();
         if (result == 0) {
             platform_log(profile == 2 ? "FS mounted large IDE data disk\n" : "FS mounted IDE data disk\n");
@@ -1969,6 +2050,9 @@ int fs_load_disk(void) {
                 active_slot = -1;
                 generation = sync_failures = save_failed = 0;
                 fs_touched = 1;
+                /* Only a disk set up from the built-in defaults gets the
+                 * samples, never one migrated from the boot floppy. */
+                if (source == FS_LOAD_BLANK) sample_import();
                 if (FS_CONVERT_TO_BASEFS) {
                     if (format_basefs() < 0) {
                         data_backend = 0;
