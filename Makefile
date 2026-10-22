@@ -159,8 +159,8 @@ $(OUT)/kernel.packed: $(OUT)/kernel.bin tools/kernel_pack.py tools/layout.py $(S
 $(IMG): $(OUT)/boot.bin $(OUT)/kernel.packed tools/update_image.py tools/kernel_pack.py tools/layout.py $(SRC)/kernel/layout.h
 	$(PYTHON) tools/update_image.py --packed $@ $(OUT)/boot.bin $(OUT)/kernel.packed
 
-$(DATA_IMG): FORCE tools/init_data.py tools/layout.py $(SRC)/kernel/layout.h | $(OUT)
-	$(PYTHON) tools/init_data.py $@ --profile $(DATA_PROFILE)
+$(DATA_IMG): FORCE tools/init_data.py tools/sample_pack.py tools/layout.py $(SRC)/kernel/layout.h | $(OUT)
+	$(PYTHON) tools/init_data.py $@ --profile $(DATA_PROFILE) --samples
 
 run: $(IMG) $(DATA_IMG)
 	qemu-system-i386 -m $(QEMU_MEMORY) -vga std -nic user,model=rtl8139 $(QEMU_AUDIO) \

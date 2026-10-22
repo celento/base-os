@@ -2,6 +2,10 @@
 
 python3 tools/init_data.py build/baseos-data.img
 python3 tools/init_data.py build/baseos-large-data.img --profile large
+python3 tools/init_data.py build/baseos-data.img --samples
+
+--samples also stores the sample pack (tools/sample_pack.py), so the first
+boot adds Documents/Sample, Pictures/Sample and Media/Sample.
 
 An existing data disk is only verified and is never modified. Boot BaseOS once
 with this disk attached to initialize it or migrate a readable floppy snapshot.
@@ -12,6 +16,7 @@ import fcntl
 import os
 from pathlib import Path
 import tempfile
+import sample_pack
 from volume import SECTOR_SIZE, data_layout, data_marker, disk_layout, locked_image, sync_directory
 
 
@@ -21,8 +26,11 @@ def verify(image, *, profile='default'):
             raise ValueError('Existing image does not match the requested BaseOS data profile; refusing to overwrite it')
 
 
-def initialize(image, *, profile='default'):
-    """Return True for a new disk or False for a byte-preserving verification."""
+def initialize(image, *, profile='default', samples=None):
+    """Return True for a new disk or False for a byte-preserving verification.
+
+    samples ({path: bytes}) go into a new disk's sample pack; an existing disk
+    is never changed."""
     layout = data_layout(profile)
     image = Path(image)
     if image.exists():
@@ -36,6 +44,11 @@ def initialize(image, *, profile='default'):
             fcntl.lockf(source, fcntl.LOCK_EX | fcntl.LOCK_NB)
             source.write(data_marker(profile))
             source.truncate(layout.sectors * SECTOR_SIZE)
+            if samples:
+                blank = bytearray(layout.sectors * SECTOR_SIZE)
+                first = sample_pack.install(blank, samples, layout.lbas[1])
+                source.seek(first * SECTOR_SIZE)
+                source.write(blank[first * SECTOR_SIZE:])
             source.flush()
             os.fsync(source.fileno())
             try:
@@ -56,13 +69,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('image', type=Path)
     parser.add_argument('--profile', choices=('default', 'large'), default='default')
+    parser.add_argument('--samples', action='store_true', help='add the sample files on first boot')
     args = parser.parse_args()
     try:
-        created = initialize(args.image, profile=args.profile)
+        samples = sample_pack.default_files() if args.samples else None
+        created = initialize(args.image, profile=args.profile, samples=samples)
     except (OSError, ValueError) as error:
         parser.exit(1, f'data image: {error}\n')
     if created:
-        print(f'Created {args.image}: blank marked {data_layout(args.profile).sectors * SECTOR_SIZE // 1048576} MiB data disk. Boot BaseOS once before importing.')
+        extra = ' with the sample pack' if args.samples else ''
+        print(f'Created {args.image}: blank marked {data_layout(args.profile).sectors * SECTOR_SIZE // 1048576} MiB data disk{extra}. Boot BaseOS once before importing.')
     else:
         print(f'Verified {args.image}: existing data disk left unchanged.')
 
