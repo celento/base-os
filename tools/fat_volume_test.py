@@ -40,7 +40,7 @@ def run(build):
     subprocess.run(['mcopy', '-i', str(fat), str(work / 'OLD SAVE.DAT'), '::GAMES'], check=True, env=ENV)
     subprocess.run(['mcopy', '-i', str(fat), str(work / 'README.TXT'), '::LOCKED.TXT'], check=True, env=ENV)
     subprocess.run(['mattrib', '-i', str(fat), '+r', '::LOCKED.TXT'], check=True, env=ENV)
-    text = boot(build, work, [('/Programs/fatdisk', 'fat', 0, 'fat disk ok')], disk,
+    text = boot(build, work, [('/Scripts/fatdisk', 'fat', 0, 'fat disk ok')], disk,
                 extra=('-drive', f'file={fat},format=raw,if=ide,index=2'))
     assert 'FAT: mounted /disk1' in text, text
     check = subprocess.run(['fsck.fat', '-n', str(fat)], capture_output=True, text=True)

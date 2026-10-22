@@ -21,7 +21,7 @@ static void repaint(void){cursor_restore();draw_desktop();draw_ui();flip_vga();c
 static void tick(void){poll_time();platform_poll();term_task_poll();__asm__ volatile("hlt");}
 static void run_stats(const char *app,const char *path,const char *label){
     context_set(0);term_task_close(0);term_reset();
-    char command_line[81];kstrcpy(command_line,"start /Programs/");kstrcpy(command_line+kstrlen(command_line),app);
+    char command_line[81];kstrcpy(command_line,"start /Scripts/");kstrcpy(command_line+kstrlen(command_line),app);
     kstrcpy(command_line+kstrlen(command_line)," ");kstrcpy(command_line+kstrlen(command_line),path);
     command(command_line);check(term_task_running(0),"DocStats workload launch");
     TermTaskInfo info;check(term_task_info(0,&info)&&info.document[0],"DocStats document metadata");
@@ -74,7 +74,7 @@ void feature_test(void){
     wins[0].x=18;wins[0].y=72;wins[0].w=700;wins[0].h=550;
     wins[1].x=738;wins[1].y=72;wins[1].w=510;wins[1].h=285;
     wins[2].x=738;wins[2].y=377;wins[2].w=510;wins[2].h=245;
-    context_set(1);command("start /Programs/counter.bex");check(term_task_running(1),"DocStats peer Counter start");
+    context_set(1);command("start /Scripts/counter.bex");check(term_task_running(1),"DocStats peer Counter start");
     run_stats("unbatched.bex","/Documents/input-2m.txt","old-2m");
     run_stats("docstats.bex","/Documents/input-2m.txt","new-2m");
     run_stats("unbatched.bex","/Documents/input-16m.txt","old-16m");

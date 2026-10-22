@@ -39,15 +39,15 @@ Writer/Spreadsheet IDE saves and exports return while disk confirmation proceeds
 
 ## Native programs
 
-Open `/Programs/counter.bex`, `notebook.bex`, `docstats.bex` or `pointer.bex`. DocStats analyzes a document; Pointer demonstrates drawing/input. `/Programs/pointer-window.bex` opens an independent native window. The optional `examples/c/workspace_array.c` and `workspace_index.c` BEX2 examples demonstrate larger launch-declared memory; build and import them as described in [BEX2_FORMAT.md](BEX2_FORMAT.md).
+Open `/Scripts/counter.bex`, `notebook.bex`, `docstats.bex` or `pointer.bex`. DocStats analyzes a document; Pointer demonstrates drawing/input. `/Scripts/pointer-window.bex` opens an independent native window. The optional `examples/c/workspace_array.c` and `workspace_index.c` BEX2 examples demonstrate larger launch-declared memory; build and import them as described in [BEX2_FORMAT.md](BEX2_FORMAT.md).
 
 In Terminal:
 
 ```text
 help
-run /Programs/demo.sh
-basic /Programs/demo.bas
-start /Programs/docstats.bex /Documents/stats-sample.txt
+run /Scripts/demo.sh
+basic /Scripts/demo.bas
+start /Scripts/docstats.bex /Documents/stats-sample.txt
 ```
 
 The host C SDK supports BEX1 executables up to 48 KiB in a 64 KiB process region. Opt-in BEX2 permits 256 KiB executables with private text/data/workspace/stack regions in a sparse 4 MiB extent, subject to free pages and process policy. Unmapped gaps are inaccessible; this is not a dynamic heap. Eight task owners share the desktop's window limits.

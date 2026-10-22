@@ -207,7 +207,7 @@ another application. A scene-discard/input-loss boundary that authoritatively
 observes all buttons released clears the old suppression baseline.
 
 `examples/c/pointer.c` is embedded in the runtime; its normal example
-installer creates `/Programs/pointer.bex` when missing and preserves an existing
+installer creates `/Scripts/pointer.bex` when missing and preserves an existing
 name. It is a regular BEX1 SDK app, also buildable as BEX2. Left/right draw separate ink;
 a chord previews both. Only ordinary final UP commits the preview. RESET/CANCEL
 aborts it. R toggles 160×100/320×200 with explicit publication; C clears; O

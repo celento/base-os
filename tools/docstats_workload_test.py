@@ -36,7 +36,7 @@ def prepare(build, directory):
     phrase = b'alpha beta\ngamma delta\n'
     large = (phrase * ((16777216 + len(phrase) - 1) // len(phrase)))[:16777216]
     inputs = {'/Documents/input-2m.txt': large[:2097152], '/Documents/input-16m.txt': large}
-    nodes = {0: node(), 1: node('Documents', 0), 2: node('Programs', 0),
+    nodes = {0: node(), 1: node('Documents', 0), 2: node('Scripts', 0),
              3: node('input-2m.txt', 1, 0, data=inputs['/Documents/input-2m.txt']),
              4: node('input-16m.txt', 1, 0, data=large),
              5: node('docstats.bex', 2, 0, data=(directory / 'docstats.bex').read_bytes()),

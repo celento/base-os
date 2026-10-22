@@ -135,7 +135,7 @@ def prepare(args, runtime, modules):
         documents = {'source.bin': expected_files()['/Documents/source.bin']}
         (work / 'source.bin').write_bytes(documents['source.bin'])
         report['original_files'] = {'/' + parent + '/' + name: dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
-                                   for parent, entries in (('Programs', apps), ('Documents', documents))
+                                   for parent, entries in (('Scripts', apps), ('Documents', documents))
                                    for name, data in entries.items()}
         for profile in (('default', 'large') if args.disk_profile == 'both' else (args.disk_profile,)):
             path = work / (profile + '.img')

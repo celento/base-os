@@ -95,7 +95,7 @@ def run(build, output):
         report['checks'].append('file picker folder/file double-click and Escape dismissal')
         session.key('ctrl-w'); session.launch('terminal')
         session.text('echo ordered-ingress'); session.key('ret')
-        session.text('basic /Programs/demo.bas'); session.key('ret'); session.key('z'); time.sleep(.7)
+        session.text('basic /Scripts/demo.bas'); session.key('ret'); session.key('z'); time.sleep(.7)
         session.text('echo synchronous-return'); session.key('ret')
         report['screenshots'].append(session.shot(output, 'terminal', 'basic-and-return'))
         report['checks'].append('Terminal typing and synchronous BASIC INKEY return')

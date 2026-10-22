@@ -21,7 +21,7 @@ static void launch_query(const char *name){
     launch_check(launch_n==1,"native search must have one match");launcher_run(0);
 }
 void feature_test(void){
-    int programs=fs_resolve(fs_root(),"/Programs"),counter=fs_resolve(fs_root(),"/Programs/counter.bex");
+    int programs=fs_resolve(fs_root(),"/Scripts"),counter=fs_resolve(fs_root(),"/Scripts/counter.bex");
     int done=fs_resolve(fs_root(),"/Documents/native-launch-ok");
     if(done>=0){
         launch_check(launch_value("/Documents/counter-2.txt")>=3,"first counter did not survive reboot");

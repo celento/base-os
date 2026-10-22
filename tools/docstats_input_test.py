@@ -74,7 +74,7 @@ def run(build):
         session.boot(); check = TerminalCheck(session, build)
         nodes = load(disk.read_bytes())[2]
         assert nodes[resolve(nodes, '/Documents/stats-sample.txt')]['data'] == expected
-        session.launch('terminal'); session.text('start /Programs/docstats.bex'); session.key('ret')
+        session.launch('terminal'); session.text('start /Scripts/docstats.bex'); session.key('ret')
         first = check.front(); assert first['kind'] == 11
         session.wait(lambda: check.ready(first['slot']), 'first DocStats stream completes')
         assert check.assert_canvas(check.front(), 320, 200) == (320, 200)
@@ -99,13 +99,13 @@ def run(build):
             assert f'Lines: {len(expected.splitlines())}\n'.encode() in reports[report]
             assert f'Byte sum: {sum(expected)}\n'.encode() in reports[report]
             if index == 0:
-                session.key('ctrl-n'); session.text('start /Programs/docstats.bex'); session.key('ret')
+                session.key('ctrl-n'); session.text('start /Scripts/docstats.bex'); session.key('ret')
                 second = check.front(); assert second['slot'] != first['slot']
                 session.wait(lambda: check.ready(second['slot']), 'second independent native app')
         session.key('ctrl-w')
         session.key('q')
         session.wait(lambda: 'Native task finished.' in check.terminal(first['slot'])['lines'], 'DocStats returns to shell')
-        session.text('start /Programs/counter.bex'); session.key('ret')
+        session.text('start /Scripts/counter.bex'); session.key('ret')
         session.wait(lambda: 'Counter: +/- changes by 10; Space pauses; S saves.' in check.terminal(first['slot'])['lines'],
                      'legacy Counter initialized')
         finished = check.terminal(first['slot'])['lines'].count('Native task finished.')

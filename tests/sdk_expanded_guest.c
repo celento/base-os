@@ -43,17 +43,17 @@ void feature_test(void){
     if(done>=0){
         verify_record(1);verify_record(2);
         check(fs_used_bytes()==fs_capacity(),"SDK reboot full volume mismatch");
-        term_select(0);term_reset();command("exec /Programs/capacity.bex");
+        term_select(0);term_reset();command("exec /Scripts/capacity.bex");
         check(has_line("Program finished."),"SDK full-volume reboot regression");
         guest_process_memory_restored(&backing_before);
         platform_log("NATIVE-SDK-EXPANDED-REBOOT-PASS\n");return;
     }
-    check(fs_size(file("/Programs/stream.bex"))>32768,"SDK large C image absent");
-    check(fs_size(file("/Programs/maximage.bex"))==PROCESS_IMAGE_LIMIT,"SDK exact-cap image absent");
-    term_select(0);term_reset();command("exec /Programs/maximage.bex");
+    check(fs_size(file("/Scripts/stream.bex"))>32768,"SDK large C image absent");
+    check(fs_size(file("/Scripts/maximage.bex"))==PROCESS_IMAGE_LIMIT,"SDK exact-cap image absent");
+    term_select(0);term_reset();command("exec /Scripts/maximage.bex");
     check(has_line("Program finished."),"SDK 48 KiB executable failed");
-    command("start /Programs/stream.bex");
-    term_select(1);term_reset();command("start /Programs/stream.bex");
+    command("start /Scripts/stream.bex");
+    term_select(1);term_reset();command("start /Scripts/stream.bex");
     term_select(2);term_reset();term_char('x');
     unsigned began=timer_ticks();
     while((file("/Documents/native-1.bin")<0||file("/Documents/native-2.bin")<0||fs_needs_sync())&&timer_ticks()-began<60*TIMER_HZ){
@@ -69,22 +69,22 @@ void feature_test(void){
     }
     platform_log("NATIVE-SDK-STREAM-2M-CONCURRENT-PASS\n");
     term_task_key(0,'q');term_task_key(1,'q');until_done(0);until_done(1);
-    term_select(0);command("exec /Programs/hello-c.bex");
+    term_select(0);command("exec /Scripts/hello-c.bex");
     check(has_line("Program finished.")&&term_canvas_width()==160&&term_canvas_height()==100,"SDK legacy canvas reset");
     const unsigned char *pixels=term_canvas();
     check(pixels&&pixels[0]==128&&pixels[15*160+15]==134,"SDK legacy C app changed");
-    command("exec /Programs/notebook.bex");
+    command("exec /Scripts/notebook.bex");
     check(has_line("Program finished.")&&file("/Documents/sdk-note.txt")>=0,"SDK legacy notebook failed");
-    command("basic /Programs/demo.bas");
+    command("basic /Scripts/demo.bas");
     check(term_canvas_width()==160&&term_canvas_height()==100,"SDK BASIC geometry reset");
     platform_log("NATIVE-SDK-LEGACY-PASS\n");
-    term_reset();command("start /Programs/docstats.bex");
+    term_reset();command("start /Scripts/docstats.bex");
     report_ready(0,"Document: /Documents/stats-sample.txt\nBytes: 56812\nWords: 9021\nLines: 904\nByte sum: 4874156\n");
     int docs=file("/Documents"),config=fs_create(docs,"stats-path.txt");
     int empty=fs_create(docs,"empty.txt");check(config>=0&&empty>=0,"DocStats config fixture");
     const char *empty_path="/Documents/empty.txt\n";
     check(fs_write(config,empty_path,kstrlen(empty_path))==kstrlen(empty_path),"DocStats configure path");
-    term_select(1);term_reset();command("start /Programs/docstats.bex");
+    term_select(1);term_reset();command("start /Scripts/docstats.bex");
     report_ready(1,"Document: /Documents/empty.txt\nBytes: 0\nWords: 0\nLines: 0\nByte sum: 0\n");
     platform_log("NATIVE-SDK-DOCSTATS-PASS\n");
     /* Valid full-volume replacement failures retain old data and node count. */
@@ -99,7 +99,7 @@ void feature_test(void){
         unsigned remaining=fs_capacity()-fs_used_bytes();if(remaining>FS_FILE_MAX)remaining=FS_FILE_MAX;
         check(fs_write(filler,fs_data(file("/Documents/native-input.bin")),remaining)==(int)remaining,"SDK fill capacity");
     }
-    int nodes=fs_node_count();term_select(0);term_reset();command("exec /Programs/capacity.bex");
+    int nodes=fs_node_count();term_select(0);term_reset();command("exec /Scripts/capacity.bex");
     check(has_line("Program finished.")&&fs_node_count()==nodes&&!kstrcmp(fs_data(capacity),"keep"),"SDK failed write changed original");
     check(fs_sync()==0,"SDK final durable snapshot");
     guest_process_memory_restored(&backing_before);

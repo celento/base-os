@@ -170,7 +170,7 @@ class PlatformEvidenceTests(unittest.TestCase):
                 manifest=struct.unpack('<12I',nodes[resolve(nodes,'/Documents/platform-manifest.bin')]['data'])
                 self.assertEqual(manifest[:4],(MAGIC,1,4096,fnv(bytes(range(256))*16)))
                 for name,data in frozen.items():
-                    self.assertEqual(nodes[resolve(nodes,'/Programs/'+name)]['data'],data)
+                    self.assertEqual(nodes[resolve(nodes,'/Scripts/'+name)]['data'],data)
 
     def test_unchanged_counter_and_hello_display_decoders(self):
         shapes=((7,5,5,5,7),(2,6,2,2,7),(7,1,7,4,7),(7,1,7,1,7),(5,5,7,1,1),

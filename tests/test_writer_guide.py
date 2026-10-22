@@ -23,5 +23,5 @@ class WriterGuideTests(unittest.TestCase):
         self.assertTrue(all(c == 10 or 32 <= c <= 126 for c in text))
         self.assertTrue(all(not (value & ~7) for value in styles + paragraphs))
         self.assertTrue(all(not value or i == 0 or text[i - 1] == 10 for i, value in enumerate(paragraphs)))
-        for control in (b'Ctrl+Shift+P', b'Letter or A4', b'Ctrl+F filters', b'start /Programs/docstats.bex'):
+        for control in (b'Ctrl+Shift+P', b'Letter or A4', b'Ctrl+F filters', b'start /Scripts/docstats.bex'):
             self.assertIn(control, text)

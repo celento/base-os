@@ -59,6 +59,9 @@ int fs_root(void);
 int fs_valid(int id);
 int fs_is_dir(int id);
 int fs_is_app(int id);
+/* Whether a folder has an app node anywhere below it. Such a folder is part
+ * of the system: it is not renamed, moved or deleted. */
+int fs_holds_app(int id);
 int fs_node_count(void);
 /* Runtime limit: 64 on floppy, 256 on a snapshot-format IDE volume; on
  * BaseFS 2 memory decides. */
@@ -73,6 +76,13 @@ const char *fs_name(int id);
 /* Borrowed bytes, followed by a convenience NUL. Any mutation, and on BaseFS 2
  * any fs_data call for another file, can move them: files load on demand. */
 const char *fs_data(int id);
+
+/* Root folders with a fixed meaning. Apps live in Applications; runnable
+ * programs and scripts in Scripts, which older volumes called Programs.
+ * fs_resolve maps /Programs to /Scripts once no Programs folder is left. */
+#define FS_APPS_DIR "Applications"
+#define FS_SCRIPTS_DIR "Scripts"
+#define FS_LEGACY_SCRIPTS_DIR "Programs"
 
 int fs_find_child(int parent, const char *name);
 int fs_mkdir(int parent, const char *name);

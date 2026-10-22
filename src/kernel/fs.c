@@ -540,19 +540,20 @@ int fs_init(void) {
     fs_write(t, tips, kstrlen(tips));
 
     /* App nodes in the volume — opened by name, not the editor. */
-    fs_create_app(0, "Calculator");
-    fs_create_app(0, "Paint");
-    fs_create_app(0, "Image Viewer");
-    fs_create_app(0, "Snake");
-    fs_create_app(0, "Wordle");
-    fs_create_app(0, "Terminal");
-    fs_create_app(0, "Todo");
-    fs_create_app(0, "Clock");
-    fs_create_app(0, "Calendar");
-    fs_create_app(0, "Minesweeper");
-    fs_create_app(0, "2048");
-    fs_create_app(0, "Breakout");
-    fs_create_app(0, "System Monitor");
+    int apps = fs_mkdir(0, FS_APPS_DIR);
+    fs_create_app(apps, "Calculator");
+    fs_create_app(apps, "Paint");
+    fs_create_app(apps, "Image Viewer");
+    fs_create_app(apps, "Snake");
+    fs_create_app(apps, "Wordle");
+    fs_create_app(apps, "Terminal");
+    fs_create_app(apps, "Todo");
+    fs_create_app(apps, "Clock");
+    fs_create_app(apps, "Calendar");
+    fs_create_app(apps, "Minesweeper");
+    fs_create_app(apps, "2048");
+    fs_create_app(apps, "Breakout");
+    fs_create_app(apps, "System Monitor");
     return 0;
 }
 
@@ -564,6 +565,15 @@ int fs_valid(int id) {
 
 int fs_is_dir(int id) { return fs_valid(id) && nodes[id].is_dir; }
 int fs_is_app(int id) { return fs_valid(id) && nodes[id].is_app; }
+int fs_holds_app(int id) {
+    if (!fs_is_dir(id)) return 0;
+    for (int i = 0; i < node_slots; i++) {
+        if (!nodes[i].used || !nodes[i].is_app) continue;
+        for (int walk = nodes[i].parent, depth = 0; walk >= 0 && depth <= FS_MAX_DEPTH; walk = nodes[walk].parent, depth++)
+            if (walk == id) return 1;
+    }
+    return 0;
+}
 
 int fs_node_count(void) {
     int n = 0;
@@ -2661,7 +2671,12 @@ int fs_resolve(int cwd, const char *path) {
         if (!fs_is_dir(id)) return -1;
         if (!kstrcmp(name, ".")) continue;
         if (!kstrcmp(name, "..")) { if (id) id = fs_parent(id); continue; }
-        id = fs_find_child(id, name);
+        int parent = id;
+        id = fs_find_child(parent, name);
+        /* Volumes from before the Scripts folder kept these files in
+         * /Programs; old paths keep working once they have moved. */
+        if (id < 0 && parent == 0 && !kstrcmp(name, FS_LEGACY_SCRIPTS_DIR))
+            id = fs_find_child(0, FS_SCRIPTS_DIR);
         if (id < 0) return -1;
     }
     return id;

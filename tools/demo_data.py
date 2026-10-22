@@ -38,9 +38,9 @@ def install(build, boot_image, data_image, epoch, profile='default', program_exa
     programs = -1
     if program_examples:
         from release_examples import GUIDE_NAME, GUIDE
-        programs = resolve(nodes, '/Programs')
+        programs = resolve(nodes, '/Scripts')
         if programs < 0:
-            raise ValueError('Fresh disk has no Programs directory')
+            raise ValueError('Fresh disk has no Scripts directory')
         examples.extend((name, programs, content) for name, content in program_examples)
         if program_guides is None:  # Preserve the original workspace-only caller contract.
             program_guides = [(GUIDE_NAME, GUIDE)]

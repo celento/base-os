@@ -14,7 +14,7 @@ void feature_test(void) {
     int rebooted = stream_result() >= 0;
     base_desktop_test();
     if (!rebooted) {
-        term_select(4); command_ui("start /Programs/large-stream.bex");
+        term_select(4); command_ui("start /Scripts/large-stream.bex");
         unsigned began = timer_ticks();
         while (term_task_running(4) && timer_ticks() - began < 60 * TIMER_HZ) {
             term_task_poll(); poll_time(); platform_poll(); __asm__ volatile("hlt");

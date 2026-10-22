@@ -27,11 +27,11 @@ void feature_test(void){
     const PhysmemStats backing_before=guest_process_memory();
     check(net_status()->available,"task media needs RTL8139");
     check(audio_status()->available,"task media needs SB16");
-    int programs=fs_find_child(fs_root(),"Programs"),id=fs_find_child(programs,"counter.bex");
+    int programs=fs_find_child(fs_root(),"Scripts"),id=fs_find_child(programs,"counter.bex");
     if(id<0){id=fs_create(programs,"counter.bex");check(id>=0,"counter install");check(fs_write(id,(const char *)sdk_counter,sizeof sdk_counter)==sizeof sdk_counter,"counter write");}
-    open_term();int first=win_front();command("start /Programs/counter.bex");
+    open_term();int first=win_front();command("start /Scripts/counter.bex");
     wins[first].x=22;wins[first].y=80;wins[first].w=580;wins[first].h=285;
-    open_term();int second=win_front();command("start /Programs/counter.bex");
+    open_term();int second=win_front();command("start /Scripts/counter.bex");
     wins[second].x=22;wins[second].y=385;wins[second].w=580;wins[second].h=285;
     check(first==0&&second==1&&term_task_running(first)&&term_task_running(second),"counter owners");
     term_task_key(first,'+');term_task_key(first,'+');term_task_key(second,'+');

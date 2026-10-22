@@ -246,7 +246,7 @@ class PlatformSession(DesktopSession):
         # Ctrl+N opens a new Terminal when one is focused. Launcher alone reuses
         # a finished Terminal, so use the ordinary Terminal command explicitly.
         self.key('ctrl-n')
-        self.text('start /Programs/platform.bex')
+        self.text('start /Scripts/platform.bex')
         self.key('ret')
         self.key('alt-ret')
         return self.until(lambda o: o['page'] == 0, 'new platform client visible')[0]

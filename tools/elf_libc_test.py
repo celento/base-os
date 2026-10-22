@@ -20,12 +20,12 @@ TOOLCHAIN = ROOT / 'build/toolchain/bin'
 
 
 def data_disk(work, files):
-    """A fresh data volume with files: {name: bytes} under /Programs."""
+    """A fresh data volume with files: {name: bytes} under /Scripts."""
     disk = work / 'data.img'
     initialize(disk)
     data = bytearray(disk.read_bytes())
     nodes = {0: dict(parent=-1, name='', directory=1, app=0, data=b'', modified=0),
-             1: dict(parent=0, name='Programs', directory=1, app=0, data=b'', modified=0)}
+             1: dict(parent=0, name='Scripts', directory=1, app=0, data=b'', modified=0)}
     for name, content in files.items():
         nodes[len(nodes)] = dict(parent=1, name=name, directory=0, app=0, data=content, modified=0)
     header, payload = encode_snapshot(nodes, DATA_LAYOUT, 1)
@@ -57,9 +57,9 @@ def run(build):
     disk = data_disk(work, {'hello': hello_c.read_bytes(), 'hello-cpp': hello_cpp.read_bytes(),
                             'files': files.read_bytes()})
     text = boot(build, work, [
-        ('/Programs/hello', 'c', 0, 'threads total 1000000 (expected 1000000)'),
-        ('/Programs/hello-cpp', 'cpp', 0, 'exceptions work'),
-        ('/Programs/files', 'files', 0, 'files ok: 1 entry, pipe'),
+        ('/Scripts/hello', 'c', 0, 'threads total 1000000 (expected 1000000)'),
+        ('/Scripts/hello-cpp', 'cpp', 0, 'exceptions work'),
+        ('/Scripts/files', 'files', 0, 'files ok: 1 entry, pipe'),
     ], disk)
     for needle in ('Hello from C on BaseOS (3 arguments)', 'malloc and memset of 32 MiB ok',
                    'read 100 lines, last 100', 'notes.txt is 792 bytes', 'entry kept.txt',

@@ -166,7 +166,7 @@ def seed_disk(path, profile, apps, documents, modules):
     modules['init_data'].initialize(path, profile=profile)
     volume = modules['volume']
     nodes = {0: dict(parent=-1, name='', directory=1, app=0, data=b'', modified=0),
-             1: dict(parent=0, name='Programs', directory=1, app=0, data=b'', modified=0),
+             1: dict(parent=0, name='Scripts', directory=1, app=0, data=b'', modified=0),
              2: dict(parent=0, name='Documents', directory=1, app=0, data=b'', modified=0)}
     for parent, entries in ((1, apps), (2, documents)):
         for name, data in entries.items():
@@ -220,7 +220,7 @@ def prepare(args, runtime, modules):
     report['expected_reports'] = {'array': expected_report('array', fallback).decode(),
                                   'index': expected_report('index', explicit).decode()}
     report['original_files'] = {}
-    for parent, entries in (('Programs', apps), ('Documents', documents)):
+    for parent, entries in (('Scripts', apps), ('Documents', documents)):
         for name, data in entries.items():
             report['original_files']['/' + parent + '/' + name] = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
     for name, data in documents.items():
@@ -348,7 +348,7 @@ def run_profile(args, profile, report, modules, font):
         # that production Terminal argument handling selected the intended file.
         session.key('ctrl-n')
         session.key('alt-ret')
-        command = 'start /Programs/workspace-index.bex /Documents/index-source.txt'
+        command = 'start /Scripts/workspace-index.bex /Documents/index-source.txt'
         session.text(command)
         session.key('ret')
         lines = report['expected_reports']['index'].splitlines() + ['Saved and synchronized:', 'Native task finished.']

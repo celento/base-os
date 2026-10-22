@@ -1,6 +1,6 @@
 # Protected native desktop tasks
 
-`start /Programs/counter.bex` starts an ordinary BEX1 program without the two-second lifetime limit of `exec`. Open another Terminal and run the same command: each copy maintains its own counter, canvas, input, stack, and data. The desktop continues taking input and servicing its cooperative built-in applications between native slices.
+`start /Scripts/counter.bex` starts an ordinary BEX1 program without the two-second lifetime limit of `exec`. Open another Terminal and run the same command: each copy maintains its own counter, canvas, input, stack, and data. The desktop continues taking input and servicing its cooperative built-in applications between native slices.
 
 BEX1 remains the default 64 KiB contract. The same hosted desktop route also
 supports the opt-in [BEX2 format](BEX2_FORMAT.md), whose sparse 4 MiB

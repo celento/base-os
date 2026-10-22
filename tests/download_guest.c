@@ -66,7 +66,7 @@ void feature_test(void){
     dl_check(fs_mkdir(0,"changed")==folder&&fs_identity(folder)!=identity,"reuse folder slot");dl_wait(DOWNLOAD_ERROR);dl_absent("/changed/file.bin");
     platform_log("DOWNLOAD-FAILURES-PRESERVE-PASS\n");
     open_term();native_slot=win_front();wins[native_slot].x=18;wins[native_slot].y=365;wins[native_slot].w=600;wins[native_slot].h=275;
-    dl_command("start /Programs/counter.bex");dl_check(term_task_running(native_slot),"native counter starts");
+    dl_command("start /Scripts/counter.bex");dl_check(term_task_running(native_slot),"native counter starts");
     open_edit();int edit_slot=win_front();wins[edit_slot].x=638;wins[edit_slot].y=75;wins[edit_slot].w=610;wins[edit_slot].h=240;
     const char *text="Editing while 2 MiB downloads in the background.\n";while(*text)edit_insert(*text++);
     dl_check(edit_write_named("download-notes.txt"),"save first Editor content");

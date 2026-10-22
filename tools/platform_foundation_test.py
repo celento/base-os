@@ -44,8 +44,8 @@ def fixture(directory, profile, app, seed=None, bulk=True):
     nodes = load(Path(seed).read_bytes())[2] if seed else {
         0: dict(parent=-1, name='', directory=1, app=0, data=b'', modified=0),
         1: dict(parent=0, name='Documents', directory=1, app=0, data=b'', modified=0),
-        2: dict(parent=0, name='Programs', directory=1, app=0, data=b'', modified=0)}
-    documents, programs = resolve(nodes, '/Documents'), resolve(nodes, '/Programs')
+        2: dict(parent=0, name='Scripts', directory=1, app=0, data=b'', modified=0)}
+    documents, programs = resolve(nodes, '/Documents'), resolve(nodes, '/Scripts')
     lengths = ([2 << 20, 2 << 20, 2 << 20, 1 << 20] if profile == 'default' else [16 << 20, 12 << 20]) if bulk else [4096]
     payloads = [bytes(range(256)) * (length // 256) for length in lengths]
     manifest = [MAGIC, len(payloads)]
@@ -160,11 +160,11 @@ def compatibility(build, work, app):
         result['directory']=str(session.directory);session.boot();quiet(session)
         session.launch('terminal');session.key('alt-ret')
         for mode in ('exec','start'):
-            session.text(mode+' /Programs/hello-c.bex');session.key('ret')
+            session.text(mode+' /Scripts/hello-c.bex');session.key('ret')
             session.wait(lambda:hello_canvas(session.frame()[0]) is not None,'unchanged C hello canvas in '+mode)
             result['checks'].append('frozen hello-c '+mode+' exact canvas')
         hello_position=hello_canvas(session.frame()[0]);assert hello_position
-        session.text('exec /Programs/hello.bex');session.key('ret')
+        session.text('exec /Scripts/hello.bex');session.key('ret')
         def assembly_canvas():
             pixels,_=session.frame();x,y,scale=hello_position
             canvas=pixels[y:y+100*scale,x:x+160*scale]
@@ -173,11 +173,11 @@ def compatibility(build, work, app):
             return np.array_equal(mask,expected)
         session.wait(assembly_canvas,'unchanged assembly hello exact plotted point')
         result['checks'].append('frozen assembly hello legacy exec exact canvas')
-        session.text('exec /Programs/notebook.bex');session.key('ret')
+        session.text('exec /Scripts/notebook.bex');session.key('ret')
         session.wait(lambda:durable_contains(disk,'/Documents/sdk-note.txt',NOTE),'legacy notebook durable bytes',90)
         quiet(session)
         result['checks'].append('frozen notebook legacy exec exact durable note')
-        session.text('start /Programs/docstats.bex');session.key('ret');time.sleep(1)
+        session.text('start /Scripts/docstats.bex');session.key('ret');time.sleep(1)
         session.key('s')
         def stats_saved():
             nodes=load(disk.read_bytes())[2]
@@ -188,7 +188,7 @@ def compatibility(build, work, app):
                     if node['data']==expected:return True
             return False
         session.wait(stats_saved,'frozen docstats streamed exact durable report',90)
-        quiet(session);session.key('q');session.text('start /Programs/counter.bex');session.key('ret')
+        quiet(session);session.key('q');session.text('start /Scripts/counter.bex');session.key('ret')
         first=None
         def counter_ready():
             nonlocal first
@@ -300,7 +300,7 @@ def run_profile(build,work,profile,app,seed,timeout,staged_default=False):
         print(profile+' owner-bound pending receipts, release, close and slot reuse passed',flush=True)
         active_id,active_handle,active_start=bid,handle_b,b
         # The frozen Counter is a third, independently scheduled old binary.
-        session.key('ctrl-n');session.text('start /Programs/counter.bex');session.key('ret');session.key('alt-ret')
+        session.key('ctrl-n');session.text('start /Scripts/counter.bex');session.key('ret');session.key('alt-ret')
         counter=None
         def ready():
             nonlocal counter

@@ -59,8 +59,8 @@ negotiation, endpoint open/reopen and kind/capability validation for the GUI
 build. Its drawing model, event consumer, cancellation, signed coordinates and
 wait loop are shared. Producer regression tests retain the existing default BEX1
 and unflagged BEX2 Pointer bytes and the unflagged BEX2 minor-1 requirement.
-The example installer adds `/Programs/pointer-window.bex` only when
-that name is absent, alongside `/Programs/pointer.bex`.
+The example installer adds `/Scripts/pointer-window.bex` only when
+that name is absent, alongside `/Scripts/pointer.bex`.
 
 | Input and context | Dispatch |
 |---|---|

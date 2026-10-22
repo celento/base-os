@@ -48,8 +48,8 @@ typedef struct { const char *name,*usage,*description,*example,*note; } Manual;
 static const Manual commands[]={
     {"help","help [COMMAND]","List commands, or show a command's manual.","help mkdir","Use Page Up / Page Down to read earlier output."},
     {"man","man COMMAND","Show usage, explanation, and an example.","man basic","man and help accept the same command names."},
-    {"ls","ls [PATH]","List a folder; / after a name marks a directory.","ls /Programs","Without PATH, lists the terminal's current folder."},
-    {"cd","cd PATH","Change this terminal's working folder.","cd /Programs","Paths accept /, . and ..; quote names with spaces."},
+    {"ls","ls [PATH]","List a folder; / after a name marks a directory.","ls /Scripts","Without PATH, lists the terminal's current folder."},
+    {"cd","cd PATH","Change this terminal's working folder.","cd /Scripts","Paths accept /, . and ..; quote names with spaces."},
     {"pwd","pwd","Print the current folder's absolute path.","pwd","Each Terminal window has its own working folder."},
     {"cat","cat FILE","Print a file as text.","cat /readme.txt","Nonprinting bytes appear as dots; this does not change the file."},
     {"mkdir","mkdir PATH","Create one new folder.","mkdir /Projects","The parent must exist. An existing name is an error."},
@@ -60,8 +60,8 @@ static const Manual commands[]={
     {"clear","clear","Clear this terminal's output and graphics canvas.","clear","Command history and the current folder are kept."},
     {"stat","stat PATH","Show type, byte size, and modification timestamp.","stat /readme.txt","Time is UTC seconds since 2000; zero means unknown."},
     {"df","df","Show used bytes, payload capacity, free slots, and disk status.","df","Folders and session files consume slots: 256 on IDE, 64 on floppy."},
-    {"run","run SCRIPT","Run one terminal command per script line.","run /Programs/demo.sh","Stops on errors; four nested scripts, 256 command dispatches."},
-    {"basic","basic FILE","Run numbered, uppercase Tiny BASIC statements.","basic /Programs/demo.bas","PRINT, LET, IF/THEN, GOTO, INKEY, WAIT, PLOT, RECT, REM, END."},
+    {"run","run SCRIPT","Run one terminal command per script line.","run /Scripts/demo.sh","Stops on errors; four nested scripts, 256 command dispatches."},
+    {"basic","basic FILE","Run numbered, uppercase Tiny BASIC statements.","basic /Scripts/demo.bas","PRINT, LET, IF/THEN, GOTO, INKEY, WAIT, PLOT, RECT, REM, END."},
     {"net","net","Show RTL8139 link, QEMU IPv4 settings, and packet counters.","net","QEMU: -nic user,model=rtl8139; fixed guest IP 10.0.2.15."},
     {"ping","ping HOST","Send an ICMP echo and report round-trip time.","ping 10.0.2.2","One bounded request. Some hosts do not answer ICMP."},
     {"nslookup","nslookup HOST","Resolve an IPv4 A record through QEMU DNS.","nslookup example.com","Uses 10.0.2.3; upstream DNS must be reachable on the host."},
@@ -69,10 +69,10 @@ static const Manual commands[]={
     {"download","download HTTP_URL PATH","Download a complete HTTP response to a new file in the background.","download http://10.0.2.2:8000/song.wav /song.wav","Up to 2 MiB on the data disk. Never overwrites. HTTP only, no redirects."},
     {"downloads","downloads [status|cancel]","Show the current download, byte progress and disk save status.","downloads","The download survives closing Terminal. One network request at a time."},
     {"cancel","cancel [download]","Cancel the background download without creating a partial file.","cancel","Only the download is stopped; another app's network request is untouched."},
-    {"start","start FILE [DOCUMENT]","Start a native app, optionally with a document path.","start /Programs/docstats.bex /Documents/stats-sample.txt","GUI apps open their own window. Hosted apps use this Terminal."},
+    {"start","start FILE [DOCUMENT]","Start a native app, optionally with a document path.","start /Scripts/docstats.bex /Documents/stats-sample.txt","GUI apps open their own window. Hosted apps use this Terminal."},
     {"stop","stop","Stop this terminal's native task.","stop","Ctrl+C also stops a task without waiting for the program."},
     {"tasks","tasks","List the running native task slots.","tasks","Sleeping and minimized tasks remain alive; closing their window stops them."},
-    {"exec","exec FILE","Run a BEX1 native x86 program in protected memory.","exec /Programs/hello.bex","64 KB memory; two-second limit. Faults return to the terminal."}
+    {"exec","exec FILE","Run a BEX1 native x86 program in protected memory.","exec /Scripts/hello.bex","64 KB memory; two-second limit. Faults return to the terminal."}
 };
 static int manual(const char *name){
     if(!*name){
@@ -282,7 +282,7 @@ static int move_command(int cwd,const char *remaining){
     if(!fs_is_dir(parent)){
         push("Cannot move: destination must be an existing folder.");return -1;
     }
-    for(int app=1;app<fs_node_slots();app++)if(fs_is_app(app)&&move_within(app,id)){
+    if(fs_holds_app(id)){
         push("Cannot move: source folder contains an app.");return -1;
     }
     if(move_within(parent,id)){
@@ -386,6 +386,7 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"rm")){
         if(fs_sync_busy())return FS_ERR_BUSY;
         if(!arg[0])return -1;
+        if(fs_holds_app(id)){push("Cannot delete: that folder contains apps.");return -1;}
         int result=fs_delete(id);if(result<0)return result;
     }
     else if(!kstrcmp(cmd,"stat")){if(!fs_valid(id))return -1;push(fs_name(id));push(fs_is_dir(id)?"Directory":"File");print_number("Bytes: ",fs_size(id));print_number("Modified (UTC seconds since 2000; 0=unknown): ",fs_modified(id));}

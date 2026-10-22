@@ -17,7 +17,7 @@ from volume import decode, load, resolve
 
 def inspect(raw,app_sha):
     slot,generation,nodes=load(raw)
-    assert sha(nodes[resolve(nodes,'/Programs/platform.bex')]['data'])==app_sha
+    assert sha(nodes[resolve(nodes,'/Scripts/platform.bex')]['data'])==app_sha
     assert nodes[resolve(nodes,'/Documents/platform.bin')]['data']==b'B'*8192
     manifest=struct.unpack('<12I',nodes[resolve(nodes,'/Documents/platform-manifest.bin')]['data'])
     assert manifest[0]==MAGIC and manifest[1]==2

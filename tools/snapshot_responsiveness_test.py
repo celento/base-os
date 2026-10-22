@@ -71,8 +71,8 @@ def fixture(directory, profile, song, app, seed=None):
     nodes = load(seed.read_bytes())[2] if seed else {
         0: dict(parent=-1, name='', directory=1, app=0, data=b'', modified=0),
         1: dict(parent=0, name='Documents', directory=1, app=0, data=b'', modified=0),
-        2: dict(parent=0, name='Programs', directory=1, app=0, data=b'', modified=0)}
-    documents, programs = resolve(nodes, '/Documents'), resolve(nodes, '/Programs')
+        2: dict(parent=0, name='Scripts', directory=1, app=0, data=b'', modified=0)}
+    documents, programs = resolve(nodes, '/Documents'), resolve(nodes, '/Scripts')
     entries = [(documents, 'trigger.bin', b'A'), (documents, 'probe.bin', b'P'),
                (documents, 'report.bin', bytes(1024)),
                (documents, 'manifest.bin', struct.pack('<16I', *manifest)),
@@ -235,7 +235,7 @@ def make_seed(build, directory):
     disk = directory / 'seed.img'
     assert initialize(disk)
     nodes = {i: dict(parent=parent, name=name, directory=1, app=0, data=b'', modified=0)
-             for i, parent, name in ((0, -1, ''), (1, 0, 'Documents'), (2, 0, 'Programs'))}
+             for i, parent, name in ((0, -1, ''), (1, 0, 'Documents'), (2, 0, 'Scripts'))}
     header, payload = encode_snapshot(nodes, data_layout(), 1)
     raw = bytearray(disk.read_bytes()); raw[512:1024] = header.ljust(512, b'\0')
     raw[1024:1024 + len(payload)] = payload; disk.write_bytes(raw)

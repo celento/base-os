@@ -157,7 +157,7 @@ def main(build, keep=False, compile_only=False):
         assert digest(default) == source_hash
         app = directory / 'large-stream.bex'; build_app(ROOT / 'tests/large_stream_app.c', app)
         initialize(desktop, profile='large')
-        desktop_nodes = {0: node(), 1: node('Documents', 0), 2: node('Programs', 0),
+        desktop_nodes = {0: node(), 1: node('Documents', 0), 2: node('Scripts', 0),
                          3: node('input-large.bin', 1, 0, data=pattern(16777216), modified=1234),
                          4: node('large-stream.bex', 2, 0, data=app.read_bytes(), modified=1234),
                          5: node('trash', 0), 6: node('prefs', 0), 7: node('Pictures', 0),

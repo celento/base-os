@@ -102,7 +102,7 @@ void feature_test(void){
         pm_exact_files();pm_checkpoint("reboot",0,0,0,0);platform_log("PROCESS-MEMORY-REBOOT-PASS\n");return;
     }
     pm_check(!fs_sync(),"PM initial disk sync");
-    int app=pm_file("/Programs/process-memory.bex");pm_check(app>=0,"PM valid client missing");
+    int app=pm_file("/Scripts/process-memory.bex");pm_check(app>=0,"PM valid client missing");
     ProcessHandle first=pm_launch(5,app);pm_checkpoint("one",16,16,1,0);
     ProcessHandle second=pm_launch(1,app);pm_checkpoint("two",32,32,2,0);
     pm_check(first!=second&&first!=6&&second!=2,"PM independent opaque owners");
@@ -111,7 +111,7 @@ void feature_test(void){
     pm_check(native_file_info(first,first_file,&info)==BOS_OK&&native_file_info(second,first_file,&info)==BOS_E_STALE,
              "PM file handle not owner bound");
     unsigned prior_steps=pm_reports[5][4];
-    int notebook=pm_file("/Programs/notebook.bex");pm_check(notebook>=0,"PM frozen notebook missing");
+    int notebook=pm_file("/Scripts/notebook.bex");pm_check(notebook>=0,"PM frozen notebook missing");
     pm_check(process_run(fs_data(notebook),fs_size(notebook),&pm_legacy)==0,"PM frozen exec failed");
     pm_checkpoint("exec-retained",32,32,2,0);pm_report_until(5,4,prior_steps+2);
     for(unsigned slot=0;slot<PROCESS_TASKS;slot++)if(slot!=5&&slot!=1)pm_launch(slot,app);
@@ -150,7 +150,7 @@ void feature_test(void){
     pm_app_exit(1,23);pm_checkpoint("nonzero-exit",16,128,1,0);
     pm_check(native_file_info(second,second_file,&info)==BOS_E_STALE&&native_sync_poll(second,second_op)==BOS_E_STALE,"PM app exit owner cleanup");
     pm_app_exit(5,0);pm_checkpoint("normal-exit",0,128,0,0);
-    int counter=pm_file("/Programs/counter.bex");pm_check(counter>=0,"PM frozen counter missing");
+    int counter=pm_file("/Scripts/counter.bex");pm_check(counter>=0,"PM frozen counter missing");
     for(unsigned mode=0;mode<3;mode++){
         pm_check(!term_task_start_file(0,counter,fs_identity(counter)),"PM Terminal frozen launch");
         pm_checkpoint("terminal-start",16,128,1,0);TermTaskInfo task;pm_check(term_task_info(0,&task),"PM Terminal owner info");

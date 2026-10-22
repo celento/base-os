@@ -339,7 +339,7 @@ static void tasks_draw(const MonitorLayout *l,const SysInfo *si,char *summary,co
         drawn_programs[drawn_program_n++]=program->pid;
     }
     if(count==0&&programs==0)
-        empty_state(l,UI_ICON_A_TASKS,"No native tasks are running","In Terminal: start /Programs/counter.bex");
+        empty_state(l,UI_ICON_A_TASKS,"No native tasks are running","In Terminal: start /Scripts/counter.bex");
     *hint=drawn_task_n<count||drawn_program_n<programs?"Enlarge the window to see all tasks":
         "Elapsed includes time spent sleeping";
 }

@@ -60,7 +60,7 @@ static void fail(const char *why) {
  * must refuse the image with that error; such steps finish at once. */
 static void spawn(void) {
     for (; step < STEPS; ++step) {
-        const char *argv[] = {"/Programs/elf-check", steps[step].check, "last-argument"};
+        const char *argv[] = {"/Scripts/elf-check", steps[step].check, "last-argument"};
         output_length = 0;
         const void *image = steps[step].image;
         unsigned size = steps[step].size;

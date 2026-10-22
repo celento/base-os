@@ -95,21 +95,21 @@ void feature_test(void){
         task_check(guest_process_release(&task_handles[owner]),"task record release");
     platform_log("TASK-STOP-RESTART-PASS\n");
     /* Terminal owner selection survives polling; close/reset discards a task. */
-    int programs=fs_find_child(fs_root(),"Programs"),id=fs_create(programs,"task-test.bex");
+    int programs=fs_find_child(fs_root(),"Scripts"),id=fs_create(programs,"task-test.bex");
     task_check(id>=0&&fs_write(id,(const char *)task_app,sizeof task_app)==sizeof task_app,"install task fixture");
-    term_select(0);term_reset();command("start /Programs/task-test.bex");
-    term_select(1);term_reset();command("start /Programs/task-test.bex");
+    term_select(0);term_reset();command("start /Scripts/task-test.bex");
+    term_select(1);term_reset();command("start /Scripts/task-test.bex");
     unsigned until=timer_ticks()+10;
     while((int)(timer_ticks()-until)<0){term_task_poll();__asm__ volatile("hlt");}
     task_check(term_task_running(0)&&term_task_running(1),"terminal task launch");
     task_check(!kstrcmp(term_input(),""),"terminal selection changed");
     term_task_close(0);task_check(!term_task_running(0)&&term_task_running(1),"close wrong owner");
     term_task_stop(1);task_check(!term_task_running(1),"terminal stop failed");
-    command("start /Programs/task-test.bex");task_check(term_task_running(1),"terminal restart failed");
+    command("start /Scripts/task-test.bex");task_check(term_task_running(1),"terminal restart failed");
     term_reset();task_check(!term_task_running(1),"reset did not cancel task");
     /* Notebook also synchronizes the floppy through syscall 16: motor delays
      * must receive PIT ticks even though the syscall enters an interrupt gate. */
-    command("exec /Programs/notebook.bex");
+    command("exec /Scripts/notebook.bex");
     task_check(!kstrcmp(term_get(term_count()-1),"Program finished."),"legacy synchronous exec regression");
     task_check(fs_sync()==0,"task document persistence");
     guest_process_memory_restored(&backing_before);

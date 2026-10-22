@@ -293,7 +293,7 @@ with CloseSession(build, 'editor-close', extra=('-drive', f'file={disk},format=r
         check.close(orphan, 'save'); check.name('orphan-rescued.txt'); session.key('ret')
         session.wait(lambda: not check.windows()[orphan]['open'], 'orphan Save As close')
         check.focus(terminal)
-        session.text('start /Programs/counter.bex'); session.key('ret')
+        session.text('start /Scripts/counter.bex'); session.key('ret')
         session.launch('editor'); owner = check.front(); session.text('Monitor must protect me')
         original = check.preserved(owner)
         session.launch('monitor'); monitor = check.front()

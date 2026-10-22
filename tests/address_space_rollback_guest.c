@@ -25,7 +25,7 @@ static void rb_count(const char *label){
 void feature_test(void){
     PhysmemStats initial;rb_check(physmem_stats(&initial)==PHYS_OK&&!initial.allocated,"AS rollback baseline");
     rb_total=initial.total;rb_count("rollback-baseline");
-    const char *names[]={"/Programs/address-space.bex","/Programs/address-large.bex"};
+    const char *names[]={"/Scripts/address-space.bex","/Scripts/address-large.bex"};
     for(unsigned i=0;i<2;i++){
         int file=fs_resolve(fs_root(),names[i]);rb_check(file>=0&&fs_size(file)>64,"AS rollback valid file missing");
         ProcessHandle unchanged=0x12345678;
@@ -34,7 +34,7 @@ void feature_test(void){
         rb_check(process_run(fs_data(file),fs_size(file),&rb_legacy)==AS_ROLLBACK_EXPECT,"AS rollback exec refusal changed");
         rb_count("rollback-refused-valid-bex2");
     }
-    int file=fs_resolve(fs_root(),"/Programs/hello-c.bex");rb_check(file>=0,"AS rollback frozen file missing");
+    int file=fs_resolve(fs_root(),"/Scripts/hello-c.bex");rb_check(file>=0,"AS rollback frozen file missing");
     ProcessHandle process=0;rb_check(!process_create(fs_data(file),fs_size(file),0,0,&process),"AS rollback BEX1 create");
     ProcessIO io={.binding={process,2,1},.print=rb_print,.plot=rb_plot};
     rb_check(process_bind(process,&io)&&process_start(process),"AS rollback BEX1 start");

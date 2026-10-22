@@ -13,8 +13,8 @@ described in [PLATFORM_V2.md](PLATFORM_V2.md). With QEMU stopped, copy one to
 the data disk and start it from Terminal:
 
 ```sh
-python3 tools/volume.py build/baseos-data.img import hello /Programs/hello
-# in BaseOS Terminal:  start /Programs/hello
+python3 tools/volume.py build/baseos-data.img import hello /Scripts/hello
+# in BaseOS Terminal:  start /Scripts/hello
 ```
 
 ## What it builds

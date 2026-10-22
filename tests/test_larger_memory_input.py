@@ -189,7 +189,7 @@ class LargerMemoryInputTests(unittest.TestCase):
                 nodes = volume.load((args.work / (profile + '.img')).read_bytes())[2]
                 for variant in (1, 2):
                     name = report['plans'][str(variant)]['name']
-                    self.assertEqual(nodes[volume.resolve(nodes, '/Programs/' + name)]['data'], self.binaries[variant])
+                    self.assertEqual(nodes[volume.resolve(nodes, '/Scripts/' + name)]['data'], self.binaries[variant])
             self.assertNotIn('report.json', report['prepared_files'])
             with self.assertRaisesRegex(ValueError, 'fresh empty'):
                 gate.prepare(args, ROOT, self.modules())

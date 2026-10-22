@@ -52,11 +52,7 @@ static int within(int node, int ancestor) {
     return 0;
 }
 
-static int contains_apps(int node) {
-    for (int i = 1; i < fs_node_slots(); ++i)
-        if (fs_is_app(i) && within(i, node)) return 1;
-    return 0;
-}
+static int contains_apps(int node) { return fs_holds_app(node); }
 
 static int normal_extension(const char *name) {
     int dot = -1, length = kstrlen(name);

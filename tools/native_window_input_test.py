@@ -231,7 +231,7 @@ def verify_build_directory(build):
 def make_volume(path, profile, apps):
     require(initialize(path, profile=profile), 'Refusing to overwrite fixture volume')
     nodes = {0: dict(parent=-1, name='', directory=1, app=0, data=b'', modified=0),
-             1: dict(parent=0, name='Programs', directory=1, app=0, data=b'', modified=0),
+             1: dict(parent=0, name='Scripts', directory=1, app=0, data=b'', modified=0),
              2: dict(parent=0, name='Documents', directory=1, app=0, data=b'', modified=0)}
     for name, data in apps.items():
         nodes[len(nodes)] = dict(parent=1, name=name, directory=0, app=0, data=data, modified=1)
@@ -377,7 +377,7 @@ class Evidence:
 
 
 def launch_files(session, name):
-    session.launch('Files'); session.key('ctrl-f'); session.text('Programs'); session.key('down'); session.key('ret')
+    session.launch('Files'); session.key('ctrl-f'); session.text('Scripts'); session.key('down'); session.key('ret')
     session.key('ctrl-f'); session.text(name); session.key('down'); session.key('ret'); time.sleep(.4)
 
 
@@ -459,7 +459,7 @@ def pointer_phase(session, evidence):
     evidence.check('normal exit0 removes owned canvas', removed)
     # The Terminal remains an ordinary visible shell across a GUI start.
     session.launch('Terminal'); session.text('echo shell marker'); session.key('ret')
-    session.text('start /Programs/pointer-window.bex'); session.key('ret'); session.key('alt-ret')
+    session.text('start /Scripts/pointer-window.bex'); session.key('ret'); session.key('alt-ret')
     state = evidence.pointer('terminal-started-owned')
     evidence.check('Terminal start reaches owned backend', state['reset'] == 1, state=state)
     session.move(*point(state, 20, 60)); session.button(True); session.key('ctrl-w'); session.button(False)
@@ -520,7 +520,7 @@ def document_phase(session, evidence, manifest):
 def stopped_volume(disk, manifest, require_document=True):
     slot, generation, nodes = load(disk.read_bytes())
     for name, record in manifest['apps'].items():
-        actual = nodes[resolve(nodes, '/Programs/'+name)]['data']
+        actual = nodes[resolve(nodes, '/Scripts/'+name)]['data']
         require(sha256(actual) == record['sha256'], 'Guest changed executable '+name)
     result = dict(slot=slot, generation=generation, volume=file_record(disk))
     if require_document:

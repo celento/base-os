@@ -28,7 +28,7 @@ try:
     key('ctrl-spc');text('terminal');key('ret');time.sleep(.5)
     text('echo input-check');key('ret');time.sleep(.5)
     assert b'input-check\x00' in memory(),'terminal keyboard input failed'
-    text('basic /Programs/demo.bas');key('ret');time.sleep(.25);key('z')
+    text('basic /Scripts/demo.bas');key('ret');time.sleep(.25);key('z')
     deadline=time.monotonic()+15
     while b'Program finished.' not in memory():
         assert time.monotonic()<deadline,'BASIC did not finish';time.sleep(.2)

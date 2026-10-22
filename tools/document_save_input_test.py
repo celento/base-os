@@ -312,7 +312,7 @@ def fixture(work, profile, build, app, seed, expected):
         raw = bytearray(disk.read_bytes())
     lengths = {'default': [2 << 20, 2 << 20, 2 << 20, 1 << 20],
                'large': [16 << 20, 12 << 20], 'floppy': [4096]}[profile]
-    documents, programs = resolve(nodes, '/Documents'), resolve(nodes, '/Programs')
+    documents, programs = resolve(nodes, '/Documents'), resolve(nodes, '/Scripts')
     bulk = [(f'doc-payload{i}.bin', bytes(range(256)) * (length // 256))
             for i, length in enumerate(lengths)]
     manifest = manifest_bytes(list(expected.items()) + [('/Documents/' + name, data) for name, data in bulk])
@@ -1023,7 +1023,7 @@ def run(args):
             session.boot(); session.idle(); session.launch('writer')
             session.visible('writer-final-draft-recovered', 'ALPHAZCDE', 'Unsaved')
             session.launch('terminal'); session.key('alt-ret')
-            session.text('start /Programs/document-check.bex'); session.key('ret')
+            session.text('start /Scripts/document-check.bex'); session.key('ret')
             verified = session.visible('sdk-files-verified', 'DOCUMENT FILES VERIFIED',
                                        'Native task finished', seconds=args.timeout)
             results['sdk_reboot'] = verified

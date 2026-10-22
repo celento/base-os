@@ -22,7 +22,7 @@ def fixture(directory,profile):
     app=directory/'frame-probe.bex';build_app(ROOT/'tests/native_publication_app.c',app)
     disk=directory/(profile+'.img');initialize(disk,profile=profile);layout=data_layout(profile)
     nodes={0:dict(parent=-1,name='',directory=1,app=0,data=b'',modified=0),
-           1:dict(parent=0,name='Programs',directory=1,app=0,data=b'',modified=0),
+           1:dict(parent=0,name='Scripts',directory=1,app=0,data=b'',modified=0),
            2:dict(parent=1,name='frame-probe.bex',directory=0,app=0,data=app.read_bytes(),modified=1)}
     header,payload=encode_snapshot(nodes,layout,1);raw=bytearray(disk.read_bytes());offset=layout.lbas[0]*512
     raw[offset:offset+512]=header.ljust(512,b'\0');raw[offset+512:offset+512+len(payload)]=payload
