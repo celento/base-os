@@ -82,6 +82,30 @@ int main(void) {
     if (rename("/disk1/README.TXT", "/elsewhere.txt") == 0 || errno != EXDEV) return fail("cross-volume rename");
     if (mkdir("Empty", 0755) || rmdir("Empty")) return fail("rmdir");
     if (rmdir("/disk1/GAMES") == 0 || errno != ENOTEMPTY) return fail("rmdir non-empty");
+
+    /* A read-only file opens for reading only. */
+    if (open("/disk1/LOCKED.TXT", O_WRONLY) >= 0 || errno != EACCES) return fail("open read-only file for writing");
+    if ((fd = open("/disk1/LOCKED.TXT", O_RDONLY)) < 0 || close(fd)) return fail("open read-only file");
+
+    /* A long working directory plus a long relative path that ".." brings
+     * back under the limit. */
+    static char name[241], path[1200];
+    memset(name, 'd', 240);
+    for (int i = 0; i < 4; ++i) {
+        name[0] = (char)('a' + i);
+        if (mkdir(name, 0755) || chdir(name)) return fail("deep mkdir");
+    }
+    size_t at = 0;
+    for (int i = 0; i < 6 + 280; ++i) at += (size_t)sprintf(path + at, "../");
+    strcpy(path + at, "disk1/readme.txt");
+    char text2[32] = {0};
+    if ((fd = open(path, O_RDONLY)) < 0 || read(fd, text2, 20) != 20 || close(fd) ||
+        strcmp(text2, "hello from the host\n"))
+        return fail("long relative path");
+    for (int i = 3; i >= 0; --i) {
+        name[0] = (char)('a' + i);
+        if (chdir("..") || rmdir(name)) return fail("deep rmdir");
+    }
     if (chdir("..") || !getcwd(cwd, sizeof cwd) || strcmp(cwd, "/disk1")) return fail("chdir ..");
     if (chdir("..") || !getcwd(cwd, sizeof cwd) || strcmp(cwd, "/")) return fail("chdir to native root");
 

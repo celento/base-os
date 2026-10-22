@@ -38,6 +38,8 @@ def run(build):
     subprocess.run(['mcopy', '-i', str(fat), str(work / 'README.TXT'), '::'], check=True, env=ENV)
     subprocess.run(['mmd', '-i', str(fat), '::GAMES'], check=True, env=ENV)
     subprocess.run(['mcopy', '-i', str(fat), str(work / 'OLD SAVE.DAT'), '::GAMES'], check=True, env=ENV)
+    subprocess.run(['mcopy', '-i', str(fat), str(work / 'README.TXT'), '::LOCKED.TXT'], check=True, env=ENV)
+    subprocess.run(['mattrib', '-i', str(fat), '+r', '::LOCKED.TXT'], check=True, env=ENV)
     text = boot(build, work, [('/Programs/fatdisk', 'fat', 0, 'fat disk ok')], disk,
                 extra=('-drive', f'file={fat},format=raw,if=ide,index=2'))
     assert 'FAT: mounted /disk1' in text, text
@@ -53,6 +55,7 @@ def run(build):
     assert big == bytes(expected), 'big file differs'
     assert (out / 'GAMES' / 'Renamed Note.txt').read_bytes() == b'written on BaseOS\nappended\n'
     assert (out / 'GAMES' / 'OLD SAVE.DAT').read_bytes() == b'save' * 100
+    assert (out / 'LOCKED.TXT').read_bytes() == b'hello from the host\n'
     assert sorted(p.name for p in (out / 'New').iterdir()) == ['A big file.bin']
     print('FAT_VOLUME_PASS: /disk1 read and written by a C program, clean under fsck.fat.', flush=True)
 

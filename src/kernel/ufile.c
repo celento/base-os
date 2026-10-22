@@ -360,6 +360,7 @@ static int fat_errno(int result) {
     case FAT_ERR_NAMETOOLONG: return -BOS_ENAMETOOLONG;
     case FAT_ERR_FBIG: return -BOS_EFBIG;
     case FAT_ERR_READONLY: return -BOS_EROFS;
+    case FAT_ERR_ACCESS: return -BOS_EACCES;
     default: return result < 0 ? -BOS_EIO : result;
     }
 }
@@ -375,7 +376,9 @@ static int locate(Uproc *process, uint32_t address, char *path, int *volume, con
     int any = 0;
     for (int i = 0; i < FATVOL_MAX; ++i) any |= fatvol_get(i) != 0;
     if (!cwd && !any) { *volume = -1; return 0; }
-    char *joined = kmalloc(2u * FS_PATH_LEN);
+    /* The joined input can reach 2 * FS_PATH_LEN; the result goes after it,
+     * so writing it never overwrites input not yet read. */
+    char *joined = kmalloc(3u * FS_PATH_LEN);
     if (!joined) return -BOS_ENOMEM;
     unsigned length = 0;
     if (*path != '/') {
@@ -390,7 +393,7 @@ static int locate(Uproc *process, uint32_t address, char *path, int *volume, con
     for (unsigned i = 0; path[i]; ++i) joined[length++] = path[i];
     joined[length] = 0;
     /* "." and ".." are resolved here, by name. */
-    char *out = joined + FS_PATH_LEN;
+    char *out = joined + 2u * FS_PATH_LEN;
     unsigned size = 0;
     for (const char *p = joined; *p;) {
         while (*p == '/') ++p;
@@ -518,6 +521,7 @@ static int fat_open_path(Uproc *process, int volume, const char *rest, int flags
     }
     int directory = !result && (node->attributes & FAT_ATTR_DIRECTORY);
     if (!result && directory && access != BOS_O_RDONLY) result = -BOS_EISDIR;
+    if (!result && (node->attributes & FAT_ATTR_READ_ONLY) && access != BOS_O_RDONLY) result = -BOS_EACCES;
     if (!result && !directory && (flags & BOS_O_DIRECTORY)) result = -BOS_ENOTDIR;
     UFile *file = result ? 0 : new_file(directory ? UFILE_FAT_DIRECTORY : UFILE_FAT);
     if (!result && !file) result = -BOS_ENOMEM;
