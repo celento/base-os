@@ -46,7 +46,8 @@ static int window_state_reserve(void *state,int count){
     return fm_ids_capacity;
 }
 static void window_state_clear(int slot){(void)slot;}
-static int pick_count,pick_selected,pick_cwd,pick_writer,pick_sheet,pick_pics_only,pick_first,name_target;
+static int pick_count,pick_selected,pick_cwd,pick_writer,pick_sheet,pick_pics_only,pick_wallpaper,pick_first,name_target;
+static void wall_picture_set(int id){(void)id;assert(0);}
 static int recents,recent_last=-1;
 static void recent_add(int id){recents++;recent_last=id;}
 static int pick_owner=-1,pick_owner_seq,*pick_ids,pick_capacity,trash_id=-1,prefs_id=-1;
