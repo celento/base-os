@@ -53,7 +53,6 @@
 #include "apps/wordle.h"
 #include "apps/term.h"
 #include "apps/todo.h"
-#include "assets/kilroy_about.h"
 #include "assets/cursor_art.h"
 
 #define CHAR_H         UI_FONT_H
