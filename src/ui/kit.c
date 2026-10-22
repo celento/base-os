@@ -53,7 +53,7 @@ static void mix_px(int x, int y, uint8_t c) {
     put_pixel(x, y, gfx_mix(get_pixel(x, y), c, 128));
 }
 
-static void cov_px(int x, int y, uint8_t c, int cov) {
+static void kit_cov_px(int x, int y, uint8_t c, int cov) {
     if (cov <= 0 || x < 0 || y < 0 || x >= fb_w || y >= fb_h) return;
     put_pixel(x, y, cov >= 16 ? c : gfx_mix(get_pixel(x, y), c, cov * 16));
 }
@@ -61,7 +61,7 @@ static void cov_px(int x, int y, uint8_t c, int cov) {
 /* Coverage (0-16) of pixel col,row of a corner square of radius r, whose
  * circle center sits at its inner corner (r, r): 4x4 samples per pixel, in
  * eighths of a pixel. */
-static int corner_cov(int col, int row, int r) {
+static int kit_arc_cov(int col, int row, int r) {
     int d = r * 8, n = 0;
     for (int j = 0; j < 4; j++) {
         int dy = d - (row * 8 + 1 + j * 2);
@@ -76,11 +76,11 @@ static int corner_cov(int col, int row, int r) {
 /* Circles, pills and knobs: the corner arcs are blended by coverage, so
  * steep parts of the curve get smooth edges too (the inset tables only soften
  * one pixel per row). */
-static int round_shape(int w, int h, int r) {
+static int kit_round_shape(int w, int h, int r) {
     return r >= 8 && (2 * r >= h || 2 * r >= w);
 }
 
-static void fill_round_aa(int x, int y, int w, int h, int r, uint8_t color) {
+static void kit_fill_round(int x, int y, int w, int h, int r, uint8_t color) {
     if (w <= 0 || h <= 0) return;
     if (2 * r > w) r = w / 2;
     if (2 * r > h) r = h / 2;
@@ -89,10 +89,10 @@ static void fill_round_aa(int x, int y, int w, int h, int r, uint8_t color) {
         if (cr < 0) { draw_hline(x, y + j, w, color); continue; }
         int solid = r;
         for (int i = 0; i < r; i++) {
-            int cov = corner_cov(i, cr, r);
+            int cov = kit_arc_cov(i, cr, r);
             if (cov >= 16) { solid = i; break; }
-            cov_px(x + i, y + j, color, cov);
-            cov_px(x + w - 1 - i, y + j, color, cov);
+            kit_cov_px(x + i, y + j, color, cov);
+            kit_cov_px(x + w - 1 - i, y + j, color, cov);
         }
         draw_hline(x + solid, y + j, w - 2 * solid, color);
     }
@@ -101,7 +101,7 @@ static void fill_round_aa(int x, int y, int w, int h, int r, uint8_t color) {
 static void fill_rows(int x, int y, int w, int h, int r, uint8_t color, int aa, int top, int bottom) {
     if (w <= 0 || h <= 0) return;
     if (r == KIT_R_NOTCH) r = KIT_R_SQUARE;
-    if (aa && top && bottom && round_shape(w, h, r)) { fill_round_aa(x, y, w, h, r, color); return; }
+    if (aa && top && bottom && kit_round_shape(w, h, r)) { kit_fill_round(x, y, w, h, r, color); return; }
     for (int j = 0; j < h; j++) {
         int a = top ? kit_inset(r, j) : 0, b = bottom ? kit_inset(r, h - 1 - j) : 0;
         int in = a > b ? a : b;
@@ -146,10 +146,10 @@ void kit_frame(int x, int y, int w, int h, int r, uint8_t border) {
 
 void kit_box(int x, int y, int w, int h, int r, uint8_t fill, uint8_t border) {
     if (w <= 0 || h <= 0) return;
-    if (border && round_shape(w, h, r) && w > 2 && h > 2) {
+    if (border && kit_round_shape(w, h, r) && w > 2 && h > 2) {
         /* A smooth ring: the border shape, then the fill one pixel in. */
-        fill_round_aa(x, y, w, h, r, border);
-        fill_round_aa(x + 1, y + 1, w - 2, h - 2, r - 1, fill);
+        kit_fill_round(x, y, w, h, r, border);
+        kit_fill_round(x + 1, y + 1, w - 2, h - 2, r - 1, fill);
         return;
     }
     if (r > KIT_R_NOTCH && border) {
@@ -177,7 +177,7 @@ static int inside(int r, int w, int h, int col, int row) {
  * band color itself; over darker pixels (the Terminal, a dark desktop) the
  * shadow can no longer show up as a light glow. Taking the minimum also
  * means a redraw over pixels that already hold a shadow changes nothing. */
-static void shadow_px(int x, int y, uint8_t band) {
+static void kit_shadow_px(int x, int y, uint8_t band) {
     if (x < 0 || y < 0 || x >= fb_w || y >= fb_h) return;
     uint8_t under = get_pixel(x, y);
     if (under == band) return;
@@ -192,9 +192,9 @@ static void shadow_px(int x, int y, uint8_t band) {
 void kit_shadow(int x, int y, int w, int h, int r) {
     if (!MODERN) {
         for (int j = 0; j < h; j++)
-            for (int i = 0; i < 2; i++) shadow_px(x + w + i, y + 2 + j, TK_SHADOW);
+            for (int i = 0; i < 2; i++) kit_shadow_px(x + w + i, y + 2 + j, TK_SHADOW);
         for (int j = 0; j < 2; j++)
-            for (int i = 0; i < w - 2; i++) shadow_px(x + 2 + i, y + h + j, TK_SHADOW);
+            for (int i = 0; i < w - 2; i++) kit_shadow_px(x + 2 + i, y + h + j, TK_SHADOW);
         return;
     }
     int rows = 12;
@@ -205,7 +205,7 @@ void kit_shadow(int x, int y, int w, int h, int r) {
             uint8_t c = 0;
             if (inside(r, w, h, col, row - 2)) c = TK_SHADOW;
             else if (inside(r, w, h, col, row - 4)) c = ui_theme.shadow2;
-            if (c) shadow_px(x + col, y + row, c);
+            if (c) kit_shadow_px(x + col, y + row, c);
         }
     }
 }
