@@ -146,6 +146,8 @@ static void type_letter(char ch) {
     grid[cur_row][cur_col++] = ch;
 }
 
+int wordle_over(void) { return state != 0; }
+
 int wordle_key(int action, char ch) {
     if (state != 0)
         return 0;
@@ -329,7 +331,7 @@ void wordle_draw(int bx, int by, int bw, int bh, PaneHot hot) {
                   pane_hot(hot, L.card_button.x, L.card_button.y, L.card_button.w, L.card_button.h));
     }
     pane_statusbar(bx, by, bw, bh,
-                   state ? "Ctrl+N or New game starts again" : "Type letters; Enter checks, Backspace deletes",
+                   state ? "Enter or New game starts again" : "Type letters; Enter checks, Backspace deletes",
                    TK_TEXT2, state == 1 ? "Solved" : state == 2 ? "Not solved" : 0,
                    state == 1 ? TK_GREEN_700 : TK_RED_700);
 }

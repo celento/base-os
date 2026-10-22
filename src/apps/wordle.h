@@ -23,5 +23,7 @@ void wordle_draw(int bx, int by, int bw, int bh, PaneHot hot);
  * the view changed. */
 int wordle_click(int bx, int by, int bw, int bh, int mx, int my, unsigned int seed);
 int wordle_key(int action, char ch);
+/* Nonzero once the game is won or lost. */
+int wordle_over(void);
 
 #endif

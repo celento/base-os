@@ -4,7 +4,7 @@
 
 #define G2048_CELL 78
 #define G2048_GAP  10
-#define G2048_PAD  16
+#define G2048_PAD  14
 #define G2048_BOARD (4 * G2048_CELL + 5 * G2048_GAP)
 /* Client size of the default window. g2048_client_h is the height in the
  * active style; G2048_H is the height in the taller (Modern) style. */

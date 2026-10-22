@@ -9517,6 +9517,11 @@ static void handle_key(void) {
             close_front();
             return;
         }
+        if (key_sc == KEY_ENTER && wordle_over()) {
+            wordle_new_game(frame_count);
+            dirty = 1;
+            return;
+        }
         int act = WORDLE_ACT_NONE;
         if (key_sc == KEY_ENTER)
             act = WORDLE_ACT_ENTER;
