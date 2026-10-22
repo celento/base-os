@@ -53,6 +53,7 @@
 #include "apps/wordle.h"
 #include "apps/term.h"
 #include "apps/todo.h"
+#include "apps/pane_chrome.h"
 #include "assets/kilroy_about.h"
 #include "assets/cursor_art.h"
 
@@ -4016,110 +4017,104 @@ static void open_term(void) {
 
 /* ---------- Todo ---------- */
 
-#define TODO_CIRCLE  12
-#define TODO_MARK_X  12
-#define TODO_LABEL_X 32
+/* Todo layout: a toolbar with the new-task field, Add and Save, the task
+ * rows with check boxes, and a status bar with the counts and the save
+ * state. Drawing and clicks share todo_layout. */
+typedef struct {
+    PaneRect field, add, save;
+    int cx, cw, list_y, rows;
+} TodoLayout;
 
-static void draw_todo_mark(int x, int y, int done) {
-    int s = TODO_CIRCLE + 4;
-    if (done) {
-        draw_round_rect(x - 2, y - 2, s, s, s / 2, ui_accent);
-        uint8_t w = ui_on_accent;
-        draw_line(x + 2, y + 6, x + 5, y + 9, w);
-        draw_line(x + 3, y + 6, x + 6, y + 9, w);
-        draw_line(x + 5, y + 9, x + 11, y + 3, w);
-        draw_line(x + 6, y + 9, x + 12, y + 3, w);
-    } else {
-        draw_round_rect(x - 2, y - 2, s, s, s / 2, INK(12));
-        draw_round_rect(x - 1, y - 1, s - 2, s - 2, s / 2 - 1, ui_field);
-    }
+static void todo_layout(int wx, int wy, int ww, int wh, TodoLayout *L) {
+    int cx = wx + 1, cy = wy + TITLE_H, cw = ww - 2, ch = wh - TITLE_H - 1;
+    int pad = pane_pad(), y = pane_ctl_y(cy), sw = pane_tool_w("Save"), aw = kit_button_w("Add", -1);
+    L->cx = cx; L->cw = cw;
+    L->save = (PaneRect){cx + cw - pad - sw, y, sw, BTN_H};
+    L->add = (PaneRect){L->save.x - 10 - aw, y, aw, BTN_H};
+    L->field = (PaneRect){cx + pad, y, L->add.x - 8 - cx - pad, BTN_H};
+    L->list_y = pane_body_y(cy) + (MODERN ? 6 : 4);
+    int n = (pane_status_y(cy, ch) - 4 - L->list_y) / ROW_H;
+    L->rows = n < 0 ? 0 : n > TODO_MAX ? TODO_MAX : n;
 }
 
-static void todo_field_box(int wx, int wy, int ww, int wh,
-                           int *fx, int *fy, int *fw, int *fh) {
-    *fx = wx + 12;
-    *fy = wy + wh - TODO_FOOT_H + 8;
-    *fw = ww - 100;
-    *fh = 24;
-}
-
-static int todo_rows_fit(int wh) {
-    int room = wh - TITLE_H - 8 - TODO_FOOT_H;
-    int n = room / TODO_ROW_H;
-    if (n > TODO_MAX)
-        n = TODO_MAX;
-    return n < 0 ? 0 : n;
+/* Default height: every task row fits. */
+static int todo_window_h(void) {
+    return TITLE_H + pane_tool_h() - (MODERN ? 1 : 0) + (MODERN ? 6 : 4) + TODO_MAX * ROW_H + 4 +
+           pane_status_h() + 1;
 }
 
 static void draw_todo(int wx, int wy, int ww, int wh, int inactive) {
     gui_draw_window(wx, wy, ww, wh, "Todo", 0, inactive ? WIN_INACTIVE : 0);
-    draw_rect(wx + 1, wy + TITLE_H + 1, ww - 2, wh - TITLE_H - 2, ui_body);
-
-    int rows = todo_rows_fit(wh);
-    int n = todo_count();
-    if (n > rows)
-        n = rows;
-    if (!n) {
-        const char *empty = "No tasks yet", *hint = "Type below and press Enter to add one.";
-        int my = wy + TITLE_H + (wh - TITLE_H - TODO_FOOT_H) / 2 - CHAR_H;
-        draw_string_bold(empty, wx + (ww - uib_string_w(empty)) / 2, my, ui_text);
-        draw_string(hint, wx + (ww - ui_string_w(hint)) / 2, my + CHAR_H + 6, ui_text_dim);
-    }
-    for (int i = 0; i < n; i++) {
-        int ry = wy + TITLE_H + 8 + i * TODO_ROW_H;
-        draw_todo_mark(wx + TODO_MARK_X, ry + (TODO_ROW_H - TODO_CIRCLE) / 2,
-                       todo_done(i));
-        draw_string_clip(todo_text(i), wx + TODO_LABEL_X,
-                         ry + (TODO_ROW_H - CHAR_H) / 2,
-                         todo_done(i) ? ui_text_dim : ui_text, wx + ww - 12);
-        if (todo_done(i))
-            draw_hline(wx + TODO_LABEL_X, ry + TODO_ROW_H / 2,
-                       ui_string_w(todo_text(i)), ui_text_dim);
-    }
-
-    int ruley = wy + wh - TODO_FOOT_H;
-    draw_rect(wx, ruley, ww, TODO_FOOT_H, ui_chrome);
-    draw_hline(wx, ruley, ww, ui_chrome_dk);
-
-    int fx, fy, fw, fh;
-    todo_field_box(wx, wy, ww, wh, &fx, &fy, &fw, &fh);
-    tool_button(wx+ww-76, fy, 64, fh, ICON_SAVE, 0, TB_NORMAL);
-    draw_string_clip(todo_status(), wx+12, ruley+37, ui_text_dim, wx+ww-12);
-    int active = todo_field_active();
-    draw_round_rect(fx, fy, fw, fh, 5, active ? ui_accent : ui_border);
-    draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 4, ui_field);
-
+    TodoLayout L;
+    todo_layout(wx, wy, ww, wh, &L);
+    int cy = wy + TITLE_H, ch = wh - TITLE_H - 1, n = todo_count();
+    PaneHot hp = inactive ? 0 : hot;
+    /* Toolbar: field, Add, Save. */
+    pane_toolbar(L.cx, cy, L.cw);
+    int active = todo_field_active() && !inactive, full = n >= TODO_MAX;
     const char *txt = todo_field();
-    int ty = fy + (fh - CHAR_H) / 2;
-    if (txt[0])
-        draw_string_clip(txt, fx + 8, ty, ui_text, fx + fw - 6);
-    else
-        draw_string_clip("Add a task and press Enter", fx + 8, ty, ui_text_dim, fx + fw - 6);
-    if (active) {
-        int cx = fx + 8 + ui_string_w(txt);
-        if (cx < fx + fw - 6)
-            draw_rect(cx, fy + 4, 1, fh - 8, ui_text);
+    PaneRect *f = &L.field;
+    int tx = kit_field(f->x, f->y, f->w, f->h, active ? KIT_FOCUS : 0), ty = kit_ty(f->y, f->h);
+    int room = f->x + f->w - (MODERN ? 10 : 6) - tx, start = 0;
+    while (txt[start] && kit_text_w(txt + start, 0) > room - 2) start++;
+    if (txt[0]) kit_text(txt + start, tx, ty, TK_TEXT, room, 0);
+    else kit_text(full ? "The list is full" : "Add a task", tx, ty, TK_TEXT2, room, 0);
+    if (active && ((frame_count / 35) & 1) == 0) kit_caret(tx + kit_text_w(txt + start, 0), ty);
+    int can_add = txt[0] && !full;
+    kit_button(L.add.x, L.add.y, L.add.w, L.add.h, "Add", -1, KB_PRIMARY,
+               can_add ? pane_hot(hp, L.add.x, L.add.y, L.add.w, L.add.h) : KIT_DISABLED);
+    kit_vseparator(L.save.x - 5, L.save.y + 4, L.save.h - 8);
+    pane_tool(&L.save, ICON_SAVE, "Save", KB_DEFAULT, pane_hot(hp, L.save.x, L.save.y, L.save.w, L.save.h));
+    /* Rows */
+    int shown = n < L.rows ? n : L.rows, done = 0, pad = pane_pad();
+    for (int i = 0; i < n; i++) done += todo_done(i) != 0;
+    for (int i = 0; i < shown; i++) {
+        int ry = L.list_y + i * ROW_H, d = todo_done(i);
+        int state = pane_hot(hp, L.cx, ry, L.cw, ROW_H);
+        uint8_t ink = kit_row(L.cx, ry, L.cw, ROW_H, state);
+        int bx = L.cx + pad + (MODERN ? 6 : 0), lx = bx + ui_theme.check + 10;
+        kit_check(bx, ry + (ROW_H - ui_theme.check) / 2, d ? KIT_ON : 0);
+        const char *s = todo_text(i);
+        int lw = kit_text(s, lx, kit_ty(ry, ROW_H), d ? TK_TEXT2 : ink, L.cx + L.cw - pad - lx, 0);
+        if (d) draw_hline(lx, ry + ROW_H / 2, lw, TK_TEXT2);
     }
+    if (!n) {
+        int my = L.list_y + (pane_status_y(cy, ch) - L.list_y) / 2 - UI_FONT_H;
+        kit_text_center("No tasks yet", L.cx, my, L.cw, TK_TEXT, 1);
+        kit_text_center("Type a task above and press Enter.", L.cx, my + UI_FONT_H + 4, L.cw, TK_TEXT2, 0);
+    }
+    /* Status bar: counts, then the save state. */
+    char left[48], a[12], b[12];
+    pane_num(a, (unsigned)n);
+    pane_num(b, (unsigned)done);
+    pane_join(left, sizeof left, a, n == 1 ? " task, " : " tasks, ", b);
+    pane_join(left + kstrlen(left), (int)sizeof left - kstrlen(left), " done", full ? " (list full)" : "", 0);
+    pane_statusbar(L.cx, cy, L.cw, ch, left, TK_TEXT2, todo_status(), TK_TEXT2);
 }
 
 static void handle_todo_click(int wx, int wy, int ww, int wh) {
-    int fx, fy, fw, fh;
-    todo_field_box(wx, wy, ww, wh, &fx, &fy, &fw, &fh);
-    if(hit(mouse_x,mouse_y,wx+ww-76,fy,64,fh)){
+    TodoLayout L;
+    todo_layout(wx, wy, ww, wh, &L);
+    if (pane_hit(mouse_x, mouse_y, &L.save)) {
         todo_retry_save();dirty=1;return;
     }
-    if (hit(mouse_x, mouse_y, fx, fy, fw, fh)) {
+    if (pane_hit(mouse_x, mouse_y, &L.add)) {
+        todo_focus_field();
+        todo_field_enter();
+        dirty = 1;
+        return;
+    }
+    if (pane_hit(mouse_x, mouse_y, &L.field)) {
         todo_focus_field();
         dirty = 1;
         return;
     }
-    int rows = todo_rows_fit(wh);
     int n = todo_count();
-    if (n > rows)
-        n = rows;
+    if (n > L.rows)
+        n = L.rows;
     for (int i = 0; i < n; i++) {
-        int ry = wy + TITLE_H + 8 + i * TODO_ROW_H;
-        if (hit(mouse_x, mouse_y, wx + 1, ry, ww - 2, TODO_ROW_H)) {
+        int ry = L.list_y + i * ROW_H;
+        if (hit(mouse_x, mouse_y, L.cx, ry, L.cw, ROW_H)) {
             todo_toggle(i);
             dirty = 1;
             return;
@@ -4393,7 +4388,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         break;
     case WK_TODO:
         *w = TODO_W;
-        *h = TODO_WIN_H;
+        *h = todo_window_h();
         break;
     case WK_CLOCK:
         *w = CLOCK_W;
@@ -4427,7 +4422,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     /* These sizes predate the window menu strip; give back its height so the
      * content keeps its original bottom margin. */
     if (kind == WK_CALC || kind == WK_SNAKE ||
-        kind == WK_WORDLE || kind == WK_TERM || kind == WK_TODO || kind == WK_PAINT)
+        kind == WK_WORDLE || kind == WK_TERM || kind == WK_PAINT)
         *h += WMENU_H;
     int maxh = fb_h - MENUBAR_H - TASKBAR_H - 8;
     if (*w > fb_w - 24)

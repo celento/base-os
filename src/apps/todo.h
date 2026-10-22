@@ -2,10 +2,7 @@
 #define TODO_H
 
 #define TODO_W       420
-#define TODO_WIN_H   404
 #define TODO_MAX     12
-#define TODO_ROW_H   24
-#define TODO_FOOT_H  60
 
 /* Reopening preserves queued/failed items and unsubmitted field text. */
 void todo_load(void);
