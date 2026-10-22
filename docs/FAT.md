@@ -27,6 +27,8 @@ after a crash, how programs reach FAT disks, and how it is tested.
   `fat_sync`. When a volume was not cleanly unmounted, the free count is
   recounted instead of trusted.
 - FAT32 volumes with FAT mirroring turned off (only the active FAT is used).
+- The read-only attribute: writes and truncates of such a file fail with
+  `FAT_ERR_ACCESS`. Renaming and deleting it are allowed, as POSIX expects.
 
 It does not format volumes, check or repair them, or handle sector sizes other
 than 512 bytes, exFAT, or GPT partition tables.

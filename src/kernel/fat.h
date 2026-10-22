@@ -33,7 +33,8 @@ enum {
     FAT_ERR_NOTEMPTY = -11,
     FAT_ERR_NAMETOOLONG = -12,
     FAT_ERR_FBIG = -13,         /* past the 4 GiB - 1 file size limit */
-    FAT_ERR_READONLY = -14
+    FAT_ERR_READONLY = -14,       /* the volume takes no changes */
+    FAT_ERR_ACCESS = -15          /* the file has the read-only attribute */
 };
 
 #define FAT_NAME_MAX 255u               /* UTF-16 units, as VFAT counts them */
