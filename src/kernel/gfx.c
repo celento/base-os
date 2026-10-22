@@ -28,6 +28,28 @@ static RgbCacheEntry *const rgb_cache = (RgbCacheEntry *)GFX_CACHE_BASE;
 #endif
 _Static_assert(sizeof(RgbCacheEntry) * 8192 == 65536, "graphics cache layout changed");
 static int presented_valid;
+
+/* Drawing clip: every primitive below stays inside [clip_l, clip_r) x
+ * [clip_t, clip_b) while clip_on is set, and inside the screen always. */
+static int clip_on, clip_l, clip_t, clip_r, clip_b;
+#define CLIP_L (clip_on ? clip_l : 0)
+#define CLIP_T (clip_on ? clip_t : 0)
+#define CLIP_R (clip_on ? clip_r : fb_w)
+#define CLIP_B (clip_on ? clip_b : fb_h)
+
+void gfx_clip(int x, int y, int w, int h) {
+    clip_l = x < 0 ? 0 : x;
+    clip_t = y < 0 ? 0 : y;
+    clip_r = x + w > fb_w ? fb_w : x + w;
+    clip_b = y + h > fb_h ? fb_h : y + h;
+    if (clip_r < clip_l) clip_r = clip_l;
+    if (clip_b < clip_t) clip_b = clip_t;
+    clip_on = 1;
+}
+
+void gfx_unclip(void) {
+    clip_on = 0;
+}
 static void palette_changed(void) {
     for(unsigned i=0;i<8192;i++)rgb_cache[i].key=0;
     presented_valid=0;
@@ -234,7 +256,7 @@ void gfx_set_flip_hook(void (*fn)(void)) {
 }
 
 void put_pixel(int x, int y, uint8_t color) {
-    if (x < 0 || x >= fb_w || y < 0 || y >= fb_h)
+    if (x < CLIP_L || x >= CLIP_R || y < CLIP_T || y >= CLIP_B)
         return;
     fb[y * fb_w + x] = color;
 }
@@ -245,12 +267,21 @@ uint8_t get_pixel(int x, int y) {
     return fb[y * fb_w + x];
 }
 
-static int clip_rect(int *x, int *y, int *w, int *h) {
-    if (*x < 0) { *w += *x; *x = 0; }
-    if (*y < 0) { *h += *y; *y = 0; }
-    if (*x + *w > fb_w) *w = fb_w - *x;
-    if (*y + *h > fb_h) *h = fb_h - *y;
+static int bound_rect(int *x, int *y, int *w, int *h, int l, int t, int r, int b) {
+    if (*x < l) { *w -= l - *x; *x = l; }
+    if (*y < t) { *h -= t - *y; *y = t; }
+    if (*x + *w > r) *w = r - *x;
+    if (*y + *h > b) *h = b - *y;
     return *w > 0 && *h > 0;
+}
+
+/* Drawing honours the clip; presenting covers the whole screen. */
+static int clip_rect(int *x, int *y, int *w, int *h) {
+    return bound_rect(x, y, w, h, CLIP_L, CLIP_T, CLIP_R, CLIP_B);
+}
+
+static int screen_rect(int *x, int *y, int *w, int *h) {
+    return bound_rect(x, y, w, h, 0, 0, fb_w, fb_h);
 }
 
 void draw_rect(int x, int y, int w, int h, uint8_t color) {
@@ -341,13 +372,13 @@ void draw_ramp_round(int x, int y, int w, int h, int r, int round_bottom,
         int corner_row=j<r?j:(round_bottom&&j>=h-r?h-1-j:-1);
         int in = corner_row>=0?r:0;
         int yy = y + j;
-        if (yy < 0 || yy >= fb_h)
+        if (yy < CLIP_T || yy >= CLIP_B)
             continue;
         uint8_t c4[4];
         ramp_row(c4, base, n, p0, p1, j, steps, yy);
         int x0 = x + in, x1 = x + w - in;
-        if (x0 < 0) x0 = 0;
-        if (x1 > fb_w) x1 = fb_w;
+        if (x0 < CLIP_L) x0 = CLIP_L;
+        if (x1 > CLIP_R) x1 = CLIP_R;
         uint8_t *row = fb + yy * fb_w;
         for (int i = x0; i < x1; i++)
             row[i] = c4[i & 3];
@@ -434,7 +465,7 @@ static void blend_span(int x, int y, int w, uint8_t color) {
 }
 
 static void blend_cov(int x, int y, uint8_t color, int cov) {
-    if (x < 0 || x >= fb_w || y < 0 || y >= fb_h || cov <= 0)
+    if (x < CLIP_L || x >= CLIP_R || y < CLIP_T || y >= CLIP_B || cov <= 0)
         return;
     uint8_t *d = &fb[y * fb_w + x];
     if (cov >= 16)
@@ -562,11 +593,11 @@ void draw_shadow(int x,int y,int w,int h) {
     uint8_t ink = (uint8_t)PAL_GRAY;
     if (w < 2 * R || h < 2 * R) return;
     for (int py = sy - S; py < sy + h + S; py++) {
-        if (py < 0 || py >= fb_h) continue;
+        if (py < CLIP_T || py >= CLIP_B) continue;
         int band = py >= sy + R && py < sy + h - R;
         for (int px = x - S; px < x + w + S; px++) {
             if (band && px == x) px = x + w;
-            if (px < 0 || px >= fb_w) continue;
+            if (px < CLIP_L || px >= CLIP_R) continue;
             int cx = px < x + R ? x + R : px > x + w - 1 - R ? x + w - 1 - R : px;
             int cy = py < sy + R ? sy + R : py > sy + h - 1 - R ? sy + h - 1 - R : py;
             int dx = px - cx, dy = py - cy, d2 = dx * dx + dy * dy;
@@ -637,7 +668,7 @@ int glyph_level(const uint8_t *px, int bpr, int row, int col) {
 static void draw_glyph(const uint8_t *px, int bpr, int h, int w, int x, int y, uint8_t color) {
     for (int row = 0; row < h; row++) {
         int yy = y + row;
-        if (yy < 0 || yy >= fb_h)
+        if (yy < CLIP_T || yy >= CLIP_B)
             continue;
         const uint8_t *src = px + row * bpr;
         int any = 0;
@@ -651,7 +682,7 @@ static void draw_glyph(const uint8_t *px, int bpr, int h, int w, int x, int y, u
             if (!lvl)
                 continue;
             int xx = x + col;
-            if (xx < 0 || xx >= fb_w)
+            if (xx < CLIP_L || xx >= CLIP_R)
                 continue;
             dst[xx] = blend_px(dst[xx], color, lvl);
         }
@@ -774,7 +805,7 @@ int hit(int px, int py, int x, int y, int w, int h) {
 void flip_rect(int x0, int y0, int rw, int rh) {
     if (!lfb)
         return;
-    if (!clip_rect(&x0, &y0, &rw, &rh))
+    if (!screen_rect(&x0, &y0, &rw, &rh))
         return;
     int bpp = fb_bpp;
     int pitch = fb_pitch;
@@ -847,13 +878,13 @@ void glass_round(int x, int y, int w, int h, int r, int round_bottom, uint8_t ti
     if (r * 2 > h) r = h / 2;
     for (int j = 0; j < h; j++) {
         int yy = y + j;
-        if (yy < 0 || yy >= fb_h) continue;
+        if (yy < CLIP_T || yy >= CLIP_B) continue;
         int t = t0 + (t1 - t0) * j / (h > 1 ? h - 1 : 1);
         int corner_row = j < r ? j : (round_bottom && j >= h - r ? h - 1 - j : -1);
         uint8_t *row = fb + yy * fb_w;
         for (int i = 0; i < w; i++) {
             int xx = x + i;
-            if (xx < 0 || xx >= fb_w) continue;
+            if (xx < CLIP_L || xx >= CLIP_R) continue;
             int cov = 16;
             if (corner_row >= 0) {
                 int cx = i < r ? i : (i >= w - r ? w - 1 - i : -1);

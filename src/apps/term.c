@@ -100,6 +100,7 @@ static int manual(const char *name){
 }
 void term_set_view(int rows,int total){T.rows=rows;T.view_count=total;int max=total-rows;if(max<0)max=0;if(T.scroll>max)T.scroll=max;}
 void term_set_rows(int rows){term_set_view(rows,T.count+1);}
+void term_clear(void){T.head=T.count=0;T.scroll=0;canvas_reset();}
 void term_scroll(int delta){T.scroll+=delta;if(T.scroll<0)T.scroll=0;term_set_view(T.rows,T.view_count);}
 int term_scroll_offset(void){return T.scroll;}
 static int prefix(const char *a,const char *b){while(*b)if(*a++!=*b++)return 0;return 1;}
@@ -442,5 +443,15 @@ void term_enter(void){
     if(overflow){push("Command exceeds 80 characters; nothing was run. Use cd for shorter paths.");return;}
     int result=execute(line,0,&budget);
     if(result==FS_ERR_BUSY)push("Disk is saving; retry shortly.");
-    else if(result&&result!=TERM_COMMAND_REPORTED)push("Error: check command, path, syntax, or available space.");
+    else if(result&&result!=TERM_COMMAND_REPORTED){
+        /* Name the command that failed, so the line reads on its own. */
+        char message[TERM_COLS+1],word[24];int n=0,at=0;
+        while(line[at]==' ')at++;
+        while(line[at]&&line[at]!=' '&&n<(int)sizeof word-1)word[n++]=line[at++];
+        word[n]=0;
+        kstrcpy(message,"Error: ");
+        if(n){kstrcpy(message+kstrlen(message),word);kstrcpy(message+kstrlen(message)," failed; ");}
+        kstrcpy(message+kstrlen(message),"check command, path, syntax, or available space.");
+        push(message);
+    }
 }

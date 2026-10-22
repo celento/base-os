@@ -59,6 +59,10 @@ uint8_t gfx_darker(uint8_t c, int pct);
 uint8_t gfx_lighter(uint8_t c, int pct);
 int gfx_luma(uint8_t c);
 
+/* Limit all drawing to a rectangle (intersected with the screen) until
+ * gfx_unclip. Clips do not nest. */
+void gfx_clip(int x, int y, int w, int h);
+void gfx_unclip(void);
 void put_pixel(int x, int y, uint8_t color);
 uint8_t get_pixel(int x, int y);
 void draw_rect(int x, int y, int w, int h, uint8_t color);

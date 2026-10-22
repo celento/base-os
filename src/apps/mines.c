@@ -163,8 +163,11 @@ void mines_draw(int bx, int by, int bw, int bh, PaneHot hot) {
         pane_append(text, sizeof text, buf);
         pane_append(text, sizeof text, " cells open");
     }
-    pane_statusbar(bx, by, bw, bh, state ? "Space or New game starts again" : "Click reveals, Shift+click flags",
-                   TK_TEXT2, right, ink);
+    /* The hint drops its first half rather than be cut when the bar is narrow. */
+    const char *hint = state ? "Space or New game starts again" : "Click reveals, Shift+click flags";
+    if (kit_text_w(hint, 0) + kit_text_w(right, 0) + 16 > bw - 2 * pane_pad())
+        hint = state ? "Space starts again" : "Shift+click flags";
+    pane_statusbar(bx, by, bw, bh, hint, TK_TEXT2, right, ink);
 }
 
 int mines_click(int bx, int by, int bw, int bh, int mx, int my, int flag) {

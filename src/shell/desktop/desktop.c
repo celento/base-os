@@ -337,12 +337,13 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
     else tx = icon_x;
     if (title) {
         int xmax = noclose ? x + w - 12 : ((flags & WIN_DIALOG) ? close_box_x(x, w) : min_box_x(x, w)) - 8;
-        if (chrome_dirty) xmax -= 14;
+        /* The unsaved dot: a small bullet one space after the name. */
+        if (chrome_dirty) xmax -= 10;
         kit_text(title, tx, ty, title_ink, xmax - tx, 1);
         if (chrome_dirty) {
-            int dx = tx + kit_text_w(title, 1) + 8;
-            if (dx > xmax + 6) dx = xmax + 6;
-            kit_fill(dx, ty + UI_FONT_H / 2 - 3, 7, 7, 3, MODERN ? TK_TEXT2 : title_ink, 0);
+            int dx = tx + kit_text_w(title, 1) + ui_advance(' ') + 1;
+            if (dx > xmax + 4) dx = xmax + 4;
+            kit_fill(dx, ty + UI_FONT_H / 2 - 2, 5, 5, 2, MODERN ? TK_TEXT2 : title_ink, 0);
         }
         if (chrome_subtitle) {
             int sx = tx + kit_text_w(title, 1) + 6;
@@ -560,7 +561,7 @@ enum {
     ACT_GO_BACK, ACT_GO_FORWARD, ACT_GO_UP, ACT_GO_HOME, ACT_GO_DOCUMENTS, ACT_GO_PICTURES, ACT_GO_TRASH,
     ACT_SORT_NAME, ACT_SORT_KIND, ACT_SORT_SIZE, ACT_SORT_MODIFIED, ACT_SORT_DESCENDING,
     ACT_LINE_NUMBERS, ACT_RESTORE, ACT_MOVE, ACT_SIZE, ACT_SETTINGS, ACT_EXPORT_PDF,
-    ACT_RECENT_MENU, ACT_RECENT_CLEAR, ACT_COPY_PATH, ACT_NEW_GAME, ACT_REVERT, ACT_QUIT,
+    ACT_RECENT_MENU, ACT_RECENT_CLEAR, ACT_COPY_PATH, ACT_NEW_GAME, ACT_REVERT, ACT_QUIT, ACT_DOC_PROPERTIES, ACT_TERM_CLEAR, ACT_TERM_BOTTOM,
     ACT_RESTART, ACT_SHUTDOWN, ACT_DESK_OPEN, ACT_DESK_PROPERTIES, ACT_VIEW_ICONS, ACT_VIEW_DETAILS,
     ACT_OPEN_WITH_MENU,
     ACT_RECENT = 0x300 /* + index */,
@@ -604,10 +605,12 @@ static const MMenu mb_files[] = {
     MN("&Go", mi_files_go), MN("&Help", mi_help),
 };
 static const MItem mi_editor_file[] = {
-    {"&New", "Ctrl+N", ACT_NEW, 0}, {"&Open...", "Ctrl+O", ACT_OPEN, 0},
-    {"Open &Recent", "", ACT_RECENT_MENU, KIT_MENU_SUB}, MSEP,
-    {"&Save", "Ctrl+S", ACT_SAVE, 0}, {"Save &As...", "Ctrl+Shift+S", ACT_SAVE_AS, 0}, MSEP,
-    {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
+    {"&New", "Ctrl+N", ACT_NEW, 0}, {"New &Window", "Ctrl+Shift+N", ACT_NEW_WINDOW, 0},
+    {"&Open...", "Ctrl+O", ACT_OPEN, 0}, {"Open &Recent", "", ACT_RECENT_MENU, KIT_MENU_SUB}, MSEP,
+    {"&Save", "Ctrl+S", ACT_SAVE, 0}, {"Save &As...", "Ctrl+Shift+S", ACT_SAVE_AS, 0},
+    {"Re&vert to Saved", "", ACT_REVERT, 0}, MSEP,
+    {"Propert&ies", "Alt+Enter", ACT_DOC_PROPERTIES, 0}, MSEP,
+    {"&Close Window", "Ctrl+W", ACT_CLOSE, 0}, {"&Quit Editor", "Ctrl+Q", ACT_QUIT, 0},
 };
 static const MItem mi_editor_edit[] = {
     {"&Undo", "Ctrl+Z", ACT_UNDO, 0}, {"&Redo", "Ctrl+Y", ACT_REDO, 0}, MSEP,
@@ -649,7 +652,12 @@ static const MItem mi_term_shell[] = {
     {"&New Window", "Ctrl+N", ACT_NEW, 0}, MSEP, {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
 };
 static const MItem mi_term_edit[] = { {"&Copy", "Ctrl+C", ACT_COPY, 0}, {"&Paste", "Ctrl+V", ACT_PASTE, 0} };
-static const MMenu mb_term[] = { MN("&Shell", mi_term_shell), MN("&Edit", mi_term_edit), MN("&Help", mi_help) };
+static const MItem mi_term_view[] = {
+    {"&Clear", "", ACT_TERM_CLEAR, 0}, {"Scroll to &Bottom", "", ACT_TERM_BOTTOM, 0},
+};
+static const MMenu mb_term[] = {
+    MN("&Shell", mi_term_shell), MN("&Edit", mi_term_edit), MN("&View", mi_term_view), MN("&Help", mi_help),
+};
 static const MItem mi_game[] = {
     {"&New Game", "Ctrl+N", ACT_NEW, 0}, MSEP, {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
 };
@@ -870,6 +878,7 @@ static void properties_key(void);
 static void handle_about_click(int wx, int wy, int ww, int wh);
 static void draw_settings(int wx, int wy, int ww, int wh, int fl);
 static int settings_window_h(void);
+static void settings_scroll_by(int dy);
 static void handle_settings_click(int wx, int wy, int ww, int wh);
 static void saver_save(void);
 static void preferences_retry(void);
@@ -1494,7 +1503,7 @@ static void front_window_origin(int *x, int *y) {
     *y = f >= 0 ? wins[f].y : 0;
 }
 static int win_has_menu(int kind) {
-    return kind != WK_ABOUT && kind != WK_HELP && kind != WK_HELLO && kind != WK_PROPERTIES;
+    return kind != WK_ABOUT && kind != WK_PROPERTIES;
 }
 /* Fixed-size information windows: a close button only, no snapping. */
 static int win_is_dialog(int kind) {
@@ -1570,6 +1579,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h);
 static void win_minimum(Win *w, int *mw, int *mh) {
     if (w->kind == WK_EDIT || w->kind == WK_FILES || w->kind == WK_TERM) { *mw = 360; *mh = 200; }
     else if(w->kind==WK_NATIVE){*mw=240;*mh=180;}
+    else if (w->kind == WK_SETTINGS) { *mw = 600; *mh = 320; }  /* the page scrolls */
     else if(w->kind==WK_VIEW){*mw=IMAGE_VIEWER_MIN_W+2;*mh=IMAGE_VIEWER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_BROWSER){*mw=BROWSER_MIN_W+2;*mh=BROWSER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_PLAYER){*mw=PLAYER_MIN_W+2;*mh=PLAYER_MIN_H+TITLE_H+2;}
@@ -2139,6 +2149,17 @@ static int edit_find_next(int direction){
     edit_sel_a=found;edit_sel_b=found+size;edit_caret=edit_sel_b;
     kstrcpy(q->message,"Match selected.");dirty=1;return 1;
 }
+/* Find as you type: the first hit at or after the selection start becomes
+ * the current match, wrapping to the top. With no hit or no query the
+ * selection collapses to its start, so the caret stays where it was. */
+static void edit_find_incremental(void){
+    EditorSearch *q=&edit_search;int size=kstrlen(q->text[0]);
+    int lo=edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b;
+    int found=size?text_find(edit_buf,edit_len,q->text[0],lo,1,edit_search_flags()):-1;
+    if(found<0){edit_caret=lo;edit_sel_collapse();}
+    else {edit_sel_a=found;edit_sel_b=found+size;edit_caret=edit_sel_b;}
+    dirty=1;
+}
 static void edit_replace_one(void){
     EditorSearch *q=&edit_search;int lo=edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b;
     int hi=edit_sel_a>edit_sel_b?edit_sel_a:edit_sel_b;
@@ -2162,6 +2183,7 @@ static void edit_replace_everywhere(void){
 }
 static void edit_search_key(void){
     EditorSearch *q=&edit_search;int f=q->field;char *text=q->text[f];int length=kstrlen(text),pos=q->position[f];
+    char before[64];kstrcpy(before,text);
     if(key_sc==KEY_ESC){q->open=q->focus=0;dirty=1;return;}
     if(key_sc==KEY_TAB){q->field=q->replace_mode?1-f:0;q->position[q->field]=kstrlen(q->text[q->field]);q->selected[q->field]=1;dirty=1;return;}
     if(key_sc==KEY_ENTER){if(ctrl_down&&q->replace_mode){if(shift_down)edit_replace_everywhere();else edit_replace_one();}else edit_find_next(shift_down?-1:1);return;}
@@ -2175,7 +2197,9 @@ static void edit_search_key(void){
         for(int j=0;j<clip_len&&length<63;j++)if(clip_buf[j]>=32&&clip_buf[j]<=126){
             for(int i=length;i>=pos;i--)text[i+1]=text[i];
             text[pos++]=clip_buf[j];length++;}
-        q->position[f]=pos;dirty=1;return;
+        q->position[f]=pos;dirty=1;
+        if(f==0)edit_find_incremental();
+        return;
     }
     if(key_sc==KEY_LEFT){if(pos>0)pos--;q->selected[f]=0;}
     else if(key_sc==KEY_RIGHT){if(pos<length)pos++;q->selected[f]=0;}
@@ -2189,6 +2213,7 @@ static void edit_search_key(void){
         if(length<63){for(int i=length;i>=pos;i--)text[i+1]=text[i];text[pos++]=key_char;}
     }
     q->position[f]=pos;q->message[0]=0;dirty=1;
+    if(f==0&&kstrcmp(before,text))edit_find_incremental();
 }
 static int nav_size(void);
 /* Find bar. Classic docks it above the status bar; Modern floats it at the
@@ -2217,7 +2242,11 @@ static void edit_find_layout(int wx, int wy, int ww, int wh, FindLayout *L) {
     if (x + fw + 260 > right) fw = right - x - 260 > 120 ? right - x - 260 : 120;
     L->field[0] = (Rect){x, y, fw, BTN_H};
     L->count_x = x + fw + 10;
-    int nx = L->count_x + kit_text_w("999 of 999", 0) - 8;
+    /* The count slot fits the longest text it shows. */
+    int cw = kit_text_w("9999 of 9999", 0), mw = kit_text_w("9999 matches", 0), nw = kit_text_w("No results", 0);
+    if (mw > cw) cw = mw;
+    if (nw > cw) cw = nw;
+    int nx = L->count_x + cw + 6;
     L->prev = (Rect){nx, y + (BTN_H - s) / 2, s, s};
     L->next = (Rect){nx + s + 2, y + (BTN_H - s) / 2, s, s};
     int ex = L->next.x + s + 12;
@@ -2335,8 +2364,8 @@ static int edit_search_click(int wx, int wy, int ww, int wh) {
         if (rect_has(L.field[f])) { q->field = f; q->position[f] = kstrlen(q->text[f]); q->selected[f] = 1; dirty = 1; return 1; }
     if (rect_has(L.next)) edit_find_next(1);
     else if (rect_has(L.prev)) edit_find_next(-1);
-    else if (rect_has(L.exact)) q->exact = !q->exact;
-    else if (L.whole.w && rect_has(L.whole)) q->whole = !q->whole;
+    else if (rect_has(L.exact)) { q->exact = !q->exact; edit_find_incremental(); }
+    else if (L.whole.w && rect_has(L.whole)) { q->whole = !q->whole; edit_find_incremental(); }
     else if (rect_has(L.close)) q->open = q->focus = 0;
     else if (L.rows > 1 && rect_has(L.replace)) edit_replace_one();
     else if (L.rows > 1 && rect_has(L.all)) edit_replace_everywhere();
@@ -2839,6 +2868,30 @@ static void calc_key_rect(int kx, int ky, int i, int *x, int *y, int *w, int *h)
         *y = ky + CALC_KEY_H + CALC_GAP + (row - 1) * (CALC_KEY_H + CALC_GAP);
 }
 
+/* Multiply, divide and backspace glyphs, which the ASCII UI font lacks,
+ * centered on (cx, cy). Returns 0 for other keys. */
+static int calc_glyph(char ch, int cx, int cy, uint8_t ink) {
+    if (ch == '*') {
+        for (int i = -4; i <= 4; i++) {
+            draw_rect(cx + i, cy + i, 2, 1, ink);
+            draw_rect(cx + i, cy - i, 2, 1, ink);
+        }
+    } else if (ch == '/') {
+        draw_rect(cx - 5, cy, 11, 2, ink);
+        kit_fill(cx - 1, cy - 5, 3, 3, 1, ink, 1);
+        kit_fill(cx - 1, cy + 4, 3, 3, 1, ink, 1);
+    } else if (ch == 'B') {
+        /* A key cap pointing left with an x inside. */
+        int l = cx - 9, r = cx + 8, t = cy - 6, b = cy + 6;
+        draw_hline(l + 6, t, r - l - 5, ink);
+        draw_hline(l + 6, b, r - l - 5, ink);
+        draw_vline(r, t, b - t + 1, ink);
+        for (int i = 0; i <= 6; i++) { put_pixel(l + i, cy - i, ink); put_pixel(l + i, cy + i, ink); }
+        for (int i = -2; i <= 2; i++) { put_pixel(cx + 1 + i, cy + i, ink); put_pixel(cx + 1 + i, cy - i, ink); }
+    } else return 0;
+    return 1;
+}
+
 static void draw_calc(int wx, int wy, int ww, int wh, int inactive) {
     (void)ww;
     gui_draw_window(wx, wy, CALC_W, wh, "Calculator", 0,
@@ -2898,7 +2951,8 @@ static void draw_calc(int wx, int wy, int ww, int wh, int inactive) {
             int on = calc_op == ch && calc_fresh;
             uint8_t fill = on ? TK_ACCENT_100 : (st & KIT_PRESSED) ? TK_HOVER : (st & KIT_HOVER) ? TK_HOVER : MODERN ? TK_SUNKEN : TK_BASE;
             kit_box(x, y, w, h, ui_theme.r_control, fill, MODERN ? 0 : TK_LINE);
-            kit_text_center(lab, x, kit_ty(y, h), w, ch == 'C' || ch == 'E' ? TK_RED_700 : ch == 'B' || ch == 'N' ? TK_TEXT : TK_ACCENT_700, 1);
+            uint8_t ink = ch == 'C' || ch == 'E' ? TK_RED_700 : ch == 'B' || ch == 'N' ? TK_TEXT : TK_ACCENT_700;
+            if (!calc_glyph(ch, x + w / 2, y + h / 2, ink)) kit_text_center(lab, x, kit_ty(y, h), w, ink, 1);
         }
     }
 }
@@ -2968,10 +3022,14 @@ static const uint8_t paint_well[PAINT_NWELL] = {
 
 /* Second row: picks from the 6x6x6 cube (>= 16), none of which exist in 0..15. */
 static const uint32_t paint_well2_rgb[PAINT_NWELL2] = {
-    0xFF00AF, 0xFFAFD7, 0xFFAFAF, 0xAF5F00, 0xFFAF00, 0xFFFF00, 0xD7FF00, 0x00FF00,
+    0xFF00AF, 0xFFAFD7, 0x870000, 0xAF5F00, 0xFFAF00, 0xFFFF00, 0xD7FF00, 0x00FF00,
     0x00FFAF, 0x00FFFF, 0x87D7FF, 0x0087FF, 0x5F00FF, 0xAF00FF, 0xD7AFFF, 0xFFD7AF
 };
 static uint8_t paint_well2[PAINT_NWELL2];
+
+/* The status bar under the color well. */
+static int paint_status_h(void) { return MODERN ? 28 : 24; }
+static int paint_hover_x = -1, paint_hover_y = -1;  /* canvas cell under the pointer */
 
 static int plot_dest; /* 0 = paint_pix, 1 = 3x screen overlay */
 static int plot_ox, plot_oy;
@@ -3198,7 +3256,7 @@ static void paint_canvas_geom(int wx, int wy, int ww, int wh,
     *px = wx + 1;
     *py = wy + TITLE_H + PAINT_TOOL_H;
     *pw = ww - 2;
-    *ph = wh - TITLE_H - PAINT_TOOL_H - PAINT_WELL_H;
+    *ph = wh - TITLE_H - PAINT_TOOL_H - PAINT_WELL_H - paint_status_h();
     int cw = PAINT_W * PAINT_SCALE;
     int ch = PAINT_H * PAINT_SCALE;
     *cx = *px + (*pw - cw) / 2;
@@ -3244,12 +3302,12 @@ static void paint_chip_cell(int wx, int wy, int ww, int *x, int *y) {
 
 static void paint_well_cell(int wx, int wy, int wh, int i, int *x, int *y) {
     *x = wx + 12 + i * (22 + 4);
-    *y = wy + wh - 24;
+    *y = wy + wh - paint_status_h() - 24;
 }
 
 static void paint_well2_cell(int wx, int wy, int wh, int i, int *x, int *y) {
     *x = wx + 12 + i * (22 + 4);
-    *y = wy + wh - 48;
+    *y = wy + wh - paint_status_h() - 48;
 }
 
 static uint8_t doodle_ink;
@@ -3351,8 +3409,7 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
     /* Canvas on a workspace, with the window shadow under it. */
     int px, py, pw, ph, cx, cy;
     paint_canvas_geom(wx, wy, ww, wh, &px, &py, &pw, &ph, &cx, &cy);
-    draw_rect(wx + 1, strip_y + PAINT_TOOL_H + 1, ww - 2, wh - TITLE_H - PAINT_TOOL_H - PAINT_WELL_H - 1,
-              MODERN ? TK_SUNKEN : TK_HOVER);
+    draw_rect(wx + 1, strip_y + PAINT_TOOL_H + 1, ww - 2, ph - 1, MODERN ? TK_SUNKEN : TK_HOVER);
     kit_shadow(cx, cy, PAINT_W * PAINT_SCALE, PAINT_H * PAINT_SCALE, 0);
     draw_frame(cx - 1, cy - 1, PAINT_W * PAINT_SCALE + 2, PAINT_H * PAINT_SCALE + 2, TK_LINE_STRONG);
     (void)px; (void)py; (void)pw; (void)ph;
@@ -3380,12 +3437,34 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
         plot_dest = 0;
     }
 
-    /* Color well. */
-    int well_top = wy + wh - PAINT_WELL_H;
+    /* Color well, then the status bar: the tool's hint on the left, the
+     * pointer's canvas position and the canvas size on the right. */
+    int sh = paint_status_h(), well_top = wy + wh - sh - PAINT_WELL_H, status_y = wy + wh - 1 - sh;
+    draw_hline(wx + 1, well_top, ww - 2, TK_LINE_SUBTLE);
+    draw_rect(wx + 1, well_top + 1, ww - 2, status_y - well_top - 1, MODERN ? ui_theme.content : TK_BASE);
     if (MODERN) {
-        draw_hline(wx + 1, well_top, ww - 2, TK_LINE_SUBTLE);
-        kit_fill_bottom(wx + 1, well_top + 1, ww - 2, PAINT_WELL_H - 2, ui_theme.r_window - 1, ui_theme.statusbar);
-    } else kit_statusbar(wx + 1, well_top, ww - 2, PAINT_WELL_H - 1);
+        draw_hline(wx + 1, status_y, ww - 2, TK_LINE_SUBTLE);
+        kit_fill_bottom(wx + 1, status_y + 1, ww - 2, sh - 1, ui_theme.r_window - 1, ui_theme.statusbar);
+    } else kit_statusbar(wx + 1, status_y, ww - 2, sh);
+    {
+        static const char *const hints[PAINT_NTOOLS] = {
+            "Pencil: drag to draw", "Fill: click an area", "Line: drag from end to end",
+            "Rectangle: drag a corner", "Ellipse: drag its bounds", "Text: click, then type",
+            "Eraser: drag to erase",
+        };
+        char right[48], n[12];
+        right[0] = 0;
+        if (paint_hover_x >= 0) {
+            fmt_uint(n, (unsigned)paint_hover_x); kstrcpy(right, n); kstrcpy(right + kstrlen(right), ", ");
+            fmt_uint(n, (unsigned)paint_hover_y); kstrcpy(right + kstrlen(right), n);
+            kstrcpy(right + kstrlen(right), "      ");
+        }
+        fmt_uint(n, PAINT_W); kstrcpy(right + kstrlen(right), n); kstrcpy(right + kstrlen(right), " x ");
+        fmt_uint(n, PAINT_H); kstrcpy(right + kstrlen(right), n); kstrcpy(right + kstrlen(right), " px");
+        int ty = kit_ty(status_y + 1, sh - 1), pad = MODERN ? 12 : 8, rw = kit_text_w(right, 0);
+        kit_text_right(right, wx + ww - 1 - pad, ty, TK_TEXT2, 0);
+        kit_text(hints[paint_tool], wx + 1 + pad, ty, TK_TEXT2, ww - 2 - 2 * pad - rw - 16, 0);
+    }
     for (int i = 0; i < PAINT_NWELL + PAINT_NWELL2; i++) {
         int sx, sy;
         uint8_t c;
@@ -3638,6 +3717,14 @@ static void handle_paint_click(int wx, int wy, int ww, int wh) {
         paint_text_last_adv = 0;
         dirty = 1;
     }
+}
+
+/* Tracks the canvas cell under the pointer for the status bar. */
+static void paint_hover_tick(void) {
+    int wx, wy, ww, wh, lx = -1, ly = -1;
+    if (front_kind() != WK_PAINT || !win_geom_kind(WK_PAINT, &wx, &wy, &ww, &wh)) return;
+    if (!paint_mouse_logical(wx, wy, ww, wh, mouse_x, mouse_y, &lx, &ly)) lx = ly = -1;
+    if (lx != paint_hover_x || ly != paint_hover_y) { paint_hover_x = lx; paint_hover_y = ly; dirty = 1; }
 }
 
 static void paint_drag_tick(void) {
@@ -3988,14 +4075,18 @@ static int term_line_kind(const char *s, int index) {
     if (s[0] == 'U' && s[1] == 's' && s[2] == 'a' && s[3] == 'g' && s[4] == 'e' && s[5] == ':') return TL_USAGE;
     return index < 2 ? TL_NOTE : TL_PLAIN;
 }
-static uint8_t term_char_ink(const char *s, int len, int at, int kind, int *prompt_end) {
+/* The prompt (folder and marker) and folder names are bold. */
+static uint8_t term_char_ink(const char *s, int len, int at, int kind, int *prompt_end, int *bold) {
+    *bold = 0;
     if (kind == TL_ERROR) return TERM_ANSI(9);
     if (kind == TL_USAGE) return TERM_ANSI(11);
     if (kind == TL_NOTE) return TERM_ANSI(8);
     if (kind == TL_PROMPT) {
         if (*prompt_end < 0) { int i = 0; while (s[i] && !(s[i] == '>' && s[i + 1] == ' ')) i++; *prompt_end = i; }
+        *bold = at <= *prompt_end;
         if (at < *prompt_end) return TERM_ANSI(12);
         if (at <= *prompt_end + 1) return TERM_ANSI(10);
+        *bold = 0;
         return TERM_ANSI(15);
     }
     /* A word that ends in a slash. */
@@ -4003,13 +4094,19 @@ static uint8_t term_char_ink(const char *s, int len, int at, int kind, int *prom
     if (s[at] == ' ') return TERM_FG;
     while (a > 0 && s[a - 1] != ' ') a--;
     while (b < len && s[b] != ' ') b++;
-    return b > a + 1 && s[b - 1] == '/' ? TERM_ANSI(12) : TERM_FG;
+    *bold = b > a + 1 && s[b - 1] == '/';
+    return *bold ? TERM_ANSI(12) : TERM_FG;
 }
-/* One wrapped chunk of a line: characters [from, from + cols) of s. */
+/* One wrapped chunk of a line: characters [from, from + cols) of s. The
+ * monospace font has no bold face, so bold is the glyph drawn twice, one
+ * pixel apart. */
 static void term_line_chunk(const char *s, int len, int kind, int from, int cols, int x, int y) {
-    int prompt_end = -1;
-    for (int c = 0; c < cols && from + c < len; c++)
-        draw_edit_char(s[from + c], x + c * EDIT_CHAR_W, y, term_char_ink(s, len, from + c, kind, &prompt_end));
+    int prompt_end = -1, bold;
+    for (int c = 0; c < cols && from + c < len; c++) {
+        uint8_t ink = term_char_ink(s, len, from + c, kind, &prompt_end, &bold);
+        draw_edit_char(s[from + c], x + c * EDIT_CHAR_W, y, ink);
+        if (bold) draw_edit_char(s[from + c], x + c * EDIT_CHAR_W + 1, y, ink);
+    }
 }
 /* Terminal and native-task bodies: dark in both styles, rounded at the
  * bottom in Modern. */
@@ -4515,7 +4612,11 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     case WK_NATIVE:
         *w=640;*h=480;break;
     case WK_SPREADSHEET:
-        *w=SPREADSHEET_W+2;*h=SPREADSHEET_H+TITLE_H+2;break;
+        { /* The client starts below the title (Modern) or menu row (Classic). */
+            int co=MODERN?TITLE_BAR-1:TITLE_H;
+            *w=SPREADSHEET_W+2;*h=spreadsheet_fit_height(SPREADSHEET_W,SPREADSHEET_H+TITLE_H+1-co)+1+co;
+        }
+        break;
     case WK_WRITER:
         *w=WRITER_W+2;*h=WRITER_H+TITLE_H+2;break;
     case WK_BROWSER:
@@ -4526,7 +4627,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *w=380;*h=properties_h();break;
     case WK_HELLO:
         *w = 520;
-        *h = TITLE_BAR + 140;
+        *h = TITLE_H + 140;
         break;
     case WK_HELP:
         *w = 560;
@@ -4554,7 +4655,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         break;
     case WK_PAINT:
         *w = 760;
-        *h = 500;
+        *h = 500 + paint_status_h();
         break;
     case WK_VIEW:
         *w=IMAGE_VIEWER_W+2;*h=IMAGE_VIEWER_H+TITLE_H+2;break;
@@ -6521,8 +6622,8 @@ static void properties_key(void) {
 /* ---------- Hello and Help ---------- */
 
 static void draw_hello(int wx, int wy, int ww, int wh, int fl) {
-    gui_draw_window(wx, wy, ww, wh, "Hello", 0, fl | WIN_NOMENU);
-    int top = wy + TITLE_BAR, lw = logo_string_w("BaseOS"), gap = 14;
+    gui_draw_window(wx, wy, ww, wh, "Hello", 0, fl);
+    int top = wy + TITLE_H, lw = logo_string_w("BaseOS"), gap = 14;
     int x = wx + (ww - (40 + gap + lw)) / 2, y = top + 26;
     ui_icon_draw(UI_ICON_LOGO, x, y + (LOGO_FONT_H - 40) / 2, 40, TK_ACCENT, ui_theme.content);
     draw_logo_string("BaseOS", x + 40 + gap, y, TK_ACCENT_700);
@@ -6548,13 +6649,13 @@ static const HelpRow help_rows[] = {
 };
 #define HELP_ROWS ((int)(sizeof help_rows / sizeof help_rows[0]))
 static int help_window_h(void) {
-    int h = TITLE_BAR + 20 + 24;
+    int h = TITLE_H + 20 + 24;
     for (int i = 0; i < HELP_ROWS; i++) h += help_rows[i].keys ? 28 : (i ? 38 : 28);
     return h + 24 + 20;
 }
 static void draw_help(int wx, int wy, int ww, int wh, int fl) {
-    gui_draw_window(wx, wy, ww, wh, "Help", 0, fl | WIN_NOMENU);
-    int pad = ui_theme.pad_dialog + 4, x = wx + pad, y = wy + TITLE_BAR + 20, kx = x + 170;
+    gui_draw_window(wx, wy, ww, wh, "Help", 0, fl);
+    int pad = ui_theme.pad_dialog + 4, x = wx + pad, y = wy + TITLE_H + 20, kx = x + 170;
     kit_text("Keyboard shortcuts", x, y, TK_TEXT, ww - 2 * pad, 1);
     y += 24;
     for (int i = 0; i < HELP_ROWS; i++) {
@@ -7655,6 +7756,9 @@ static int act_enabled(int act) {
     case ACT_MOVE: case ACT_SIZE: return f >= 0 && !wins[f].maximized;
     case ACT_RECENT_CLEAR: return recent_n > 0;
     case ACT_QUIT: return f >= 0;
+    case ACT_DOC_PROPERTIES: return fk == WK_EDIT && edit_binding_valid();
+    case ACT_TERM_CLEAR: return fk == WK_TERM && !term_task_running(f);
+    case ACT_TERM_BOTTOM: return fk == WK_TERM && term_scroll_offset() > 0;
     case ACT_DESK_OPEN: case ACT_DESK_PROPERTIES: return icon_sel >= 0;
     default: return 1;
     }
@@ -7767,6 +7871,13 @@ static void act_run(int act) {
     case ACT_QUIT:
         for (int i = 0; i < MAX_WIN; i++)
             if (wins[i].open && wins[i].kind == fk && edit_close_owner < 0) win_request_close(i);
+        break;
+    case ACT_TERM_CLEAR: term_clear(); break;
+    case ACT_TERM_BOTTOM: term_scroll(-term_scroll_offset()); break;
+    case ACT_DOC_PROPERTIES:
+        properties_id = edit_file;
+        properties_reason = "";
+        win_open(WK_PROPERTIES);
         break;
     case ACT_RESTART: do_restart(); break;
     case ACT_DESK_OPEN: desk_open(icon_sel); break;
@@ -9523,6 +9634,7 @@ static void handle_wheel(int amount) {
     else if(w->kind==WK_VIEW)image_viewer_scroll(amount*3);
     else if(w->kind==WK_TERM)term_scroll(-amount*3);
     else if(w->kind==WK_NATIVE)native_output_scroll_by(target,-amount*3);
+    else if(w->kind==WK_SETTINGS)settings_scroll_by(amount*48);
     else if(w->kind==WK_EDIT){
         int ax,ay,aw,ah,row,col,old=edit_caret;edit_area(w->x,w->y,w->w,w->h,&ax,&ay,&aw,&ah);
         int cols=aw/EDIT_CHAR_W;if(cols<1)cols=1;edit_caret=edit_len;edit_caret_cell(cols,&row,&col);edit_caret=old;
@@ -9669,6 +9781,7 @@ static void handle_key(void) {
     if (!name_dlg && !open_dlg && alt_down && key_sc == KEY_ENTER) {
         int f = win_front();
         if (front_kind() == WK_FILES) act_run(ACT_PROPERTIES);
+        else if (front_kind() == WK_EDIT && act_enabled(ACT_DOC_PROPERTIES)) act_run(ACT_DOC_PROPERTIES);
         else if (f >= 0 && !win_is_dialog(wins[f].kind)) win_arrange(f, wins[f].maximized == SNAP_MAX ? 3 : 0);
         return;
     }
@@ -9712,6 +9825,7 @@ static void handle_key(void) {
         if(key_sc==0x17 && front_kind()==WK_FILES){menu_activate(MENU_FILE,6);return;}
         if(key_sc==0x20 && front_kind()==WK_FILES){act_run(ACT_DUPLICATE);return;}
         if(key_sc==KEY_N && shift_down && front_kind()==WK_FILES){act_run(ACT_NEW_FOLDER);return;}
+        if(key_sc==KEY_N && shift_down && front_kind()==WK_EDIT){act_run(ACT_NEW_WINDOW);return;}
         if(key_sc==KEY_S && shift_down && act_enabled(ACT_SAVE_AS)){act_run(ACT_SAVE_AS);return;}
         if(key_sc==KEY_Q){act_run(ACT_QUIT);return;}
         if (key_sc == 0x2c || key_sc == 0x15) {
@@ -10326,14 +10440,34 @@ static int settings_page;
 
 enum {
     SZ_PAGE = 1, SZ_STYLE, SZ_ACCENT, SZ_DESKTOP, SZ_PATTERN, SZ_WINOPT, SZ_SNAP,
-    SZ_SAVER, SZ_SAVER_DELAY, SZ_SAVER_PREVIEW, SZ_DISPLAY, SZ_CLOCK, SZ_MOUSE, SZ_RETRY
+    SZ_SAVER, SZ_SAVER_DELAY, SZ_SAVER_PREVIEW, SZ_DISPLAY, SZ_CLOCK, SZ_MOUSE, SZ_RETRY, SZ_SCROLL
 };
 typedef struct { int x, y, w, h, kind, arg; } SetZone;
 static SetZone set_zones[64];
-static int set_zone_n, set_slider_drag;
+static int set_zone_n, set_slider_drag;   /* 1 the snap slider, 2 the scroll thumb */
 static int set_snap_x, set_snap_w;
 
+/* The page scrolls inside the view [set_view_t, set_view_b). Zones drawn
+ * while the page is clipped are cut to the view, so a control scrolled out
+ * of sight takes no clicks. A key that changes a control asks for it to be
+ * revealed: the next draw scrolls until its zone is inside the view. */
+static int settings_scroll, settings_scroll_max, settings_view_h;
+static int set_view_on, set_view_t, set_view_b;
+static int set_reveal_kind, set_reveal_arg, set_reveal_y, set_reveal_h;
+static int set_sb_x, set_sb_y, set_sb_h, set_sb_total, set_scroll_grab;
+#define SET_NO_REVEAL (-0x40000000)
+/* Hover reads the zones of the previous draw, since a control asks for its
+ * hover state before it records its zone. */
+static SetZone set_prev_zones[64];
+static int set_prev_n;
+
 static void set_zone(int x, int y, int w, int h, int kind, int arg) {
+    if (set_view_on) {
+        if (kind == set_reveal_kind && arg == set_reveal_arg) { set_reveal_y = y; set_reveal_h = h; }
+        if (y < set_view_t) { h -= set_view_t - y; y = set_view_t; }
+        if (y + h > set_view_b) h = set_view_b - y;
+        if (h <= 0) return;
+    }
     if (set_zone_n < (int)(sizeof set_zones / sizeof set_zones[0]))
         set_zones[set_zone_n++] = (SetZone){x, y, w, h, kind, arg};
 }
@@ -10343,17 +10477,47 @@ static const SetZone *set_zone_at(int px, int py) {
     return 0;
 }
 static int set_hover(int kind, int arg) {
-    const SetZone *z = set_zone_at(mouse_x, mouse_y);
-    return z && z->kind == kind && z->arg == arg;
+    for (int i = set_prev_n - 1; i >= 0; i--) {
+        const SetZone *z = &set_prev_zones[i];
+        if (hit(mouse_x, mouse_y, z->x, z->y, z->w, z->h)) return z->kind == kind && z->arg == arg;
+    }
+    return 0;
 }
 
 static int settings_side_w(void) { return MODERN ? 200 : 192; }
-static int settings_window_h(void) { return MODERN ? 540 : 564; }
+static int settings_window_h(void) { return MODERN ? 588 : 580; }
 
 /* Form layout: a label column and a control column. Classic rows sit on
  * the content with a rule between sections; Modern groups rows in cards. */
 typedef struct { int x, y, w, card_y, rows; } SetForm;
 static int set_label_w(void) { return MODERN ? 150 : 152; }
+
+/* Word-wrapped help text. Draws when draw is set and returns the number of
+ * lines; a word wider than w is cut by kit_text. */
+#define SET_LINE_H 16
+static int set_wrap(const char *text, int x, int y, int w, uint8_t color, int draw) {
+    int lines = 0;
+    while (*text) {
+        char line[160];
+        int n = 0, fit = 0;
+        while (text[n] && n < (int)sizeof line - 1) {
+            line[n] = text[n];
+            line[n + 1] = 0;
+            if (n && ui_string_w(line) > w) break;
+            n++;
+            if (!text[n] || text[n] == ' ') fit = n;
+        }
+        if (!text[n]) fit = n;
+        if (!fit) fit = n;
+        kmemcpy(line, text, fit);
+        line[fit] = 0;
+        if (draw) kit_text(line, x, y + lines * SET_LINE_H, color, w, 0);
+        lines++;
+        text += fit;
+        while (*text == ' ') text++;
+    }
+    return lines;
+}
 
 static void set_heading(SetForm *f, const char *title, const char *sub) {
     draw_string_bold(title, f->x, f->y, TK_TEXT);
@@ -10432,18 +10596,21 @@ static void set_segmented(int x, int y, const char *const *labels, int n, int se
 }
 /* A check (Classic) or a toggle at the right of the row (Modern). */
 static void set_switch(SetForm *f, const char *label, const char *hint, int on, int kind, int arg) {
-    int cx, h = hint ? 40 : (MODERN ? 20 : 24);
+    int hint_x = MODERN ? f->x + 16 : f->x + set_label_w() + 16 + ui_theme.check + 8;
+    int hint_w = MODERN ? f->w - 80 : f->x + f->w - hint_x;
+    int lines = hint ? set_wrap(hint, hint_x, 0, hint_w, TK_TEXT2, 0) : 0;
+    int cx, h = hint ? 22 + lines * SET_LINE_H + 2 : (MODERN ? 20 : 24);
     int y = set_row(f, 0, h, &cx);
     if (MODERN) {
         int lx = f->x + 16;
         kit_text(label, lx, hint ? y + 2 : kit_ty(y, h), TK_TEXT, f->w - 80, 0);
-        if (hint) kit_text(hint, lx, y + 22, TK_TEXT2, f->w - 80, 0);
+        if (hint) set_wrap(hint, lx, y + 22, hint_w, TK_TEXT2, 1);
         int tx = f->x + f->w - 16 - KIT_TOGGLE_W, ty = y + (h - KIT_TOGGLE_H) / 2;
         kit_toggle(tx, ty, (on ? KIT_ON : 0) | (set_hover(kind, arg) ? KIT_HOVER : 0));
         set_zone(f->x, y - 8, f->w, h + 16, kind, arg);
     } else {
         int w = kit_check_row(cx, y, label, (on ? KIT_ON : 0) | (set_hover(kind, arg) ? KIT_HOVER : 0), 0);
-        if (hint) kit_text(hint, cx + ui_theme.check + 8, y + 24, TK_TEXT2, f->x + f->w - cx - 30, 0);
+        if (hint) set_wrap(hint, hint_x, y + 24, hint_w, TK_TEXT2, 1);
         set_zone(cx, y, w, 24, kind, arg);
     }
 }
@@ -10466,7 +10633,7 @@ static void set_slider_row(SetForm *f, const char *label, int value, int max, co
     int right = f->x + f->w - (MODERN ? 16 : 0);
     int sw = right - 60 - sx;
     if (sw > 240) sw = 240;
-    kit_slider(sx, y, sw, value, max, set_slider_drag ? KIT_PRESSED : 0);
+    kit_slider(sx, y, sw, value, max, set_slider_drag == 1 ? KIT_PRESSED : 0);
     char v[16];
     fmt_uint(v, (unsigned)value);
     kstrcpy(v + kstrlen(v), unit);
@@ -10567,15 +10734,17 @@ static void settings_display(SetForm *f) {
 }
 
 static const char *const mouse_speed_names[3] = {"Slow", "Normal", "Fast"};
-static const char *const shortcut_keys[][2] = {
-    {"Super", "Apps"}, {"Ctrl+Space", "Apps"}, {"Alt+Tab", "Switch windows"},
+/* Each row: the keys (a second key, when set, is an alternative) and what
+ * they do. */
+static const char *const shortcut_keys[][3] = {
+    {"Super", "Apps", "Ctrl+Space"}, {"Alt+Tab", "Switch windows"},
     {"Alt+F4", "Close window"}, {"Super+Arrow", "Snap or maximize"}, {"Super+D", "Show desktop"},
     {"Alt or F10", "Menu row"}, {"Alt+Space", "Window menu"},
 };
 
 static void settings_input(SetForm *f) {
     int cx, y;
-    set_heading(f, "Keyboard and Mouse", 0);
+    set_heading(f, "Keyboard and Mouse", "These shortcuts work in every app.");
     if (!MODERN) set_rule(f), f->y -= 10;
     set_card_begin(f);
     y = set_row(f, "Double-click speed", kit_segmented_h(), &cx);
@@ -10589,6 +10758,11 @@ static void settings_input(SetForm *f) {
     for (int i = 0; i < n; i++) {
         y = set_row(f, shortcut_keys[i][1], 22, &cx);
         kit_kbd(cx, y, shortcut_keys[i][0]);
+        if (shortcut_keys[i][2]) {
+            int ox = cx + kit_kbd_w(shortcut_keys[i][0]) + 8;
+            kit_text("or", ox, kit_ty(y, MODERN ? 20 : 19), TK_TEXT2, 40, 0);
+            kit_kbd(ox + kit_text_w("or", 0) + 8, y, shortcut_keys[i][2]);
+        }
         if (!MODERN) f->y -= 6;
     }
     if (!MODERN) f->y += 6;
@@ -10654,6 +10828,8 @@ static int settings_failed_pref(void) {
 
 static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
     gui_draw_window(wx, wy, ww, wh, settings_pages[settings_page], 0, fl);
+    kmemcpy(set_prev_zones, set_zones, sizeof set_zones);
+    set_prev_n = set_zone_n;
     set_zone_n = 0;
     int top = wy + TITLE_H, side = settings_side_w(), bottom = wy + wh - 1;
     /* Sidebar */
@@ -10672,28 +10848,94 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
         set_zone(x, iy, w, ih, SZ_PAGE, i);
         iy += ih + (MODERN ? 2 : 0);
     }
-    /* Page */
-    int cx = wx + 1 + side + 1, pad = MODERN ? 20 : 24;
-    SetForm f = {cx + pad, top + (MODERN ? 20 : 28), wx + ww - 1 - (MODERN ? 0 : SB) - cx - 2 * pad, 0, 0};
-    if (!MODERN) {
-        draw_rect(wx + ww - 1 - SB, top, SB, bottom - top, TK_BASE);
-        draw_vline(wx + ww - 1 - SB, top, bottom - top, TK_LINE_SUBTLE);
+    /* Page: drawn clipped to the view at the scroll offset. The page's
+     * height is known only after drawing it, so a scroll that lands out of
+     * range, or a reveal request, draws the page a second time. */
+    int cx = wx + 1 + side + 1, pad = MODERN ? 20 : 24, top_pad = MODERN ? 20 : 28;
+    int page_r = wx + ww - 1, failed = settings_failed_pref();
+    int view_b = failed >= 0 ? bottom - 16 - BTN_H - 12 : bottom;
+    int view_h = view_b - top, zones = set_zone_n, total = 0;
+    SetForm f = {0};
+    if (view_h < 1) view_h = 1;
+    settings_view_h = view_h;
+    for (int pass = 0; pass < 2; pass++) {
+        set_zone_n = zones;
+        draw_rect(cx, top, page_r - cx, view_h, ui_theme.content);
+        f = (SetForm){cx + pad, top + top_pad - settings_scroll, page_r - (MODERN ? 0 : SB) - cx - 2 * pad, 0, 0};
+        set_view_on = 1;
+        set_view_t = top;
+        set_view_b = view_b;
+        set_reveal_y = SET_NO_REVEAL;
+        gfx_clip(cx, top, page_r - (MODERN ? 0 : SB) - cx, view_h);
+        switch (settings_page) {
+        case SET_APPEARANCE: settings_appearance(&f); break;
+        case SET_DESKTOP: settings_desktop(&f); break;
+        case SET_DISPLAY: settings_display(&f); break;
+        case SET_INPUT: settings_input(&f); break;
+        case SET_TIME: settings_time(&f); break;
+        default: settings_about(&f); break;
+        }
+        gfx_unclip();
+        set_view_on = 0;
+        total = f.y + settings_scroll - top + (MODERN ? 20 : 24);
+        settings_scroll_max = total > view_h ? total - view_h : 0;
+        int want = settings_scroll;
+        if (set_reveal_kind && set_reveal_y != SET_NO_REVEAL) {
+            int ry = set_reveal_y + settings_scroll - top, margin = 12;
+            if (ry - margin < want) want = ry - margin;
+            if (ry + set_reveal_h + margin > want + view_h) want = ry + set_reveal_h + margin - view_h;
+        }
+        set_reveal_kind = 0;
+        if (want > settings_scroll_max) want = settings_scroll_max;
+        if (want < 0) want = 0;
+        if (want == settings_scroll) break;
+        settings_scroll = want;
     }
-    switch (settings_page) {
-    case SET_APPEARANCE: settings_appearance(&f); break;
-    case SET_DESKTOP: settings_desktop(&f); break;
-    case SET_DISPLAY: settings_display(&f); break;
-    case SET_INPUT: settings_input(&f); break;
-    case SET_TIME: settings_time(&f); break;
-    default: settings_about(&f); break;
+    /* The scrollbar: Classic keeps its track in the reserved column; Modern
+     * overlays a thin thumb at the page's right edge while the page overflows. */
+    set_sb_x = page_r - SB;
+    set_sb_y = top;
+    set_sb_h = view_h;
+    set_sb_total = total;
+    {
+        int sb_state = set_slider_drag == 2 ? KIT_PRESSED : set_hover(SZ_SCROLL, 0) ? KIT_HOVER : 0;
+        if (!MODERN) draw_rect(set_sb_x, top, SB, bottom - top, TK_BASE);
+        kit_vscroll(set_sb_x, top, view_h, settings_scroll, view_h, total, sb_state);
+        if (!MODERN) draw_vline(set_sb_x, top, bottom - top, TK_LINE_SUBTLE);
+        if (total > view_h) set_zone(set_sb_x, top, SB, view_h, SZ_SCROLL, 0);
     }
-    int failed = settings_failed_pref();
     if (failed >= 0) {
         int by = bottom - 16 - BTN_H, bw = kit_button_w("Retry saving", -1);
+        draw_rect(cx, view_b, page_r - (MODERN ? 0 : SB) - cx, bottom - view_b, ui_theme.content);
+        draw_hline(cx, view_b, page_r - (MODERN ? 0 : SB) - cx, TK_LINE_SUBTLE);
         kit_text(preference_message(failed), f.x, kit_ty(by, BTN_H), TK_RED_700, f.w - bw - 12, 0);
         kit_button(f.x + f.w - bw, by, bw, BTN_H, "Retry saving", -1, KB_DEFAULT, set_hover(SZ_RETRY, 0) ? KIT_HOVER : 0);
         set_zone(f.x + f.w - bw, by, bw, BTN_H, SZ_RETRY, 0);
     }
+}
+
+/* Scrolls the page by dy pixels, kept inside the range of the last draw. */
+static void settings_scroll_by(int dy) {
+    int v = settings_scroll + dy;
+    if (v > settings_scroll_max) v = settings_scroll_max;
+    if (v < 0) v = 0;
+    if (v != settings_scroll) { settings_scroll = v; dirty = 1; }
+}
+static void settings_page_set(int page) {
+    if (page != settings_page) settings_scroll = 0;
+    settings_page = page;
+}
+/* Scroll thumb geometry, as kit_vscroll draws it. */
+static void settings_thumb(int *at, int *size) {
+    kit_scroll_thumb(set_sb_h - 4, settings_scroll, set_sb_h, set_sb_total, at, size);
+    *at += set_sb_y + 2;
+}
+static void settings_scroll_drag(void) {
+    int at, size, range = set_sb_h - 4;
+    settings_thumb(&at, &size);
+    if (range <= size) return;
+    int y = mouse_y - set_scroll_grab - (set_sb_y + 2);
+    settings_scroll_by(y * settings_scroll_max / (range - size) - settings_scroll);
 }
 
 static void settings_slider_set(void) {
@@ -10705,6 +10947,12 @@ static void settings_slider_set(void) {
 }
 static void settings_drag(void) {
     if (!set_slider_drag) return;
+    if (set_slider_drag == 2) {
+        if (mouse_left) settings_scroll_drag();
+        else set_slider_drag = 0;
+        dirty = 1;
+        return;
+    }
     if (!mouse_left) {
         set_slider_drag = 0;
         preference_save(PREF_SNAP, win_snap_distance);
@@ -10719,7 +10967,15 @@ static void handle_settings_click(int wx, int wy, int ww, int wh) {
     const SetZone *z = set_zone_at(mouse_x, mouse_y);
     if (!z) return;
     switch (z->kind) {
-    case SZ_PAGE: settings_page = z->arg; break;
+    case SZ_PAGE: settings_page_set(z->arg); break;
+    case SZ_SCROLL: {
+        int at, size;
+        settings_thumb(&at, &size);
+        if (mouse_y < at) settings_scroll_by(-settings_view_h * 7 / 8);
+        else if (mouse_y >= at + size) settings_scroll_by(settings_view_h * 7 / 8);
+        else { set_slider_drag = 2; set_scroll_grab = mouse_y - at; }
+        break;
+    }
     case SZ_STYLE: style_set(z->arg); break;
     case SZ_ACCENT: accent_set(z->arg); break;
     case SZ_DESKTOP: desktop_color_set(z->arg); break;
@@ -10738,15 +10994,29 @@ static void handle_settings_click(int wx, int wy, int ww, int wh) {
     dirty = 1;
 }
 
-/* Settings keys: Tab and the arrows move between pages, 1-4 pick a display
- * mode on the Display page, R retries saving. */
+/* Settings keys: Tab and the arrows move between pages, Page Up, Page Down,
+ * Home and End scroll the page, 1-4 pick a display mode on the Display
+ * page, R retries saving. A control changed from the keyboard is scrolled
+ * into view. */
 static void settings_key(void) {
     if (key_sc == KEY_ESC) { close_front(); return; }
-    if (key_sc == KEY_TAB || key_sc == KEY_DOWN) settings_page = (settings_page + (shift_down ? SET_PAGES - 1 : 1)) % SET_PAGES;
-    else if (key_sc == KEY_UP) settings_page = (settings_page + SET_PAGES - 1) % SET_PAGES;
-    else if (key_char >= '1' && key_char <= '0' + DISPLAY_MODE_COUNT) { display_request(key_char - '1'); return; }
+    if (key_sc == KEY_TAB || key_sc == KEY_DOWN) settings_page_set((settings_page + (shift_down ? SET_PAGES - 1 : 1)) % SET_PAGES);
+    else if (key_sc == KEY_UP) settings_page_set((settings_page + SET_PAGES - 1) % SET_PAGES);
+    else if (key_sc == 0x49 || key_sc == 0x51) settings_scroll_by((key_sc == 0x49 ? -1 : 1) * settings_view_h * 7 / 8);
+    else if (key_sc == 0x47 || key_sc == 0x4f) settings_scroll_by(key_sc == 0x47 ? -settings_scroll : settings_scroll_max);
+    else if (key_char >= '1' && key_char <= '0' + DISPLAY_MODE_COUNT) {
+        if (settings_page == SET_DISPLAY) { set_reveal_kind = SZ_DISPLAY; set_reveal_arg = key_char - '1'; }
+        display_request(key_char - '1');
+        dirty = 1;
+        return;
+    }
     else if (key_char == 'r' || key_char == 'R') preferences_retry();
-    else if (key_sc == KEY_SPACE && settings_page == SET_DESKTOP) { saver_enabled = !saver_enabled; saver_save(); }
+    else if (key_sc == KEY_SPACE && settings_page == SET_DESKTOP) {
+        saver_enabled = !saver_enabled;
+        saver_save();
+        set_reveal_kind = SZ_SAVER;
+        set_reveal_arg = 0;
+    }
     dirty = 1;
 }
 
@@ -11555,6 +11825,7 @@ static void desktop_pointer_sample(const InputSample *sample) {
     if(mouse_moved && (prior&INPUT_LEFT)) desktop_pointer_motion();
     mouse_left=!!(buttons&INPUT_LEFT); mouse_right=!!(buttons&INPUT_RIGHT);
     if(open_menu>=0 && open_menu!=MENU_BAR && mouse_moved) menu_hover();
+    if(mouse_moved) paint_hover_tick();
     if(volume_on && mouse_left && mouse_moved) volume_drag();
     if((buttons&INPUT_RIGHT) && !(prior&INPUT_RIGHT))handle_rclick();
     if((buttons&INPUT_LEFT) && !(prior&INPUT_LEFT))handle_click();

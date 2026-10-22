@@ -46,7 +46,7 @@ static void fresh(void) {
 static void reject(const char *text,const char *reason) {
     term_reset();remember_tree();command(text);unchanged();
     assert(output_has(reason));assert(!output_has("Moved in RAM"));
-    assert(strstr(last_line(),"Error: check command"));
+    assert(strstr(last_line(),"failed; check command"));
 }
 static void finish_snapshot(FsSyncTicket ticket) {
     unsigned steps=0;

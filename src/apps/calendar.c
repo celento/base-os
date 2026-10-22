@@ -218,7 +218,7 @@ static void cal_layout(int bx, int by, int bw, int bh, CalLayout *L) {
     L->ly = hy + 2 * UI_FONT_H + 3 + 8;
     /* Entry form: heading with Cancel / Save, Date and Time with labels,
      * then Title with its label at the left. */
-    L->form_y = L->status_y - (51 + 3 * h);
+    L->form_y = L->status_y - (41 + 3 * h + (modern ? 16 : 10));
     int y1 = L->form_y + 8, y2 = y1 + h + 6 + UI_FONT_H + 2, y3 = y2 + h + 8;
     w = kit_button_w("Save", -1);
     int dw = kit_button_w("Discard", -1);
@@ -419,7 +419,7 @@ void cal_draw(int bx, int by, int bw, int bh, PaneHot hot) {
     const CalAgendaDraft *d = cal_agenda_draft();
     const char *hint = confirm ? "Enter confirms; Esc keeps your work" :
         d->active ? "Tab: next field  Enter: save  Esc: close, keep entry" :
-        "Arrows: day, appointment  PgUp/PgDn: month  N: new";
+        "Arrows: day, item   PgUp/PgDn: month   N: new";
     pane_statusbar(bx, by, bw, bh, notice[0] ? notice : hint, notice[0] ? TK_RED_700 : TK_TEXT2,
                    cal_agenda_status(), TK_TEXT2);
 }

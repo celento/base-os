@@ -48,7 +48,7 @@ int main(void) {
     command("run /write.script"); assert(fs_find_child(0, "from-script.txt") >= 0);
     assert(!strcmp(last_line(), "After mutation"));
     command("rm /note.txt"); assert(!fs_valid(text));
-    command("rm /missing.txt"); assert(strstr(last_line(), "Error: check command"));
+    command("rm /missing.txt"); assert(strstr(last_line(), "failed; check command"));
     assert(!fs_sync());
     puts("Terminal storage lease: only writes report busy, script errors propagate, reads/native launch and retries work");
     return 0;

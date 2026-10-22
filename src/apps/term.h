@@ -13,6 +13,8 @@ void term_complete(void);
 void term_set_rows(int rows);
 void term_set_view(int rows,int total);
 void term_scroll(int delta);
+/* Clears the output and graphics canvas; history and the folder stay. */
+void term_clear(void);
 int term_scroll_offset(void);
 int term_cwd(void);
 void term_set_cwd(int id);
