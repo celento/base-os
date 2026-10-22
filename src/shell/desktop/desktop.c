@@ -426,17 +426,17 @@ static void icons_init(void) {
     icon_set(ICON_DESK_EDIT, "Editor", ICON_APP_EDITOR);
     icon_set(ICON_CALC, "Calculator", ICON_APP_CALC);
     icon_set(ICON_PAINT, "Paint", ICON_APP_PAINT);
-    icon_set(ICON_VIEW, "Viewer", ICON_APP_VIEWER);
+    icon_set(ICON_VIEW, "Image Viewer", ICON_APP_VIEWER);
     icon_set(ICON_SNAKE, "Snake", ICON_APP_SNAKE);
     icon_set(ICON_WORDLE, "Wordle", ICON_APP_WORDLE);
     icon_set(ICON_TERM, "Terminal", ICON_APP_TERMINAL);
     icon_set(ICON_TODO, "Todo", ICON_APP_TODO);
     icon_set(ICON_CLOCK, "Clock", ICON_APP_CLOCK);
     icon_set(ICON_CAL, "Calendar", ICON_APP_CALENDAR);
-    icon_set(ICON_MINES, "Mines", ICON_APP_MINES);
+    icon_set(ICON_MINES, "Minesweeper", ICON_APP_MINES);
     icon_set(ICON_2048, "2048", ICON_APP_2048);
     icon_set(ICON_BREAKOUT, "Breakout", ICON_APP_BREAKOUT);
-    icon_set(ICON_SYSMON, "Monitor", ICON_APP_MONITOR);
+    icon_set(ICON_SYSMON, "System Monitor", ICON_APP_MONITOR);
     icon_set(ICON_DESK_SETTINGS, "Settings", ICON_APP_SETTINGS);
     icon_set(ICON_BROWSER, "Browser", ICON_APP_BROWSER);
     icon_set(ICON_PLAYER, "Media Player", ICON_APP_PLAYER);
@@ -562,10 +562,13 @@ enum {
     ACT_LINE_NUMBERS, ACT_RESTORE, ACT_MOVE, ACT_SIZE, ACT_SETTINGS, ACT_EXPORT_PDF,
     ACT_RECENT_MENU, ACT_RECENT_CLEAR, ACT_COPY_PATH, ACT_NEW_GAME, ACT_REVERT, ACT_QUIT,
     ACT_RESTART, ACT_SHUTDOWN, ACT_DESK_OPEN, ACT_DESK_PROPERTIES, ACT_VIEW_ICONS, ACT_VIEW_DETAILS,
-    ACT_RECENT = 0x300 /* + index */
+    ACT_OPEN_WITH_MENU,
+    ACT_RECENT = 0x300 /* + index */,
+    ACT_OPEN_WITH = 0x380 /* + OW_* app */
 };
 
 typedef struct { const char *label; const char *key; int act; int flags; } MItem;
+#define MI_DANGER 0x40  /* Modern draws the item in the danger color */
 typedef struct { const char *name; const MItem *items; int n; } MMenu;
 #define MSEP {"-", "", ACT_SEP, 0}
 #define MN(name, items) {name, items, (int)(sizeof(items) / sizeof(items[0]))}
@@ -671,8 +674,9 @@ static const MItem mi_window[] = {
     {"&Close", "Alt+F4", ACT_CLOSE, 0},
 };
 static const MItem mi_files_context[] = {
-    {"&Open", "Enter", ACT_OPEN_ITEM, 0}, MSEP, {"&Rename", "F2", ACT_RENAME, 0},
-    {"&Duplicate", "Ctrl+D", ACT_DUPLICATE, 0}, {"Move to &Trash", "Del", ACT_TRASH, 0}, MSEP,
+    {"&Open", "Enter", ACT_OPEN_ITEM, 0}, {"Open &With", "", ACT_OPEN_WITH_MENU, KIT_MENU_SUB}, MSEP,
+    {"&Rename", "F2", ACT_RENAME, 0}, {"&Duplicate", "Ctrl+D", ACT_DUPLICATE, 0},
+    {"Move to &Trash", "Del", ACT_TRASH, MI_DANGER}, MSEP,
     {"Cu&t", "Ctrl+X", ACT_CUT, 0}, {"&Copy", "Ctrl+C", ACT_COPY, 0}, {"Copy Pat&h", "", ACT_COPY_PATH, 0}, MSEP,
     {"Propert&ies", "Alt+Enter", ACT_PROPERTIES, 0},
 };
@@ -716,6 +720,14 @@ static int recent_n;
 static MItem mi_recent[RECENT_N + 2];
 static int mi_recent_n;
 static void recent_build_menu(void);
+
+/* Open With: the apps that can open a file, its usual app first. The list
+ * is built for one item when the submenu or the Properties dropdown opens. */
+enum { OW_EDITOR, OW_WRITER, OW_SHEET, OW_BROWSER, OW_VIEWER, OW_PLAYER, OW_N };
+static MItem mi_open_with[OW_N];
+static int mi_open_with_n, ow_target = -1;
+static unsigned ow_identity;
+static int ow_build(int id);
 
 static int front_kind(void);
 static int menu_kind(void);
@@ -909,13 +921,21 @@ static void menu_open_popup(const MItem *items, int n, int x, int y) {
     popup_n = 1;
 }
 
+static int files_selected_item(void);
 static void menu_open_sub(int parent) {
     Popup *p = &popup[0];
     if (parent < 0 || parent >= p->n || !(p->items[parent].flags & KIT_MENU_SUB)) return;
-    if (p->items[parent].act == ACT_RECENT_MENU) recent_build_menu();
+    if (!act_enabled(p->items[parent].act)) return;
     Popup *s = &popup[1];
-    s->items = mi_recent;
-    s->n = mi_recent_n;
+    if (p->items[parent].act == ACT_OPEN_WITH_MENU) {
+        ow_build(files_selected_item());
+        s->items = mi_open_with;
+        s->n = mi_open_with_n;
+    } else {
+        if (p->items[parent].act == ACT_RECENT_MENU) recent_build_menu();
+        s->items = mi_recent;
+        s->n = mi_recent_n;
+    }
     s->sel = -1;
     popup_place(s, p->x + p->w - 4, popup_item_y(p, parent) - kit_menu_pad() - 1, p->x + 4);
     popup_n = 2;
@@ -956,6 +976,11 @@ static void draw_popup(const Popup *p) {
         int mn;
         mi_text(it->label, t, sizeof t, &mn);
         kit_menu_item(p->x, y, p->w, t, it->key, it->flags, st);
+        if (MODERN && (it->flags & MI_DANGER) && en && i != p->sel) {
+            int lx = p->x + 36, ty = kit_ty(y, MENU_ROW);
+            draw_rect(lx, ty, ui_string_w(t), UI_FONT_H, ui_theme.overlay);
+            kit_text(t, lx, ty, TK_RED_700, p->w - 72, 0);
+        }
         if ((alt_down || menu_by_key) && mn >= 0) {
             char pre[96];
             for (int k = 0; k < mn; k++) pre[k] = t[k];
@@ -4958,12 +4983,10 @@ static void do_empty_trash(void) {
 /* ---------- Drawing ---------- */
 
 static int file_extension(const char *name,const char *suffix);
-/* Application nodes are named after their desktop icon; a few have longer names. */
+/* Application nodes are named like their launcher entry; Hello has none. */
 static int app_icon_by_name(const char *name) {
     for (int i = 0; i < ICON_DESK_COUNT; i++)
         if (kstrcmp(icons[i].label, name) == 0) return icons[i].icon;
-    if (kstrcmp(name, "Image Viewer") == 0) return ICON_APP_VIEWER;
-    if (kstrcmp(name, "Minesweeper") == 0) return ICON_APP_MINES;
     if (kstrcmp(name, "Hello") == 0) return ICON_APP_HELLO;
     return ICON_WINDOW;
 }
@@ -5128,6 +5151,8 @@ static void node_icon_draw(int id, int x, int y, int size, uint8_t paper) {
     else if (fs_is_dir(id)) icon = big ? UI_ICON_A_FILES : UI_ICON_FOLDER;
     else if (is_image_file(id)) icon = big ? UI_ICON_A_IMG : UI_ICON_IMG;
     else if (code_name(nm)) icon = big ? UI_ICON_A_CODE : UI_ICON_CODE;
+    else if (file_extension(nm, ".bsh") || file_extension(nm, ".csv")) icon = big ? UI_ICON_A_TABLE : UI_ICON_TABLE;
+    else if (file_extension(nm, ".html") || file_extension(nm, ".htm")) icon = big ? UI_ICON_A_WEB : UI_ICON_WEB;
     ui_icon_draw(icon, x, y, size, TK_ICON, paper);
 }
 
@@ -5207,21 +5232,29 @@ static void stamp_text(unsigned stamp, char *out) {
     fmt_uint(out + n, (unsigned)y);
 }
 
-/* Detail list: Name, then Size and Modified at the right when there is
- * room. Size and date columns start at the returned x values (0: hidden). */
-enum { FL_SIZE = 1, FL_DATE = 2 };
+/* Detail list: Name, then Size, Kind and Modified at the right when there
+ * is room. Size, kind and date columns start at the returned x values (0:
+ * hidden). */
+enum { FL_SIZE = 1, FL_DATE = 2, FL_KIND = 4 };
+static const char *kind_name(int id, int brief);
 static int flist_head_h(void) { return MODERN ? 32 : 24; }
-static void flist_columns(int x, int w, int cols, int *name_x, int *size_x, int *date_x) {
+static void flist_layout(int x, int w, int cols, int *name_x, int *size_x, int *kind_x, int *date_x) {
     int dw = (cols & FL_DATE) && w >= 360 ? (MODERN ? 128 : 124) : 0;
+    int kw = (cols & FL_KIND) && w >= 520 ? 104 : 0;
     int sw = (cols & FL_SIZE) && w >= 420 ? 72 : 0;
     *name_x = x + (MODERN ? 16 : 8);
     *date_x = dw ? x + w - dw : 0;
-    *size_x = sw ? (dw ? *date_x : x + w) - sw : 0;
+    *kind_x = kw ? (dw ? *date_x : x + w) - kw : 0;
+    *size_x = sw ? (kw ? *kind_x : dw ? *date_x : x + w) - sw : 0;
+}
+static void flist_columns(int x, int w, int cols, int *name_x, int *size_x, int *date_x) {
+    int kx;
+    flist_layout(x, w, cols, name_x, size_x, &kx, date_x);
 }
 static int flist_name_end(int x, int w, int cols) {
-    int nx, sx, dx;
-    flist_columns(x, w, cols, &nx, &sx, &dx);
-    return (sx ? sx : dx ? dx : x + w) - 8;
+    int nx, sx, kx, dx;
+    flist_layout(x, w, cols, &nx, &sx, &kx, &dx);
+    return (sx ? sx : kx ? kx : dx ? dx : x + w) - 8;
 }
 
 static void sort_arrow(int x, int y, int up) {
@@ -5229,13 +5262,13 @@ static void sort_arrow(int x, int y, int up) {
 }
 
 static void flist_header(int x, int y, int w, int cols, const FileViewOptions *v) {
-    int h = flist_head_h(), nx, sx, dx, ty = kit_ty(y, h);
-    flist_columns(x, w, cols, &nx, &sx, &dx);
+    int h = flist_head_h(), nx, sx, kx, dx, ty = kit_ty(y, h);
+    flist_layout(x, w, cols, &nx, &sx, &kx, &dx);
     kit_list_header(x, y, w, h);
-    static const int sorts[3] = {FILE_VIEW_NAME, FILE_VIEW_SIZE, FILE_VIEW_MODIFIED};
-    static const char *const names[3] = {"Name", "Size", "Modified"};
-    int at[3] = {nx, sx ? sx + 8 : 0, dx ? dx + 8 : 0};
-    for (int c = 0; c < 3; c++) {
+    static const int sorts[4] = {FILE_VIEW_NAME, FILE_VIEW_SIZE, FILE_VIEW_TYPE, FILE_VIEW_MODIFIED};
+    static const char *const names[4] = {"Name", "Size", "Kind", "Modified"};
+    int at[4] = {nx, sx ? sx + 8 : 0, kx ? kx + 8 : 0, dx ? dx + 8 : 0};
+    for (int c = 0; c < 4; c++) {
         if (!at[c]) continue;
         if (!MODERN && c) draw_vline(at[c] - 8, y + 4, h - 8, TK_LINE_SUBTLE);
         int tw = kit_text(names[c], at[c], ty, TK_TEXT, x + w - at[c], 1);
@@ -5245,18 +5278,19 @@ static void flist_header(int x, int y, int w, int cols, const FileViewOptions *v
 
 /* FILE_VIEW_* for a header click, or -1. */
 static int flist_header_hit(int x, int y, int w, int cols) {
-    int nx, sx, dx;
+    int nx, sx, kx, dx;
     if (!hit(mouse_x, mouse_y, x, y, w, flist_head_h())) return -1;
-    flist_columns(x, w, cols, &nx, &sx, &dx);
+    flist_layout(x, w, cols, &nx, &sx, &kx, &dx);
     if (dx && mouse_x >= dx) return FILE_VIEW_MODIFIED;
+    if (kx && mouse_x >= kx) return FILE_VIEW_TYPE;
     if (sx && mouse_x >= sx) return FILE_VIEW_SIZE;
     return FILE_VIEW_NAME;
 }
 
 /* One row. warn tints it amber (a name that would be replaced). */
 static void flist_row(int x, int y, int w, int cols, int id, int state, int warn) {
-    int h = ROW_H, nx, sx, dx;
-    flist_columns(x, w, cols, &nx, &sx, &dx);
+    int h = ROW_H, nx, sx, kx, dx;
+    flist_layout(x, w, cols, &nx, &sx, &kx, &dx);
     if (warn && !(state & KIT_ON)) kit_fill(MODERN ? x + 6 : x, y, MODERN ? w - 12 : w, h, MODERN ? 6 : 0, TK_AMBER_50, 1);
     uint8_t ink = kit_row(x, y, w, h, state), dim = kit_row_dim(state);
     uint8_t paper = (state & KIT_ON) ? ((state & KIT_UNFOCUSED) ? TK_ACCENT_100 : TK_ACCENT) :
@@ -5265,10 +5299,11 @@ static void flist_row(int x, int y, int w, int cols, int id, int state, int warn
     char text[32];
     node_icon_draw(id, nx, y + (h - 16) / 2, 16, paper);
     kit_text(fs_name(id), tx, ty, ink, flist_name_end(x, w, cols) - tx, 0);
-    if (sx) {
+    if (sx && !(kx && fs_is_app(id))) {  /* the Kind column already says App */
         node_size_text(id, text);
-        kit_text_right(text, (dx ? dx : x + w) - 16, ty, dim, 0);
+        kit_text_right(text, (kx ? kx : dx ? dx : x + w) - 16, ty, dim, 0);
     }
+    if (kx) kit_text(kind_name(id, 1), kx + 8, ty, dim, (dx ? dx : x + w) - kx - 16, 0);
     if (dx) {
         stamp_text(fs_modified(id), text);
         kit_text(text, dx + 8, ty, dim, x + w - dx - 12, 0);
@@ -5325,6 +5360,7 @@ static void files_status(char *left, int max, char *right) {
  * detail rows, and a status bar. fm_first is the first item shown; in the
  * icon view it starts a row. */
 #define FILES_TOOL_H (MODERN ? 44 : 34)
+#define FILES_COLS (FL_SIZE | FL_KIND | FL_DATE)
 #define FILES_STATUS_H (MODERN ? 28 : 24)
 #define FILES_TILE_W (MODERN ? 96 : 92)
 #define FILES_TILE_H (MODERN ? 92 : 84)
@@ -5345,15 +5381,22 @@ static int files_cols(int ww) {
     return c < 1 ? 1 : c;
 }
 static int files_item_h(void) { return fm_details ? ROW_H : FILES_TILE_H + FILES_GAP; }
+/* Rows that fit whole (scrolling keeps the selection in these), and rows
+ * on screen at all: a last row that only partly fits is drawn cut at the
+ * list's bottom edge. */
 static int files_rows(int wy, int wh) {
     int r = (files_list_bottom(wy, wh) - files_list_y(wy)) / files_item_h();
     return r < 1 ? 1 : r;
 }
+static int files_shown_rows(int wy, int wh) {
+    int r = (files_list_bottom(wy, wh) - files_list_y(wy) + files_item_h() - 1) / files_item_h();
+    return r < 1 ? 1 : r;
+}
 static int files_scrolls(int ww, int wy, int wh) { return fm_vis_count() > files_rows(wy, wh) * files_cols(ww); }
-/* The rectangle of item i, when it is on screen. */
+/* The rectangle of item i, when it is on screen, cut at the list's bottom. */
 static int files_item_rect(int wx, int wy, int ww, int wh, int i, int *x, int *y, int *w, int *h) {
     int cols = files_cols(ww), k = i - fm_first;
-    if (i < 0 || i >= fm_vis_count() || k < 0 || k >= files_rows(wy, wh) * cols) return 0;
+    if (i < 0 || i >= fm_vis_count() || k < 0 || k >= files_shown_rows(wy, wh) * cols) return 0;
     if (fm_details) {
         *x = files_content_x(wx, ww);
         *y = files_list_y(wy) + k * ROW_H;
@@ -5365,6 +5408,8 @@ static int files_item_rect(int wx, int wy, int ww, int wh, int i, int *x, int *y
         *w = FILES_TILE_W;
         *h = FILES_TILE_H;
     }
+    int bottom = files_list_bottom(wy, wh);
+    if (*y + *h > bottom) *h = bottom - *y;
     return 1;
 }
 /* The item under the pointer: an index, -1 for empty space among the
@@ -5373,7 +5418,7 @@ static int files_item_at(int wx, int wy, int ww, int wh) {
     int ax = files_content_x(wx, ww), ay = files_list_y(wy) - (fm_details ? 0 : FILES_PAD);
     int aw = files_content_w(ww) - (files_scrolls(ww, wy, wh) ? SB : 0);
     if (!hit(mouse_x, mouse_y, ax, ay, aw, files_list_bottom(wy, wh) - ay)) return -2;
-    int cols = files_cols(ww), page = files_rows(wy, wh) * cols;
+    int cols = files_cols(ww), page = files_shown_rows(wy, wh) * cols;
     for (int i = fm_first; i < fm_vis_count() && i < fm_first + page; i++) {
         int x, y, w, h;
         if (files_item_rect(wx, wy, ww, wh, i, &x, &y, &w, &h) && hit(mouse_x, mouse_y, x, y, w, h)) return i;
@@ -5401,17 +5446,29 @@ static void files_scroll(int rows, int cols) {
     fm_first -= fm_first % cols;
 }
 
-static void tile_label(const char *s, int x, int y, int w, uint8_t ink, int bold);
+static void tile_label_ex(const char *s, int x, int y, int w, uint8_t ink, int bold, int selected);
 
-/* An icon tile: the 32px icon and up to two lines of name. */
+/* Drawing clips to the frame buffer, so while a partly visible row draws,
+ * the buffer's height stands in for the bottom edge of its list. */
+static int clip_bottom_begin(int bottom) {
+    int saved = fb_h;
+    if (bottom < fb_h) fb_h = bottom < 0 ? 0 : bottom;
+    return saved;
+}
+static void clip_bottom_end(int saved) { fb_h = saved; }
+
+/* An icon tile: the 32px icon and up to two lines of name. The selection
+ * tints the tile; while the list has focus the name also sits on the
+ * accent (Classic outlines the tile instead of tinting it). */
 static void draw_file_tile(int x, int y, int w, int h, int id, int state, int cut) {
+    int on = state & KIT_ON, focused = on && !(state & KIT_UNFOCUSED);
     uint8_t bg = 0;
-    if (state & KIT_ON) bg = TK_ACCENT_100;
+    if (on) bg = MODERN || !focused ? TK_ACCENT_100 : 0;
     else if (state & KIT_HOVER) bg = MODERN ? TK_SUNKEN : TK_ACCENT_50;
     if (bg) kit_fill(x, y, w, h, MODERN ? 8 : 0, bg, 1);
-    if ((state & KIT_ON) && !(state & KIT_UNFOCUSED) && !MODERN) kit_frame(x, y, w, h, 0, TK_ACCENT);
+    if (focused && !MODERN) kit_frame(x, y, w, h, 0, TK_ACCENT);
     node_icon_draw(id, x + (w - 32) / 2, y + 10, 32, bg ? bg : ui_theme.content);
-    tile_label(fs_name(id), x + 4, y + 48, w - 8, cut ? TK_TEXT2 : TK_TEXT, 0);
+    tile_label_ex(fs_name(id), x + 4, y + 48, w - 8, cut ? TK_TEXT2 : TK_TEXT, 0, focused);
 }
 
 static int files_is_cut(int id) {
@@ -5463,16 +5520,18 @@ static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
     int cx = files_content_x(wx, ww), cw = files_content_w(ww), cols = files_cols(ww), rows = files_rows(wy, wh);
     int vis = fm_vis_count(), unfocused = inactive || fm_filter_focus ? KIT_UNFOCUSED : 0;
     files_scroll(rows, cols);
-    if (fm_details) flist_header(cx, by, cw, FL_SIZE | FL_DATE, &fm_view);
-    for (int i = fm_first; i < vis && i < fm_first + rows * cols; i++) {
+    if (fm_details) flist_header(cx, by, cw, FILES_COLS, &fm_view);
+    int shown = files_shown_rows(wy, wh), clip = clip_bottom_begin(files_list_bottom(wy, wh));
+    for (int i = fm_first; i < vis && i < fm_first + shown * cols; i++) {
         int x, y, w, h, id = fm_row_id(i);
         if (id < 0 || !files_item_rect(wx, wy, ww, wh, i, &x, &y, &w, &h)) continue;
         int renaming = fm_renaming && id == fm_rename_id && fs_identity(id) == fm_rename_identity;
         int state = i == fm_selected ? KIT_ON | unfocused : renaming || inactive ? 0 : hot(x, y, w, h);
         if (fm_details) {
-            flist_row(x, y, w, FL_SIZE | FL_DATE, id, state, 0);
-        } else draw_file_tile(x, y, w, h, id, state, files_is_cut(id));
+            flist_row(x, y, w, FILES_COLS, id, state, 0);
+        } else draw_file_tile(x, y, w, FILES_TILE_H, id, state, files_is_cut(id));
     }
+    clip_bottom_end(clip);
     if (!fm_count) {
         const char *empty = fm_view.filter[0] ? "No matching names" : "This folder is empty";
         int ey = files_list_y(wy) + (fm_details ? 8 : 24);
@@ -5506,7 +5565,7 @@ static int files_rename_rect(int wx, int wy, int ww, int wh, int *fx, int *fy, i
     if (fm_details) {
         *fx = x + (MODERN ? 36 : 26); *fy = y + 1; *fh = h - 2;
         *fw = tw < 120 ? 120 : tw;
-        int end = flist_name_end(x, w, FL_SIZE | FL_DATE);
+        int end = flist_name_end(x, w, FILES_COLS);
         if (*fx + *fw > end) *fw = end - *fx;
     } else {
         *fw = tw < w ? w : tw;
@@ -5691,7 +5750,7 @@ static void chooser_layout(Chooser *c, int x, int y, int w, int h, int band, int
     if (c->rows < 1) c->rows = 1;
 }
 
-static int chooser_cols(void) { return pick_save ? FL_DATE : FL_SIZE | FL_DATE; }
+static int chooser_cols(void) { return pick_save ? FL_DATE : FL_SIZE | FL_KIND | FL_DATE; }
 static int chooser_row_w(const Chooser *c) { return c->list_w - (pick_count > c->rows ? SB : 0); }
 static int chooser_right_w(void) { return pick_save ? kit_button_w("New Folder", UI_ICON_NEWF) : 168; }
 static int chooser_right_x(const Chooser *c) { return c->x + c->w - (MODERN ? 12 : 8) - chooser_right_w(); }
@@ -6084,7 +6143,7 @@ static const char *win_app_name(int kind) {
     case WK_HELLO: return "Hello";
     case WK_SETTINGS: return "Settings";
     case WK_PAINT: return "Paint";
-    case WK_VIEW: return "Viewer";
+    case WK_VIEW: return "Image Viewer";
     case WK_SNAKE: return "Snake";
     case WK_WORDLE: return "Wordle";
     case WK_TERM: return "Terminal";
@@ -6092,10 +6151,10 @@ static const char *win_app_name(int kind) {
     case WK_TODO: return "Todo";
     case WK_CLOCK: return "Clock";
     case WK_CAL: return "Calendar";
-    case WK_MINES: return "Mines";
+    case WK_MINES: return "Minesweeper";
     case WK_2048: return "2048";
     case WK_BREAKOUT: return "Breakout";
-    case WK_SYSMON: return "Monitor";
+    case WK_SYSMON: return "System Monitor";
     case WK_PROPERTIES: return "Properties";
     case WK_BROWSER: return "Browser";
     case WK_PLAYER: return "Media Player";
@@ -6111,6 +6170,26 @@ static const char *win_display_title(int slot, char *buffer) {
         app_view_title(slot, buffer, APP_VIEW_TITLE_LEN))
         return buffer;
     return win_app_name(wins[slot].kind);
+}
+
+/* A task's label: a document window shows its document as its title bar
+ * does, with *unsaved set when it has unsaved changes; others show the
+ * window's name. */
+static const char *win_task_title(int slot, char *buffer, int *unsaved) {
+    *unsaved = 0;
+    if (slot < 0 || slot >= MAX_WIN) return win_display_title(slot, buffer);
+    int kind = wins[slot].kind;
+    if (kind == WK_EDIT) {
+        const Document *doc = &window_state[slot].doc;
+        int bound = fs_valid(doc->file) && !fs_is_dir(doc->file) && !fs_is_app(doc->file) &&
+                    fs_identity(doc->file) == doc->identity;
+        *unsaved = !doc->saved_ok;
+        return bound ? fs_name(doc->file) : "untitled";
+    }
+    if (kind == WK_WRITER) { *unsaved = writer_dirty(); return writer_title(); }
+    if (kind == WK_SPREADSHEET) { *unsaved = spreadsheet_dirty(); return spreadsheet_title(); }
+    if (kind == WK_VIEW) return image_viewer_title();
+    return win_display_title(slot, buffer);
 }
 
 /* Lucide glyph for a window kind (taskbar, Start menu, Files rows). */
@@ -6168,22 +6247,27 @@ static void fmt_grouped(char *out, unsigned v) {
     out[o] = 0;
 }
 
-static const char *kind_text(int id) {
+/* What an item is: in full for Properties and the Editor status bar, brief
+ * for the Kind column. */
+static const char *kind_name(int id, int brief) {
     const char *n = fs_name(id);
-    static const struct { const char *ext, *kind; } kinds[] = {
-        {".txt", "Plain text"}, {".bwr", "Writer document"}, {".rtf", "Rich text"},
-        {".bsh", "Spreadsheet"}, {".csv", "CSV values"}, {".pdf", "PDF document"},
-        {".bex", "Program"}, {".c", "C source"}, {".h", "C header"}, {".html", "Web page"},
-        {".htm", "Web page"}, {".wav", "Sound"}, {".mp3", "Sound"}, {".mpg", "Video"},
-        {".mpeg", "Video"}, {".log", "Log file"},
+    static const struct { const char *ext, *kind, *brief; } kinds[] = {
+        {".txt", "Plain text", "Text"}, {".bwr", "Writer document", "Writer"}, {".rtf", "Rich text", "Rich text"},
+        {".bsh", "Spreadsheet", "Spreadsheet"}, {".csv", "CSV values", "CSV"}, {".pdf", "PDF document", "PDF"},
+        {".bex", "Program", "Program"}, {".c", "C source", "C source"}, {".h", "C header", "C header"},
+        {".html", "Web page", "Web page"}, {".htm", "Web page", "Web page"}, {".wav", "Sound", "Sound"},
+        {".mp3", "Sound", "Sound"}, {".mpg", "Video", "Video"}, {".mpeg", "Video", "Video"},
+        {".log", "Log file", "Log"},
     };
     if (id == fs_root()) return "Volume";
     if (fs_is_dir(id)) return "Folder";
-    if (fs_is_app(id)) return "Application";
-    for (unsigned i = 0; i < sizeof kinds / sizeof *kinds; i++) if (file_extension(n, kinds[i].ext)) return kinds[i].kind;
-    if (is_image_file(id)) return "Picture";
+    if (fs_is_app(id)) return brief ? "App" : "Application";
+    for (unsigned i = 0; i < sizeof kinds / sizeof *kinds; i++)
+        if (file_extension(n, kinds[i].ext)) return brief ? kinds[i].brief : kinds[i].kind;
+    if (is_image_file(id)) return brief ? "Image" : "Picture";
     return "File";
 }
+static const char *kind_text(int id) { return kind_name(id, 0); }
 
 /* The app open_fs_file would use; 0 when nothing opens it. */
 static const char *opens_with(int id, int *ai) {
@@ -6202,6 +6286,70 @@ static const char *opens_with(int id, int *ai) {
     if (fs_size(id) >= EDIT_BUF_SIZE) return 0;
     *ai = AI_EDITOR;
     return "Editor";
+}
+
+static int ow_sound(const char *n) {
+    return file_extension(n, ".wav") || file_extension(n, ".wave") || file_extension(n, ".mp3") ||
+           file_extension(n, ".mpg") || file_extension(n, ".mpeg");
+}
+static int ow_image(int id) {
+    const char *n = fs_name(id);
+    return is_image_file(id) || file_extension(n, ".jpg") || file_extension(n, ".jpeg") ||
+           file_extension(n, ".png") || file_extension(n, ".bmp") || file_extension(n, ".gif");
+}
+static const char *const ow_names[OW_N] = {"Editor", "Writer", "Spreadsheet", "Browser", "Image Viewer", "Media Player"};
+
+/* Whether app can open file id: the same file types open_fs_file sends
+ * it, and Editor for any small file that is not media, a program or a
+ * binary document. */
+static int ow_can(int id, int app) {
+    if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id)) return 0;
+    const char *n = fs_name(id);
+    switch (app) {
+    case OW_EDITOR:
+        return fs_size(id) < EDIT_BUF_SIZE && !fs_streamed(id) && !ow_image(id) && !ow_sound(n) &&
+               !file_extension(n, ".bex") && !file_extension(n, ".bwr") && !file_extension(n, ".pdf");
+    case OW_WRITER: return file_extension(n, ".bwr") || file_extension(n, ".txt") || file_extension(n, ".rtf");
+    case OW_SHEET: return file_extension(n, ".bsh") || file_extension(n, ".csv");
+    case OW_BROWSER: return file_extension(n, ".html") || file_extension(n, ".htm");
+    case OW_VIEWER: return ow_image(id);
+    case OW_PLAYER: return ow_sound(n);
+    default: return 0;
+    }
+}
+
+static int ow_build(int id) {
+    int ai;
+    const char *usual = fs_valid(id) ? opens_with(id, &ai) : 0;
+    ow_target = id;
+    ow_identity = fs_valid(id) ? fs_identity(id) : 0;
+    mi_open_with_n = 0;
+    for (int pass = 0; pass < 2; pass++)
+        for (int app = 0; app < OW_N; app++) {
+            int first = usual && !kstrcmp(usual, ow_names[app]);
+            if (pass == !first && ow_can(id, app))
+                mi_open_with[mi_open_with_n++] = (MItem){ow_names[app], "", ACT_OPEN_WITH + app, 0};
+        }
+    if (!mi_open_with_n) mi_open_with[mi_open_with_n++] = (MItem){"No app opens this file", "", ACT_NONE, 0};
+    return mi_open_with_n;
+}
+
+static void ow_open(int id, int app) {
+    if (!ow_can(id, app)) return;
+    recent_add(id);
+    switch (app) {
+    case OW_EDITOR:
+        if (win_open(WK_EDIT) < 0) return;
+        fm_set_cwd(fs_parent(id));
+        edit_load(id);
+        break;
+    case OW_WRITER: open_writer(id); break;
+    case OW_SHEET: open_spreadsheet(id); break;
+    case OW_BROWSER: open_browser(id); break;
+    case OW_VIEWER: open_view(id); break;
+    case OW_PLAYER: open_player(id); break;
+    }
+    dirty = 1;
 }
 
 static int prop_root(void) { return properties_id == fs_root(); }
@@ -6229,6 +6377,14 @@ static void prop_field(int wx, int wy, int ww, int *fx, int *fy, int *fw) {
     *fx = wx + prop_pad() + 32 + 12;
     *fy = wy + TITLE_BAR + prop_pad() + (32 - BTN_H) / 2;
     *fw = ww - (*fx - wx) - prop_pad();
+}
+
+/* The Opens with row, under the details; shared by drawing and clicks. */
+static void prop_opens_geom(int wx, int wy, int ww, int *x, int *y, int *w) {
+    int pad = prop_pad(), rows = prop_rows();
+    *y = wy + TITLE_BAR + pad + 32 + 12 + (MODERN ? rows * 26 + 16 + 16 : 8 + rows * 24 + 4 + 12);
+    *x = wx + pad + 108;
+    *w = wx + ww - pad - *x;
 }
 
 static void prop_row(int lx, int vx, int *y, int right, const char *label, const char *value) {
@@ -6303,14 +6459,23 @@ static void draw_properties(int wx, int wy, int ww, int wh, int fl) {
     y += MODERN ? 16 : 4;
     if (valid && !prop_root() && !fs_is_app(id)) {
         if (!MODERN) { kit_separator(wx + pad, y, ww - pad * 2); y += 12; }
-        int ai;
+        int ai, dx, dw;
         const char *app = opens_with(id, &ai);
+        prop_opens_geom(wx, wy, ww, &dx, &y, &dw);
         kit_text("Opens with", lx, kit_ty(y, BTN_H), TK_TEXT2, vx - lx - 8, 0);
-        int tx = kit_field(vx, y, right - vx, BTN_H, KIT_DISABLED);
-        if (app) {
+        if (app && ow_build(id) && mi_open_with[0].act != ACT_NONE) {
+            /* The dropdown lists every app that can open the item. */
+            kit_dropdown(dx, y, dw, BTN_H, "", (fl & WIN_INACTIVE) ? 0 : hot(dx, y, dw, BTN_H));
+            int tx = dx + (MODERN ? 10 : 6);
             app_icon_draw(ai, tx, y + (BTN_H - 16) / 2, AI_SMALL);
-            kit_text(app, tx + 22, kit_ty(y, BTN_H), TK_TEXT, right - tx - 30, 0);
-        } else kit_text("No app opens this file", tx, kit_ty(y, BTN_H), TK_TEXT2, right - tx - 8, 0);
+            kit_text(app, tx + 22, kit_ty(y, BTN_H), TK_TEXT, dw - 22 - 36, 0);
+        } else {
+            int tx = kit_field(dx, y, dw, BTN_H, KIT_DISABLED);
+            if (app) {
+                app_icon_draw(ai, tx, y + (BTN_H - 16) / 2, AI_SMALL);
+                kit_text(app, tx + 22, kit_ty(y, BTN_H), TK_TEXT, right - tx - 30, 0);
+            } else kit_text("No app opens this file", tx, kit_ty(y, BTN_H), TK_TEXT2, right - tx - 8, 0);
+        }
         y += BTN_H + 16;
     }
     if (properties_reason[0]) {
@@ -6343,7 +6508,13 @@ static void properties_commit(void) {
 }
 
 static void handle_properties_click(int wx, int wy, int ww, int wh) {
-    int ok, cancel, by, bw;
+    int ok, cancel, by, bw, ox, oy, ow, id = properties_id, ai;
+    prop_opens_geom(wx, wy, ww, &ox, &oy, &ow);
+    if (fs_valid(id) && !prop_root() && !fs_is_app(id) && hit(mouse_x, mouse_y, ox, oy, ow, BTN_H) &&
+        opens_with(id, &ai) && ow_build(id) && mi_open_with[0].act != ACT_NONE) {
+        menu_open_context(mi_open_with, mi_open_with_n, ox, oy + BTN_H + 2);
+        return;
+    }
     prop_buttons(wx, wy, ww, wh, &ok, &cancel, &by, &bw);
     if (hit(mouse_x, mouse_y, ok, by, bw, BTN_H)) properties_commit();
     else if (prop_editable(properties_id) && hit(mouse_x, mouse_y, cancel, by, bw, BTN_H)) { prop_for = -1; close_front(); }
@@ -6576,6 +6747,7 @@ static const char *tray_status(void) {
     return status;
 }
 
+#define TASK_DOT_W 10  /* room for a task's unsaved-changes dot */
 static void taskbar_layout(void) {
     int order[MAX_WIN], n;
     taskbar_order(order, &n);
@@ -6591,7 +6763,7 @@ static void taskbar_layout(void) {
         int total = fixed;
         int widths[MAX_WIN];
         for (int k = 0; k < n; k++) {
-            int w = 36 + 12 + uib_string_w(win_display_title(order[k], title));
+            int unsaved, w = 36 + 12 + uib_string_w(win_task_title(order[k], title, &unsaved)) + (unsaved ? TASK_DOT_W : 0);
             if (w > each) w = each;
             if (w < 72) w = 44;
             widths[k] = w;
@@ -6669,10 +6841,16 @@ static int taskbar_hover_at(void) {
     return HOT_NONE;
 }
 
+/* A task's label, cut to fit, then the unsaved-changes dot one space on. */
+static void task_label(const char *title, int unsaved, int x, int y, int maxw, uint8_t ink, int bold) {
+    int used = kit_text(title, x, y, ink, maxw - (unsaved ? TASK_DOT_W : 0), bold);
+    if (unsaved) kit_fill(x + used + 5, y + UI_FONT_H / 2 - 2, 5, 5, 2, ink, 1);
+}
+
 static void draw_task_button(int t, int front) {
-    int i = tb_id[t], x = tb_x[t], w = tb_w[t], y = tb_task_y, h = tb_task_h;
+    int i = tb_id[t], x = tb_x[t], w = tb_w[t], y = tb_task_y, h = tb_task_h, unsaved;
     char native_title[TERM_TASK_TITLE_LEN];
-    const char *title = win_display_title(i, native_title);
+    const char *title = win_task_title(i, native_title, &unsaved);
     int active = i == front && !wins[i].min, hover = taskbar_hover == i;
     int pressed = hover && mouse_left;
     uint8_t ink = wins[i].min ? TK_TEXT2 : TK_TEXT, bg;
@@ -6684,7 +6862,7 @@ static void draw_task_button(int t, int front) {
         if (w < 72) { app_icon_draw(icon, x + (w - 16) / 2, y + 10, AI_SMALL); }
         else {
             app_icon_draw(icon, x + 12, y + 10, AI_SMALL);
-            kit_text(title, x + 36, kit_ty(y, h), ink, w - 36 - 12, active);
+            task_label(title, unsaved, x + 36, kit_ty(y, h), w - 36 - 12, ink, active);
         }
         if (active) kit_fill(x + w / 2 - 8, y + 31, 16, 3, 2, TK_ACCENT, 1);
         return;
@@ -6700,7 +6878,7 @@ static void draw_task_button(int t, int front) {
     if (w < 72) app_icon_draw(icon, x + (w - 16) / 2, y + 9, AI_SMALL);
     else {
         app_icon_draw(icon, x + 10, y + 9, AI_SMALL);
-        kit_text(title, x + 32, ty, ink, w - 32 - 10, active);
+        task_label(title, unsaved, x + 32, ty, w - 32 - 10, ink, active);
     }
 }
 
@@ -6976,7 +7154,7 @@ static int files_chrome_click(int wx, int wy, int ww, int wh) {
     }
     int cx = files_content_x(wx, ww), cw = files_content_w(ww);
     if (fm_details) {
-        int sort = flist_header_hit(cx, by, cw, FL_SIZE | FL_DATE);
+        int sort = flist_header_hit(cx, by, cw, FILES_COLS);
         if (sort >= 0) { fm_sort_by(sort); return 1; }
     }
     if (files_scrolls(ww, wy, wh) && mouse_x >= cx + cw - SB) {
@@ -7454,6 +7632,8 @@ static int files_selected_item(void) {
 static int act_enabled(int act) {
     if (act == ACT_NONE || act == ACT_SEP) return 0;
     if (act >= ACT_RECENT && act < ACT_RECENT + RECENT_N) return recent_valid(act - ACT_RECENT);
+    if (act >= ACT_OPEN_WITH && act < ACT_OPEN_WITH + OW_N)
+        return fs_valid(ow_target) && fs_identity(ow_target) == ow_identity && ow_can(ow_target, act - ACT_OPEN_WITH);
     if (act >= 0x100 && act < 0x200) return menu_item_enabled((act >> 4) & 15, act & 15);
     if (open_dlg) return act == ACT_ABOUT || act == ACT_HELP;
     int fk = front_kind(), f = win_front(), id;
@@ -7471,6 +7651,9 @@ static int act_enabled(int act) {
         return id >= 0 && !fs_is_app(id) && id != trash_id && id != prefs_id &&
                (act != ACT_TRASH || (trash_id >= 0 && fs_parent(id) != trash_id));
     case ACT_COPY_PATH: return files_selected_item() >= 0;
+    case ACT_OPEN_WITH_MENU:
+        id = files_selected_item();
+        return id >= 0 && !fs_is_dir(id) && !fs_is_app(id);
     case ACT_NEW_FILE: case ACT_REFRESH: case ACT_FILTER:
     case ACT_SORT_NAME: case ACT_SORT_KIND: case ACT_SORT_SIZE: case ACT_SORT_MODIFIED:
     case ACT_SORT_DESCENDING: case ACT_VIEW_ICONS: case ACT_VIEW_DETAILS:
@@ -7521,6 +7704,7 @@ static void act_run(int act) {
     if (!act_enabled(act)) return;
     fm_last_click_item = -1;
     if (act >= ACT_RECENT && act < ACT_RECENT + RECENT_N) { open_fs_file(recent[act - ACT_RECENT].id); return; }
+    if (act >= ACT_OPEN_WITH && act < ACT_OPEN_WITH + OW_N) { ow_open(ow_target, act - ACT_OPEN_WITH); return; }
     if (act >= 0x100 && act < 0x200) { menu_activate((act >> 4) & 15, act & 15); return; }
     int fk = front_kind(), f = win_front();
     switch (act) {
@@ -7934,6 +8118,15 @@ static int launcher_visible_rows(void) {
     int rows = (lp_grid_bottom(y, h) - lp_grid_y(y)) / (lp_tile_h() + 4);
     return rows < 1 ? 1 : rows;
 }
+/* Rows on screen: with no matching files listed under the grid, a last row
+ * that only partly fits is drawn cut at the grid's bottom. */
+static int launcher_shown_rows(void) {
+    if (launch_n > launch_apps) return launcher_visible_rows();
+    int x, y, w, h;
+    launcher_geom(&x, &y, &w, &h);
+    int rows = (lp_grid_bottom(y, h) - lp_grid_y(y) + lp_tile_h() + 3) / (lp_tile_h() + 4);
+    return rows < 1 ? 1 : rows;
+}
 static int launcher_total_rows(void) { int c = lp_cols(); return (launch_apps + c - 1) / c; }
 static void launcher_clamp_scroll(void) {
     int rows = launcher_visible_rows(), total = launcher_total_rows();
@@ -8036,28 +8229,35 @@ static int launcher_item_icon(int i) {
     return file_extension(launch_items[i].name, ".bex") ? AI_NATIVE : AI_DOCUMENT;
 }
 
+/* One centered label line; a selected label sits on an accent box. */
+static void tile_line(const char *s, int x, int y, int w, uint8_t ink, int bold, int selected) {
+    int tw = kit_text_w(s, bold) < w ? kit_text_w(s, bold) : w, lx = x + (w - tw) / 2;
+    if (selected) {
+        kit_fill(lx - 3, y, tw + 6, CHAR_H + 1, MODERN ? 4 : KIT_R_SQUARE, TK_ACCENT, 1);
+        ink = TK_ON_ACCENT;
+    }
+    kit_text(s, lx, y, ink, w, bold);
+}
+
 /* A tile label on up to two centered lines, split at the last space that
  * fits the first line. */
-static void tile_label(const char *s, int x, int y, int w, uint8_t ink, int bold) {
+static void tile_label_ex(const char *s, int x, int y, int w, uint8_t ink, int bold, int selected) {
     int n = kstrlen(s);
-    if (kit_text_w(s, bold) <= w) { kit_text_center(s, x, y, w, ink, bold); return; }
     char first[FS_NAME_LEN];
     int cut = -1;
-    for (int i = 0; i < n && i < FS_NAME_LEN - 1; i++) {
-        if (s[i] != ' ') continue;
-        kmemcpy(first, s, i); first[i] = 0;
-        if (kit_text_w(first, bold) <= w) cut = i;
-    }
-    if (cut < 0) {
-        int tw = kit_text_w(s, bold) < w ? kit_text_w(s, bold) : w;
-        kit_text(s, x + (w - tw) / 2, y, ink, w, bold);
-        return;
-    }
+    if (kit_text_w(s, bold) > w)
+        for (int i = 0; i < n && i < FS_NAME_LEN - 1; i++) {
+            if (s[i] != ' ') continue;
+            kmemcpy(first, s, i); first[i] = 0;
+            if (kit_text_w(first, bold) <= w) cut = i;
+        }
+    if (cut < 0) { tile_line(s, x, y, w, ink, bold, selected); return; }
     kmemcpy(first, s, cut); first[cut] = 0;
-    kit_text_center(first, x, y, w, ink, bold);
-    const char *rest = s + cut + 1;
-    int tw = kit_text_w(rest, bold) < w ? kit_text_w(rest, bold) : w;
-    kit_text(rest, x + (w - tw) / 2, y + CHAR_H + 1, ink, w, bold);
+    tile_line(first, x, y, w, ink, bold, selected);
+    tile_line(s + cut + 1, x, y + CHAR_H + 1, w, ink, bold, selected);
+}
+static void tile_label(const char *s, int x, int y, int w, uint8_t ink, int bold) {
+    tile_label_ex(s, x, y, w, ink, bold, 0);
 }
 
 static int lp_hover(int x, int y, int w, int h) { return hit(mouse_x, mouse_y, x, y, w, h); }
@@ -8148,15 +8348,16 @@ static void draw_launcher(void) {
         fmt_uint(count, (unsigned)launch_apps);
         kit_text_right(count, sr, kit_ty(sy, lp_section_h()), TK_TEXT2, 0);
         int c = lp_cols(), rows = launcher_visible_rows(), cw = lp_cell_w(w), th = lp_tile_h();
-        int first = launch_scroll * c, last = first + rows * c;
+        int first = launch_scroll * c, last = first + launcher_shown_rows() * c;
         if (last > launch_apps) last = launch_apps;
+        int clip = clip_bottom_begin(lp_grid_bottom(y, h));
         for (int i = first; i < last; i++) {
             int gx, gy;
             launcher_cell(x, y, w, i, &gx, &gy);
             int sel = i == launch_sel, hov = !sel && lp_hover(gx, gy, cw, th);
             if (sel) {
                 if (MODERN) {
-                    kit_fill(gx, gy, cw, th, 8, TK_ACCENT_50, 1);
+                    kit_fill(gx, gy, cw, th, 8, TK_ACCENT_100, 1);
                     kit_frame(gx, gy, cw, th, 8, TK_ACCENT);
                     kit_frame(gx + 1, gy + 1, cw - 2, th - 2, 7, TK_ACCENT);
                 } else {
@@ -8168,6 +8369,7 @@ static void draw_launcher(void) {
             app_icon_draw(launcher_item_icon(i), gx + (cw - AI_BIG) / 2, gy + top, AI_BIG);
             tile_label(launch_items[i].name, gx + 3, gy + top + AI_BIG + (MODERN ? 6 : 4), cw - 6, TK_TEXT, 0);
         }
+        clip_bottom_end(clip);
         if (!launch_apps && launch_len)
             kit_text("No apps match", sx, lp_grid_y(y) + 6, TK_TEXT2, w, 0);
         if (launcher_total_rows() > rows) {
@@ -8241,13 +8443,14 @@ static int launcher_click(void) {
         dirty = 1;
         return 1;
     }
-    int c = lp_cols(), rows = launcher_visible_rows(), cw = lp_cell_w(w);
-    int first = launch_scroll * c, last = first + rows * c;
+    int c = lp_cols(), cw = lp_cell_w(w), bottom = lp_grid_bottom(y, h);
+    int first = launch_scroll * c, last = first + launcher_shown_rows() * c;
     if (last > launch_apps) last = launch_apps;
     for (int i = first; i < last; i++) {
         int gx, gy;
         launcher_cell(x, y, w, i, &gx, &gy);
-        if (hit(mouse_x, mouse_y, gx, gy, cw, lp_tile_h())) {
+        int th = gy + lp_tile_h() > bottom ? bottom - gy : lp_tile_h();
+        if (hit(mouse_x, mouse_y, gx, gy, cw, th)) {
             launcher_run(i);
             return 1;
         }
@@ -9049,8 +9252,16 @@ static const MItem mi_trash_icon[] = {
 };
 
 static void handle_rclick(void) {
-    if (display_pending || name_dlg || edit_close_dlg || open_dlg || launcher_on || switcher_on)
+    if (display_pending || name_dlg || edit_close_dlg || open_dlg || switcher_on)
         return;
+    if (launcher_on) {
+        /* Light dismiss: outside the panel the click closes it and goes on
+         * to whatever is under the pointer. */
+        int lx, ly, lw, lh;
+        launcher_geom(&lx, &ly, &lw, &lh);
+        if (hit(mouse_x, mouse_y, lx, ly, lw, lh)) return;
+        launcher_close();
+    }
     if (open_menu >= 0) menu_close();
     volume_on = 0;
     if (taskbar_rclick()) return;
@@ -9074,6 +9285,9 @@ static void handle_rclick(void) {
                 fm_selected = row;
                 menu_open_context(mi_files_context, (int)(sizeof mi_files_context / sizeof mi_files_context[0]), mouse_x, mouse_y);
             } else if (row == -1) {
+                /* The folder menu acts on the folder: nothing stays selected. */
+                fm_rename_cancel();
+                fm_selected = -1;
                 menu_open_context(mi_folder_context, (int)(sizeof mi_folder_context / sizeof mi_folder_context[0]), mouse_x, mouse_y);
             }
             return;
