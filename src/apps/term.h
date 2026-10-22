@@ -30,6 +30,8 @@ int term_canvas_size(int slot, int *width, int *height);
 /* Scrollback, oldest first. */
 int term_count(void);
 const char *term_get(int i);
+/* 1 when scrollback line i is a command echoed after its prompt. */
+int term_is_echo(int i);
 
 /* Live row: prompt text plus whatever has been typed so far. */
 void term_prompt(char *out, int max);

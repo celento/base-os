@@ -78,6 +78,7 @@ int term_task_running(int slot){(void)slot;return 1;}
 int term_count(void){return 3;}
 const char *term_get(int row){return row==0?"Canvas updates preserve this text.":row==1?"This longer ordinary line wraps in a narrow Terminal window.":"Canvas task started.";}
 void term_prompt(char *out,int max){(void)max;strcpy(out,"/>");}
+int term_is_echo(int row){(void)row;return 0;}
 const char *term_input(void){return "";}
 void term_set_view(int rows,int total){view_rows=rows;view_total=total;}
 int term_scroll_offset(void){return 0;}

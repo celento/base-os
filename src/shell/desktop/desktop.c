@@ -209,6 +209,7 @@ static void utoa(unsigned v, char *out) {
  * and the kind whose menu model the window row shows. */
 static int chrome_icon = -1;
 static int chrome_dirty;     /* draw an unsaved-changes dot after the title */
+static const char *chrome_subtitle; /* dim text after the title */
 static int chrome_kind = -1;
 static int chrome_slot = -1;
 static int chrome_flags;  /* WIN_MAXED and WIN_DIALOG for the window being drawn */
@@ -342,6 +343,10 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
             int dx = tx + kit_text_w(title, 1) + 8;
             if (dx > xmax + 6) dx = xmax + 6;
             kit_fill(dx, ty + UI_FONT_H / 2 - 3, 7, 7, 3, MODERN ? TK_TEXT2 : title_ink, 0);
+        }
+        if (chrome_subtitle) {
+            int sx = tx + kit_text_w(title, 1) + 6;
+            if (sx < xmax - 24) kit_text(chrome_subtitle, sx, ty, MODERN ? TK_TEXT2 : active ? TK_ACCENT_100 : TK_LINE_STRONG, xmax - sx, 0);
         }
     }
 
@@ -1317,7 +1322,9 @@ int spreadsheet_clipboard_get(char *text, unsigned capacity, unsigned *generatio
 #define TERM_WIN_W   640
 #define TERM_WIN_H   400
 #define TERM_PAD     12
-#define TERM_FG      gfx_gray(0xE8)
+#define TERM_BG      ((uint8_t)(PAL_ANSI + 0))
+#define TERM_FG      ((uint8_t)(PAL_ANSI + 7))
+#define TERM_ANSI(i) ((uint8_t)(PAL_ANSI + (i)))
 
 #define CALC_W       280
 #define CALC_H       408
@@ -3854,6 +3861,58 @@ static int term_text(const char *s, int x, int y, int col, int cols) {
     return col;
 }
 
+/* Output lines are plain text; colors come from their shape. A prompt line
+ * shows its folder in blue, errors are red, usage lines amber, and words that
+ * end in a slash (folders in ls) blue. */
+enum { TL_PLAIN, TL_PROMPT, TL_ERROR, TL_USAGE, TL_NOTE };
+static int term_line_kind(const char *s, int index) {
+    static const char *const errors[] = { "Cannot ", "Error", "No manual", "Command exceeds", "Input was lost",
+                                          "Program stopped", "Stop this terminal", "Disk is saving", "Network is busy" };
+    for (unsigned k = 0; k < sizeof errors / sizeof errors[0]; k++) {
+        int n = kstrlen(errors[k]), i = 0;
+        while (i < n && s[i] == errors[k][i]) i++;
+        if (i == n) return TL_ERROR;
+    }
+    if (s[0] == 'U' && s[1] == 's' && s[2] == 'a' && s[3] == 'g' && s[4] == 'e' && s[5] == ':') return TL_USAGE;
+    return index < 2 ? TL_NOTE : TL_PLAIN;
+}
+static uint8_t term_char_ink(const char *s, int len, int at, int kind, int *prompt_end) {
+    if (kind == TL_ERROR) return TERM_ANSI(9);
+    if (kind == TL_USAGE) return TERM_ANSI(11);
+    if (kind == TL_NOTE) return TERM_ANSI(8);
+    if (kind == TL_PROMPT) {
+        if (*prompt_end < 0) { int i = 0; while (s[i] && !(s[i] == '>' && s[i + 1] == ' ')) i++; *prompt_end = i; }
+        if (at < *prompt_end) return TERM_ANSI(12);
+        if (at <= *prompt_end + 1) return TERM_ANSI(10);
+        return TERM_ANSI(15);
+    }
+    /* A word that ends in a slash. */
+    int a = at, b = at;
+    if (s[at] == ' ') return TERM_FG;
+    while (a > 0 && s[a - 1] != ' ') a--;
+    while (b < len && s[b] != ' ') b++;
+    return b > a + 1 && s[b - 1] == '/' ? TERM_ANSI(12) : TERM_FG;
+}
+/* One wrapped chunk of a line: characters [from, from + cols) of s. */
+static void term_line_chunk(const char *s, int len, int kind, int from, int cols, int x, int y) {
+    int prompt_end = -1;
+    for (int c = 0; c < cols && from + c < len; c++)
+        draw_edit_char(s[from + c], x + c * EDIT_CHAR_W, y, term_char_ink(s, len, from + c, kind, &prompt_end));
+}
+/* Terminal and native-task bodies: dark in both styles, rounded at the
+ * bottom in Modern. */
+static void term_body(int wx, int top, int ww, int h) {
+    if (MODERN && !(chrome_flags & WIN_MAXED)) kit_fill_bottom(wx + 1, top, ww - 2, h, ui_theme.r_window - 1, TERM_BG);
+    else draw_rect(wx + 1, top, ww - 2, h, TERM_BG);
+}
+/* Scroll position along the right edge; the wheel and Page keys scroll. */
+static void term_scroll_marker(int x, int y, int h, int first, int rows, int total) {
+    if (total <= rows || h < 16) return;
+    int at, size;
+    kit_scroll_thumb(h, first, rows, total, &at, &size);
+    kit_fill(x, y + at, 6, size, 3, TERM_ANSI(8), 0);
+}
+
 /* Both full composition and stable native-task updates use this exact layout.
  * A zero-height result retains the original eight-pixel canvas gap. */
 static int term_canvas_geometry(int ww,int wh,int source_w,int source_h,
@@ -3933,10 +3992,10 @@ static void draw_native_window(int slot,int inactive){
     Win *w=&wins[slot];char title[APP_VIEW_TITLE_LEN];
     gui_draw_window(w->x,w->y,w->w,w->h,win_display_title(slot,title),0,inactive?WIN_INACTIVE:0);
     int top=w->y+TITLE_H+1;
-    draw_rect(w->x+1,top,w->w-2,w->h-TITLE_H-2,INK(30));
-    draw_rect(w->x+1,top,w->w-2,NATIVE_TOOLBAR_H,ui_chrome_dk);
+    term_body(w->x,top-1,w->w,w->h-TITLE_H-1);
+    kit_toolbar(w->x+1,top-1,w->w-2,NATIVE_TOOLBAR_H+1);
     int output=app_view_output_visible(slot);
-    tool_button(w->x+8,top+3,100,NATIVE_TOOLBAR_H-6,ICON_LIST,app_view_output_dropped(slot)?"Output*":"Output",
+    tool_button(w->x+8,top+2,76,NATIVE_TOOLBAR_H-4,ICON_LIST,app_view_output_dropped(slot)?"Output*":"Output",
                 output?TB_ACTIVE:TB_FLAT);
     AppViewResult result;
     int ended=app_view_result(slot,&result);
@@ -3944,7 +4003,7 @@ static void draw_native_window(int slot,int inactive){
         (result.reason==PROCESS_EXIT_STOP?"Stopped":"Ended; see Output"):
         "Ctrl+C stops; Close ends task";
     if(output&&app_view_output_dropped(slot))status="Older output discarded";
-    draw_string_clip(status,w->x+90,top+7,ui_text_dim,w->x+w->w-12);
+    kit_text(status,w->x+96,kit_ty(top,NATIVE_TOOLBAR_H-1),TK_TEXT2,w->w-108,0);
     if(output){
         int rows=native_output_rows(w),count=app_view_output_count(slot);
         int total=native_output_total(slot),max=total>rows?total-rows:0;
@@ -3964,15 +4023,22 @@ static void draw_native_window(int slot,int inactive){
     }else{
         AppCanvasFrame frame=app_view_frame(slot);CanvasView view=native_canvas_geometry(slot);
         if(frame.pixels)draw_app_canvas(frame,&view);
-        else draw_string_clip(ended?"No published frame; see Output":"Starting...",
-                              w->x+16,top+NATIVE_TOOLBAR_H+16,TERM_FG,w->x+w->w-16);
+        else kit_text(ended?"No published frame; see Output":"Starting...",
+                      w->x+16,top+NATIVE_TOOLBAR_H+16,TERM_ANSI(8),w->w-32,0);
     }
 }
 
 static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
-    char title[TERM_TASK_TITLE_LEN];
+    char title[TERM_TASK_TITLE_LEN], size[24];
+    int tcols = (ww - 2 - TERM_PAD * 2) / EDIT_CHAR_W, trows = (wh - TITLE_H - 2 - TERM_PAD * 2) / EDIT_LINE_H;
+    kstrcpy(size, "~ ");
+    fmt_uint(size + 2, (unsigned)(tcols > 0 ? tcols : 0));
+    kstrcpy(size + kstrlen(size), "x");
+    fmt_uint(size + kstrlen(size), (unsigned)(trows > 0 ? trows : 0));
+    chrome_subtitle = size;
     gui_draw_window(wx, wy, ww, wh, win_display_title(context_slot, title), 0, inactive ? WIN_INACTIVE : 0);
-    draw_rect(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1, INK(30));
+    chrome_subtitle = 0;
+    term_body(wx, wy + TITLE_H, ww, wh - TITLE_H - 1);
 
     int ax = wx + 1 + TERM_PAD;
     int canvas_height=draw_term_canvas(wx,wy,ww,wh);
@@ -3997,15 +4063,21 @@ static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
     for(int i=0;i<=count;i++){
         const char *text=i==count?live:term_get(i);int len=kstrlen(text);
         int chunks=i==count?len/cols+1:(len?(len+cols-1)/cols:1);
+        int kind=i==count?(term_task_running(context_slot)?TL_NOTE:TL_PROMPT):term_is_echo(i)?TL_PROMPT:term_line_kind(text,i);
         for(int chunk=0;chunk<chunks;chunk++,visual++){
             int row=visual-first;
             if(row<0||row>=rows)continue;
             int y=ay+row*EDIT_LINE_H;
-            term_text(text+chunk*cols,ax,y,0,cols);
-            if(i==count&&chunk==chunks-1&&!inactive)
-                draw_rect(ax+(len%cols)*EDIT_CHAR_W,y,1,EDIT_FONT_H,TERM_FG);
+            term_line_chunk(text,len,kind,chunk*cols,cols,ax,y);
+            /* Block cursor; hollow while another window has focus. */
+            if(i==count&&chunk==chunks-1){
+                int cx=ax+(len%cols)*EDIT_CHAR_W;
+                if(inactive)draw_frame(cx,y,EDIT_CHAR_W,EDIT_FONT_H,TERM_ANSI(8));
+                else if((frame_count/35)%2==0)draw_rect(cx,y,EDIT_CHAR_W,EDIT_FONT_H,TERM_ANSI(15));
+            }
         }
     }
+    term_scroll_marker(wx+ww-1-10,wy+TITLE_H+6,wh-TITLE_H-14,first,rows,total);
 }
 
 static void open_term(void) {
