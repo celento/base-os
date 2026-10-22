@@ -39,12 +39,32 @@ theme bands:
 | 48-63 | icon colors and Settings swatches | yes |
 | 64-79 | terminal colors (dark in both styles) | yes |
 | 80-111 | neutral gray ramp for images | no |
-| 112-127 | extra icon colors | yes |
+| 112-120 | extra icon colors | yes |
+| 121-127 | wallpaper gradient ramp | with the wallpaper |
 | 128-252 | 5x5x5 color cube | no |
 
 Images and native programs only use the fixed entries, so a style or accent
-change never recolors a picture. The accent ramp (`TK_ACCENT_50` to
+change never recolors a picture. Color lookups (`gfx_rgb`, `gfx_mix`) skip
+the wallpaper ramp, so changing the wallpaper recolors nothing else. The accent ramp (`TK_ACCENT_50` to
 `TK_ACCENT_700` and `TK_ON_ACCENT`) comes from six presets per style.
+
+## Desktop backgrounds
+
+Settings > Appearance > Desktop picks one of three kinds (`src/ui/wallpaper.c`):
+
+- Color: one of six presets per style, with an optional dot or grid pattern.
+- Gradient: eight presets (the first follows the accent color) drawn linear,
+  diagonal or radial. A gradient is sampled into the wallpaper ramp and drawn
+  with an 8x8 ordered dither between neighboring entries, so switching presets
+  only rewrites seven palette entries. A radial gradient puts its lighter end
+  in the middle.
+- Picture: any JPEG, PNG, BMP, GIF or Paint file, chosen in Settings or with
+  Image Viewer's Use as Desktop Background. It is scaled to cover the screen,
+  dithered to the cube and gray ramp, and kept in the desktop cache; only a new
+  screen size or file decodes it again. The path is stored in
+  `/prefs/picture`, so the image itself stays on the disk volume.
+
+Desktop icon labels turn white with a shadow over a dark background.
 
 ## Tokens
 
