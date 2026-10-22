@@ -21,7 +21,7 @@ class DocumentModelsFSTests(unittest.TestCase):
             command += [str(ROOT / 'tests/document_models_fs_host.c')]
             command += [str(ROOT / 'src' / name) for name in
                         ('apps/writer.c', 'lib/writer_codec.c', 'lib/writer_pdf.c', 'apps/sheet.c', 'lib/sheet_model.c',
-                         'lib/sheet_codec.c', 'lib/decimal.c', 'lib/document_save.c', 'kernel/kernel_owner.c', 'kernel/gfx.c', 'ui/icons.c', 'ui/theme.c')]
+                         'lib/sheet_codec.c', 'lib/decimal.c', 'lib/document_save.c', 'kernel/kernel_owner.c', 'kernel/gfx.c', 'ui/icons.c', 'ui/theme.c', 'ui/kit.c')]
             subprocess.run(command + ['-o', str(output)], check=True)
             subprocess.run([str(output)], check=True, env=dict(os.environ, ASAN_OPTIONS='detect_leaks=0',
                                                               UBSAN_OPTIONS='halt_on_error=1'))

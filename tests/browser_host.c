@@ -15,6 +15,7 @@ static uint8_t test_mirror[0x100000];
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
 #include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 #define BROWSER_HOST_TEST
 #include "../src/apps/browser.c"
 

@@ -78,7 +78,7 @@ static MonitorLayout layout(int bx,int by,int bw,int bh){
     l.heading_y=by+48;l.rows_y=by+74;l.footer_y=by+bh-24;
     return l;
 }
-static int inside(MonitorRect outer,MonitorRect r){
+static int mon_inside(MonitorRect outer,MonitorRect r){
     return r.w>0&&r.h>0&&r.x>=outer.x&&r.y>=outer.y&&
         r.x-outer.x<=outer.w-r.w&&r.y-outer.y<=outer.h-r.h;
 }
@@ -96,7 +96,7 @@ static void text(const MonitorLayout *l,const char *s,int x,int y,int w,int bold
     else draw_string_clip(s,x,y,color,x+w-UI_FONT_W);
 }
 static void segments(const MonitorLayout *l,const char *const labels[3],int active){
-    if(!inside(l->client,l->segment))return;
+    if(!mon_inside(l->client,l->segment))return;
     MonitorRect t=l->segment;
     draw_round_rect(t.x,t.y,t.w,t.h,8,app_chrome);
     for(int i=0;i<3;i++){
@@ -109,7 +109,7 @@ static void segments(const MonitorLayout *l,const char *const labels[3],int acti
     }
 }
 static void button(const MonitorLayout *l,MonitorRect r,int icon,const char *label){
-    if(!inside(l->client,r))return;
+    if(!mon_inside(l->client,r))return;
     tool_button(r.x,r.y,r.w,r.h,icon,label,TB_NORMAL);
 }
 static void row(const MonitorLayout *l,int y,const char *label,const char *value){
@@ -136,7 +136,7 @@ static int bar_width(int width,int used,int cap){
 }
 static void bar(const MonitorLayout *l,int y,int used,int cap){
     MonitorRect r={l->x,y,l->w,8};
-    if(!inside(l->client,r))return;
+    if(!mon_inside(l->client,r))return;
     draw_round_rect(r.x,r.y,r.w,r.h,4,app_chrome_dk);
     int fw=bar_width(r.w,used,cap);
     if(fw>=8)draw_round_rect(r.x,r.y,fw,r.h,4,app_accent);
@@ -282,7 +282,7 @@ SysmonAction sysmon_click(int bx,int by,int bw,int bh,int mx,int my,const SysInf
     if(bw<=0||bh<=0||!si)return none;
     MonitorLayout l=layout(bx,by,bw,bh);
     if(!contains(l.client,mx,my))return none;
-    for(int i=0;i<3;i++)if(inside(l.client,l.tabs[i])&&contains(l.tabs[i],mx,my)){
+    for(int i=0;i<3;i++)if(mon_inside(l.client,l.tabs[i])&&contains(l.tabs[i],mx,my)){
         if(current_tab==i)return none;
         current_tab=i;drawn_tab=-1;
         return (SysmonAction){SYSMON_ACTION_REDRAW,-1,0};

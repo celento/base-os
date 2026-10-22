@@ -7,6 +7,7 @@
 #define MENUBAR_H 0
 #define BTN_H 30
 #define TITLE_BAR 29
+#undef MODERN
 #define MODERN 0
 #define SPREADSHEET_SAVE_OK 1
 static struct { int open, seq; } wins[MAX_WIN];

@@ -11,6 +11,7 @@ static unsigned char host_presented[FB_CAPACITY];
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
 #include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 #define IMAGE_VIEWER_HOST_TEST
 #include "../src/apps/image_viewer.c"
 

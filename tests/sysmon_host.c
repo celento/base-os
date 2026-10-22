@@ -12,6 +12,7 @@ static uint8_t test_mirror[FB_CAPACITY];
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
 #include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 #include "ui/app.h"
 #include "apps/sysmon.h"
 #include "kernel/program.h"

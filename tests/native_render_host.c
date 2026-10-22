@@ -15,6 +15,7 @@ static uint8_t test_mirror[FB_CAPACITY];
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
 #include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 #define TITLE_BAR 30
 #define WMENU_H 24
 #define TITLE_H 54

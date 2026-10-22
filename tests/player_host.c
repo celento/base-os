@@ -15,6 +15,7 @@ static uint8_t test_mirror[FB_CAPACITY];
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
 #include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 
 static char names[FS_MAX_NODES][FS_NAME_LEN];
 static unsigned generations[FS_MAX_NODES];

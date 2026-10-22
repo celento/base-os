@@ -10,6 +10,7 @@ static uint8_t test_mirror[FB_CAPACITY];
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
 #include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 void kmemset(void *d,int v,int n){memset(d,v,(size_t)n);}
 void kmemcpy(void *d,const void *s,int n){memmove(d,s,(size_t)n);}
 static uint8_t back[73*53],linear[73*53*4+53*12],reference[sizeof linear];

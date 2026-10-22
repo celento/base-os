@@ -14,6 +14,7 @@ static unsigned char presented[FB_CAPACITY];
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
 #include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 #include "../src/apps/calendar_agenda.c"
 #include "../src/apps/calendar.c"
 
