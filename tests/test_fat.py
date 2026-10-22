@@ -461,6 +461,19 @@ class FatTests(unittest.TestCase):
                 if b'error -14' not in result.stdout:
                     self.fsck(path)
 
+    def test_read_only_files_refuse_changes(self):
+        path = self.image('fat12', 'readonly')
+        self.tool('script', path, stdin=b'put\tlocked.txt\t1\t3000\t0\n')
+        subprocess.run(['mattrib', '-i', str(path), '+r', '::/locked.txt'], check=True, env=ENV)
+        result = self.tool('script', path, stdin=b'put\tlocked.txt\t2\t100\t0\ntrunc\tlocked.txt\t0\n',
+                           check=False)
+        self.assertEqual(result.stdout.count(b'error -15'), 2)
+        self.assertEqual(self.tool('cat', path, 'locked.txt').stdout, pattern(1, 3000))
+        # Renaming and deleting stay allowed, as POSIX expects: the flag
+        # guards the data, the folder decides names.
+        self.tool('script', path, stdin=b'mv\tlocked.txt\tmoved.txt\nrm\tmoved.txt\n')
+        self.fsck(path)
+
     def test_full_volume(self):
         path = self.image('fat12', 'full')
         script = ''.join(f'put\tfile{i}\t{i}\t300000\t0\n' for i in range(6))

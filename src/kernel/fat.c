@@ -1266,6 +1266,7 @@ static int grow_and_write(FatVolume *v, FatNode *f, uint32_t size, uint32_t offs
 int fat_write(FatVolume *v, FatNode *f, uint32_t offset, const void *data, uint32_t length) {
     if (f->attributes & FAT_ATTR_DIRECTORY) return FAT_ERR_ISDIR;
     if (v->read_only) return FAT_ERR_READONLY;
+    if (f->attributes & FAT_ATTR_READ_ONLY) return FAT_ERR_ACCESS;
     if (!length) return FAT_OK;
     if ((uint64_t)offset + length > FAT_FILE_MAX) return FAT_ERR_FBIG;
     uint8_t *e;
@@ -1279,6 +1280,7 @@ int fat_write(FatVolume *v, FatNode *f, uint32_t offset, const void *data, uint3
 int fat_truncate(FatVolume *v, FatNode *f, uint32_t size) {
     if (f->attributes & FAT_ATTR_DIRECTORY) return FAT_ERR_ISDIR;
     if (v->read_only) return FAT_ERR_READONLY;
+    if (f->attributes & FAT_ATTR_READ_ONLY) return FAT_ERR_ACCESS;
     uint8_t *e;
     int result = node_entry(v, f, &e);
     if (result || size == f->size) return result;
