@@ -8,7 +8,7 @@ font with `npm pack lucide-static@1.57.0` and pass the extracted package folder:
 Icons are rendered at ICON_SIZE for toolbars, rows and controls. Glyphs are
 drawn at 4x and box-filtered down, then stored as 16 coverage levels (4 bits
 per pixel), the same scheme as the UI font, so drawing blends them over any
-surface. The color application icons are a separate set (tools/icon_art.py).
+surface. The UI and application icons are a separate set (tools/gen_ui_icons.py).
 Only the generated header is committed; normal builds do not need Pillow.
 """
 import argparse

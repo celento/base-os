@@ -307,6 +307,18 @@ void kernel_power_off(void) {
     asm volatile("hlt");
 }
 
+/* Pulse the reset line through the keyboard controller once its input
+ * buffer drains; if that does nothing, a null IDT and a fault reset the CPU. */
+void kernel_restart(void) {
+    asm volatile("cli");
+    for (unsigned n = 0; n < 100000 && (inb(0x64) & 2); ++n) { }
+    outb(0x64, 0xFE);
+    for (unsigned n = 0; n < 1000000; ++n) asm volatile("pause");
+    static const struct __attribute__((packed)) { uint16_t limit; uint32_t base; } none = {0, 0};
+    asm volatile("lidt %0; int3" :: "m"(none));
+    for (;;) asm volatile("hlt");
+}
+
 /* ---------- kmain ---------- */
 
 void kmain(void) {

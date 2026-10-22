@@ -36,14 +36,14 @@ int main(void){
     fm_new_file();assert(files_action_busy&&dirty&&files_message_until==20+8*TIMER_HZ);
     fm_rename_commit();assert(fm_renaming&&fm_rename_id==id&&!strcmp(fm_rename_buf,"after.txt"));
     do_new_folder();assert(fm_renaming&&fs_node_count()==count);
-    assert(!paint_write_named("drawing.pbm")&&strstr(name_failure_message,"Retry Save"));
+    assert(!paint_write_in(-1,"drawing.pbm")&&strstr(name_failure_message,"Retry Save"));
     assert(fs_node_count()==count&&fs_find_child(0,"Pictures")<0&&!strcmp(fs_name(id),"before.txt"));
     unsigned steps=0;while(fs_sync_busy()){assert(fs_sync_step()!=FS_SYNC_IDLE);assert(++steps<100000);}
     assert(!fs_sync_result(ticket)&&!fs_sync_release(ticket));
     fm_rename_commit();assert(!fm_renaming&&!files_action_busy&&!strcmp(fs_name(id),"after.txt"));
     fm_new_file();assert(fs_node_count()==count+1&&fm_selected>=0);
     do_new_folder();assert(fs_node_count()==count+2&&fs_is_dir(fm_selected));
-    memset(paint_pix,7,sizeof paint_pix);assert(paint_write_named("drawing.pbm")&&!name_failure_message);
+    memset(paint_pix,7,sizeof paint_pix);assert(paint_write_in(-1,"drawing.pbm")&&!name_failure_message);
     assert(!fs_sync());remount();id=fs_resolve(0,"/Pictures/drawing.pbm");
     assert(id>0&&fs_size(id)==8+PAINT_W*PAINT_H&&!memcmp(fs_data(id),"BOS1",4));
     assert(fs_resolve(0,"/after.txt")>0);

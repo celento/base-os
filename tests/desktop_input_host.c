@@ -6,12 +6,11 @@
 #include "kernel/input_ingress.h"
 #include "kernel/native_ui.h"
 #define MAX_WIN 8
-/* Fixture chrome metrics: the routing under test is parameterized by these,
- * and the pointer coordinates below are tuned to them. */
-#define MENUBAR_H 36
-#define TITLE_H 32
-#define TIMER_HZ 70
-#define KEY_ESC 1
+static int fb_w=800,fb_h=600;
+/* Production chrome metrics of the installed style, window behavior options
+ * and double-click timing. */
+#include "theme_metrics_host.h"
+#include "desktop_input_defs.inc"
 #define MENU_NONE -1
 enum { WK_NONE=-1, WK_FILES, WK_EDIT, WK_PAINT, WK_WRITER, WK_SPREADSHEET, WK_TERM, WK_NATIVE };
 typedef struct { int kind,x,y,w,h,z,open,seq,min,maximized,old_x,old_y,old_w,old_h; } Win;
@@ -29,7 +28,7 @@ static int open_menu=-1,open_dlg,name_dlg,edit_close_dlg,launcher_on,saver_on,di
 static int dragging_win=-1,resizing_win=-1,drag_active,fm_dragging,fm_drag_active;
 static int paint_dragging,paint_shape_drag,dirty,title_click_window,icon_last,pick_last_click_item;
 static int drag_from_x,drag_from_y,drag_orig_x,drag_orig_y,fm_drag_sx,fm_drag_sy;
-static int context_slot,edit_sel_b,edit_caret,fb_w=800,menu_sel,taskbar_hover;
+static int context_slot,edit_sel_b,edit_caret,taskbar_hover;
 static int resize_start_w,resize_start_h,resize_edges;
 static uint32_t pick_last_click_frame;
 #define fm_last_click_item (window_state[context_slot].last_click_item)
@@ -55,11 +54,26 @@ static void writer_release(void){writer_active=0;++writer_releases;}
 static void spreadsheet_release(void){}
 static void paint_mouse_up(void){++releases;if(paint_shape_drag)++paint_commits;paint_shape_drag=paint_dragging=0;}
 static void paint_drag_tick(void){paint_last_x=mouse_x;}
+static void paint_hover_tick(void){}
 static int writer_drag(int x,int y,int w,int h,int mx,int my){(void)x;(void)y;(void)w;(void)h;(void)mx;(void)my;if(writer_active)++writer_moves;return writer_active;}
 static int spreadsheet_drag(int x,int y,int w,int h,int mx,int my){return writer_drag(x,y,w,h,mx,my);}
 static int menu_item_at(int menu,int x,int y){(void)menu;(void)x;return y/30;}
 static int taskbar_hover_at(void){return mouse_x/100;}
 static void saver_stop(void){saver_on=0;last_input_frame=frame_count;dirty=1;}
+/* Outline drag position, Settings slider, volume popup, menus, hover targets,
+ * Alt+Tab switcher and Super launcher: observable fixtures. */
+static int drag_outline_x,drag_outline_y,set_slider_drag,settings_drags,volume_on,volume_drags,menu_hovers;
+static int hot_last=-1,alt_tap,switcher_on,switcher_commits,menu_closes,menu_focuses,super_down,super_used;
+static int launcher_opens,launcher_closes,key_ext;
+static void settings_drag(void){++settings_drags;}
+static void volume_drag(void){++volume_drags;}
+static void menu_hover(void){++menu_hovers;}
+static int hot_index(void){return -1;}
+static void switcher_commit(void){switcher_on=0;++switcher_commits;}
+static void menu_close(void){open_menu=MENU_NONE;++menu_closes;}
+static void menu_focus_row(void){open_menu=MENU_BAR;++menu_focuses;}
+static void launcher_open(void){launcher_on=1;++launcher_opens;}
+static void launcher_close(void){launcher_on=0;++launcher_closes;}
 static unsigned terminal_losses;
 static void term_input_lost(int slot){(void)slot;++terminal_losses;}
 static void drain_8042(void){}
@@ -99,7 +113,12 @@ static void pointer(int dx,int dy,unsigned buttons,int wheel,unsigned ticks){
     input_mouse_byte(&device_input,(uint8_t)dx,ticks);input_mouse_byte(&device_input,(uint8_t)dy,ticks);
     input_mouse_byte(&device_input,(uint8_t)wheel,ticks);
 }
+static int fixture_style;
 static void fresh(void){
+    ui_theme_install(fixture_style,0,0);
+    win_options=WINOPT_DOUBLE_CLICK|WINOPT_SNAP|WINOPT_LINE_NUMBERS;win_snap_distance=8;
+    drag_outline_x=drag_outline_y=0;alt_tap=switcher_on=super_down=super_used=0;
+    switcher_commits=menu_closes=menu_focuses=launcher_opens=launcher_closes=0;
     memset(wins,0,sizeof wins);memset(window_state,0,sizeof window_state);memset(&input_scene,0,sizeof input_scene);
     wins[0]=(Win){.open=1,.seq=1,.kind=WK_PAINT,.x=100,.y=100,.w=300,.h=250,.z=1};
     mouse_x=400;mouse_y=300;mouse_left=mouse_right=mouse_moved=0;
@@ -111,7 +130,7 @@ static void fresh(void){
     pick_last_click_item=title_click_window=icon_last=-1;pick_last_click_frame=0;
     frame_count=1000;desktop_input_remember_scene();
 }
-int main(void){
+static void adapter_checks(void){
     fresh();key(0x2a,1);pointer(0,0,1,0,2);key(0xaa,3);pointer(5,-3,0,-1,4);key(0x1e,5);
     assert(desktop_input_turn()==5 && records==3 && releases==1);
     assert(record[0].kind=='D' && record[0].mod==1 && record[0].ticks==2);
@@ -192,6 +211,40 @@ int main(void){
     assert(desktop_input_turn()==INPUT_BATCH && !input_tail_pending && !acquire_tail && !records);
     key(0x30,2);desktop_input_turn();assert(records==1 && record[0].value=='b');
     puts("Desktop synchronous owner: INKEY last-character snapshot, keyboard typeahead and pointer fencing passed.");
+
+    /* Outline drag (the default) moves only the outline until release;
+     * showing contents moves the window itself. */
+    fresh();mode=TITLE_DRAG;pointer(0,0,1,0,10);pointer(30,-20,1,0,11);desktop_input_turn();
+    assert(wins[0].x==100 && wins[0].y==100 && drag_outline_x==130 && drag_outline_y==120 && dragging_win==0);
+    pointer(0,0,0,0,12);desktop_input_turn();
+    assert(wins[0].x==130 && wins[0].y==120 && dragging_win==-1 && !arranged);
+    fresh();mode=TITLE_DRAG;win_options|=WINOPT_DRAG_CONTENTS;
+    pointer(0,0,1,0,10);pointer(30,-20,1,0,11);desktop_input_turn();
+    assert(wins[0].x==130 && wins[0].y==120 && dragging_win==0);
+    pointer(0,0,0,0,12);desktop_input_turn();assert(wins[0].x==130 && wins[0].y==120 && !arranged);
+    /* Edges within the snap distance stick to the work area; a release at
+     * the screen edge arranges the window. */
+    fresh();mode=TITLE_DRAG;pointer(0,0,1,0,10);pointer(-95,0,1,0,11);pointer(0,0,0,0,12);desktop_input_turn();
+    assert(wins[0].x==0 && wins[0].y==100 && !arranged);
+    fresh();mode=TITLE_DRAG;win_options&=~WINOPT_SNAP;
+    pointer(0,0,1,0,10);pointer(-95,0,1,0,11);pointer(0,0,0,0,12);desktop_input_turn();
+    assert(wins[0].x==5 && !arranged);
+    fresh();mode=TITLE_DRAG;pointer(0,0,1,0,10);for(unsigned i=0;i<5;++i)pointer(100,0,1,0,11+i);pointer(0,0,0,0,16);
+    desktop_input_turn();assert(mouse_x==fb_w-1 && arranged==1);
+    puts("Desktop window behavior: outline and contents drag, edge snap and edge arrange passed.");
+
+    /* Alt tapped alone focuses the menu row; Alt with a key does not. Super
+     * tapped alone toggles the launcher; Super used for a shortcut does not. */
+    fresh();key(0x38,1);key(0xb8,2);desktop_input_turn();assert(menu_focuses==1 && open_menu==MENU_BAR && !records);
+    fresh();key(0x38,1);key(0x1e,2);key(0xb8,3);desktop_input_turn();assert(!menu_focuses && records==1);
+    fresh();key(0xe0,1);key(0x5b,1);key(0xe0,2);key(0xdb,2);desktop_input_turn();
+    assert(launcher_opens==1 && launcher_on && !records);
+    key(0xe0,3);key(0x5b,3);key(0xe0,4);key(0xdb,4);desktop_input_turn();assert(launcher_closes==1 && !launcher_on);
+    fresh();switcher_on=1;key(0x38,1);key(0xb8,2);desktop_input_turn();assert(switcher_commits==1 && !menu_focuses);
+    puts("Desktop modifiers: Alt menu focus, Super launcher and switcher commit passed.");
+}
+int main(void){
+    for(fixture_style=0;fixture_style<UI_STYLE_COUNT;++fixture_style)adapter_checks();
     puts("All production desktop input checks passed.");
     return 0;
 }

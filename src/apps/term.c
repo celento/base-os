@@ -16,7 +16,7 @@ void term_set_native_launch(int (*hook)(int,int,unsigned,const char *,unsigned))
 }
 #define T (terms[selected])
 void term_select(int slot){if(slot>=0&&slot<PROCESS_TASKS)selected=slot;}
-static void push_at(Terminal *t,const char *s){app_view_mark((int)(t-terms),TERM_TASK_TEXT);int slot=(t->head+t->count)%TERM_LINES;if(t->count<TERM_LINES)t->count++;else t->head=(t->head+1)%TERM_LINES;int i=0;while(s[i]&&i<TERM_COLS){t->lines[slot][i]=s[i];i++;}t->lines[slot][i]=0;}
+static void push_at(Terminal *t,const char *s){app_view_mark((int)(t-terms),TERM_TASK_TEXT);int slot=(t->head+t->count)%TERM_LINES;if(t->count<TERM_LINES)t->count++;else t->head=(t->head+1)%TERM_LINES;int i=0;while(s[i]&&i<TERM_COLS){t->lines[slot][i]=s[i];i++;}t->lines[slot][i]=0;t->echo[slot]=0;}
 void term_write_at(int slot,const char *text){if(slot>=0&&slot<PROCESS_TASKS)push_at(terms+slot,text);}
 static void push(const char *s){push_at(&T,s);}
 static void canvas_reset(void){app_view_canvas_reset(selected);}
@@ -27,6 +27,7 @@ void term_reset(void){
 }
 int term_count(void){return T.count;}
 const char *term_get(int i){return i>=0&&i<T.count?T.lines[(T.head+i)%TERM_LINES]:"";}
+int term_is_echo(int i){return i>=0&&i<T.count&&T.echo[(T.head+i)%TERM_LINES];}
 const char *term_input(void){return T.input;}
 int term_cwd(void){if(!fs_is_dir(T.cwd)||fs_identity(T.cwd)!=T.cwd_identity){T.cwd=fs_root();T.cwd_identity=fs_identity(T.cwd);}return T.cwd;}
 void term_set_cwd(int id){if(fs_is_dir(id)){T.cwd=id;T.cwd_identity=fs_identity(id);}}
@@ -99,6 +100,7 @@ static int manual(const char *name){
 }
 void term_set_view(int rows,int total){T.rows=rows;T.view_count=total;int max=total-rows;if(max<0)max=0;if(T.scroll>max)T.scroll=max;}
 void term_set_rows(int rows){term_set_view(rows,T.count+1);}
+void term_clear(void){T.head=T.count=0;T.scroll=0;canvas_reset();}
 void term_scroll(int delta){T.scroll+=delta;if(T.scroll<0)T.scroll=0;term_set_view(T.rows,T.view_count);}
 int term_scroll_offset(void){return T.scroll;}
 static int prefix(const char *a,const char *b){while(*b)if(*a++!=*b++)return 0;return 1;}
@@ -422,12 +424,34 @@ static int execute(const char *s,int depth,int *budget){
 void term_enter(void){
     T.scroll=0;
     if(T.input_invalid){push("Input was lost; command not run. Clear the line with Backspace.");return;}
-    char line[81];kstrcpy(line,T.input);push(line);
+    char line[81];kstrcpy(line,T.input);
+    /* Echo the command after its prompt; a long folder shortens to its name. */
+    {char echo[TERM_COLS+FS_PATH_LEN+8];term_prompt(echo,FS_PATH_LEN+4);
+     int n=kstrlen(echo);
+     if(n+kstrlen(line)>TERM_COLS){
+         char path[FS_PATH_LEN];fs_path(term_cwd(),path,sizeof path);
+         int last=0;for(int i=0;path[i];i++)if(path[i]=='/'&&path[i+1])last=i+1;
+         kstrcpy(echo,".../");kstrcpy(echo+4,path+last);n=kstrlen(echo);
+         if(n+2+kstrlen(line)>TERM_COLS)n=0;else{echo[n++]='>';echo[n++]=' ';}
+         echo[n]=0;
+     }
+     kstrcpy(echo+n,line);push(echo);
+     if(n)T.echo[(T.head+T.count-1)%TERM_LINES]=1;}
     int overflow=T.input_overflow;T.input_overflow=0;
     if(T.len&&!overflow){if(T.hcount==16){for(int i=1;i<16;i++)kstrcpy(T.history[i-1],T.history[i]);T.hcount--;}kstrcpy(T.history[T.hcount++],line);}
     T.hpos=T.hcount;T.len=0;T.input[0]=0;T.draft[0]=0;int budget=256;
     if(overflow){push("Command exceeds 80 characters; nothing was run. Use cd for shorter paths.");return;}
     int result=execute(line,0,&budget);
     if(result==FS_ERR_BUSY)push("Disk is saving; retry shortly.");
-    else if(result&&result!=TERM_COMMAND_REPORTED)push("Error: check command, path, syntax, or available space.");
+    else if(result&&result!=TERM_COMMAND_REPORTED){
+        /* Name the command that failed, so the line reads on its own. */
+        char word[24],message[sizeof "Error: "+sizeof word+sizeof " failed; "+sizeof "check command, path, syntax, or available space."];int n=0,at=0;
+        while(line[at]==' ')at++;
+        while(line[at]&&line[at]!=' '&&n<(int)sizeof word-1)word[n++]=line[at++];
+        word[n]=0;
+        kstrcpy(message,"Error: ");
+        if(n){kstrcpy(message+kstrlen(message),word);kstrcpy(message+kstrlen(message)," failed; ");}
+        kstrcpy(message+kstrlen(message),"check command, path, syntax, or available space.");
+        push(message);
+    }
 }

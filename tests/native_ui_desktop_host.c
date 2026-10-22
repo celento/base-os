@@ -5,10 +5,8 @@
 #include "apps/app_view.h"
 #define NATIVE_TOOLBAR_H 30
 #define NATIVE_CLIENT_PAD 8
-static int fb_h=600;
 #define TERM_PAD 12
 #define EDIT_LINE_H 10
-#define TASKBAR_Y (fb_h-44)
 static uint32_t timer_ticks(void);
 static void win_focus(int slot);
 static int hit(int x,int y,int ax,int ay,int w,int h);
@@ -48,7 +46,8 @@ static void fixture(void){
         native_bindings[i]=(ProcessBinding){BOS_HANDLE_TYPE_PROCESS|(unsigned)(i+1),(unsigned)i,1};
         native_live[i]=1;pixels_available[i]=1;published_w[i]=160;published_h[i]=100;
     }
-    mouse_x=80;mouse_y=140;input_init(&device_input,800,600,mouse_x,mouse_y);input_mouse_type(&device_input,3);
+    /* Start inside the first Terminal's canvas, below the style's chrome. */
+    mouse_x=80;mouse_y=wins[0].y+TITLE_H+1+TERM_PAD+14;input_init(&device_input,800,600,mouse_x,mouse_y);input_mouse_type(&device_input,3);
     const NativeUiHooks hooks={native_host_snapshot,native_host_acquired,native_host_focus};native_ui_init(&hooks);
     desktop_input_remember_scene();
 }
@@ -62,7 +61,7 @@ static void move(int x,int y,unsigned buttons,int wheel,unsigned ticks){
     }
     pointer(dx,dy,buttons,wheel,ticks);desktop_input_turn();
 }
-int main(void){
+static void route_checks(void){
     fixture();BosHandle a=ui_open(0),b=ui_open(1);event(0,a,BOS_UI_STATE_RESET);event(1,b,BOS_UI_STATE_RESET);
     /* Real front-to-back canvas hit, then outside capture over the peer. */
     move(90,150,1,0,1);event(0,a,BOS_UI_POINTER_MOVE);event(0,a,BOS_UI_POINTER_BUTTON);
@@ -172,6 +171,9 @@ int main(void){
     wins[0].min=1;native_ui_refresh(147,0);
     event(0,a,BOS_UI_FOCUS);event(0,a,BOS_UI_AVAILABILITY);event(0,a,BOS_UI_GEOMETRY);
     assert(native_live[0]);
-    puts("Native UI desktop adapter: real point ownership, focus/capture, overlays, publication geometry, legacy exclusion and input-loss recovery passed.");
+}
+int main(void){
+    for(fixture_style=0;fixture_style<UI_STYLE_COUNT;fixture_style++)route_checks();
+    puts("Native UI desktop adapter: real point ownership, focus/capture, overlays, publication geometry, legacy exclusion and input-loss recovery in Classic and Modern passed.");
     return 0;
 }

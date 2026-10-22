@@ -14,6 +14,8 @@ static uint8_t test_mirror[0x100000];
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
+#include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 #define BROWSER_HOST_TEST
 #include "../src/apps/browser.c"
 
@@ -265,11 +267,11 @@ static void test_browser_download_mouse_and_bounds(void){
         ToolLayout L;tool_layout(40,30,widths[k],&L);ToolRect all[BT_COUNT+1];
         for(int i=0;i<BT_COUNT;i++)all[i]=L.b[i];all[BT_COUNT]=L.address;
         for(int i=0;i<=BT_COUNT;i++){
-            assert(all[i].x>=48&&all[i].x+all[i].w<=40+widths[k]-8&&all[i].y>=38&&all[i].y+all[i].h<=30+tool_height(widths[k])-8);
+            assert(all[i].x>=40+TOOL_PAD&&all[i].x+all[i].w<=40+widths[k]-TOOL_PAD&&all[i].y>=30+tool_vpad()&&all[i].y+all[i].h<=30+tool_height(widths[k])-tool_vpad()-1);
             for(int j=0;j<i;j++)assert(all[i].x+all[i].w<=all[j].x||all[j].x+all[j].w<=all[i].x||all[i].y+all[i].h<=all[j].y||all[j].y+all[j].h<=all[i].y);
         }
         assert(L.address.w>=200);
-        if(widths[k]>=720)assert(tool_wide(widths[k])&&L.address.y==L.b[BT_BACK].y&&tool_height(widths[k])==TB_H+16);
+        if(widths[k]>=720)assert(tool_wide(widths[k])&&L.address.y==L.b[BT_BACK].y&&tool_height(widths[k])==tool_size()+2*tool_vpad()+1);
     }
     assert(!tool_wide(360)&&tool_height(360)<112);
     int sizes[][2]={{360,200},{520,350},{720,520},{960,680}};
@@ -284,6 +286,14 @@ static void test_browser_download_mouse_and_bounds(void){
     tool_click(BT_CANCEL);assert(!busy&&download_status()->state==DOWNLOAD_CANCELLED);
     browser_key(KEY_TAB,0,0);assert(B.focused_link==1&&!B.download_visible);browser_key(0x20,0,BROWSER_MOD_CTRL);assert(download_active());download_cancel();browser_tick();
 }
+/* Error pages keep their text for search and draw a centred message. */
+static void test_error_page(void){
+    reset_browser();browser_open("http://example.com/broken");result.state=NET_HTTP_ERROR;strcpy(result.error,"Connection refused");busy=0;browser_tick();
+    assert(B.error_page&&!strcmp(B.error_message,"Connection refused")&&strstr(B.text,"Connection refused"));
+    memset(back,0x55,sizeof back);browser_draw(20,20,720,520);
+    for(int yy=0;yy<768;yy++)for(int xx=0;xx<1024;xx++)if(xx<20||xx>=20+720||yy<20||yy>=20+520)assert(back[yy*1024+xx]==0x55);
+    browser_open("http://example.com/fine");complete("<p>Fine</p>","text/html");assert(!B.error_page);
+}
 static void write_preview(const char *path){
     reset_browser();browser_open("http://10.0.2.2:8000/docs/index.html");complete(example_html,"text/html");
     memset(back,0x55,sizeof back);browser_draw(32,28,760,600);
@@ -292,7 +302,12 @@ static void write_preview(const char *path){
 }
 int main(int argc,char **argv){
     gfx_init(back,linear,1024,768,32,4096);
-    test_url_resolution();test_document_and_async();test_navigation();test_address_and_clicks();test_redirects_and_ownership();test_scroll_reflow_and_bounds();test_save_original_pages();test_download_names();test_browser_binary_download();test_browser_download_ownership();test_browser_download_storage_wait();test_browser_download_mouse_and_bounds();
+    ui_theme_install(UI_STYLE_CLASSIC,0,0);
+    test_url_resolution();test_document_and_async();test_navigation();test_address_and_clicks();test_redirects_and_ownership();test_scroll_reflow_and_bounds();test_save_original_pages();test_download_names();test_browser_binary_download();test_browser_download_ownership();test_browser_download_storage_wait();test_browser_download_mouse_and_bounds();test_error_page();
     if(argc>1)write_preview(argv[1]);
+    /* Modern: the same controls, clicks and client bounds. */
+    ui_theme_install(UI_STYLE_MODERN,0,0);
+    test_address_and_clicks();test_scroll_reflow_and_bounds();test_browser_download_mouse_and_bounds();test_error_page();
+    if(argc>2)write_preview(argv[2]);
     puts("browser: HTTP lifecycle, HTML rendering, links, navigation, address editing, redirects, local files, scrolling and client-area bounds passed");return 0;
 }

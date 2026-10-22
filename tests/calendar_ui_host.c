@@ -13,6 +13,8 @@ static unsigned char presented[FB_CAPACITY];
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
+#include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 #include "../src/apps/calendar_agenda.c"
 #include "../src/apps/calendar.c"
 
@@ -74,9 +76,27 @@ int fs_sync(void) {
 static void key(int sc) { assert(cal_key(sc, 0, 0)); }
 static void type(const char *s) { while (*s) assert(cal_key(0, *s++, 0)); }
 static void replace(const char *s) { assert(cal_key(0x1e, 0, CAL_MOD_CTRL)); type(s); }
-static void click(int x, int y) { assert(cal_click(40, 40, CAL_W, 40 + x, 40 + y)); }
+/* Click the middle of a layout target in the window at 40,40. */
+static void tap(int target) {
+    CalLayout L; cal_layout(40, 40, CAL_W, CAL_H, &L);
+    const CalRect *r = &L.r[target];
+    assert(cal_click(40, 40, CAL_W, CAL_H, r->x + r->w / 2, r->y + r->h / 2));
+}
+/* Layout targets inside the client area with no two overlapping, and the
+ * agenda, month grid and form between the toolbar and the status bar. */
+static void check_layout(int x, int y) {
+    CalLayout L; cal_layout(x, y, CAL_W, CAL_H, &L);
+    CalRect *r = L.r;
+    assert(L.rows >= 5 && L.ly + L.rows * ui_theme.row_h <= L.form_y);
+    assert(L.gy + 6 * L.ch <= L.status_y && L.gx + 7 * L.cw <= x + L.side_w);
+    for (int i = 0; i < CB_COUNT; ++i) {
+        assert(r[i].x >= x + 4 && r[i].x + r[i].w <= x + CAL_W - 4 && r[i].y >= y && r[i].y + r[i].h <= L.status_y);
+        for (int j = 0; j < i; ++j)
+            assert(r[i].x + r[i].w <= r[j].x || r[j].x + r[j].w <= r[i].x || r[i].y + r[i].h <= r[j].y || r[j].y + r[j].h <= r[i].y);
+    }
+}
 static void render(const char *path) {
-    draw_rect(0, 0, 800, 600, COLOR_WHITE); cal_draw(40, 40, CAL_W, CAL_H);
+    draw_rect(0, 0, 800, 600, COLOR_WHITE); cal_draw(40, 40, CAL_W, CAL_H, 0);
     if (!path) return;
     FILE *f = fopen(path, "wb"); assert(f); fprintf(f, "P6\n800 600\n255\n");
     for (int i = 0; i < 800 * 600; ++i) {
@@ -91,18 +111,20 @@ static void reboot(void) {
     inited = 0; selected = 0; first_row = 0; cal_reset();
 }
 int main(int argc, char **argv) {
-    /* Match the smallest production desktop: 36px menu + 44px taskbar,
-     * 32px title, 8px layout margin, and one client separator pixel. */
-    _Static_assert(CAL_H + 32 <= 600 - 36 - 44 - 8, "Calendar must fit 800x600");
+    /* Match the smallest production desktop in the taller style: Modern's
+     * 28px top bar, 60px dock area, 40px header, 8px layout margin and the
+     * bottom frame row. */
+    _Static_assert(CAL_H + 40 + 1 <= 600 - 28 - 60 - 8, "Calendar must fit 800x600");
     gfx_init(back, linear, 800, 600, 32, 800 * 4);
+    ui_theme_install(UI_STYLE_CLASSIC, 0, 0);
     cal_reset(); assert(view_year == 2026 && view_month == 10 && view_day == 4);
     assert(!cal_agenda_count());
     assert(!cal_key(0, 'n', CAL_MOD_ALT) && !cal_agenda_draft()->active);
-    click(350, 266); type("Project review");
+    tap(CB_NEW); type("Project review");
     assert(!cal_key(0, 'x', CAL_MOD_ALT));
     assert(!strcmp(cal_agenda_draft()->title, "Project review"));
-    click(198, 356); type("09:30");
-    click(475, 306); assert(cal_agenda_count() == 1 && !cal_agenda_draft()->active);
+    tap(CB_TIME); type("09:30");
+    tap(CB_ACCEPT); assert(cal_agenda_count() == 1 && !cal_agenda_draft()->active);
     unsigned first = selected; assert(cal_agenda_find(first)->minute == 570);
     assert(writes == 0); cal_agenda_tick(); assert(writes == 1);
     assert(cal_agenda_retry_save() == 0 && syncs == 1);
@@ -127,7 +149,7 @@ int main(int argc, char **argv) {
     key(KEY_ENTER); assert(cal_agenda_draft()->active && strstr(notice, "real date"));
     replace("2028-02-29"); key(KEY_TAB); replace("24:01");
     key(KEY_ENTER); assert(cal_agenda_draft()->active && strstr(notice, "24-hour"));
-    click(316, 358); assert(!cal_agenda_draft()->time[0]); key(KEY_ENTER);
+    tap(CB_ALL_DAY); assert(!cal_agenda_draft()->time[0]); key(KEY_ENTER);
     assert(cal_agenda_count() == 2 && cal_agenda_find(selected)->minute == -1);
     assert(cal_agenda_get(0)->id == selected);
     printf("Calendar validation: leap days, month rollover, invalid dates/times and all-day passed.\n");
@@ -137,8 +159,8 @@ int main(int argc, char **argv) {
     key(KEY_DELETE); key(KEY_ENTER); assert(cal_agenda_count() == 1 && !cal_agenda_find(second));
     cal_new(); type("Keep partial"); key(KEY_TAB); replace("2028-0");
     cal_new(); assert(!strcmp(cal_agenda_draft()->title, "Keep partial"));
-    click(548, 306); assert(confirm == CONFIRM_CANCEL); key(KEY_ESC);
-    assert(cal_agenda_draft()->active); click(548, 306); key(KEY_ENTER);
+    tap(CB_DISMISS); assert(confirm == CONFIRM_CANCEL); key(KEY_ESC);
+    assert(cal_agenda_draft()->active); tap(CB_DISMISS); key(KEY_ENTER);
     assert(!cal_agenda_draft()->active && cal_agenda_count() == 1);
     printf("Calendar safety: repeated delete needs confirmation, new never replaces entry, cancel is explicit.\n");
 
@@ -151,23 +173,24 @@ int main(int argc, char **argv) {
     assert(strstr(cal_agenda_status(), "failed")); failed = 0;
     assert(cal_agenda_retry_save() == 0); reboot();
     assert(!strcmp(cal_agenda_draft()->title, "Busy draft"));
-    click(548, 306); key(KEY_ENTER);
+    tap(CB_DISMISS); key(KEY_ENTER);
     printf("Calendar storage: leased writes and failed sync retain draft, retry and recovery passed.\n");
 
     for (int i = 0; i < 20; ++i) {
         char title[40]; snprintf(title, sizeof title, "Appointment %02d", i);
         assert(cal_agenda_add(view_year, view_month, view_day, i * 30, title));
     }
-    changed_day(); click(590, 230); assert(first_row == 6);
-    click(590, 230); assert(first_row == 12);
-    click(335, 230); assert(first_row == 6);
-    key(KEY_DOWN); assert(selected_row() == 7);
+    render(0); int page = page_rows; assert(page >= 5);
+    changed_day(); tap(CB_PAGE_DOWN); assert(first_row == page);
+    tap(CB_PAGE_DOWN); assert(first_row == 2 * page);
+    tap(CB_PAGE_UP); assert(first_row == page);
+    key(KEY_DOWN); assert(selected_row() == page + 1);
     for (int i = cal_agenda_count(); i < CAL_AGENDA_MAX; ++i)
         assert(cal_agenda_add(view_year, view_month, view_day, -1, "Capacity"));
     cal_new(); type("Full list entry"); key(KEY_ENTER);
     assert(cal_agenda_count() == CAL_AGENDA_MAX && cal_agenda_draft()->active);
     assert(!strcmp(cal_agenda_draft()->title, "Full list entry"));
-    click(548, 306); key(KEY_ENTER);
+    tap(CB_DISMISS); key(KEY_ENTER);
     printf("Calendar navigation: date agenda paging, stable selection and full-list entry preservation passed.\n");
 
     cal_new(); type("A long title can be edited without losing its beginning or end");
@@ -176,20 +199,20 @@ int main(int argc, char **argv) {
     assert(strstr(cal_agenda_draft()->title, "[end]"));
     key(KEY_LEFT); key(KEY_BACKSPACE); key(KEY_DELETE);
     render(argc > 1 ? argv[1] : 0);
-    cal_draw(90, 76, CAL_W, CAL_H - 1); /* actual default-window client height */
-    CalRect r[CB_COUNT]; cal_layout(90, 76, CAL_W, r);
-    assert(get_pixel(r[CB_RETRY].x + 8, r[CB_RETRY].y + r[CB_RETRY].h / 2) != COLOR_WHITE); /* Retry fill drawn, not fallback */
-    /* Icon buttons stay inside the client area and never overlap. */
-    for (int i = 0; i < CB_COUNT; ++i) {
-        assert(r[i].x >= 90 + 16 && r[i].x + r[i].w <= 90 + CAL_W - 16 && r[i].y + r[i].h <= 76 + CAL_H - 1);
-        for (int j = 0; j < i; ++j)
-            assert(r[i].x + r[i].w <= r[j].x || r[j].x + r[j].w <= r[i].x || r[i].y + r[i].h <= r[j].y || r[j].y + r[j].h <= r[i].y);
+    for (int style = UI_STYLE_CLASSIC; style < UI_STYLE_COUNT; ++style) {
+        ui_theme_install(style, 0, 0);
+        cal_draw(90, 76, CAL_W, CAL_H, 0); /* default-window client area */
+        CalLayout L; cal_layout(90, 76, CAL_W, CAL_H, &L);
+        CalRect *r = L.r;
+        assert(get_pixel(r[CB_RETRY].x + 3, r[CB_RETRY].y + r[CB_RETRY].h / 2) == TK_RAISED); /* Save button drawn, not fallback */
+        assert(get_pixel(90 + 2, L.status_y + 4) == ui_theme.statusbar);
+        check_layout(90, 76); check_layout(40, 40);
+        int month = view_month;
+        tap(CB_NEXT_MONTH); assert(view_month == month % 12 + 1);
+        tap(CB_PREV_MONTH); assert(view_month == month);
+        if (style == UI_STYLE_MODERN && argc > 2) render(argv[2]);
     }
-    cal_layout(40, 40, CAL_W, r);
-    int month = view_month;
-    assert(cal_click(40, 40, CAL_W, r[CB_NEXT_MONTH].x + 16, r[CB_NEXT_MONTH].y + 15) && view_month == month % 12 + 1);
-    assert(cal_click(40, 40, CAL_W, r[CB_PREV_MONTH].x + 16, r[CB_PREV_MONTH].y + 15) && view_month == month);
-    cal_draw(0, 0, 320, 200); cal_draw(-20, -10, CAL_W, CAL_H);
+    cal_draw(0, 0, 320, 200, 0); cal_draw(-20, -10, CAL_W, CAL_H, 0);
     printf("Calendar rendering: real font/raster drawing, caret, long fields and small-window fallback passed.\n");
     puts("All Calendar UI functional checks passed."); return 0;
 }

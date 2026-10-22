@@ -2,7 +2,7 @@
 
 A small hobby operating system written from scratch in C and x86 assembly. It boots directly into a graphical desktop with persistent files, document editing, HTTP browsing, media playback, and small protected native applications.
 
-BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. ELF programs can use every frame above the fixed kernel areas, up to 4 GiB. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased Geist type. Windows have rounded corners, a light gradient title bar with the app icon and title on the left and minimize, maximize and close buttons on the right, and a File / Edit / Window menu strip under the title. Buttons and scrollbar thumbs are glossy, the taskbar is light glass with the BaseOS mark, the app launcher opens in the middle of the screen, and every application has a hand-drawn color icon. Each of the three themes is a bundled wallpaper with its own accent. Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
+BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data profile. ELF programs can use every frame above the fixed kernel areas, up to 4 GiB. The desktop is rendered entirely in software using a 256-color backbuffer and antialiased Geist type. It has two visual styles, switched in Settings: Classic, with accent title bars, a menu row inside each window and a taskbar along the bottom, and Modern, with light rounded windows, a global top bar that holds the front app's menus, and a floating dock. Both share one set of palette tokens, a control kit and two icon sets, and each comes with six accent colors and six desktop colors with optional patterns; see [the design guide](docs/DESIGN.md). Settings switches between 800 × 600, 1024 × 768, 1280 × 720 and 1280 × 800, with a timed confirmation and automatic revert.
 
 ![Files and Editor running side by side in BaseOS](screenshots/gallery/desktop.png)
 
@@ -87,15 +87,15 @@ Wordle and 2048 running together. Snake, Mines, and Breakout are available from 
 
 ![Wordle guesses alongside an active 2048 game](screenshots/gallery/games.png)
 
-### Wallpapers and utilities
+### Appearance and utilities
 
-Three bundled wallpapers (the drawn Blue default, and the Lake and Clouds photos from Unsplash), decoded from JPEG at boot and dithered into the 256-color palette,, a screen saver, and everyday utilities. Clock reads the machine's real-time clock; System Monitor reports the OS's resource and window information.
+Settings sets the style, accent, desktop color and pattern, window behavior, screen saver, display mode, clock format and mouse speed. Everyday utilities include Clock, which reads the machine's real-time clock, and System Monitor, which reports the OS's resource and window information.
 
-![Appearance settings and the analog clock with the Lake wallpaper](screenshots/gallery/themes.png)
+![Appearance settings and the analog clock](screenshots/gallery/themes.png)
 
 ### App launcher and window menus
 
-Click Apps in the taskbar or press `Ctrl+Space`. The launcher opens in the middle of the screen with a search field above a grid of every application; typing filters apps and files, the arrow keys and the mouse wheel move through the grid and Enter opens the selection. Its footer holds About, Settings, the screen saver and Shutdown. There is no global menu bar: each window carries its own File, Edit and Window menus under the title, and `F10` opens the front window's File menu.
+Click Apps in the taskbar or press `Ctrl+Space`. The launcher opens in the middle of the screen with a search field above a grid of every application; typing filters apps and files, the arrow keys and the mouse wheel move through the grid and Enter opens the selection. Its footer holds About, Settings, the screen saver and Shutdown. In Classic each window carries its own menus under the title; in Modern the front window's menus sit in the top bar. `F10` opens the first menu either way.
 
 ![The app launcher with the application grid and search field](screenshots/gallery/search.png)
 
@@ -201,7 +201,7 @@ The compositor caches the background during window drags and uploads changed scr
 | Directory | Contents |
 | --- | --- |
 | `src/kernel/`, `src/lib/` | Bootloader, kernel services, filesystem, drivers, codecs, and interpreters |
-| `src/ui/` | Shared icon art, theme tokens, and toolbar helpers |
+| `src/ui/` | Theme tokens and metrics, the control kit, icon art, and toolbar helpers |
 | `src/apps/` | App components, independent of any windowing |
 | `src/shell/` | Shells: `desktop` (the default) and `pocket` (a phone-style shell) |
 | `tests/` | Host and QEMU regression fixtures |
@@ -218,7 +218,7 @@ To regenerate the gallery, run `python3 tools/gallery.py build`. It links a docu
 
 ## License
 
-MIT. The bundled Geist and Geist Mono fonts have their own [OFL licenses](assets/fonts/), the toolbar glyphs come from Lucide ([ISC](third_party/lucide/)), and the application icons are BaseOS's own SVG drawings in [assets/icons](assets/icons/) (MIT, like the rest of the project). The Blue wallpaper is drawn by `tools/gen_blue_wallpaper.py`; the other wallpapers in [assets/wallpapers](assets/wallpapers/) are photos published on Unsplash under the [Unsplash License](https://unsplash.com/license), with each one's source recorded in `tools/gen_wallpapers.py`. Pinned third-party decoders retain their original licenses and notices: [minimp3](third_party/minimp3/), [stb_image](third_party/stb/) and [pl_mpeg](third_party/pl_mpeg/). Local patches and attribution are recorded alongside the vendored sources.
+MIT. The bundled Geist and Geist Mono fonts have their own [OFL licenses](assets/fonts/), the toolbar glyphs come from Lucide ([ISC](third_party/lucide/)), and the interface and application icons are BaseOS's own drawings in [assets/ui-icons](assets/ui-icons/) (MIT, like the rest of the project). Pinned third-party decoders retain their original licenses and notices: [minimp3](third_party/minimp3/), [stb_image](third_party/stb/) and [pl_mpeg](third_party/pl_mpeg/). Local patches and attribution are recorded alongside the vendored sources.
 
 The [runtime and developer quick start](docs/RUNTIME_QUICK_START.md) summarizes the
 runtime profiles, everyday applications and native platform limits.

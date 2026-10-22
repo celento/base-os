@@ -11,6 +11,8 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
+#include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
 #include "ui/app.h"
 #include "apps/sysmon.h"
 #include "kernel/program.h"
@@ -27,30 +29,34 @@ static void bounds(int x,int y,int w,int h){
     assert(w>0&&h>0&&x>=bx&&y>=by&&x+w<=bx+bw&&y+h<=by+bh);
 }
 static void checked_rect(int x,int y,int w,int h,uint8_t c){bounds(x,y,w,h);draw_rect(x,y,w,h,c);}
-static void checked_round(int x,int y,int w,int h,int r,uint8_t c){bounds(x,y,w,h);draw_round_rect(x,y,w,h,r,c);}
 static void checked_line(int x,int y,int w,uint8_t c){bounds(x,y,w,1);draw_hline(x,y,w,c);}
-static void checked_text(const char *s,int x,int y,uint8_t c,int xmax){
-    bounds(x,y,xmax-x+UI_FONT_W,UI_FONT_H);
-    if((!strcmp(s,"Show window")||!strcmp(s,"Stop task")||!strcmp(s,"Close"))&&ui_string_w(s)>xmax-x)fprintf(stderr,"clipped label %s: %d > %d\n",s,ui_string_w(s),xmax-x);
-    if(!strcmp(s,"Show window")){show_labels++;assert(ui_string_w(s)<=xmax-x);}
-    if(!strcmp(s,"Stop task")){stop_labels++;assert(ui_string_w(s)<=xmax-x);}
-    if(!strcmp(s,"Close")){close_labels++;assert(ui_string_w(s)<=xmax-x);}
-    draw_string_clip(s,x,y,c,xmax);
+static void checked_vline(int x,int y,int h,uint8_t c){bounds(x,y,1,h);draw_vline(x,y,h,c);}
+/* Text through the kit: the whole width it may use stays in the client. */
+static int checked_text(const char *s,int x,int y,uint8_t c,int maxw,int bold){
+    if(maxw>0)bounds(x,y,maxw,UI_FONT_H);
+    return kit_text(s,x,y,c,maxw,bold);
 }
-static void checked_bold(const char *s,int x,int y,uint8_t c,int xmax){
-    bounds(x,y,xmax-x+UI_FONT_W,UI_FONT_H);draw_string_bold_clip(s,x,y,c,xmax);
+/* Row buttons: count the labels and require the whole label to fit. */
+static void checked_button(int x,int y,int w,int h,const char *label,int icon,int kind,int state){
+    bounds(x,y,w,h);
+    if(!strcmp(label,"Show window"))show_labels++;
+    if(!strcmp(label,"Stop task"))stop_labels++;
+    if(!strcmp(label,"Close"))close_labels++;
+    if(kit_text_w(label,0)>w-8)fprintf(stderr,"clipped label %s: %d > %d\n",label,kit_text_w(label,0),w-8);
+    assert(kit_text_w(label,0)<=w-8);
+    kit_button(x,y,w,h,label,icon,kind,state);
 }
 #define draw_rect checked_rect
-#define draw_round_rect checked_round
 #define draw_hline checked_line
-#define draw_string_clip checked_text
-#define draw_string_bold_clip checked_bold
+#define draw_vline checked_vline
+#define kit_text checked_text
+#define kit_button checked_button
 #include "../src/apps/sysmon.c"
 #undef draw_rect
-#undef draw_round_rect
 #undef draw_hline
-#undef draw_string_clip
-#undef draw_string_bold_clip
+#undef draw_vline
+#undef kit_text
+#undef kit_button
 static void render(SysInfo *si){
     memset(back,253,sizeof back);show_labels=stop_labels=close_labels=0;
     sysmon_draw(bx,by,bw,bh,si);
@@ -107,8 +113,8 @@ static void check_actions(SysInfo *si){
     MonitorRect stop=task_button(&l,0,1);
     assert(!sysmon_click(bx,by,bw+1,bh,stop.x+10,stop.y+10,si).kind);
 }
-int main(int argc,char **argv){
-    gfx_init(back,linear,1280,800,32,1280*4);
+static void run(int style,const char *directory){
+    ui_theme_install(style,0,0);
     SysInfo si={.uptime_sec=3723,.frames=1250,.fs_nodes=35,.fs_max=64,
         .fs_bytes=7340032,.fs_cap=8385024,.fb_w=1280,.fb_h=800,.fb_bpp=32,.mem_mb=64,
         .win_n=8,.task_n=8};
@@ -128,9 +134,9 @@ int main(int argc,char **argv){
             assert(bar_width(widths[w],used[i],cap)==(int)((uint64_t)widths[w]*(unsigned)used[i]/(unsigned)cap));
     }
     bx=23;by=31;bw=SYSMON_W;bh=SYSMON_H-1;
-    sysmon_reset();render(&si);snapshot(argc>1?argv[1]:0,"monitor-system");
-    check_actions(&si);snapshot(argc>1?argv[1]:0,"monitor-tasks");
-    tab(&si,SYSMON_TAB_WINDOWS);snapshot(argc>1?argv[1]:0,"monitor-windows");
+    sysmon_reset();render(&si);snapshot(directory,style?"monitor-system-modern":"monitor-system");
+    check_actions(&si);snapshot(directory,style?"monitor-tasks-modern":"monitor-tasks");
+    tab(&si,SYSMON_TAB_WINDOWS);snapshot(directory,style?"monitor-windows-modern":"monitor-windows");
     bx=350;by=80;bw=900;bh=650;check_actions(&si);
     tab(&si,SYSMON_TAB_SYSTEM);render(&si);
     /* Smaller supplied dimensions stay bounded, although unsupported for all rows. */
@@ -157,6 +163,12 @@ int main(int argc,char **argv){
     }
     SysInfo gone=si;gone.program_n=1;
     assert(!click(&gone,program_button(&l,2)).kind);
-    snapshot(argc>1?argv[1]:0,"monitor-programs");
-    puts("monitor: three tabs, eight bounded rows, resized hit targets, task identity, empty states and 8/32 MiB bars passed");
+    snapshot(directory,style?"monitor-programs-modern":"monitor-programs");
+    sysmon_reset();
+}
+int main(int argc,char **argv){
+    gfx_init(back,linear,1280,800,32,1280*4);
+    run(UI_STYLE_CLASSIC,argc>1?argv[1]:0);
+    run(UI_STYLE_MODERN,argc>1?argv[1]:0);
+    puts("monitor: Classic and Modern, three tabs, eight bounded rows, resized hit targets, task identity, empty states and 8/32 MiB bars passed");
 }

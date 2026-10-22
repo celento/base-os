@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from test_editor_binding import function
+from desktop_source import desktop_input_defs, desktop_input_kernel
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,11 +24,8 @@ class InputIngressTests(unittest.TestCase):
         source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-desktop-input-') as temporary:
             directory = Path(temporary)
-            start = source.index('/* Desktop-only compatibility adapter')
-            end = source.index('/* ---------- Shell contract (kernel/shell.h)', start)
-            functions = function(source, 'input_gesture_ticks') + function(source, 'double_click')
-            functions += function(source, 'win_resize_tick') + function(source, 'saver_start')
-            (directory / 'desktop_input_kernel.inc').write_text(functions + source[start:end])
+            (directory / 'desktop_input_defs.inc').write_text(desktop_input_defs(source))
+            (directory / 'desktop_input_kernel.inc').write_text(desktop_input_kernel(source, function))
             output = directory / 'desktop-input'
             subprocess.run([shutil.which('cc'), '-std=gnu11', '-Wall', '-Wextra',
                             '-Werror', '-Wno-unused-function', '-O1', '-I', str(ROOT / 'src'),

@@ -5,7 +5,10 @@
 #include "apps/file_view.h"
 #define MAX_WIN 8
 #define EDIT_BUF_SIZE 65536
+#include "theme_metrics_host.h"
+int fb_w=1024,fb_h=768;
 #define ICON_DESK_TRASH 2
+#define ICON_DESK_COUNT (ICON_DESK_TRASH+1)
 static const struct {const char *label;} icons[ICON_DESK_TRASH]={{"Terminal"},{"Files"}};
 enum { WK_NONE=-1, WK_TERM, WK_EDIT, WK_CLOCK, WK_CAL, WK_MINES, WK_2048,
        WK_BREAKOUT, WK_SYSMON, WK_HELLO, WK_PROPERTIES, WK_WRITER, WK_SPREADSHEET,
@@ -43,7 +46,9 @@ static int window_state_reserve(void *state,int count){
     return fm_ids_capacity;
 }
 static void window_state_clear(int slot){(void)slot;}
-static int pick_count,pick_selected,pick_cwd,pick_writer,pick_sheet,pick_pics_only;
+static int pick_count,pick_selected,pick_cwd,pick_writer,pick_sheet,pick_pics_only,pick_first,name_target;
+static int recents,recent_last=-1;
+static void recent_add(int id){recents++;recent_last=id;}
 static int pick_owner=-1,pick_owner_seq,*pick_ids,pick_capacity,trash_id=-1,prefs_id=-1;
 static unsigned *pick_identity;
 static char launch_buf[24];
@@ -81,7 +86,8 @@ STUB_OPEN(edit_close_cancel) STUB_OPEN(image_viewer_close) STUB_OPEN(browser_clo
 STUB_OPEN(player_close) STUB_OPEN(writer_close) STUB_OPEN(spreadsheet_close)
 static void icon_open(int icon){(void)icon;icon_opens++;}
 #include "native_launch_types.inc"
-static LaunchItem launch_items[24];
+static LaunchItem launch_items[LAUNCH_MAX];
+static int launch_apps;
 #include "native_launch_ops.inc"
 static int windows(void){int count=0;for(int i=0;i<MAX_WIN;i++)count+=wins[i].open;return count;}
 static void close_all(void){
@@ -95,6 +101,7 @@ static void select_file(int id){
     assert(!"file not listed");
 }
 int main(void){
+    ui_theme_install(UI_STYLE_CLASSIC,0,0);
     reset();int first=executable("native one.bex"),upper=executable("COUNTER.BEX");
     unsigned identity=fs_identity(first);TermTaskInfo before,after;
     /* Explicit owner API is independent of whichever Terminal is selected. */
@@ -118,7 +125,7 @@ int main(void){
     query("COUNTER.BEX");assert(launch_n==1);launcher_run(0);
     assert(!launcher_on&&windows()==2&&term_task_info(1,&after));
     assert(before.instance!=after.instance&&!strcmp(after.name,"COUNTER.BEX")&&!edits);
-    open_fs_file(first);assert(windows()==3&&term_task_running(2));
+    recents=0;open_fs_file(first);assert(windows()==3&&term_task_running(2)&&recents==1&&recent_last==first);
     for(int i=3;i<8;i++)open_fs_file(upper);
     assert(windows()==8);assert(term_task_info(0,&before));open_fs_file(first);
     assert(windows()==8&&strstr(native_launch_status,"close a window"));
@@ -149,7 +156,24 @@ int main(void){
     int plain=fs_create(fs_root(),"note.txt");assert(plain>=0);open_fs_file(plain);
     assert(edits==1&&!term_task_running(context_slot));close_all();
     query("Terminal");assert(launch_n==1);launcher_run(0);assert(icon_opens==1);
-    open_fs_file(shortcut);assert(!windows());
+    recents=0;open_fs_file(shortcut);assert(!windows()&&!recents); /* Apps are not recent files. */
+    /* Save As lists folders and files of the target type; other files stay
+     * listed but cannot be picked. Open hides what the app cannot open. */
+    int folder=fs_mkdir(fs_root(),"Letters"),letter=fs_create(fs_root(),"letter.bwr");
+    assert(folder>=0&&letter>=0);
+    pick_save=1;name_target=2;
+    assert(od_row_enabled(folder)&&od_row_enabled(letter)&&!od_row_enabled(plain)&&!od_row_enabled(shortcut));
+    name_target=0;assert(od_row_enabled(plain)&&!od_row_enabled(letter));
+    name_target=7;assert(!od_row_enabled(plain)&&od_row_enabled(folder));
+    name_target=2;pick_cwd=fs_root();pick_selected=0;od_refresh();
+    assert(!pick_hidden&&pick_count>=4&&(pick_selected<0||od_row_enabled(pick_ids[pick_selected])));
+    pick_save=0;name_target=0;pick_sheet=1;od_refresh();
+    for(int i=0;i<pick_count;i++)assert(fs_is_dir(pick_ids[i])||od_row_enabled(pick_ids[i]));
+    assert(pick_hidden>0);pick_sheet=0;
+    pick_cwd=fs_root();od_refresh();
+    for(int i=0;i<pick_count;i++)if(pick_ids[i]==folder)pick_selected=i;
+    open_dlg=1;od_open_selected();assert(open_dlg&&pick_cwd==folder&&!windows());
+    open_dlg=0;assert(!fs_delete(letter)&&!fs_delete(folder));
     /* Native mode preflight and all refused admissions leave the caller's
      * Terminal state alone. This hosted fixture intentionally has no owned
      * process creator; owned success has a separate real-view integration gate. */

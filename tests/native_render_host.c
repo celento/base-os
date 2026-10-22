@@ -14,42 +14,25 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
-#define TITLE_BAR 30
-#define WMENU_H 24
-#define TITLE_H 54
-#define INK(i) ((uint8_t)(PAL_GRAY+(i)))
-static uint8_t idx24(uint32_t c){return gfx_rgb((int)((c>>16)&255),(int)((c>>8)&255),(int)(c&255));}
-#define CAP_H 20
-#define CAP_W 28
-#define CAP_CLOSE_W 46
-#define TERM_PAD 12
+#include "../src/ui/theme.c"
+#include "../src/ui/kit.c"
+static int mouse_x,mouse_y,mouse_left;
+#include "native_render_defs.inc"
 #define EDIT_LINE_H (EDIT_FONT_H+1)
-#define TERM_FG gfx_gray(0xE8)
 #define CHAR_H UI_FONT_H
-#define INFO_H 24
-#define SB 12
-#define WIN_INFO 1
-#define WIN_SCROLL 2
-#define WIN_NOCLOSE 4
-#define WIN_INACTIVE 8
-#define WIN_NOMENU 16
-static int chrome_icon=-1;
 #define CURSOR_W CURSOR_ART_W
 #define CURSOR_H CURSOR_ART_H
 #define MAX_WIN 8
-#define WK_TERM 11
-#define WK_NATIVE 12
-static uint8_t ui_border=2,ui_body=15,ui_chrome=3,ui_chrome_dk=2;
 /* Production strips carry menu labels; the fixture paints the same flat band. */
-static void draw_win_menu_strip(int x,int y,int w,int inactive,int nomenu){(void)nomenu;draw_rect(x,y+TITLE_BAR,w,WMENU_H,inactive?ui_chrome:INK(4));}
-static uint8_t ui_text_dim=1,ui_track=3;
-typedef struct {int x,y,w,h,open,min,z,kind;} Win;
+static void draw_win_menu_strip(int x,int y,int w,int inactive,int nomenu){(void)nomenu;draw_rect(x+1,y+TITLE_BAR,w-2,WMENU_H-1,inactive?TK_SUNKEN:TK_BASE);}
 static Win wins[MAX_WIN];
+static int switcher_on;
+static uint32_t frame_count;
 static int context_slot,dirty,name_dlg,edit_close_dlg,open_dlg,launcher_on;
 static int open_menu=-1,display_pending,saver_on,dragging_win=-1,resizing_win=-1;
-static int drag_cached=-1,fm_dragging,fm_drag_active,fm_renaming,edit_dragging,paint_dragging,paint_shape_drag,mouse_left;
+static int drag_cached=-1,fm_dragging,fm_drag_active,fm_renaming,edit_dragging,paint_dragging,paint_shape_drag;
 static int render_skip=-1;
-static int mouse_x,mouse_y,cursor_sx,cursor_sy,cursor_on;
+static int cursor_sx,cursor_sy,cursor_on;
 static uint8_t cursor_saved[CURSOR_W*CURSOR_H];
 typedef struct {uint8_t pixels[64000];int w,h,on;} TestCanvas;
 static TestCanvas canvases[MAX_WIN];
@@ -64,6 +47,7 @@ void kmemset(void *d,int v,int n){memset(d,v,(size_t)n);}
 void kmemcpy(void *d,const void *s,int n){memmove(d,s,(size_t)n);}
 int kstrlen(const char *s){return (int)strlen(s);}
 void kstrcpy(char *d,const char *s){strcpy(d,s);}
+void fmt_uint(char *out,unsigned v){sprintf(out,"%u",v);}
 void platform_poll(void){polls++;}
 const unsigned char *term_canvas(void){return canvas_on?canvas_pixels:0;}
 int term_canvas_width(void){return canvas_w;}
@@ -76,6 +60,7 @@ int term_task_running(int slot){(void)slot;return 1;}
 int term_count(void){return 3;}
 const char *term_get(int row){return row==0?"Canvas updates preserve this text.":row==1?"This longer ordinary line wraps in a narrow Terminal window.":"Canvas task started.";}
 void term_prompt(char *out,int max){(void)max;strcpy(out,"/>");}
+int term_is_echo(int row){(void)row;return 0;}
 const char *term_input(void){return "";}
 void term_set_view(int rows,int total){view_rows=rows;view_total=total;}
 int term_scroll_offset(void){return 0;}
@@ -98,7 +83,7 @@ static void fixture_reset(void){
     for(int i=0;i<MAX_WIN;i++){canvases[i].w=160;canvases[i].h=100;canvases[i].on=1;}
 }
 static void full_scene(Win *w) {
-    draw_ramp(0,0,fb_w,fb_h,PAL_DESK,PAL_DESK_N,0,RAMP_END(PAL_DESK_N));
+    draw_rect(0,0,fb_w,fb_h,TK_DESKTOP);
     gui_draw_window(12,38,400,210,"Background",0,WIN_INACTIVE);
     uint8_t corners[256];
     gfx_window_corners(w->x-1,w->y-1,w->w+2,w->h+2,corners,0,ui_border);
@@ -202,7 +187,7 @@ static void pixels(int screen_w,int screen_h,int ww,int wh,int sw,int bpp) {
     }
 }
 static void composite_scene(void){
-    draw_ramp(0,0,fb_w,fb_h,PAL_DESK,PAL_DESK_N,0,RAMP_END(PAL_DESK_N));
+    draw_rect(0,0,fb_w,fb_h,TK_DESKTOP);
     draw_ui();
 }
 static void composite_compare(void){
@@ -327,22 +312,28 @@ static void occlusion_pixels(int bpp){
         composite_begin(800,600,bpp);composite_update(TERM_RENDER_FULL,flags,13+(int)flags);
     }
     /* Theme/structural invalidation and drag-cache paths cannot be suppressed. */
-    dirty=1;ui_chrome=9;ui_border=10;ui_body=12;
+    int style=ui_theme.style;
+    dirty=1;ui_theme_install(style==UI_STYLE_MODERN?UI_STYLE_CLASSIC:UI_STYLE_MODERN,3,4);
     composite_update(TERM_RENDER_FULL,TERM_TASK_CANVAS,30);dirty=0;
+    ui_theme_install(style,0,0);
     dragging_win=3;drag_cached=3;
     composite_update(TERM_RENDER_FULL,TERM_TASK_CANVAS,31);dragging_win=drag_cached=-1;
 }
 int main(void) {
-    geometry();eligibility();owned_eligibility();canvas_guards();
-    for(int bpp=16;bpp<=32;bpp+=8){
-        fixture_reset();
-        pixels(800,600,360,200,160,bpp);
-        pixels(800,600,540,360,160,bpp);
-        pixels(800,600,540,361,320,bpp);
-        pixels(1024,768,800,550,320,bpp);
-        pixels(1280,800,800,551,320,bpp);
-        pixels(1280,800,1276,718,320,bpp);
-        occlusion_pixels(bpp);
+    (void)hot;(void)hot_index; /* Extracted with the chrome state; menus use them. */
+    for(int style=0;style<UI_STYLE_COUNT;style++){
+        ui_theme_install(style,0,0);
+        geometry();eligibility();owned_eligibility();canvas_guards();
+        for(int bpp=16;bpp<=32;bpp+=8){
+            fixture_reset();
+            pixels(800,600,360,200,160,bpp);
+            pixels(800,600,540,360,160,bpp);
+            pixels(800,600,540,361,320,bpp);
+            pixels(1024,768,800,550,320,bpp);
+            pixels(1280,800,800,551,320,bpp);
+            pixels(1280,800,1276,718,320,bpp);
+            occlusion_pixels(bpp);
+        }
     }
-    puts("Native render: exact geometry/guards; partial and occluded vs full pixels, independent owners, maximized/minimized/partial covers, edge/corner boundaries, moved covers, lifecycle and 16/24/32-bit presentation passed.");
+    puts("Native render: exact geometry/guards; partial and occluded vs full pixels, independent owners, maximized/minimized/partial covers, edge/corner boundaries, moved covers, lifecycle and 16/24/32-bit presentation in Classic and Modern passed.");
 }

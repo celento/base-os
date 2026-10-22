@@ -46,13 +46,13 @@ class AppViewTests(unittest.TestCase):
             result = subprocess.check_output(['nm', '-S', '--defined-only', str(obj)], text=True)
             sizes = {row.split()[-1]: int(row.split()[1], 16) for row in result.splitlines()}
             self.assertEqual(sizes, {
-                'measured_terminal_text': 27432,
+                'measured_terminal_text': 27752,
                 'measured_app_canvas': 64032,
                 'measured_view_metadata': 112,
                 'measured_app_view': 64144,
-                'measured_app_storage': 763808,
+                'measured_app_storage': 766368,
                 'measured_app_log': 3900,
-                'measured_view_offset': 219456,
+                'measured_view_offset': 222016,
                 'measured_published_pixels': 512000,
             })
             self.assertLessEqual(sizes['measured_app_storage'], 0xC0000)

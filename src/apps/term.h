@@ -13,6 +13,8 @@ void term_complete(void);
 void term_set_rows(int rows);
 void term_set_view(int rows,int total);
 void term_scroll(int delta);
+/* Clears the output and graphics canvas; history and the folder stay. */
+void term_clear(void);
 int term_scroll_offset(void);
 int term_cwd(void);
 void term_set_cwd(int id);
@@ -30,6 +32,8 @@ int term_canvas_size(int slot, int *width, int *height);
 /* Scrollback, oldest first. */
 int term_count(void);
 const char *term_get(int i);
+/* 1 when scrollback line i is a command echoed after its prompt. */
+int term_is_echo(int i);
 
 /* Live row: prompt text plus whatever has been typed so far. */
 void term_prompt(char *out, int max);

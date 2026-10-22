@@ -10,6 +10,6 @@ char measured_view_offset[offsetof(AppStorage,views)];
 char measured_published_pixels[PROCESS_TASKS*APP_CANVAS_PIXELS];
 _Static_assert(sizeof(void *)==4,"must measure the production i386 ABI");
 _Static_assert(_Alignof(AppStorage)==4,"unexpected app arena alignment");
-_Static_assert(sizeof(AppStorage)==763808,"update measured i386 app arena budget");
+_Static_assert(sizeof(AppStorage)==766368,"update measured i386 app arena budget");
 _Static_assert(TERM_MEMORY==APPS_BASE+0x300000,"must reuse original Terminal container");
 _Static_assert(TERM_MEMORY+APP_STORAGE_CAPACITY<=APPS_BASE+APPS_CAPACITY,"app arena outside reservation");

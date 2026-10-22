@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from process_host_extract import extract
 from test_editor_binding import function
+from desktop_source import desktop_input_defs, desktop_input_kernel
 ROOT = Path(__file__).resolve().parents[1]
 class NativeUiTests(unittest.TestCase):
     def test_production_core(self):
@@ -22,12 +23,9 @@ class NativeUiTests(unittest.TestCase):
         source=(ROOT/'src/shell/desktop/desktop.c').read_text()
         with tempfile.TemporaryDirectory(prefix='baseos-native-ui-desktop-') as temporary:
             directory=Path(temporary)
-            names=('input_gesture_ticks','double_click','win_resize_tick','saver_start',
-                'native_canvas_geometry','native_host_snapshot','native_host_acquired','native_host_focus','desktop_native_pointer')
-            code=''.join(function(source,name) for name in names)
-            start=source.index('/* Desktop-only compatibility adapter')
-            code+=source[start:source.index('/* ---------- Shell contract (kernel/shell.h)',start)]
-            (directory/'desktop_input_kernel.inc').write_text(code)
+            names=('native_canvas_geometry','native_host_snapshot','native_host_acquired','native_host_focus','desktop_native_pointer')
+            (directory/'desktop_input_defs.inc').write_text(desktop_input_defs(source))
+            (directory/'desktop_input_kernel.inc').write_text(desktop_input_kernel(source,function,names))
             output=directory/'desktop-ui'
             subprocess.run([shutil.which('clang') or 'cc','-std=gnu11','-O1','-g',
                 '-Wall','-Wextra','-Werror','-Wno-unused-function','-fsanitize=address,undefined',

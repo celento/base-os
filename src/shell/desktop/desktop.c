@@ -27,8 +27,9 @@
 #include "apps/image_viewer.h"
 #include "lib/image_decode.h"
 #include "ui/app_icons.h"
-#define WALLPAPERS_DEFINE_DATA
-#include "shell/desktop/wallpapers.h"
+#include "ui/theme.h"
+#include "ui/kit.h"
+#include "ui/ui_icons.h"
 #include "kernel/platform.h"
 #include "kernel/physmem.h"
 #include "kernel/input_ingress.h"
@@ -52,33 +53,37 @@
 #include "apps/wordle.h"
 #include "apps/term.h"
 #include "apps/todo.h"
-#include "assets/kilroy_about.h"
+#include "apps/pane_chrome.h"
 #include "assets/cursor_art.h"
 
 #define CHAR_H         UI_FONT_H
 #define LINE_H         (CHAR_H + 4)
 #define EDIT_LINE_H    (EDIT_FONT_H + 1)
 
-/* No global menu bar: menus live in each window. The chrome above a client
- * is the title band (TITLE_BAR) plus the File / Edit / Window strip (WMENU_H). */
-#define MENUBAR_H      0
-#define TITLE_BAR      30
-#define WMENU_H        24
-#define TITLE_H        54
+/* Window chrome comes from the active style (ui/theme.h). Classic draws a
+ * 1px border, a 28px title bar and a 24px menu row inside every window;
+ * Modern draws a 38px header and shows the front window's menus in a global
+ * top bar. TITLE_BAR is everything above the menu row, TITLE_H everything
+ * above the client area. */
+#define MODERN         (ui_theme.style == UI_STYLE_MODERN)
+#define MENUBAR_H      (ui_theme.topbar_h)
+#define TITLE_BAR      (ui_theme.border + ui_theme.title_h + (ui_theme.menu_h ? 0 : 1))
+#define WMENU_H        (ui_theme.menu_h)
+#define TITLE_H        (TITLE_BAR + WMENU_H)
 #define INFO_H         24
-#define SB             12
-#define ROW_H          24
+#define SB             (ui_theme.scrollbar)
+#define ROW_H          (ui_theme.row_h)
 #define ICON_S         32
-#define TILE_S         44
+#define TILE_S         32
 #define CURSOR_W       CURSOR_ART_W
 #define CURSOR_H       CURSOR_ART_H
-#define MENU_ROW       26
-#define BTN_H          26
+#define MENU_ROW       (ui_theme.menu_item_h)
+#define BTN_H          (ui_theme.control_h)
+/* Classic: a 34px taskbar. Modern: a 48px dock floating 8px above the
+ * bottom edge, with the work area ending 4px above the dock. */
+#define TASKBAR_H      (MODERN ? 60 : ui_theme.taskbar_h)
 #define TASKBAR_Y      (fb_h - TASKBAR_H)
-#define TASKBAR_H      40
 #define MAX_WIN        8
-
-#define THEME_N        WALLPAPER_N
 
 #define KEY_LCTRL      0x1D
 #define KEY_LSHIFT     0x2A
@@ -88,44 +93,52 @@
 #define KEY_S          0x1F
 #define KEY_W          0x11
 #define KEY_Q          0x10
-#define SAVER_DELAY    (70 * 90)
 
 #define EDIT_BUF_SIZE  65536
 
-/* A theme is a bundled wallpaper and the accent that suits it. The chrome
- * itself is always light glass. */
-typedef struct {
-    const char *name;
-    int wallpaper;
-    uint32_t accent;
-} Theme;
-
-static const Theme themes[THEME_N] = {
-    {"Blue",   0, 0x3B82E0},
-    {"Lake",   1, 0x2F86C8},
-    {"Clouds", 2, 0x4A7FC8},
-};
-
-static int theme_id = 0;
+/* Appearance preferences. */
+static int ui_style = UI_STYLE_CLASSIC;
+static int ui_accent_id, ui_desktop_id, ui_pattern;
+/* Window behavior: outline drag unless contents are shown, double-click on a
+ * title bar maximizes, windows snap to screen edges within snap distance. */
+#define WINOPT_DRAG_CONTENTS 1
+#define WINOPT_DOUBLE_CLICK  2
+#define WINOPT_SNAP          4
+#define WINOPT_LINE_NUMBERS  8   /* Editor line numbers */
+static int win_options = WINOPT_DOUBLE_CLICK | WINOPT_SNAP | WINOPT_LINE_NUMBERS;
+static int win_snap_distance = 8;
+#define SNAP_DISTANCE_MAX 32
+/* Screen saver delay choices, in seconds. */
+#define SAVER_DELAY_N 5
+static const unsigned saver_delay_secs[SAVER_DELAY_N] = {90, 180, 300, 600, 1800};
+static int saver_delay;
+/* Taskbar clock: 12-hour time, no date. */
+#define CLOCK_12H 1
+#define CLOCK_NO_DATE 2
+static int clock_flags;
+/* Double-click speed: slow, normal, fast. */
+static int dbl_click_speed = 1;
+static unsigned dbl_click_ticks(void) {
+    static const unsigned ms[3] = {600, 400, 250};
+    return TIMER_HZ * ms[dbl_click_speed < 0 || dbl_click_speed > 2 ? 1 : dbl_click_speed] / 1000;
+}
 static const char *session_status="";
 static const char *native_launch_status="";
 
-static uint8_t ui_accent;
-static uint8_t ui_accent_dk;
-static uint32_t ui_accent_rgb;
-static uint32_t ui_accent_rgb_lt;
-static uint32_t ui_accent_rgb_dk;
-static uint8_t ui_border;
-static uint8_t ui_chrome;
-static uint8_t ui_chrome_dk;
-static uint8_t ui_text;
-static uint8_t ui_text_dim;
-static uint8_t ui_track;
-static uint8_t ui_body;
-static uint8_t ui_field;
-static uint8_t ui_paper;
-static uint8_t ui_title;
-static uint8_t ui_on_accent;
+/* Shell drawing uses the theme tokens directly. These names keep the older
+ * role vocabulary readable at call sites. */
+#define ui_accent      ((uint8_t)TK_ACCENT)
+#define ui_accent_dk   ((uint8_t)TK_ACCENT_700)
+#define ui_text        ((uint8_t)TK_TEXT)
+#define ui_text_dim    ((uint8_t)TK_TEXT2)
+#define ui_chrome      ((uint8_t)TK_BASE)
+#define ui_chrome_dk   ((uint8_t)TK_LINE_SUBTLE)
+#define ui_border      ((uint8_t)TK_LINE)
+#define ui_field       ((uint8_t)TK_RAISED)
+#define ui_paper       ((uint8_t)TK_RAISED)
+#define ui_body        ((uint8_t)ui_theme.content)
+#define ui_on_accent   ((uint8_t)TK_ON_ACCENT)
+#define ui_track       ((uint8_t)TK_SUNKEN)
 static int desk_cache_theme = -1;
 static int display_pending = 0, display_previous = -1;
 static uint32_t display_deadline;
@@ -137,77 +150,39 @@ static int saver_enabled = 1;
 static int saver_on = 0;
 static uint32_t last_input_frame = 0;
 static int launcher_on = 0;
-static char launch_buf[24];
+static char launch_buf[FS_NAME_LEN];
 static int launch_len = 0;
 static int launch_sel = 0;
 static int launch_scroll;
 static unsigned redraw_count = 0;
-
-static uint32_t rgb_lighten(uint32_t c, int pct) {
-    int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
-    r += (255 - r) * pct / 100;
-    g += (255 - g) * pct / 100;
-    b += (255 - b) * pct / 100;
-    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-}
-
-static uint32_t rgb_darken(uint32_t c, int pct) {
-    int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
-    return ((uint32_t)(r * pct / 100) << 16) | ((uint32_t)(g * pct / 100) << 8) |
-           (uint32_t)(b * pct / 100);
-}
+static int mouse_x;
+static int mouse_y;
+static int mouse_left = 0;
+static int mouse_right = 0;
+static int mouse_moved = 0;
 
 static uint8_t idx24(uint32_t c) {
     return gfx_rgb((c >> 16) & 255, (c >> 8) & 255, c & 255);
 }
 
-/* Neutrals are a 32-step ink ramp with a faint cool cast. INK(0) is the
- * brightest surface and INK(31) the darkest text. */
-#define INK(i) ((uint8_t)(PAL_GRAY + (i)))
+/* Older drawing code names neutrals by darkness, 0 (lightest surface) to 31
+ * (darkest text). Each level maps to the nearest token of the style. */
+static uint8_t ink_token(int i) {
+    static const uint8_t map[32] = {
+        TK_RAISED, TK_RAISED, TK_BASE, TK_SUNKEN, TK_HOVER, TK_HOVER, TK_LINE_SUBTLE, TK_LINE_SUBTLE,
+        TK_LINE_SUBTLE, TK_LINE, TK_LINE, TK_LINE, TK_LINE_STRONG, TK_LINE_STRONG, TK_LINE_STRONG, TK_LINE_STRONG,
+        TK_LINE_STRONG, TK_TEXT2, TK_TEXT2, TK_TEXT2, TK_TEXT2, TK_TEXT2, TK_ICON, TK_ICON,
+        TK_ICON, TK_ICON, TK_ICON, TK_ICON, TK_TEXT, TK_TEXT, TK_TEXT, TK_TEXT
+    };
+    return map[i < 0 ? 0 : i > 31 ? 31 : i];
+}
+#define INK(i) ink_token(i)
 
+static void menu_bar_init(void);
 static void theme_apply(void) {
-    const Theme *t = &themes[theme_id];
-    ui_accent_rgb = t->accent;
-    ui_accent_rgb_lt = rgb_lighten(t->accent, 45);
-    ui_accent_rgb_dk = rgb_darken(t->accent, 62);
-    /* The wallpaper's own colors, chosen offline by tools/gen_wallpapers.py. */
-    for (int i = 0; i < WALLPAPER_COLORS; i++)
-        gfx_set_color(PAL_DESK + i, wallpapers[t->wallpaper].colors[i]);
-    /* Neutral ink ramp with a faint cool cast: light surfaces, dark text.
-     * tools/palette.py mirrors these two segments for the asset tools. */
-    gfx_set_ramp(PAL_GRAY, 17, 0xF7F8FA, 0x8A9099);
-    gfx_set_ramp(PAL_GRAY + 16, 16, 0x8A9099, 0x14161B);
-    gfx_set_ramp(PAL_ACCENT, 9, ui_accent_rgb_lt, ui_accent_rgb);
-    gfx_set_ramp(PAL_ACCENT + 8, 8, ui_accent_rgb, ui_accent_rgb_dk);
-    gfx_pal_commit();
-    ui_accent = PAL_ACCENT + 8;
-    ui_accent_dk = PAL_ACCENT + 12;
-    ui_track = INK(3);
-    ui_field = INK(0);
-    ui_paper = INK(0);
-    ui_body = INK(1);
-    ui_chrome = INK(2);
-    ui_title = INK(3);
-    ui_chrome_dk = INK(6);
-    ui_border = INK(11);
-    ui_text_dim = INK(18);
-    ui_text = INK(29);
-    {
-        int r = (t->accent >> 16) & 255, g = (t->accent >> 8) & 255, b = t->accent & 255;
-        ui_on_accent = (r * 299 + g * 587 + b * 114) / 1000 > 140 ? INK(31) : COLOR_WHITE;
-    }
+    ui_theme_install(ui_style, ui_accent_id, ui_desktop_id);
     desk_cache_theme = -1;
-    app_accent = ui_accent;
-    app_accent_dk = ui_accent_dk;
-    app_text = ui_text;
-    app_text_dim = ui_text_dim;
-    app_chrome = ui_chrome;
-    app_chrome_dk = ui_chrome_dk;
-    app_body = ui_body;
-    app_field = ui_field;
-    app_paper = ui_paper;
-    app_border = ui_border;
-    app_on_accent = ui_on_accent;
+    menu_bar_init();
 }
 
 /* ---------- Helpers ---------- */
@@ -230,9 +205,38 @@ static void utoa(unsigned v, char *out) {
     out[i] = 0;
 }
 
-static int btn_w(const char *label) { return ui_string_w(label) + 24; }
-/* App icon shown in the title bar of the window being drawn, or -1. */
+/* App icon (AI_*) shown in the title bar of the window being drawn, or -1,
+ * and the kind whose menu model the window row shows. */
 static int chrome_icon = -1;
+static int chrome_dirty;     /* draw an unsaved-changes dot after the title */
+static const char *chrome_subtitle; /* dim text after the title */
+static int chrome_kind = -1;
+static int chrome_slot = -1;
+static int chrome_flags;  /* WIN_MAXED and WIN_DIALOG for the window being drawn */
+
+/* Hover and press state for a control under the pointer. */
+static int ctl_state(int x, int y, int w, int h) {
+    if (!hit(mouse_x, mouse_y, x, y, w, h)) return 0;
+    return mouse_left ? KIT_HOVER | KIT_PRESSED : KIT_HOVER;
+}
+
+typedef struct { int x, y, w, h; } Rect;
+
+/* Hover targets: drawing registers each control that reacts to the
+ * pointer, and pointer motion repaints only when the target under it
+ * changes. */
+#define HOT_MAX 96
+static Rect hot_rect[HOT_MAX];
+static int hot_n, hot_last = -1;
+static int hot(int x, int y, int w, int h) {
+    if (hot_n < HOT_MAX) hot_rect[hot_n++] = (Rect){x, y, w, h};
+    return ctl_state(x, y, w, h);
+}
+static int hot_index(void) {
+    for (int i = hot_n - 1; i >= 0; i--)
+        if (hit(mouse_x, mouse_y, hot_rect[i].x, hot_rect[i].y, hot_rect[i].w, hot_rect[i].h)) return i;
+    return -1;
+}
 
 /* ---------- Shared desktop controls ---------- */
 
@@ -241,140 +245,116 @@ static int chrome_icon = -1;
 #define WIN_NOCLOSE 4
 #define WIN_INACTIVE 8
 #define WIN_NOMENU 16
+#define WIN_MAXED 32
+#define WIN_DIALOG 64   /* close button only */
 
-/* Caption buttons sit at the right of the title bar as one joined group:
- * minimize, maximize and a wider close. Drawing and hit testing both use
- * these rectangles. */
-#define CAP_H 20
-#define CAP_W 28
-#define CAP_CLOSE_W 46
+/* Caption buttons: minimize, maximize and close at the right of the title
+ * bar, each caption_w x caption_h. Drawing and hit testing share these. */
+#define CAP_H (ui_theme.caption_h)
+#define CAP_W (ui_theme.caption_w)
+#define CAP_CLOSE_W CAP_W
+static int cap_y(int wy) { return wy + (MODERN ? 6 : 5); }
 static void close_box_pos(int wx, int wy, int *cx, int *cy) {
-    (void)wx; *cx = -1; *cy = wy + (TITLE_BAR - CAP_H) / 2;
+    (void)wx; *cx = -1; *cy = cap_y(wy);
 }
-static int close_box_x(int wx, int ww) { return wx + ww - 8 - CAP_CLOSE_W; }
+static int close_box_x(int wx, int ww) { return wx + ww - (MODERN ? 34 : 29); }
 static void min_box_pos(int wx, int wy, int *cx, int *cy) {
-    (void)wx; *cx = -1; *cy = wy + (TITLE_BAR - CAP_H) / 2;
+    (void)wx; *cx = -1; *cy = cap_y(wy);
 }
-static int max_box_x(int wx, int ww) { return close_box_x(wx, ww) - CAP_W; }
-static int min_box_x(int wx, int ww) { return max_box_x(wx, ww) - CAP_W; }
+static int max_box_x(int wx, int ww) { return close_box_x(wx, ww) - CAP_W - ui_theme.caption_gap; }
+static int min_box_x(int wx, int ww) { return max_box_x(wx, ww) - CAP_W - ui_theme.caption_gap; }
 
 static void draw_win_menu_strip(int x, int y, int w, int inactive, int nomenu);
-/* The caption group: neutral glass for minimize and maximize, red for close
- * while the window is active. */
-static void draw_win_control(int wx, int wy, int ww, int active) {
-    int cx, cy;
-    close_box_pos(wx, wy, &cx, &cy);
-    int gx = min_box_x(wx, ww), gw = 2 * CAP_W + CAP_CLOSE_W, kx = close_box_x(wx, ww);
-    draw_round_rect(gx, cy, gw, CAP_H, 4, active ? INK(15) : INK(11));
-    draw_round_rect(gx + 1, cy + 1, gw - 2, CAP_H - 2, 3, INK(2));
-    draw_round_rect(gx + 1, cy + 1, gw - 2, CAP_H / 2 - 1, 3, INK(0));
-    draw_rect(gx + 1, cy + CAP_H / 2 - 2, gw - 2, 2, INK(0));
-    if (active) {
-        draw_round_rect(kx, cy, CAP_CLOSE_W, CAP_H, 4, idx24(0x9E2B21));
-        draw_rect(kx, cy, 5, CAP_H, idx24(0x9E2B21));
-        draw_round_rect(kx + 1, cy + 1, CAP_CLOSE_W - 2, CAP_H - 2, 3, idx24(0xC9473A));
-        draw_rect(kx + 1, cy + 1, 4, CAP_H - 2, idx24(0xC9473A));
-        draw_round_rect(kx + 1, cy + 1, CAP_CLOSE_W - 2, CAP_H / 2 - 1, 3, idx24(0xE0796D));
-        draw_rect(kx + 1, cy + 1, 4, CAP_H / 2 - 1, idx24(0xE0796D));
+static int caption_pointer_ok(void);
+
+static void draw_caption(int bx, int by, int icon, int active, int close, int hot) {
+    int hover = hot && caption_pointer_ok() && hit(mouse_x, mouse_y, bx, by, CAP_W, CAP_H);
+    int pressed = hover && mouse_left;
+    uint8_t ink = MODERN ? (active ? TK_ICON : TK_LINE_STRONG) : (active ? TK_ON_ACCENT : TK_TEXT2);
+    uint8_t bg = MODERN ? (active ? ui_theme.chrome : TK_46) : (active ? TK_ACCENT_600 : TK_45);
+    if (hover) {
+        if (close) bg = pressed ? TK_RED_700 : TK_RED;
+        else bg = MODERN ? TK_HOVER : active ? (pressed ? TK_ACCENT_700 : TK_ACCENT) : TK_HOVER;
+        if (close) ink = TK_ON_ACCENT;
+        kit_fill(bx, by, CAP_W, CAP_H, MODERN ? 6 : KIT_R_SQUARE, bg, 1);
     }
-    draw_vline(max_box_x(wx, ww), cy + 1, CAP_H - 2, active ? INK(13) : INK(9));
-    draw_vline(kx, cy + 1, CAP_H - 2, active ? idx24(0x9E2B21) : INK(9));
-    uint8_t glyph = active ? INK(27) : INK(16);
-    int gy = cy + (CAP_H - ICON_SIZE) / 2;
-    icon_draw(ICON_MINUS, min_box_x(wx, ww) + (CAP_W - ICON_SIZE) / 2, gy, glyph);
-    icon_draw(ICON_MAXIMIZE, max_box_x(wx, ww) + (CAP_W - ICON_SIZE) / 2, gy, glyph);
-    icon_draw(ICON_STOP, kx + (CAP_CLOSE_W - ICON_SIZE) / 2, gy, active ? COLOR_WHITE : glyph);
+    ui_icon_draw(icon, bx + (CAP_W - 16) / 2, by + (CAP_H - 16) / 2, 16, ink, bg);
 }
 
-static void draw_sb_arrow(int x, int y, int dir, uint8_t col) {
-    int cx = x + SB / 2;
-    int cy = y + SB / 2;
-    for (int i = 0; i < 4; i++) {
-        if (dir == 0)
-            draw_line(cx - i, cy - 2 + i, cx + i, cy - 2 + i, col);
-        else if (dir == 1)
-            draw_line(cx - i, cy + 1 - i, cx + i, cy + 1 - i, col);
-        else if (dir == 2)
-            draw_line(cx - 2 + i, cy - i, cx - 2 + i, cy + i, col);
-        else
-            draw_line(cx + 1 - i, cy - i, cx + 1 - i, cy + i, col);
-    }
+static void draw_win_control(int wx, int wy, int ww, int active, int flags) {
+    int y = cap_y(wy);
+    draw_caption(close_box_x(wx, ww), y, UI_ICON_X, active, 1, 1);
+    if (flags & WIN_DIALOG) return;
+    draw_caption(max_box_x(wx, ww), y, (flags & WIN_MAXED) ? UI_ICON_RESTORE : UI_ICON_MAX, active, 0, 1);
+    draw_caption(min_box_x(wx, ww), y, UI_ICON_MIN, active, 0, 1);
 }
 
-static void draw_thumb(int x, int y, int w, int h) {
-    int r = (w < h ? w : h) / 2 - 1;
-    draw_round_rect(x + 1, y + 1, w - 2, h - 2, r, PAL_ACCENT + 11);
-    draw_round_rect(x + 2, y + 2, w - 4, h - 4, r - 1, PAL_ACCENT + 7);
-    if (w < h) draw_round_rect(x + 3, y + 3, (w - 6) / 2 + 1, h - 6, 2, PAL_ACCENT + 4);
-    else draw_round_rect(x + 3, y + 3, w - 6, (h - 6) / 2 + 1, 2, PAL_ACCENT + 4);
+/* Scrollbars along the client edges of a window, for views that page their
+ * content in whole rows (pos, visible and total are in rows). */
+static void draw_vscroll(int x, int y, int h, int pos, int visible, int total) {
+    kit_vscroll(x, y, h, pos, visible, total, ctl_state(x, y, SB, h));
 }
 
 static void draw_scrollbars(int x, int y, int w, int h, int top) {
-    uint8_t arrow = ui_text_dim;
-    int vx = x + w - 1 - SB;
-    int vy = y + top + 1;
-    int vh = h - top - SB - 2;
-    if (vh < SB * 2)
-        vh = SB * 2;
-    draw_rect(vx, vy, SB, vh, ui_track);
-    draw_vline(vx, vy, vh, ui_chrome_dk);
-    draw_sb_arrow(vx, vy, 0, arrow);
-    draw_sb_arrow(vx, vy + vh - SB, 1, arrow);
-    int track_h = vh - 2 * SB;
-    if (track_h > 30)
-        draw_thumb(vx + 3, vy + SB + 2, SB - 5, 26);
-
-    int hy = y + h - 1 - SB;
-    int hw = w - SB - 1;
-    draw_rect(x + 1, hy, hw, SB, ui_track);
-    draw_hline(x + 1, hy, hw, ui_chrome_dk);
-    draw_sb_arrow(x + 1, hy, 2, arrow);
-    draw_sb_arrow(x + hw - SB, hy, 3, arrow);
-    int track_w = hw - 2 * SB;
-    if (track_w > 36)
-        draw_thumb(x + 1 + SB + 2, hy + 3, 30, SB - 5);
-    draw_rect(vx, hy, SB, SB, ui_track);
+    int vx = x + w - 1 - SB, vy = y + top;
+    draw_vscroll(vx, vy, h - top - 1, 0, 1, 1);
 }
 
 void gui_draw_window(int x, int y, int w, int h, const char *title,
                      const char *info, int flags) {
+    flags |= chrome_flags;
     int noclose = flags & WIN_NOCLOSE;
-    int inactive = flags & WIN_INACTIVE;
-    int r = 9;
-
-    draw_shadow(x, y, w, h);
-    draw_round_rect(x, y, w, h, r, ui_body);
-    /* Title bar: a light vertical gradient with a bright top edge. */
-    draw_ramp_round(x, y, w, TITLE_BAR, r, 0, PAL_GRAY, PAL_GRAY_N, 0, inactive ? 2 * 16 : 5 * 16);
-    draw_hline(x + r, y + 1, w - 2 * r, COLOR_WHITE);
-    draw_win_menu_strip(x, y, w, inactive, flags & WIN_NOMENU);
-    draw_hline(x, y + TITLE_BAR, w, (flags & WIN_NOMENU) ? INK(8) : INK(6));
-    if (!(flags & WIN_NOMENU)) draw_hline(x, y + TITLE_H, w, INK(8));
-    draw_round_frame(x - 1, y - 1, w + 2, h + 2, r + 1, inactive ? INK(12) : INK(16));
-    draw_round_frame(x, y, w, h, r, COLOR_WHITE);
-
-    if (!noclose)
-        draw_win_control(x, y, w, !inactive);
-
-    if(!noclose)for(int d=0;d<3;d++)draw_line(x+w-5-d*3,y+h-4,x+w-4,y+h-5-d*3,ui_chrome_dk);
-    int title_y = y + (TITLE_BAR - CHAR_H) / 2;
-    int tx = x + 12;
-    if (chrome_icon >= 0) {
-        app_icon_draw(chrome_icon, x + 9, y + (TITLE_BAR - AI_SMALL) / 2, AI_SMALL);
-        tx = x + 34;
+    int active = !(flags & WIN_INACTIVE);
+    int maxed = flags & WIN_MAXED;
+    int menu = !(flags & WIN_NOMENU) && WMENU_H > 0;
+    int top = menu ? TITLE_H : TITLE_BAR;
+    uint8_t title_ink;
+    int tx, ty, icon_x, icon_y;
+    if (MODERN) {
+        int r = maxed ? KIT_R_SQUARE : ui_theme.r_window;
+        if (!maxed) kit_shadow(x, y, w, h, r);
+        kit_fill(x, y, w, h, r, ui_theme.content, 0);
+        kit_fill_top(x, y, w, TITLE_BAR - 1, r, active ? ui_theme.chrome : TK_46);
+        draw_hline(x + 1, y + TITLE_BAR - 1, w - 2, TK_LINE);
+        kit_frame(x, y, w, h, r, active ? TK_LINE_STRONG : TK_47);
+        title_ink = active ? TK_TEXT : TK_TEXT2;
+        icon_x = x + 12; icon_y = y + 12; tx = x + 36; ty = y + 11;
+    } else {
+        if (!maxed) kit_shadow(x, y, w, h, 0);
+        draw_frame(x, y, w, h, active ? TK_ACCENT_700 : TK_LINE_STRONG);
+        draw_rect(x + 1, y + 1, w - 2, ui_theme.title_h, active ? TK_ACCENT_600 : TK_45);
+        if (menu) {
+            draw_rect(x + 1, y + TITLE_BAR, w - 2, WMENU_H - 1, TK_BASE);
+            draw_hline(x + 1, y + TITLE_H - 1, w - 2, TK_LINE_SUBTLE);
+        }
+        draw_rect(x + 1, y + top, w - 2, h - top - 1, ui_theme.content);
+        title_ink = active ? TK_ON_ACCENT : TK_TEXT2;
+        icon_x = x + 8; icon_y = y + 7; tx = x + 30; ty = y + 6;
     }
+    if (menu) draw_win_menu_strip(x, y, w, !active, 0);
+    if (!noclose) draw_win_control(x, y, w, active, flags);
+    if (chrome_icon >= 0) app_icon_draw(chrome_icon, icon_x, icon_y, AI_SMALL);
+    else tx = icon_x;
     if (title) {
-        int xmax = noclose ? x + w - 12 : min_box_x(x, w) - 10;
-        draw_string_bold_clip(title, tx, title_y, inactive ? INK(17) : INK(29), xmax);
+        int xmax = noclose ? x + w - 12 : ((flags & WIN_DIALOG) ? close_box_x(x, w) : min_box_x(x, w)) - 8;
+        /* The unsaved dot: a small bullet one space after the name. */
+        if (chrome_dirty) xmax -= 10;
+        kit_text(title, tx, ty, title_ink, xmax - tx, 1);
+        if (chrome_dirty) {
+            int dx = tx + kit_text_w(title, 1) + ui_advance(' ') + 1;
+            if (dx > xmax + 4) dx = xmax + 4;
+            kit_fill(dx, ty + UI_FONT_H / 2 - 2, 5, 5, 2, MODERN ? TK_TEXT2 : title_ink, 0);
+        }
+        if (chrome_subtitle) {
+            int sx = tx + kit_text_w(title, 1) + 6;
+            if (sx < xmax - 24) kit_text(chrome_subtitle, sx, ty, MODERN ? TK_TEXT2 : active ? TK_ACCENT_100 : TK_LINE_STRONG, xmax - sx, 0);
+        }
     }
 
-    int top = TITLE_H;
     if ((flags & WIN_INFO) && info) {
-        draw_rect(x, y + TITLE_H + 1, w, INFO_H - 1, ui_chrome);
-        int iy = y + TITLE_H + (INFO_H - CHAR_H) / 2;
-        draw_string_clip(info, x + 10, iy, ui_text_dim, x + w - 8);
-        draw_hline(x, y + TITLE_H + INFO_H, w, ui_chrome_dk);
-        top = TITLE_H + INFO_H;
+        kit_toolbar(x + 1, y + top, w - 2, INFO_H);
+        draw_string_clip(info, x + 10, kit_ty(y + top, INFO_H - 1), ui_text_dim, x + w - 8);
+        top += INFO_H;
     }
 
     if (flags & WIN_SCROLL)
@@ -382,20 +362,7 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
 }
 
 static void draw_button_styled(int x, int y, int w, int h, const char *label, int primary) {
-    /* A pill with a glossy upper half. */
-    int r = h / 2;
-    if (primary) {
-        draw_ramp_round(x, y, w, h, r, 1, PAL_ACCENT, PAL_ACCENT_N, 4 * 16, 12 * 16);
-        draw_round_frame(x, y, w, h, r, PAL_ACCENT + 14);
-    } else {
-        draw_ramp_round(x, y, w, h, r, 1, PAL_GRAY, PAL_GRAY_N, 0, 5 * 16);
-        draw_round_frame(x, y, w, h, r, INK(13));
-    }
-    glass_round(x + 2, y + 1, w - 4, h / 2 - 1, h / 2 - 1, 0, COLOR_WHITE, 150, 40);
-    int tw = ui_string_w(label);
-    int tx = x + (w - tw) / 2;
-    int ty = y + (h - CHAR_H) / 2;
-    draw_string_clip(label, tx, ty, primary ? ui_on_accent : ui_text, x + w - 4);
+    kit_button(x, y, w, h, label, -1, primary ? KB_PRIMARY : KB_DEFAULT, ctl_state(x, y, w, h) | (primary ? KIT_DEFAULT : 0));
 }
 
 void draw_button(int x, int y, int w, int h, const char *label) {
@@ -406,6 +373,8 @@ static void draw_default_button(int x, int y, int w, int h, const char *label) {
     draw_button_styled(x, y, w, h, label, 1);
 }
 
+/* The app registry: every built-in app, in launcher order. Desktop icons are
+ * a separate, smaller set (System, Home, Trash). */
 typedef struct {
     const char *label;
     int icon; /* ICON_APP_* glyph */
@@ -433,6 +402,7 @@ enum {
     ICON_PLAYER,
     ICON_WRITER,
     ICON_SPREADSHEET,
+    ICON_HELP,
     ICON_DESK_TRASH,
     ICON_DESK_COUNT
 };
@@ -440,63 +410,62 @@ enum {
 
 static DeskIcon icons[ICON_DESK_COUNT];
 
+enum { DESK_SYSTEM, DESK_HOME, DESK_TRASH, DESK_COUNT };
+typedef struct { const char *label; int x, y; } DesktopIcon;
+static DesktopIcon desk[DESK_COUNT];
+
 static void icon_set(int id, const char *label, int icon) {
     icons[id].label = label;
     icons[id].icon = icon;
 }
+
+static int desk_icon_w(void) { return MODERN ? 84 : 76; }
+static int desk_icon_pitch(void) { return MODERN ? 88 : 80; }
 
 static void icons_init(void) {
     icon_set(ICON_FILES, "Files", ICON_APP_FILES);
     icon_set(ICON_DESK_EDIT, "Editor", ICON_APP_EDITOR);
     icon_set(ICON_CALC, "Calculator", ICON_APP_CALC);
     icon_set(ICON_PAINT, "Paint", ICON_APP_PAINT);
-    icon_set(ICON_VIEW, "Viewer", ICON_APP_VIEWER);
+    icon_set(ICON_VIEW, "Image Viewer", ICON_APP_VIEWER);
     icon_set(ICON_SNAKE, "Snake", ICON_APP_SNAKE);
     icon_set(ICON_WORDLE, "Wordle", ICON_APP_WORDLE);
     icon_set(ICON_TERM, "Terminal", ICON_APP_TERMINAL);
     icon_set(ICON_TODO, "Todo", ICON_APP_TODO);
     icon_set(ICON_CLOCK, "Clock", ICON_APP_CLOCK);
     icon_set(ICON_CAL, "Calendar", ICON_APP_CALENDAR);
-    icon_set(ICON_MINES, "Mines", ICON_APP_MINES);
+    icon_set(ICON_MINES, "Minesweeper", ICON_APP_MINES);
     icon_set(ICON_2048, "2048", ICON_APP_2048);
     icon_set(ICON_BREAKOUT, "Breakout", ICON_APP_BREAKOUT);
-    icon_set(ICON_SYSMON, "Monitor", ICON_APP_MONITOR);
+    icon_set(ICON_SYSMON, "System Monitor", ICON_APP_MONITOR);
     icon_set(ICON_DESK_SETTINGS, "Settings", ICON_APP_SETTINGS);
     icon_set(ICON_BROWSER, "Browser", ICON_APP_BROWSER);
     icon_set(ICON_PLAYER, "Media Player", ICON_APP_PLAYER);
     icon_set(ICON_WRITER, "Writer", ICON_APP_WRITER);
     icon_set(ICON_SPREADSHEET, "Spreadsheet", ICON_APP_SHEET);
+    icon_set(ICON_HELP, "Help", ICON_APP_HELP);
     icon_set(ICON_DESK_TRASH, "Trash", ICON_APP_TRASH);
 
-    int col_w = 84;
-    int row_h = 76;
-    int x0 = 22;
-    int y0 = MENUBAR_H + 14;
-    int rows = (TASKBAR_Y - y0 - 12) / row_h;
-    if (rows < 1) rows = 1;
-    for (int i = 0; i < ICON_DESK_TRASH; i++) {
-        icons[i].x = x0 + (i / rows) * col_w;
-        icons[i].y = y0 + (i % rows) * row_h;
+    static const char *const names[DESK_COUNT] = {"System", "Home", "Trash"};
+    int x0 = MODERN ? 12 : 10, y0 = MENUBAR_H + (MODERN ? 12 : 8);
+    for (int i = 0; i < DESK_COUNT; i++) {
+        desk[i].label = names[i];
+        desk[i].x = x0;
+        desk[i].y = y0 + i * desk_icon_pitch();
     }
-    icons[ICON_DESK_TRASH].x = fb_w - 26 - TILE_S;
-    icons[ICON_DESK_TRASH].y = TASKBAR_Y - 12 - TILE_S - CHAR_H - 8;
 }
 
-static void icon_label_pos(int id, int *lx, int *ly, int *lw) {
-    int tw = ui_string_w(icons[id].label);
-    *lx = icons[id].x + TILE_S / 2 - tw / 2;
-    *ly = icons[id].y + TILE_S + 6;
-    *lw = tw;
+/* Label box under a desktop icon (one line; the names are short). */
+static void desk_label_pos(int id, int *lx, int *ly, int *lw) {
+    int tw = ui_string_w(desk[id].label), pad = MODERN ? 6 : 4;
+    *lw = tw + 2 * pad;
+    *lx = desk[id].x + (desk_icon_w() - *lw) / 2;
+    *ly = desk[id].y + 4 + 32 + (MODERN ? 6 : 4);
 }
 
 static int icon_hit(int id, int px, int py) {
-    int lx, ly, lw;
-    icon_label_pos(id, &lx, &ly, &lw);
-    int x0 = icons[id].x < lx ? icons[id].x : lx;
-    int x1 = icons[id].x + TILE_S;
-    if (lx + lw > x1)
-        x1 = lx + lw;
-    return hit(px, py, x0 - 6, icons[id].y - 4, (x1 - x0) + 12, TILE_S + CHAR_H + 16);
+    if (id < 0 || id >= DESK_COUNT) return 0;
+    return hit(px, py, desk[id].x, desk[id].y, desk_icon_w(), 4 + 32 + 6 + CHAR_H + 4);
 }
 
 /* The color icon for a Lucide application glyph (icons[].icon, kind_icon()). */
@@ -518,92 +487,58 @@ static int app_icon_for(int glyph) {
     case ICON_FILE_TEXT: return AI_DOCUMENT;    default: return AI_WINDOW;
     }
 }
-/* Desktop icons stand free on the wallpaper; a selection is a glass pane. */
-static void draw_app_tile(int x, int y, int id, int size, int selected) {
-    if (selected) {
-        glass_round(x - 8, y - 6, size + 16, size + CHAR_H + 20, 8, 1, COLOR_WHITE, 110, 110);
-        draw_round_frame(x - 8, y - 6, size + 16, size + CHAR_H + 20, 8, INK(0));
-    }
-    app_icon_draw(app_icon_for(icons[id].icon), x + (size - AI_BIG) / 2, y + (size - AI_BIG) / 2, AI_BIG);
-}
+
+static const int desk_ui_icon[DESK_COUNT] = {UI_ICON_A_DISK, UI_ICON_A_FILES, UI_ICON_A_TRASH};
 
 static void draw_desktop_icons(int selected) {
-    for (int i = 0; i < ICON_DESK_COUNT; i++) {
+    for (int i = 0; i < DESK_COUNT; i++) {
         int sel = (i == selected);
         int lx, ly, lw;
-        icon_label_pos(i, &lx, &ly, &lw);
-        draw_app_tile(icons[i].x, icons[i].y, i, TILE_S, sel);
-        draw_string(icons[i].label, lx + 1, ly + 1, INK(31));
-        draw_string(icons[i].label, lx, ly, INK(0));
+        desk_label_pos(i, &lx, &ly, &lw);
+        int iw = desk_icon_w();
+        if (sel && MODERN) kit_fill(desk[i].x, desk[i].y, iw, ly + CHAR_H + 6 - desk[i].y, 8, TK_LINE, 1);
+        ui_icon_draw(desk_ui_icon[i], desk[i].x + (iw - 32) / 2, desk[i].y + (MODERN ? 6 : 4), 32, TK_ICON, TK_DESKTOP);
+        if (sel) kit_fill(lx, ly, lw, CHAR_H + (MODERN ? 2 : 0), MODERN ? 4 : KIT_R_SQUARE, TK_ACCENT, 1);
+        draw_string(desk[i].label, lx + (MODERN ? 6 : 4), ly + (MODERN ? 1 : 0), sel ? TK_ON_ACCENT : TK_TEXT);
     }
 }
 
-/* The wallpaper is a bundled JPEG, decoded when the theme changes and kept in
- * RAM. It is scaled bilinearly to the screen and ordered-dithered into the
- * palette through a lazily filled nearest-color table. */
-static const uint8_t wall_bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
-static uint8_t near_lut[32768];
-static int near_lut_theme = -2;
-static uint8_t wall_near(int r, int g, int b) {
-    r = r < 0 ? 0 : r > 255 ? 255 : r;
-    g = g < 0 ? 0 : g > 255 ? 255 : g;
-    b = b < 0 ? 0 : b > 255 ? 255 : b;
-    int key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
-    uint8_t v = near_lut[key];
-    if (v == 255) { v = gfx_rgb((r & ~7) | 4, (g & ~7) | 4, (b & ~7) | 4); near_lut[key] = v; }
-    return v;
-}
-/* Paints wallpaper `wp` into dst (dw x dh, pitch dw). Returns 0 if the JPEG
- * cannot be decoded. The viewer's decode workspace is reused; both decodes
- * are synchronous and never nested. */
-static int wallpaper_paint(const Wallpaper *wp, uint8_t *dst, int dw, int dh) {
-    if (near_lut_theme != theme_id) { kmemset(near_lut, 255, sizeof near_lut); near_lut_theme = theme_id; }
-    ImageDecoded img;
-    if (image_decode(wp->jpeg, wp->bytes, (void *)(IMAGE_BASE + 0x400000), 0x300000, &img) != IMAGE_OK ||
-        img.channels < 1 || img.width < 2 || img.height < 2) return 0;
-    int sw = (int)img.width, sh = (int)img.height, ch = (int)img.channels;
-    const uint8_t *px = img.pixels;
-    for (int y = 0; y < dh; y++) {
-        int fy = y * (sh - 1) * 256 / (dh > 1 ? dh - 1 : 1), sy = fy >> 8, ty = fy & 255;
-        const uint8_t *row0 = px + (unsigned)sy * (unsigned)sw * (unsigned)ch;
-        const uint8_t *row1 = sy + 1 < sh ? row0 + (unsigned)sw * (unsigned)ch : row0;
-        uint8_t *out = dst + y * dw;
-        for (int x = 0; x < dw; x++) {
-            int fx = x * (sw - 1) * 256 / (dw > 1 ? dw - 1 : 1), sx = fx >> 8, tx = fx & 255;
-            const uint8_t *a = row0 + sx * ch, *b = sx + 1 < sw ? a + ch : a;
-            const uint8_t *c = row1 + sx * ch, *d = sx + 1 < sw ? c + ch : c;
-            int rgb[3];
-            for (int k = 0; k < 3; k++) {
-                int kk = ch >= 3 ? k : 0;
-                int top = a[kk] + (b[kk] - a[kk]) * tx / 256, bot = c[kk] + (d[kk] - c[kk]) * tx / 256;
-                rgb[k] = top + (bot - top) * ty / 256;
-            }
-            int dither = (int)wall_bayer[y & 3][x & 3] - 7;
-            out[x] = wall_near(rgb[0] + dither, rgb[1] + dither, rgb[2] + dither);
-        }
-    }
-    return 1;
-}
+/* The desktop is one token fill with an optional pattern drawn a step
+ * darker. Changing the desktop preset rewrites the token, so the cached
+ * frame only needs rebuilding when the style or pattern changes. */
 static void desktop_render(void) {
-    if (wallpaper_paint(&wallpapers[themes[theme_id].wallpaper], fb, fb_w, fb_h)) return;
-    /* Decode failure: a plain sky, so the desktop still works. */
-    draw_rect(0, 0, fb_w, fb_h, idx24(0x5B86B8));
+    draw_rect(0, 0, fb_w, fb_h, TK_DESKTOP);
+    if (ui_pattern == UI_PATTERN_NONE) return;
+    uint8_t ink = gfx_mix(TK_DESKTOP, TK_TEXT, 36);
+    if (ink == TK_DESKTOP) ink = TK_SHADOW;
+    if (ui_pattern == UI_PATTERN_DOTS) {
+        for (int y = 4; y < fb_h; y += 8)
+            for (int x = 4; x < fb_w; x += 8) put_pixel(x, y, ink);
+    } else {
+        for (int y = 15; y < fb_h; y += 16) draw_hline(0, y, fb_w, ink);
+        for (int x = 15; x < fb_w; x += 16) draw_vline(x, 0, fb_h, ink);
+    }
 }
 
 void draw_desktop(void) {
     uint8_t *cache = (uint8_t *)DESK_CACHE;
     int n = fb_w * fb_h;
-    if (desk_cache_theme != theme_id) {
+    int key = (ui_style << 8) | (ui_pattern << 4) | ui_desktop_id;
+    if (desk_cache_theme != key) {
         desktop_render();
         kmemcpy(cache, fb, n);
-        desk_cache_theme = theme_id;
+        desk_cache_theme = key;
         return;
     }
     kmemcpy(fb, cache, n);
 }
 
-/* Window menus: every window carries a File / Edit / Window strip under its
- * title. Pulldowns open from the front window's strip. */
+/* ---------- Menus ----------
+ * Each app kind declares its menu row as data: menus of items with a label
+ * (an '&' marks the mnemonic), a shortcut text, an action and flags. The
+ * shell draws the model in the window's menu row (Classic) or the top bar
+ * (Modern) and dispatches actions. The legacy File / Edit / Window action
+ * groups below remain the implementation of the shared actions. */
 enum {
     MENU_NONE = -1,
     MENU_FILE = 0,
@@ -611,21 +546,306 @@ enum {
     MENU_WINDOW,
     MENU_N
 };
+#define LEG(m, i) (0x100 | ((m) << 4) | (i))
+enum {
+    ACT_SEP = -1, ACT_NONE = 0,
+    ACT_NEW = LEG(MENU_FILE, 0), ACT_NEW_FOLDER = LEG(MENU_FILE, 1), ACT_OPEN = LEG(MENU_FILE, 2),
+    ACT_CLOSE = LEG(MENU_FILE, 3), ACT_SAVE = LEG(MENU_FILE, 4), ACT_DUPLICATE = LEG(MENU_FILE, 5),
+    ACT_PROPERTIES = LEG(MENU_FILE, 6), ACT_EMPTY_TRASH = LEG(MENU_FILE, 8),
+    ACT_CUT = LEG(MENU_EDITM, 0), ACT_COPY = LEG(MENU_EDITM, 1), ACT_PASTE = LEG(MENU_EDITM, 2),
+    ACT_FIND = LEG(MENU_EDITM, 3), ACT_REPLACE = LEG(MENU_EDITM, 4),
+    ACT_MINIMIZE = LEG(MENU_WINDOW, 0), ACT_MAXIMIZE = LEG(MENU_WINDOW, 1),
+    ACT_SHOW_DESKTOP = LEG(MENU_WINDOW, 2), ACT_ABOUT = LEG(MENU_WINDOW, 4), ACT_HELP = LEG(MENU_WINDOW, 5),
+    ACT_NEW_WINDOW = 0x200, ACT_SAVE_AS, ACT_UNDO, ACT_REDO, ACT_SELECT_ALL, ACT_FIND_NEXT,
+    ACT_OPEN_ITEM, ACT_NEW_FILE, ACT_RENAME, ACT_TRASH, ACT_REFRESH, ACT_FILTER,
+    ACT_GO_BACK, ACT_GO_FORWARD, ACT_GO_UP, ACT_GO_HOME, ACT_GO_DOCUMENTS, ACT_GO_PICTURES, ACT_GO_TRASH,
+    ACT_SORT_NAME, ACT_SORT_KIND, ACT_SORT_SIZE, ACT_SORT_MODIFIED, ACT_SORT_DESCENDING,
+    ACT_LINE_NUMBERS, ACT_RESTORE, ACT_MOVE, ACT_SIZE, ACT_SETTINGS, ACT_EXPORT_PDF,
+    ACT_RECENT_MENU, ACT_RECENT_CLEAR, ACT_COPY_PATH, ACT_NEW_GAME, ACT_REVERT, ACT_QUIT, ACT_DOC_PROPERTIES, ACT_TERM_CLEAR, ACT_TERM_BOTTOM,
+    ACT_RESTART, ACT_SHUTDOWN, ACT_DESK_OPEN, ACT_DESK_PROPERTIES, ACT_VIEW_ICONS, ACT_VIEW_DETAILS,
+    ACT_OPEN_WITH_MENU,
+    ACT_RECENT = 0x300 /* + index */,
+    ACT_OPEN_WITH = 0x380 /* + OW_* app */
+};
 
-static const char *bar_name[MENU_N] = {"File", "Edit", "Window"};
-static int bar_x[MENU_N]; /* offsets from the window's left edge */
-static int bar_w[MENU_N];
+typedef struct { const char *label; const char *key; int act; int flags; } MItem;
+#define MI_DANGER KIT_MENU_DANGER
+typedef struct { const char *name; const MItem *items; int n; } MMenu;
+#define MSEP {"-", "", ACT_SEP, 0}
+#define MN(name, items) {name, items, (int)(sizeof(items) / sizeof(items[0]))}
 
-static const char *m_file[] = {"New", "New Folder", "Open", "Close", "Save", "Duplicate", "Properties", "-", "Empty Trash"};
-static const char *m_edit[] = {"Cut", "Copy", "Paste", "Find...", "Replace..."};
-static const char *m_window[] = {"Minimize", "Maximize", "Show Desktop", "-", "About BaseOS", "Help"};
+static const MItem mi_help[] = {
+    {"&Help Topics", "F1", ACT_HELP, 0}, MSEP, {"&About BaseOS", "", ACT_ABOUT, 0},
+};
+static const MItem mi_files_file[] = {
+    {"&New Window", "Ctrl+N", ACT_NEW, 0}, {"New &Folder", "Ctrl+Shift+N", ACT_NEW_FOLDER, 0},
+    {"New Fi&le", "", ACT_NEW_FILE, 0}, MSEP,
+    {"&Open", "Enter", ACT_OPEN_ITEM, 0}, {"&Rename", "F2", ACT_RENAME, 0},
+    {"&Duplicate", "Ctrl+D", ACT_DUPLICATE, 0}, {"Move to &Trash", "Del", ACT_TRASH, 0},
+    {"Propert&ies", "Alt+Enter", ACT_PROPERTIES, 0}, MSEP,
+    {"&Empty Trash", "", ACT_EMPTY_TRASH, 0}, MSEP, {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
+};
+static const MItem mi_files_edit[] = {
+    {"Cu&t", "Ctrl+X", ACT_CUT, 0}, {"&Copy", "Ctrl+C", ACT_COPY, 0}, {"&Paste", "Ctrl+V", ACT_PASTE, 0},
+    MSEP, {"Copy Pat&h", "", ACT_COPY_PATH, 0}, MSEP, {"&Find", "Ctrl+F", ACT_FILTER, 0},
+};
+static const MItem mi_files_view[] = {
+    {"&Icons", "", ACT_VIEW_ICONS, KIT_MENU_RADIO}, {"De&tails", "", ACT_VIEW_DETAILS, KIT_MENU_RADIO}, MSEP,
+    {"By &Name", "Ctrl+1", ACT_SORT_NAME, KIT_MENU_RADIO}, {"By &Kind", "Ctrl+2", ACT_SORT_KIND, KIT_MENU_RADIO},
+    {"By &Size", "Ctrl+3", ACT_SORT_SIZE, KIT_MENU_RADIO}, {"By &Modified", "Ctrl+4", ACT_SORT_MODIFIED, KIT_MENU_RADIO},
+    MSEP, {"&Descending", "", ACT_SORT_DESCENDING, KIT_MENU_CHECK}, MSEP, {"&Refresh", "F5", ACT_REFRESH, 0},
+};
+static const MItem mi_files_go[] = {
+    {"&Back", "Alt+Left", ACT_GO_BACK, 0}, {"&Forward", "Alt+Right", ACT_GO_FORWARD, 0},
+    {"&Up", "Alt+Up", ACT_GO_UP, 0}, MSEP, {"&Home", "", ACT_GO_HOME, 0},
+    {"&Documents", "", ACT_GO_DOCUMENTS, 0}, {"&Pictures", "", ACT_GO_PICTURES, 0}, {"&Trash", "", ACT_GO_TRASH, 0},
+};
+static const MMenu mb_files[] = {
+    MN("&File", mi_files_file), MN("&Edit", mi_files_edit), MN("&View", mi_files_view),
+    MN("&Go", mi_files_go), MN("&Help", mi_help),
+};
+static const MItem mi_editor_file[] = {
+    {"&New", "Ctrl+N", ACT_NEW, 0}, {"New &Window", "Ctrl+Shift+N", ACT_NEW_WINDOW, 0},
+    {"&Open...", "Ctrl+O", ACT_OPEN, 0}, {"Open &Recent", "", ACT_RECENT_MENU, KIT_MENU_SUB}, MSEP,
+    {"&Save", "Ctrl+S", ACT_SAVE, 0}, {"Save &As...", "Ctrl+Shift+S", ACT_SAVE_AS, 0},
+    {"Re&vert to Saved", "", ACT_REVERT, 0}, MSEP,
+    {"Propert&ies", "Alt+Enter", ACT_DOC_PROPERTIES, 0}, MSEP,
+    {"&Close Window", "Ctrl+W", ACT_CLOSE, 0}, {"&Quit Editor", "Ctrl+Q", ACT_QUIT, 0},
+};
+static const MItem mi_editor_edit[] = {
+    {"&Undo", "Ctrl+Z", ACT_UNDO, 0}, {"&Redo", "Ctrl+Y", ACT_REDO, 0}, MSEP,
+    {"Cu&t", "Ctrl+X", ACT_CUT, 0}, {"&Copy", "Ctrl+C", ACT_COPY, 0}, {"&Paste", "Ctrl+V", ACT_PASTE, 0},
+    {"Select &All", "Ctrl+A", ACT_SELECT_ALL, 0}, MSEP,
+    {"&Find...", "Ctrl+F", ACT_FIND, 0}, {"Find &Next", "F3", ACT_FIND_NEXT, 0}, {"R&eplace...", "Ctrl+H", ACT_REPLACE, 0},
+};
+static const MItem mi_editor_view[] = {
+    {"Line &Numbers", "", ACT_LINE_NUMBERS, KIT_MENU_CHECK},
+};
+static const MMenu mb_editor[] = {
+    MN("&File", mi_editor_file), MN("&Edit", mi_editor_edit), MN("&View", mi_editor_view), MN("&Help", mi_help),
+};
+static const MItem mi_doc_file[] = {
+    {"&New", "Ctrl+N", ACT_NEW, 0}, {"&Open...", "Ctrl+O", ACT_OPEN, 0},
+    {"Open &Recent", "", ACT_RECENT_MENU, KIT_MENU_SUB}, MSEP,
+    {"&Save", "Ctrl+S", ACT_SAVE, 0}, MSEP, {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
+};
+static const MItem mi_doc_edit[] = {
+    {"&Undo", "Ctrl+Z", ACT_UNDO, 0}, {"&Redo", "Ctrl+Y", ACT_REDO, 0}, MSEP,
+    {"Cu&t", "Ctrl+X", ACT_CUT, 0}, {"&Copy", "Ctrl+C", ACT_COPY, 0}, {"&Paste", "Ctrl+V", ACT_PASTE, 0},
+    {"Select &All", "Ctrl+A", ACT_SELECT_ALL, 0},
+};
+static const MItem mi_writer_edit[] = {
+    {"&Undo", "Ctrl+Z", ACT_UNDO, 0}, {"&Redo", "Ctrl+Y", ACT_REDO, 0}, MSEP,
+    {"Cu&t", "Ctrl+X", ACT_CUT, 0}, {"&Copy", "Ctrl+C", ACT_COPY, 0}, {"&Paste", "Ctrl+V", ACT_PASTE, 0},
+    {"Select &All", "Ctrl+A", ACT_SELECT_ALL, 0}, MSEP,
+    {"&Find...", "Ctrl+F", ACT_FIND, 0}, {"R&eplace...", "Ctrl+H", ACT_REPLACE, 0},
+};
+static const MMenu mb_writer[] = { MN("&File", mi_doc_file), MN("&Edit", mi_writer_edit), MN("&Help", mi_help) };
+static const MMenu mb_sheet[] = { MN("&File", mi_doc_file), MN("&Edit", mi_doc_edit), MN("&Help", mi_help) };
+static const MItem mi_paint_file[] = {
+    {"&New", "Ctrl+N", ACT_NEW, 0}, {"&Open...", "Ctrl+O", ACT_OPEN, 0}, MSEP,
+    {"&Save", "Ctrl+S", ACT_SAVE, 0}, MSEP, {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
+};
+static const MItem mi_paint_edit[] = { {"&Undo", "Ctrl+Z", ACT_UNDO, 0}, {"&Redo", "Ctrl+Y", ACT_REDO, 0} };
+static const MMenu mb_paint[] = { MN("&File", mi_paint_file), MN("&Edit", mi_paint_edit), MN("&Help", mi_help) };
+static const MItem mi_term_shell[] = {
+    {"&New Window", "Ctrl+N", ACT_NEW, 0}, MSEP, {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
+};
+static const MItem mi_term_edit[] = { {"&Copy", "Ctrl+C", ACT_COPY, 0}, {"&Paste", "Ctrl+V", ACT_PASTE, 0} };
+static const MItem mi_term_view[] = {
+    {"&Clear", "", ACT_TERM_CLEAR, 0}, {"Scroll to &Bottom", "", ACT_TERM_BOTTOM, 0},
+};
+static const MMenu mb_term[] = {
+    MN("&Shell", mi_term_shell), MN("&Edit", mi_term_edit), MN("&View", mi_term_view), MN("&Help", mi_help),
+};
+static const MItem mi_game[] = {
+    {"&New Game", "Ctrl+N", ACT_NEW, 0}, MSEP, {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
+};
+static const MMenu mb_game[] = { MN("&Game", mi_game), MN("&Help", mi_help) };
+static const MItem mi_calc_file[] = { {"&Close Window", "Ctrl+W", ACT_CLOSE, 0} };
+static const MItem mi_calc_edit[] = { {"&Copy", "Ctrl+C", ACT_COPY, 0}, {"&Paste", "Ctrl+V", ACT_PASTE, 0} };
+static const MMenu mb_calc[] = { MN("&File", mi_calc_file), MN("&Edit", mi_calc_edit), MN("&Help", mi_help) };
+static const MItem mi_viewer_file[] = {
+    {"&Open...", "Ctrl+O", ACT_OPEN, 0}, MSEP, {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
+};
+static const MMenu mb_viewer[] = { MN("&File", mi_viewer_file), MN("&Help", mi_help) };
+static const MItem mi_save_file[] = {
+    {"&New", "Ctrl+N", ACT_NEW, 0}, {"&Save", "Ctrl+S", ACT_SAVE, 0}, MSEP,
+    {"&Close Window", "Ctrl+W", ACT_CLOSE, 0},
+};
+static const MMenu mb_save[] = { MN("&File", mi_save_file), MN("&Help", mi_help) };
+static const MItem mi_plain_file[] = { {"&Close Window", "Ctrl+W", ACT_CLOSE, 0} };
+static const MMenu mb_plain[] = { MN("&File", mi_plain_file), MN("&Help", mi_help) };
+static const MItem mi_window[] = {
+    {"&Restore", "", ACT_RESTORE, 0}, {"&Move", "", ACT_MOVE, 0}, {"&Size", "", ACT_SIZE, 0},
+    {"Mi&nimize", "", ACT_MINIMIZE, 0}, {"Ma&ximize", "", ACT_MAXIMIZE, 0}, MSEP,
+    {"&Close", "Alt+F4", ACT_CLOSE, 0},
+};
+static const MItem mi_files_context[] = {
+    {"&Open", "Enter", ACT_OPEN_ITEM, 0}, {"Open &With", "", ACT_OPEN_WITH_MENU, KIT_MENU_SUB}, MSEP,
+    {"&Rename", "F2", ACT_RENAME, 0}, {"&Duplicate", "Ctrl+D", ACT_DUPLICATE, 0},
+    {"Move to &Trash", "Del", ACT_TRASH, MI_DANGER}, MSEP,
+    {"Cu&t", "Ctrl+X", ACT_CUT, 0}, {"&Copy", "Ctrl+C", ACT_COPY, 0}, {"Copy Pat&h", "", ACT_COPY_PATH, 0}, MSEP,
+    {"Propert&ies", "Alt+Enter", ACT_PROPERTIES, 0},
+};
+static const MItem mi_folder_context[] = {
+    {"New &Folder", "Ctrl+Shift+N", ACT_NEW_FOLDER, 0}, {"New Fi&le", "", ACT_NEW_FILE, 0}, MSEP,
+    {"&Paste", "Ctrl+V", ACT_PASTE, 0}, MSEP, {"&Refresh", "F5", ACT_REFRESH, 0},
+};
+static const MItem mi_desktop_context[] = {
+    {"&Open Files", "", ACT_GO_HOME, 0}, MSEP, {"&Show Desktop", "Super+D", ACT_SHOW_DESKTOP, 0},
+    {"&Settings...", "", ACT_SETTINGS, 0},
+};
 
-static const char **menu_items[MENU_N] = {m_file, m_edit, m_window};
-static const int menu_count[MENU_N] = {9, 5, 6};
+static int win_kbd_mode, win_kbd_slot = -1;  /* Alt+Space Move (1) or Size (2) */
+static int menu_bar_focus = -1;              /* Alt or F10: row focused, no pulldown */
+#define MENU_BAR 101
+static int switcher_on;                      /* Alt+Tab panel is up */
+static int key_ext;                          /* the key event carried the E0 prefix */
+static int super_down, super_used;           /* Super held; a shortcut consumed it */
+static int alt_tap;                          /* Alt pressed with nothing else yet */
+static int drag_outline_x, drag_outline_y;   /* outline position while dragging */
+
+static const MItem mi_desktop_file[] = {
+    {"&Open Home", "", ACT_GO_HOME, 0}, {"&Settings...", "", ACT_SETTINGS, 0}, MSEP,
+    {"Show &Desktop", "Super+D", ACT_SHOW_DESKTOP, 0},
+};
+static const MMenu mb_desktop[] = { MN("&File", mi_desktop_file), MN("&Help", mi_help) };
+static const MItem mi_system[] = {
+    {"&About BaseOS", "", ACT_ABOUT, 0}, MSEP, {"&Settings...", "", ACT_SETTINGS, 0},
+    {"Show &Desktop", "Super+D", ACT_SHOW_DESKTOP, 0}, MSEP,
+    {"&Restart", "", ACT_RESTART, 0}, {"Shut &Down", "", ACT_SHUTDOWN, 0},
+};
+static void menu_open_bar(int m);
+static void menu_open_context(const MItem *items, int n, int x, int y);
+static void menu_open_window(int slot);
+
+/* Recent files: the shell remembers the last documents opened in any app. */
+#define RECENT_N 8
+typedef struct { int id; unsigned identity; } RecentFile;
+static RecentFile recent[RECENT_N];
+static int recent_n;
+static MItem mi_recent[RECENT_N + 2];
+static int mi_recent_n;
+static void recent_build_menu(void);
+
+/* Open With: the apps that can open a file, its usual app first. The list
+ * is built for one item when the submenu or the Properties dropdown opens. */
+enum { OW_EDITOR, OW_WRITER, OW_SHEET, OW_BROWSER, OW_VIEWER, OW_PLAYER, OW_N };
+static MItem mi_open_with[OW_N];
+static int mi_open_with_n, ow_target = -1;
+static unsigned ow_identity;
+static int ow_build(int id);
+
+static int front_kind(void);
+static int menu_kind(void);
+
+/* The menu row for a window kind (WK_* values; see enum WinKind). */
+static const MMenu *menubar_for(int kind, int *n);
+
+static const MMenu *bar_menus;
+static int bar_n;
+static int bar_x[8]; /* offsets from the row's left edge */
+static int bar_w[8];
+
+/* Open popup chain: [0] is a pulldown, context or window menu, [1] a
+ * submenu of [0]. */
+typedef struct { const MItem *items; int n; int x, y, w, h; int sel; } Popup;
+static Popup popup[2];
+static int popup_n;
+#define MENU_CONTEXT 100  /* open_menu while a context or window menu is up */
+
+static int mi_is_sep(const MItem *it) { return it->act == ACT_SEP; }
+
+/* Label without its '&' marker, and the index of the mnemonic letter. */
+static void mi_text(const char *label, char *out, int cap, int *mnemonic) {
+    int n = 0;
+    if (mnemonic) *mnemonic = -1;
+    for (int i = 0; label[i] && n < cap - 1; i++) {
+        if (label[i] == '&' && label[i + 1]) {
+            if (mnemonic) *mnemonic = n;
+            continue;
+        }
+        out[n++] = label[i];
+    }
+    out[n] = 0;
+}
+
+static char mi_mnemonic(const char *label) {
+    for (int i = 0; label[i]; i++)
+        if (label[i] == '&' && label[i + 1]) {
+            char c = label[i + 1];
+            return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
+        }
+    return 0;
+}
+
+static void menu_bar_init(void) {
+    bar_menus = menubar_for(menu_kind(), &bar_n);
+    if (bar_n > 8) bar_n = 8;
+    int x = MODERN ? 0 : 3;
+    for (int i = 0; i < bar_n; i++) {
+        char t[32];
+        mi_text(bar_menus[i].name, t, sizeof t, 0);
+        bar_x[i] = x;
+        bar_w[i] = ui_string_w(t) + (MODERN ? 18 : 16);
+        x += bar_w[i] + (MODERN ? 2 : 0);
+    }
+}
+
+static int popup_item_h(const MItem *it) { return mi_is_sep(it) ? kit_menu_sep_h() : MENU_ROW; }
+
+static void popup_size(Popup *p) {
+    int w = ui_theme.menu_min_w;
+    for (int i = 0; i < p->n; i++) {
+        char t[96];
+        mi_text(p->items[i].label, t, sizeof t, 0);
+        int iw = kit_menu_width(t, p->items[i].key) + ((p->items[i].flags & KIT_MENU_SUB) ? 18 : 0);
+        if (iw > w) w = iw;
+    }
+    if (w > ui_theme.menu_max_w) w = ui_theme.menu_max_w;
+    p->w = w;
+    p->h = 2 * kit_menu_pad();
+    for (int i = 0; i < p->n; i++) p->h += popup_item_h(&p->items[i]);
+}
+
+/* Place a popup at x,y, flipping left or up so it stays on screen. */
+static void popup_place(Popup *p, int x, int y, int flip_x) {
+    popup_size(p);
+    if (x + p->w > fb_w - 2) x = flip_x >= 0 ? flip_x - p->w : fb_w - 2 - p->w;
+    if (x < 2) x = 2;
+    if (y + p->h > fb_h - 2) y = fb_h - 2 - p->h;
+    if (y < 2) y = 2;
+    p->x = x;
+    p->y = y;
+}
+
+static int popup_item_y(const Popup *p, int i) {
+    int y = p->y + kit_menu_pad();
+    for (int k = 0; k < i; k++) y += popup_item_h(&p->items[k]);
+    return y;
+}
+
+static int popup_item_at(const Popup *p, int px, int py) {
+    if (!hit(px, py, p->x, p->y, p->w, p->h)) return -1;
+    for (int i = 0; i < p->n; i++) {
+        int y = popup_item_y(p, i);
+        if (py >= y && py < y + popup_item_h(&p->items[i])) return mi_is_sep(&p->items[i]) ? -1 : i;
+    }
+    return -1;
+}
+
 static void front_window_origin(int *x, int *y);
 
 static int menu_item_enabled(int m, int item);
-static int front_kind(void);
+static int act_enabled(int act);
+static int act_checked(int act);
+static void act_run(int act);
+static void desk_open(int i);
+static void settings_key(void);
+static void switcher_cancel(void);
+static void win_kbd_begin(void);
+static void display_click(void);
 static void launcher_open(void);
 static void saver_start(void);
 static void show_desktop(void);
@@ -634,6 +854,7 @@ static const char *win_display_title(int slot, char *buffer);
 static void draw_logo(int x, int y, int size);
 static void icon_open(int id);
 static void open_fs_file(int id);
+static void recent_add(int id);
 static int snake_is_front(void);
 static int wordle_is_front(void);
 static int clip_is_number(void);
@@ -651,131 +872,128 @@ static int fm_history_target(int dir);
 static void fm_navigate(int id);
 static void theme_load(void);
 static void draw_about(int wx, int wy, int ww, int wh, int fl);
+static int properties_h(void);
+static void handle_properties_click(int wx, int wy, int ww, int wh);
+static void properties_key(void);
+static void handle_about_click(int wx, int wy, int ww, int wh);
 static void draw_settings(int wx, int wy, int ww, int wh, int fl);
 static int settings_window_h(void);
+static void settings_scroll_by(int dy);
 static void handle_settings_click(int wx, int wy, int ww, int wh);
-static void theme_set(int id);
 static void saver_save(void);
 static void preferences_retry(void);
 static void boot_splash(void);
 static void start_open_dialog(int pics_only);
 
-/* File item 0 reads "New Game" while Snake or Wordle is the front window. */
-static const char *menu_label(int m, int i) {
-    if (m == MENU_FILE && i == 0 && (snake_is_front() || wordle_is_front()))
-        return "New Game";
-    return menu_items[m][i];
+/* Modern top bar: the system button, the front app's name in bold, then its
+ * menus, all 22px items 3px below the top. */
+static const char *win_app_name(int kind);
+#define TOPBAR_SYS_X 6
+#define TOPBAR_SYS_W 28
+static const char *topbar_app_name(void) {
+    int k = menu_kind();
+    return k < 0 ? "Desktop" : win_app_name(k);
 }
+static int topbar_app_x(void) { return TOPBAR_SYS_X + TOPBAR_SYS_W + 2; }
+static int topbar_app_w(void) { return kit_text_w(topbar_app_name(), 1) + 18; }
 
-static void menu_bar_init(void) {
-    int x = 6;
-    for (int i = 0; i < MENU_N; i++) {
-        bar_x[i] = x;
-        bar_w[i] = ui_string_w(bar_name[i]) + 20;
-        x += bar_w[i];
-    }
-}
-
-static int menu_pulldown_w(int m) {
-    int w = 80;
-    for (int i = 0; i < menu_count[m]; i++) {
-        int tw = ui_string_w(menu_label(m, i)) + 24;
-        if (tw > w)
-            w = tw;
-    }
-    return w;
-}
-
-static void menu_geom(int m, int *x, int *y, int *w, int *h) {
+/* Menu row origin: inside the front window (Classic) or the top bar. */
+static void menu_row_origin(int *x, int *y, int *h) {
+    if (MODERN) { *x = topbar_app_x() + topbar_app_w() + 2; *y = 3; *h = 22; return; }
     int wx, wy;
     front_window_origin(&wx, &wy);
-    *x = wx + bar_x[m];
-    *y = wy + TITLE_H - 1;
-    *w = menu_pulldown_w(m);
-    if (*x + *w > fb_w - 4) *x = fb_w - 4 - *w;
-    *h = 8;
-    for (int i = 0; i < menu_count[m]; i++)
-        *h += (menu_label(m, i)[0] == '-') ? 9 : MENU_ROW;
+    *x = wx + 1;
+    *y = wy + TITLE_BAR;
+    *h = WMENU_H - 2;
 }
 
-static int menu_item_at(int m, int px, int py) {
-    int x, y, w, h;
-    menu_geom(m, &x, &y, &w, &h);
-    if (!hit(px, py, x, y, w, h))
-        return -1;
-    int iy = y + 4;
-    for (int i = 0; i < menu_count[m]; i++) {
-        int rh = (menu_label(m, i)[0] == '-') ? 9 : MENU_ROW;
-        if (hit(px, py, x, iy, w, rh) && menu_label(m, i)[0] != '-')
-            return i;
-        iy += rh;
+/* Open pulldown m of the current menu row. */
+static void menu_open(int m) {
+    menu_bar_init();
+    if (m < 0 || m >= bar_n) return;
+    int rx, ry, rh;
+    menu_row_origin(&rx, &ry, &rh);
+    Popup *p = &popup[0];
+    p->items = bar_menus[m].items;
+    p->n = bar_menus[m].n;
+    p->sel = -1;
+    popup_place(p, rx + bar_x[m], MODERN ? 30 : ry + rh + 1, -1);
+    popup_n = 1;
+}
+
+static void menu_open_popup(const MItem *items, int n, int x, int y) {
+    Popup *p = &popup[0];
+    p->items = items;
+    p->n = n;
+    p->sel = -1;
+    popup_place(p, x, y, x);
+    popup_n = 1;
+}
+
+static int files_selected_item(void);
+static void menu_open_sub(int parent) {
+    Popup *p = &popup[0];
+    if (parent < 0 || parent >= p->n || !(p->items[parent].flags & KIT_MENU_SUB)) return;
+    if (!act_enabled(p->items[parent].act)) return;
+    Popup *s = &popup[1];
+    if (p->items[parent].act == ACT_OPEN_WITH_MENU) {
+        ow_build(files_selected_item());
+        s->items = mi_open_with;
+        s->n = mi_open_with_n;
+    } else {
+        if (p->items[parent].act == ACT_RECENT_MENU) recent_build_menu();
+        s->items = mi_recent;
+        s->n = mi_recent_n;
     }
-    return -1;
+    s->sel = -1;
+    popup_place(s, p->x + p->w - 4, popup_item_y(p, parent) - kit_menu_pad() - 1, p->x + 4);
+    popup_n = 2;
 }
 
 static uint32_t frame_count = 0;
 
 /* "Thu Oct 15  20:34" for the taskbar clock. */
-static void clock_text(char *clk) {
-    RtcTime now;
-    rtc_read(&now);
-    int n = 0;
-    static const char *dshort[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-    const char *d = dshort[now.wday];
-    while (*d) clk[n++] = *d++;
-    clk[n++] = ' ';
-    const char *mn = rtc_month_name[now.month - 1];
-    for (int i = 0; i < 3 && mn[i]; i++) clk[n++] = mn[i];
-    clk[n++] = ' ';
-    char t[4];
-    fmt_uint(t, (unsigned)now.day);
-    for (int i = 0; t[i]; i++) clk[n++] = t[i];
-    clk[n++] = ' ';
-    clk[n++] = ' ';
-    fmt_pad2(t, now.hour);
-    clk[n++] = t[0]; clk[n++] = t[1];
-    clk[n++] = ':';
-    fmt_pad2(t, now.min);
-    clk[n++] = t[0]; clk[n++] = t[1];
-    clk[n] = 0;
-}
 
-static void draw_pulldown(int open_menu, int menu_sel) {
-    if (open_menu < 0)
-        return;
-
-    int x, y, w, h;
-    menu_geom(open_menu, &x, &y, &w, &h);
-    draw_shadow(x, y, w, h);
-    draw_round_rect(x, y, w, h, 7, INK(13));
-    draw_round_rect(x + 1, y + 1, w - 2, h - 2, 6, INK(0));
-
-    int iy = y + 4;
-    for (int i = 0; i < menu_count[open_menu]; i++) {
-        const char *it = menu_label(open_menu, i);
-        if (it[0] == '-') {
-            draw_hline(x + 8, iy + 4, w - 16, ui_chrome_dk);
-            iy += 9;
-            continue;
-        }
-        int enabled = menu_item_enabled(open_menu, i);
-        int inv = (i == menu_sel) && enabled;
-        if (inv)
-            draw_round_rect(x + 4, iy, w - 8, MENU_ROW, 4, ui_accent);
-        int ty = iy + (MENU_ROW - CHAR_H) / 2;
-        uint8_t fg = inv ? ui_on_accent : (enabled ? ui_text : ui_text_dim);
-        draw_string(it, x + 14, ty, fg);
-        iy += MENU_ROW;
+static int alt_down;
+/* Draw a label with its mnemonic underlined while Alt is held. */
+static void draw_mnemonic(const char *label, int x, int y, uint8_t ink, int maxw, int show) {
+    char t[96];
+    int mn;
+    mi_text(label, t, sizeof t, &mn);
+    kit_text(t, x, y, ink, maxw, 0);
+    if (show && mn >= 0) {
+        char pre[96];
+        for (int i = 0; i < mn; i++) pre[i] = t[i];
+        pre[mn] = 0;
+        char one[2] = {t[mn], 0};
+        int ux = x + ui_string_w(pre);
+        draw_hline(ux, y + 15, ui_string_w(one), ink);
     }
 }
 
-/* ---------- PS/2 mouse (polled) ---------- */
+static void draw_popup(const Popup *p) {
+    kit_menu_frame(p->x, p->y, p->w, p->h);
+    for (int i = 0; i < p->n; i++) {
+        const MItem *it = &p->items[i];
+        int y = popup_item_y(p, i);
+        if (mi_is_sep(it)) { kit_menu_sep(p->x, y, p->w); continue; }
+        int en = act_enabled(it->act);
+        int st = (i == p->sel ? KIT_HOVER : 0) | (en ? 0 : KIT_DISABLED) |
+                 ((it->flags & (KIT_MENU_CHECK | KIT_MENU_RADIO)) && act_checked(it->act) ? KIT_ON : 0);
+        /* Items always underline their access letter, as in the design. */
+        kit_menu_item(p->x, y, p->w, it->label, it->key, it->flags, st);
+    }
+}
 
-static int mouse_x;
-static int mouse_y;
-static int mouse_left = 0;
-static int mouse_right = 0;
-static int mouse_moved = 0;
+static void draw_pulldown(int open_menu, int menu_sel) {
+    (void)menu_sel;
+    if (open_menu < 0)
+        return;
+    for (int i = 0; i < popup_n; i++) draw_popup(&popup[i]);
+}
+
+
+/* ---------- PS/2 mouse (polled) ---------- */
 
 static uint32_t input_sample_ticks;
 static int input_routing, input_cursor_moved, input_tail_pending;
@@ -831,7 +1049,6 @@ void cursor_save_draw(void) {
 /* ---------- Keyboard (polled) ---------- */
 
 static int shift_down = 0;
-static int alt_down;
 static int ctrl_down = 0;
 static uint8_t key_sc = 0;
 static char key_char = 0;
@@ -928,7 +1145,7 @@ typedef struct {
 typedef struct { unsigned size,hash_a,hash_b; } EditorBinding;
 typedef struct { unsigned valid; EditorBinding source; } EditorSource;
 typedef struct {
-    int open,replace_mode,focus,field,exact,position[2],selected[2];
+    int open,replace_mode,focus,field,exact,whole,position[2],selected[2];
     char text[2][64],message[64];
 } EditorSearch;
 typedef struct {
@@ -945,6 +1162,7 @@ typedef struct {
     int files_total;
     FileViewOptions files_view;
     int filter_open, filter_focus, filter_select_all;
+    int files_details;       /* detail rows instead of icon tiles */
     int hist[12], hist_n, hist_pos;
     unsigned hist_identity[12];
     uint32_t last_click_frame;
@@ -991,6 +1209,7 @@ _Static_assert(sizeof(WindowState) * MAX_WIN < EDITOR_CAPACITY - 2 * EDIT_BUF_SI
 #define fm_count (window_state[context_slot].count)
 #define fm_total (window_state[context_slot].files_total)
 #define fm_view (window_state[context_slot].files_view)
+#define fm_details (window_state[context_slot].files_details)
 #define fm_filter_open (window_state[context_slot].filter_open)
 #define fm_filter_focus (window_state[context_slot].filter_focus)
 #define fm_filter_select_all (window_state[context_slot].filter_select_all)
@@ -1120,7 +1339,9 @@ int spreadsheet_clipboard_get(char *text, unsigned capacity, unsigned *generatio
 #define TERM_WIN_W   640
 #define TERM_WIN_H   400
 #define TERM_PAD     12
-#define TERM_FG      gfx_gray(0xE8)
+#define TERM_BG      ((uint8_t)(PAL_ANSI + 0))
+#define TERM_FG      ((uint8_t)(PAL_ANSI + 7))
+#define TERM_ANSI(i) ((uint8_t)(PAL_ANSI + (i)))
 
 #define CALC_W       280
 #define CALC_H       408
@@ -1147,7 +1368,7 @@ typedef struct {
 } CalcKey;
 
 static const CalcKey calc_keys[] = {
-    {'C', 0, 0},
+    {'C', 0, 0}, {'E', 0, 1}, {'B', 0, 2}, {'N', 0, 3},
     {'7', 1, 0}, {'8', 1, 1}, {'9', 1, 2}, {'/', 1, 3},
     {'4', 2, 0}, {'5', 2, 1}, {'6', 2, 2}, {'*', 2, 3},
     {'1', 3, 0}, {'2', 3, 1}, {'3', 3, 2}, {'-', 3, 3},
@@ -1158,6 +1379,11 @@ static const CalcKey calc_keys[] = {
 static int open_dlg = 0;
 static int name_dlg = 0;
 static int name_failed;
+static int name_target = 0;
+static char name_buf[FS_NAME_LEN];
+static int name_len = 0, name_sel, name_caret; /* name_sel: selected stem length from 0 */
+static int name_focus, name_owner, name_owner_seq;
+static unsigned name_pdf_paper;
 static const char *name_failure_message;
 /* A close request owns a window incarnation, never whichever app draws last. */
 static int edit_close_owner = -1, edit_close_seq, edit_close_kind;
@@ -1212,7 +1438,11 @@ static int fm_rename_len = 0;
 
 static int preferences_prepare_shutdown(void);
 static int win_open(int kind);
+/* Restart runs the same save path as Shut Down and resets at the end. */
+static int power_restart;
 static void do_shutdown(void) {
+    int restart = power_restart;
+    power_restart = 0;
     if (preferences_prepare_shutdown() < 0) {
         if (win_open(WK_SETTINGS) < 0)
             session_status="Shutdown paused. Open Settings after closing a window.";
@@ -1240,7 +1470,12 @@ static void do_shutdown(void) {
         dirty = 1;
         return; /* Keep unsaved work available after a failed flush. */
     }
+    if (restart) kernel_restart();
     kernel_power_off();
+}
+static void do_restart(void) {
+    power_restart = 1;
+    do_shutdown();
 }
 
 static int find_open_kind(int kind) {
@@ -1267,18 +1502,25 @@ static void front_window_origin(int *x, int *y) {
     *x = f >= 0 ? wins[f].x : 8;
     *y = f >= 0 ? wins[f].y : 0;
 }
-/* Menu strip hit test on the front window: the menu index under the pointer. */
 static int win_has_menu(int kind) {
-    return kind != WK_ABOUT && kind != WK_HELP && kind != WK_HELLO && kind != WK_PROPERTIES;
+    return kind != WK_ABOUT && kind != WK_PROPERTIES;
 }
+/* Fixed-size information windows: a close button only, no snapping. */
+static int win_is_dialog(int kind) {
+    return kind == WK_ABOUT || kind == WK_PROPERTIES;
+}
+/* The menu row item under the pointer, or -1. Classic rows live inside the
+ * front window; Modern shows the front window's menus in the top bar. */
 static int win_menu_at(int px, int py) {
-    int f = win_front();
-    if (f < 0) return -1;
-    Win *w = &wins[f];
-    if (!win_has_menu(w->kind)) return -1;
-    if (!hit(px, py, w->x, w->y + TITLE_BAR, w->w, WMENU_H)) return -1;
-    for (int i = 0; i < MENU_N; i++)
-        if (hit(px, py, w->x + bar_x[i], w->y + TITLE_BAR, bar_w[i], WMENU_H)) return i;
+    if (!MODERN) {
+        int f = win_front();
+        if (f < 0 || !win_has_menu(wins[f].kind)) return -1;
+    }
+    menu_bar_init();
+    int rx, ry, rh;
+    menu_row_origin(&rx, &ry, &rh);
+    for (int i = 0; i < bar_n; i++)
+        if (hit(px, py, rx + bar_x[i], ry, bar_w[i], rh)) return i;
     return -1;
 }
 
@@ -1337,38 +1579,69 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h);
 static void win_minimum(Win *w, int *mw, int *mh) {
     if (w->kind == WK_EDIT || w->kind == WK_FILES || w->kind == WK_TERM) { *mw = 360; *mh = 200; }
     else if(w->kind==WK_NATIVE){*mw=240;*mh=180;}
+    else if (w->kind == WK_SETTINGS) { *mw = 600; *mh = 320; }  /* the page scrolls */
     else if(w->kind==WK_VIEW){*mw=IMAGE_VIEWER_MIN_W+2;*mh=IMAGE_VIEWER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_BROWSER){*mw=BROWSER_MIN_W+2;*mh=BROWSER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_PLAYER){*mw=PLAYER_MIN_W+2;*mh=PLAYER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_WRITER){*mw=WRITER_MIN_W+2;*mh=WRITER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_SPREADSHEET){*mw=SPREADSHEET_MIN_W+2;*mh=SPREADSHEET_MIN_H+TITLE_H+2;}
     else { int x, y; layout_window(w->kind, &x, &y, mw, mh); }
+    /* Every window keeps at least a 240x120 client area. */
+    if (*mw < 242) *mw = 242;
+    if (*mh < 120 + TITLE_H + 1) *mh = 120 + TITLE_H + 1;
+}
+
+/* Window states other than normal: maximized, or snapped to a screen half.
+ * A maximized window's border falls just outside the work area. */
+enum { SNAP_NONE, SNAP_MAX, SNAP_LEFT, SNAP_RIGHT };
+static void win_snap_rect(int state, int *x, int *y, int *w, int *h) {
+    int top = MENUBAR_H, work = TASKBAR_Y - MENUBAR_H;
+    if (state == SNAP_MAX) {
+        *x = -1; *w = fb_w + 2;
+        *y = top - 1; *h = MODERN ? work + 1 : work + 2;
+        return;
+    }
+    int half = fb_w / 2;
+    *x = state == SNAP_RIGHT ? half : 0;
+    *w = state == SNAP_RIGHT ? fb_w - half : half;
+    *y = top; *h = work;
 }
 static void win_clamp(Win *w) {
+    if (w->maximized) { win_snap_rect(w->maximized, &w->x, &w->y, &w->w, &w->h); return; }
     int mw, mh; win_minimum(w, &mw, &mh);
     if (w->w < mw) w->w = mw;
     if (w->h < mh) w->h = mh;
-    if (w->w > fb_w - 4) w->w = fb_w - 4;
-    if (w->h > TASKBAR_Y - MENUBAR_H - 4) w->h = TASKBAR_Y - MENUBAR_H - 4;
-    if (w->x < 2) w->x = 2;
-    if (w->y < MENUBAR_H + 2) w->y = MENUBAR_H + 2;
-    if (w->x + w->w > fb_w - 2) w->x = fb_w - 2 - w->w;
-    if (w->y + w->h > TASKBAR_Y - 2) w->y = TASKBAR_Y - 2 - w->h;
+    if (w->w > fb_w) w->w = fb_w;
+    if (w->h > TASKBAR_Y - MENUBAR_H) w->h = TASKBAR_Y - MENUBAR_H;
+    if (w->x + w->w > fb_w) w->x = fb_w - w->w;
+    if (w->y + w->h > TASKBAR_Y) w->y = TASKBAR_Y - w->h;
+    if (w->x < 0) w->x = 0;
+    if (w->y < MENUBAR_H) w->y = MENUBAR_H;
 }
+/* mode 0 toggles maximized, 1 and 2 toggle the left and right halves,
+ * 3 restores. */
 static void win_arrange(int i, int mode) {
-    if (i < 0) return;
+    if (i < 0 || i >= MAX_WIN || !wins[i].open) return;
     Win *w = &wins[i];
-    if (!w->maximized) { w->old_x=w->x; w->old_y=w->y; w->old_w=w->w; w->old_h=w->h; }
-    if (!mode && w->maximized) {
-        w->x=w->old_x; w->y=w->old_y; w->w=w->old_w; w->h=w->old_h; w->maximized=0;
-    } else {
-        w->maximized=1;
-        w->x = mode == 2 ? fb_w / 2 : 2;
-        w->y = MENUBAR_H + 2;
-        w->w = mode ? fb_w / 2 - 4 : fb_w - 4;
-        w->h = TASKBAR_Y - MENUBAR_H - 4;
-    }
-    win_clamp(w); dirty=1;
+    int target = mode == 0 ? SNAP_MAX : mode == 1 ? SNAP_LEFT : mode == 2 ? SNAP_RIGHT : SNAP_NONE;
+    if (target == w->maximized) target = SNAP_NONE;
+    if (!w->maximized) { w->old_x = w->x; w->old_y = w->y; w->old_w = w->w; w->old_h = w->h; }
+    if (target == SNAP_NONE) {
+        if (w->maximized) { w->x = w->old_x; w->y = w->old_y; w->w = w->old_w; w->h = w->old_h; }
+        w->maximized = SNAP_NONE;
+    } else w->maximized = target;
+    win_clamp(w);
+    dirty = 1;
+}
+
+/* Edge magnetism: a moving window's edges stick to the work area edges. */
+static void win_snap_edges(int *x, int *y, int w, int h) {
+    if (!(win_options & WINOPT_SNAP) || win_snap_distance <= 0) return;
+    int d = win_snap_distance;
+    if (*x < d && *x > -d) *x = 0;
+    if (fb_w - (*x + w) < d && fb_w - (*x + w) > -d) *x = fb_w - w;
+    if (*y - MENUBAR_H < d && *y - MENUBAR_H > -d) *y = MENUBAR_H;
+    if (TASKBAR_Y - (*y + h) < d && TASKBAR_Y - (*y + h) > -d) *y = TASKBAR_Y - h;
 }
 
 static void win_resize_tick(void) {
@@ -1384,6 +1657,29 @@ static void win_resize_tick(void) {
             rw->y=(resize_edges&4)?drag_orig_y+resize_start_h-rw->h:drag_orig_y;
             win_clamp(rw);dirty=1;
         }
+}
+
+/* New windows cascade from the top left of the work area. */
+static int cascade_n;
+static void win_place(Win *w) {
+    int x = 48 + 24 * cascade_n, y = MENUBAR_H + 24 + 24 * cascade_n;
+    if (x + w->w > fb_w || y + w->h > TASKBAR_Y) { cascade_n = 0; x = 48; y = MENUBAR_H + 24; }
+    cascade_n++;
+    w->x = x;
+    w->y = y;
+    win_clamp(w);
+}
+
+/* Resize zones: the frame plus 3px (Classic) or 4px (Modern), with larger
+ * corner squares. Returns edge bits: 1 left, 2 right, 4 top, 8 bottom. */
+static int win_resize_edges(const Win *w, int px, int py) {
+    if (w->maximized == SNAP_MAX) return 0;
+    int z = MODERN ? 5 : 4, c = MODERN ? 16 : 12, e = 0;
+    if (!hit(px, py, w->x, w->y, w->w, w->h)) return 0;
+    int l = px < w->x + z, r = px >= w->x + w->w - z, t = py < w->y + z, b = py >= w->y + w->h - z;
+    if (l || r) { e |= l ? 1 : 2; if (py < w->y + c) e |= 4; else if (py >= w->y + w->h - c) e |= 8; }
+    if (t || b) { e |= t ? 4 : 8; if (px < w->x + c) e |= 1; else if (px >= w->x + w->w - c) e |= 2; }
+    return e;
 }
 
 static int win_open(int kind) {
@@ -1422,8 +1718,7 @@ static int win_open(int kind) {
     wins[slot].min = 0;
     wins[slot].seq = ++wm_seq;
     layout_window(kind, &wins[slot].x, &wins[slot].y, &wins[slot].w, &wins[slot].h);
-    wins[slot].x += slot * 18; wins[slot].y += slot * 14;
-    win_clamp(&wins[slot]);
+    win_place(&wins[slot]);
     win_focus(slot);
     return slot;
 }
@@ -1628,15 +1923,12 @@ static int fm_has_parent(void) {
 }
 
 static int fm_vis_count(void) {
-    return fm_count + (fm_has_parent() ? 1 : 0);
+    return fm_count;
 }
 
 static int fm_row_id(int row) {
     if(!fm_cwd_valid())return -2;
-    int up = fm_has_parent() ? 1 : 0;
-    if (up && row == 0)
-        return -1; /* synthetic ".." */
-    int i = row - up;
+    int i = row;
     if (i < 0 || i >= fm_count ||
         !file_view_valid(fm_cwd,fm_ids[i],fm_ids_identity[i])) return -2;
     return fm_ids[i];
@@ -1647,14 +1939,13 @@ static void fm_refresh(void) {
      * object; filtering, deletion or node-slot reuse clears the selection. */
     int selected_id=fm_row_id(fm_selected);
     unsigned selected_identity=selected_id>=0?fs_identity(selected_id):0;
-    int parent_selected=selected_id==-1;
     fm_checked_cwd();
     fm_view.hidden[0]=fm_cwd==fs_root()?trash_id:-1;
     fm_view.hidden[1]=fm_cwd==fs_root()?prefs_id:-1;
     int capacity=window_state_reserve(&window_state[context_slot],fs_child_count(fm_cwd));
     fm_count=file_view_build(fm_cwd,&fm_view,fm_ids,fm_ids_identity,capacity,&fm_total);
     int index=file_view_find(fm_ids,fm_ids_identity,fm_count,selected_id,selected_identity);
-    fm_selected=index>=0?index+(fm_has_parent()?1:0):parent_selected&&fm_has_parent()?0:-1;
+    fm_selected=index;
 }
 
 /* The filter belongs to this folder; leaving the folder clears it. */
@@ -1712,7 +2003,7 @@ static int fm_filter_key(void) {
         if(length<FILE_VIEW_FILTER_LEN-1){fm_view.filter[length++]=key_char;fm_view.filter[length]=0;changed=1;}
     }else if(key_sc==KEY_UP||key_sc==KEY_DOWN){
         fm_filter_focus=fm_filter_select_all=0;dirty=1;
-        if(fm_selected<0&&fm_count){fm_selected=(key_sc==KEY_UP?fm_count-1:0)+(fm_has_parent()?1:0);return 1;}
+        if(fm_selected<0&&fm_count){fm_selected=key_sc==KEY_UP?fm_count-1:0;return 1;}
         return 0;
     }else return 1;
     if(changed){fm_manual_scroll=fm_first=0;fm_last_click_item=-1;fm_refresh();}
@@ -1841,7 +2132,7 @@ static void edit_backspace(void) {
     edit_saved_ok = 0;
 }
 
-static int edit_search_height(void){return !edit_search.open?0:edit_search.replace_mode?100:68;}
+static int edit_search_flags(void){return (edit_search.exact?TEXT_MATCH_CASE:0)|(edit_search.whole?TEXT_WHOLE_WORD:0);}
 static void edit_search_open(int replacing){
     EditorSearch *q=&edit_search;q->open=1;q->replace_mode=replacing;q->focus=1;q->field=0;
     int lo=edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b,hi=edit_sel_a>edit_sel_b?edit_sel_a:edit_sel_b;
@@ -1853,16 +2144,27 @@ static int edit_find_next(int direction){
     EditorSearch *q=&edit_search;int size=kstrlen(q->text[0]);
     if(!size){kstrcpy(q->message,"Enter text to find.");dirty=1;return 0;}
     int start=direction<0?(edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b)-1:edit_caret;
-    int found=text_find(edit_buf,edit_len,q->text[0],start,direction,q->exact);
+    int found=text_find(edit_buf,edit_len,q->text[0],start,direction,edit_search_flags());
     if(found<0){kstrcpy(q->message,"Text not found.");dirty=1;return 0;}
     edit_sel_a=found;edit_sel_b=found+size;edit_caret=edit_sel_b;
     kstrcpy(q->message,"Match selected.");dirty=1;return 1;
+}
+/* Find as you type: the first hit at or after the selection start becomes
+ * the current match, wrapping to the top. With no hit or no query the
+ * selection collapses to its start, so the caret stays where it was. */
+static void edit_find_incremental(void){
+    EditorSearch *q=&edit_search;int size=kstrlen(q->text[0]);
+    int lo=edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b;
+    int found=size?text_find(edit_buf,edit_len,q->text[0],lo,1,edit_search_flags()):-1;
+    if(found<0){edit_caret=lo;edit_sel_collapse();}
+    else {edit_sel_a=found;edit_sel_b=found+size;edit_caret=edit_sel_b;}
+    dirty=1;
 }
 static void edit_replace_one(void){
     EditorSearch *q=&edit_search;int lo=edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b;
     int hi=edit_sel_a>edit_sel_b?edit_sel_a:edit_sel_b;
     int n=kstrlen(q->text[0]),r=kstrlen(q->text[1]);
-    if(!n||hi-lo!=n||!text_match(edit_buf,edit_len,lo,q->text[0],q->exact)){
+    if(!n||hi-lo!=n||!text_match(edit_buf,edit_len,lo,q->text[0],edit_search_flags())){
         if(!edit_find_next(1))return;
         lo=edit_sel_a;hi=edit_sel_b;
     }
@@ -1874,13 +2176,14 @@ static void edit_replace_one(void){
 }
 static void edit_replace_everywhere(void){
     EditorSearch *q=&edit_search;int count=0;
-    int length=text_replace_all(edit_scratch,EDIT_BUF_SIZE,edit_buf,edit_len,q->text[0],q->text[1],q->exact,&count);
+    int length=text_replace_all(edit_scratch,EDIT_BUF_SIZE,edit_buf,edit_len,q->text[0],q->text[1],edit_search_flags(),&count);
     if(length<0){kstrcpy(q->message,"Empty search or replacement exceeds limit.");dirty=1;return;}
     if(count){edit_record();kmemcpy(edit_buf,edit_scratch,length+1);edit_len=length;edit_caret=0;edit_sel_collapse();edit_saved_ok=0;}
     fmt_uint(q->message,count);kstrcpy(q->message+kstrlen(q->message)," replacements.");dirty=1;
 }
 static void edit_search_key(void){
     EditorSearch *q=&edit_search;int f=q->field;char *text=q->text[f];int length=kstrlen(text),pos=q->position[f];
+    char before[64];kstrcpy(before,text);
     if(key_sc==KEY_ESC){q->open=q->focus=0;dirty=1;return;}
     if(key_sc==KEY_TAB){q->field=q->replace_mode?1-f:0;q->position[q->field]=kstrlen(q->text[q->field]);q->selected[q->field]=1;dirty=1;return;}
     if(key_sc==KEY_ENTER){if(ctrl_down&&q->replace_mode){if(shift_down)edit_replace_everywhere();else edit_replace_one();}else edit_find_next(shift_down?-1:1);return;}
@@ -1894,7 +2197,9 @@ static void edit_search_key(void){
         for(int j=0;j<clip_len&&length<63;j++)if(clip_buf[j]>=32&&clip_buf[j]<=126){
             for(int i=length;i>=pos;i--)text[i+1]=text[i];
             text[pos++]=clip_buf[j];length++;}
-        q->position[f]=pos;dirty=1;return;
+        q->position[f]=pos;dirty=1;
+        if(f==0)edit_find_incremental();
+        return;
     }
     if(key_sc==KEY_LEFT){if(pos>0)pos--;q->selected[f]=0;}
     else if(key_sc==KEY_RIGHT){if(pos<length)pos++;q->selected[f]=0;}
@@ -1908,58 +2213,164 @@ static void edit_search_key(void){
         if(length<63){for(int i=length;i>=pos;i--)text[i+1]=text[i];text[pos++]=key_char;}
     }
     q->position[f]=pos;q->message[0]=0;dirty=1;
+    if(f==0&&kstrcmp(before,text))edit_find_incremental();
 }
-/* Find bar buttons: next, previous, [replace, replace all], match case, close. */
-static int edit_search_buttons(int wx,int ww,int replace,int *xs,int *ws){
-    int n=0,x=wx+12;
-    xs[n]=x;ws[n++]=32;x+=36;
-    xs[n]=x;ws[n++]=32;x+=44;
-    if(replace){xs[n]=x;ws[n]=tool_button_w("Replace");x+=ws[n++]+4;xs[n]=x;ws[n]=tool_button_w("All");x+=ws[n++]+8;}
-    xs[n]=x;ws[n++]=40;
-    xs[n]=wx+ww-44;ws[n++]=32;
-    return n;
+static int nav_size(void);
+/* Find bar. Classic docks it above the status bar; Modern floats it at the
+ * top right of the text. Drawing and clicks share edit_find_layout. */
+typedef struct { Rect panel, field[2], prev, next, exact, whole, close, replace, all; int count_x, rows; } FindLayout;
+static int edit_status_h(void) { return MODERN ? 28 : 24; }
+static int edit_search_height(void) {
+    if (!edit_search.open || MODERN) return 0;
+    return edit_search.replace_mode ? 2 * BTN_H + 20 : BTN_H + 12;
 }
-static void draw_edit_search(int wx,int wy,int ww,int wh){
-    if(!edit_search.open)return;
-    EditorSearch *q=&edit_search;
-    int y=wy+wh-SB-edit_search_height();draw_rect(wx+1,y,ww-2,edit_search_height(),ui_chrome);
-    draw_hline(wx+1,y,ww-2,ui_chrome_dk);
-    for(int f=0;f<(q->replace_mode?2:1);f++){
-        int fy=y+6+f*32;draw_string(f?"With":"Find",wx+12,fy+5,ui_text);
-        draw_round_rect(wx+66,fy,ww-82,26,4,q->focus&&q->field==f?ui_accent:ui_border);
-        draw_round_rect(wx+67,fy+1,ww-84,24,3,ui_field);
-        int selected=q->focus&&q->field==f&&q->selected[f];
-        if(selected)draw_rect(wx+72,fy+4,ww-96,18,ui_accent);
-        draw_string_clip(q->text[f],wx+72,fy+5,selected?ui_on_accent:ui_text,wx+ww-22);
-        if(q->focus&&q->field==f&&!selected){char prefix[64];kmemcpy(prefix,q->text[f],q->position[f]);prefix[q->position[f]]=0;
-            int x=wx+72+ui_string_w(prefix);if(x<wx+ww-22)draw_rect(x,fy+4,1,18,ui_text);}
+static int edit_text_top(int wy) { return wy + TITLE_H; }
+static int edit_text_bottom(int wy, int wh) { return wy + wh - 1 - edit_status_h() - edit_search_height(); }
+
+static void edit_find_layout(int wx, int wy, int ww, int wh, FindLayout *L) {
+    int rows = edit_search.replace_mode ? 2 : 1, s = nav_size(), fw;
+    L->rows = rows;
+    if (MODERN) {
+        int w = ww - 2 * 24 - SB < 500 ? ww - 2 * 24 - SB : 500;
+        L->panel = (Rect){wx + ww - 1 - SB - 12 - w, edit_text_top(wy) + 10, w, rows * (BTN_H + 8) + 8};
+    } else
+        L->panel = (Rect){wx + 1, edit_text_bottom(wy, wh), ww - 2, edit_search_height()};
+    int x = L->panel.x + 8, y = L->panel.y + (MODERN ? 8 : 6);
+    int right = L->panel.x + L->panel.w - 8;
+    L->close = (Rect){right - s, y + (BTN_H - s) / 2, s, s};
+    fw = MODERN ? 210 : 240;
+    if (x + fw + 260 > right) fw = right - x - 260 > 120 ? right - x - 260 : 120;
+    L->field[0] = (Rect){x, y, fw, BTN_H};
+    L->count_x = x + fw + 10;
+    /* The count slot fits the longest text it shows. */
+    int cw = kit_text_w("9999 of 9999", 0), mw = kit_text_w("9999 matches", 0), nw = kit_text_w("No results", 0);
+    if (mw > cw) cw = mw;
+    if (nw > cw) cw = nw;
+    int nx = L->count_x + cw + 6;
+    L->prev = (Rect){nx, y + (BTN_H - s) / 2, s, s};
+    L->next = (Rect){nx + s + 2, y + (BTN_H - s) / 2, s, s};
+    int ex = L->next.x + s + 12;
+    L->exact = (Rect){ex, y + (BTN_H - s) / 2, MODERN ? s + 4 : kit_text_w("Match case", 0) + 24, s};
+    L->whole = (Rect){L->exact.x + L->exact.w + (MODERN ? 4 : 12), L->exact.y, MODERN ? s + 4 : kit_text_w("Whole word", 0) + 24, s};
+    /* Drop the whole-word toggle when the bar is too narrow for it. */
+    if (L->whole.x + L->whole.w > L->close.x - 8) L->whole.w = 0;
+    int y2 = y + BTN_H + 8;
+    L->field[1] = (Rect){x, y2, fw, BTN_H};
+    int rw = kit_button_w("Replace", -1);
+    L->replace = (Rect){L->count_x, y2, rw, BTN_H};
+    L->all = (Rect){L->count_x + rw + 8, y2, kit_button_w("Replace All", -1), BTN_H};
+}
+
+/* Matches in the document and which one the selection is. */
+static void edit_find_count(int *count, int *current) {
+    EditorSearch *q = &edit_search;
+    int n = kstrlen(q->text[0]), lo = edit_sel_a < edit_sel_b ? edit_sel_a : edit_sel_b;
+    *count = *current = 0;
+    if (!n) return;
+    for (int at = text_find(edit_buf, edit_len, q->text[0], 0, 1, edit_search_flags()); at >= 0 && *count < 9999;) {
+        (*count)++;
+        if (at == lo && edit_sel_a != edit_sel_b) *current = *count;
+        if (at + 1 > edit_len - n) break;
+        int next = text_find(edit_buf, edit_len, q->text[0], at + 1, 1, edit_search_flags());
+        if (next <= at) break;
+        at = next;
     }
-    int by=y+(q->replace_mode?70:38);
-    int xs[6],ws[6],n=edit_search_buttons(wx,ww,q->replace_mode,xs,ws);
-    static const int icon[6]={ICON_CHEVRON_DOWN,ICON_CHEVRON_UP,ICON_REPLACE,ICON_REPLACE,-1,ICON_STOP};
-    static const char *label[6]={0,0,"Replace","All","Aa",0};
-    for(int i=0;i<n;i++){
-        int b=q->replace_mode||i<2?i:i+2;
-        tool_button(xs[i],by,ws[i],26,icon[b],label[b],b==4?(q->exact?TB_ACTIVE:TB_NORMAL):b==5?TB_FLAT:TB_NORMAL);
+}
+
+static void edit_find_field(Rect r, int f, int placeholder_search) {
+    EditorSearch *q = &edit_search;
+    int focus = q->focus && q->field == f, tx, ty = kit_ty(r.y, r.h);
+    if (placeholder_search) tx = kit_search(r.x, r.y, r.w, r.h, "", q->text[f][0] ? "" : "Find", focus ? KIT_FOCUS : 0);
+    else {
+        tx = kit_field(r.x, r.y, r.w, r.h, focus ? KIT_FOCUS : 0);
+        if (!q->text[f][0] && !focus) kit_text("Replace with", tx, ty, TK_TEXT2, r.w - (tx - r.x) - 8, 0);
+    }
+    int lim = r.x + r.w - 8 - tx;
+    if (focus && q->selected[f] && q->text[f][0]) {
+        int w = kit_text_w(q->text[f], 0);
+        draw_rect(tx - 1, ty, (w < lim ? w : lim) + 2, UI_FONT_H, TK_ACCENT);
+        kit_text(q->text[f], tx, ty, TK_ON_ACCENT, lim, 0);
+    } else kit_text(q->text[f], tx, ty, TK_TEXT, lim, 0);
+    if (focus && !q->selected[f] && ((frame_count / 35) & 1) == 0) {
+        char prefix[64];
+        kmemcpy(prefix, q->text[f], q->position[f]);
+        prefix[q->position[f]] = 0;
+        int cx = tx + kit_text_w(prefix, 0);
+        if (cx < r.x + r.w - 4) kit_caret(cx, ty);
     }
 }
-static int edit_search_click(int wx,int wy,int ww,int wh){
-    if(!edit_search.open)return 0;
-    EditorSearch *q=&edit_search;int y=wy+wh-SB-edit_search_height();
-    if(!hit(mouse_x,mouse_y,wx,y,ww,edit_search_height()))return 0;
-    q->focus=1;
-    for(int f=0;f<(q->replace_mode?2:1);f++)if(hit(mouse_x,mouse_y,wx+66,y+6+f*32,ww-82,26)){
-        q->field=f;q->position[f]=kstrlen(q->text[f]);q->selected[f]=1;dirty=1;return 1;}
-    int by=y+(q->replace_mode?70:38);
-    int xs[6],ws[6],n=edit_search_buttons(wx,ww,q->replace_mode,xs,ws),pressed=-1;
-    for(int i=0;i<n;i++)if(hit(mouse_x,mouse_y,xs[i],by,ws[i],26)){pressed=q->replace_mode||i<2?i:i+2;break;}
-    if(pressed==0)edit_find_next(1);
-    else if(pressed==1)edit_find_next(-1);
-    else if(pressed==2)edit_replace_one();
-    else if(pressed==3)edit_replace_everywhere();
-    else if(pressed==4)q->exact=!q->exact;
-    else if(pressed==5)q->open=q->focus=0;
-    dirty=1;return 1;
+
+static void draw_edit_search(int wx, int wy, int ww, int wh) {
+    if (!edit_search.open) return;
+    EditorSearch *q = &edit_search;
+    FindLayout L;
+    edit_find_layout(wx, wy, ww, wh, &L);
+    Rect p = L.panel;
+    if (MODERN) { kit_shadow(p.x, p.y, p.w, p.h, 10); kit_box(p.x, p.y, p.w, p.h, 10, ui_theme.overlay, TK_LINE_STRONG); }
+    else { draw_hline(p.x, p.y, p.w, TK_LINE_SUBTLE); draw_rect(p.x, p.y + 1, p.w, p.h - 1, TK_BASE); }
+    uint8_t paper = MODERN ? ui_theme.overlay : TK_BASE;
+    edit_find_field(L.field[0], 0, 1);
+    int count, current;
+    edit_find_count(&count, &current);
+    char text[32];
+    if (!q->text[0][0]) text[0] = 0;
+    else if (!count) kstrcpy(text, "No results");
+    else if (!current) {
+        fmt_uint(text, (unsigned)count);
+        kstrcpy(text + kstrlen(text), count == 1 ? " match" : " matches");
+    } else {
+        fmt_uint(text, (unsigned)current);
+        kstrcpy(text + kstrlen(text), " of ");
+        fmt_uint(text + kstrlen(text), (unsigned)count);
+    }
+    kit_text(text, L.count_x, kit_ty(L.field[0].y, BTN_H), TK_TEXT2, L.prev.x - L.count_x - 4, 0);
+    kit_icon_button(L.prev.x, L.prev.y, L.prev.w, UI_ICON_UP, hot(L.prev.x, L.prev.y, L.prev.w, L.prev.h));
+    kit_icon_button(L.next.x, L.next.y, L.next.w, UI_ICON_DOWN, hot(L.next.x, L.next.y, L.next.w, L.next.h));
+    kit_vseparator(L.exact.x - 6, L.field[0].y + 4, BTN_H - 8);
+    for (int k = 0; k < 2; k++) {
+        Rect b = k ? L.whole : L.exact;
+        int set = k ? q->whole : q->exact;
+        if (!b.w) continue;
+        if (MODERN) {
+            int on = set ? KIT_ON : hot(b.x, b.y, b.w, b.h);
+            if (on) kit_fill(b.x, b.y, b.w, b.h, 6, set ? TK_ACCENT_100 : TK_HOVER, 1);
+            uint8_t ink = set ? TK_ACCENT_700 : TK_TEXT;
+            int ty = kit_ty(b.y, b.h);
+            kit_text_center(k ? "ab" : "Aa", b.x, ty, b.w, ink, 0);
+            if (k) draw_hline(b.x + b.w / 2 - kit_text_w("ab", 0) / 2, ty + UI_FONT_H, kit_text_w("ab", 0), ink);
+        } else kit_check_row(b.x, b.y + (b.h - ui_theme.check) / 2 - 1, k ? "Whole word" : "Match case",
+                             (set ? KIT_ON : 0) | hot(b.x, b.y, b.w, b.h), 0);
+    }
+    if (MODERN) kit_vseparator(L.close.x - 6, L.field[0].y + 4, BTN_H - 8);
+    kit_icon_button(L.close.x, L.close.y, L.close.w, UI_ICON_X, hot(L.close.x, L.close.y, L.close.w, L.close.h));
+    if (L.rows > 1) {
+        edit_find_field(L.field[1], 1, 0);
+        kit_button(L.replace.x, L.replace.y, L.replace.w, BTN_H, "Replace", -1, KB_DEFAULT,
+                   hot(L.replace.x, L.replace.y, L.replace.w, BTN_H));
+        kit_button(L.all.x, L.all.y, L.all.w, BTN_H, "Replace All", -1, KB_DEFAULT, hot(L.all.x, L.all.y, L.all.w, BTN_H));
+    }
+    (void)paper;
+}
+
+static int rect_has(Rect r) { return hit(mouse_x, mouse_y, r.x, r.y, r.w, r.h); }
+static int edit_search_click(int wx, int wy, int ww, int wh) {
+    if (!edit_search.open) return 0;
+    EditorSearch *q = &edit_search;
+    FindLayout L;
+    edit_find_layout(wx, wy, ww, wh, &L);
+    if (!rect_has(L.panel)) return 0;
+    q->focus = 1;
+    for (int f = 0; f < L.rows; f++)
+        if (rect_has(L.field[f])) { q->field = f; q->position[f] = kstrlen(q->text[f]); q->selected[f] = 1; dirty = 1; return 1; }
+    if (rect_has(L.next)) edit_find_next(1);
+    else if (rect_has(L.prev)) edit_find_next(-1);
+    else if (rect_has(L.exact)) { q->exact = !q->exact; edit_find_incremental(); }
+    else if (L.whole.w && rect_has(L.whole)) { q->whole = !q->whole; edit_find_incremental(); }
+    else if (rect_has(L.close)) q->open = q->focus = 0;
+    else if (L.rows > 1 && rect_has(L.replace)) edit_replace_one();
+    else if (L.rows > 1 && rect_has(L.all)) edit_replace_everywhere();
+    dirty = 1;
+    return 1;
 }
 
 static void namedlg_open(int target, const char *initial);
@@ -2075,6 +2486,18 @@ static void spreadsheet_result(int result) {
     if (result & SPREADSHEET_REQUEST_SAVE_AS) namedlg_open(4, "untitled.bsh");
     if (result & SPREADSHEET_REQUEST_EXPORT) namedlg_open(5, "spreadsheet.csv");
 }
+/* Writer and Spreadsheet client area: under the menu row in Classic; in
+ * Modern the app toolbar starts on the header's bottom rule and continues
+ * the header. Drawing, clicks and drags share it. */
+static void doc_client(const Win *w, int *x, int *y, int *cw, int *ch) {
+    *x = w->x + 1;
+    *y = MODERN ? w->y + TITLE_BAR - 1 : w->y + TITLE_H;
+    *cw = w->w - 2;
+    *ch = w->y + w->h - 1 - *y;
+}
+/* Their toolbar and find-bar controls hover through the shell's targets. */
+int writer_hover(int x, int y, int w, int h) { return hot(x, y, w, h); }
+int spreadsheet_hover(int x, int y, int w, int h) { return hot(x, y, w, h); }
 /* These metadata hooks run only at desktop boundaries, not from storage
  * polling. One exact request can finish one guarded navigation action. */
 static void document_save_info(int kind, DocumentSave *out) {
@@ -2365,6 +2788,35 @@ static void calc_press(char ch) {
     }
     if (calc_error)
         return;
+    if (ch == 'E') {                      /* clear the entry, keep the operation */
+        kstrcpy(calc_entry, "0");
+        calc_entry_len = 1;
+        calc_has_dot = 0;
+        calc_fresh = 1;
+        return;
+    }
+    if (ch == 'B') {                      /* backspace in the entry being typed */
+        if (calc_fresh) return;
+        if (calc_entry_len > 0 && calc_entry[calc_entry_len - 1] == '.') calc_has_dot = 0;
+        if (calc_entry_len > 0) calc_entry[--calc_entry_len] = 0;
+        if (!calc_entry_len || (calc_entry_len == 1 && calc_entry[0] == '-')) {
+            kstrcpy(calc_entry, "0");
+            calc_entry_len = 1;
+            calc_fresh = 1;
+        }
+        return;
+    }
+    if (ch == 'N') {                      /* change sign */
+        if (calc_entry[0] == '-') {
+            for (int i = 0; i < calc_entry_len; i++) calc_entry[i] = calc_entry[i + 1];
+            calc_entry_len--;
+        } else if (!(calc_entry_len == 1 && calc_entry[0] == '0') && calc_entry_len < (int)sizeof calc_entry - 1) {
+            for (int i = calc_entry_len; i >= 0; i--) calc_entry[i + 1] = calc_entry[i];
+            calc_entry[0] = '-';
+            calc_entry_len++;
+        }
+        return;
+    }
     if (ch >= '0' && ch <= '9')
         calc_digit(ch);
     else if (ch == '.')
@@ -2416,6 +2868,30 @@ static void calc_key_rect(int kx, int ky, int i, int *x, int *y, int *w, int *h)
         *y = ky + CALC_KEY_H + CALC_GAP + (row - 1) * (CALC_KEY_H + CALC_GAP);
 }
 
+/* Multiply, divide and backspace glyphs, which the ASCII UI font lacks,
+ * centered on (cx, cy). Returns 0 for other keys. */
+static int calc_glyph(char ch, int cx, int cy, uint8_t ink) {
+    if (ch == '*') {
+        for (int i = -4; i <= 4; i++) {
+            draw_rect(cx + i, cy + i, 2, 1, ink);
+            draw_rect(cx + i, cy - i, 2, 1, ink);
+        }
+    } else if (ch == '/') {
+        draw_rect(cx - 5, cy, 11, 2, ink);
+        kit_fill(cx - 1, cy - 5, 3, 3, 1, ink, 1);
+        kit_fill(cx - 1, cy + 4, 3, 3, 1, ink, 1);
+    } else if (ch == 'B') {
+        /* A key cap pointing left with an x inside. */
+        int l = cx - 9, r = cx + 8, t = cy - 6, b = cy + 6;
+        draw_hline(l + 6, t, r - l - 5, ink);
+        draw_hline(l + 6, b, r - l - 5, ink);
+        draw_vline(r, t, b - t + 1, ink);
+        for (int i = 0; i <= 6; i++) { put_pixel(l + i, cy - i, ink); put_pixel(l + i, cy + i, ink); }
+        for (int i = -2; i <= 2; i++) { put_pixel(cx + 1 + i, cy + i, ink); put_pixel(cx + 1 + i, cy - i, ink); }
+    } else return 0;
+    return 1;
+}
+
 static void draw_calc(int wx, int wy, int ww, int wh, int inactive) {
     (void)ww;
     gui_draw_window(wx, wy, CALC_W, wh, "Calculator", 0,
@@ -2424,10 +2900,16 @@ static void draw_calc(int wx, int wy, int ww, int wh, int inactive) {
     int dy = wy + TITLE_H + 12;
     int dw = CALC_W - 2 * CALC_MARGIN;
     int dh = CALC_DISP_H + 10;
-    draw_round_rect(dx, dy, dw, dh, 6, ui_chrome_dk);
-    draw_round_rect(dx + 1, dy + 1, dw - 2, dh - 2, 5, INK(1));
+    /* Display: a sunken readout with the pending operator at the left. */
+    if (MODERN) kit_fill(dx, dy, dw, dh, 8, TK_SUNKEN, 1);
+    else kit_box(dx, dy, dw, dh, 0, TK_RAISED, TK_LINE_STRONG);
+    if (calc_op && !calc_error) {
+        char op[2] = { calc_op == '*' ? 'x' : (char)calc_op, 0 };
+        kit_text(op, dx + 10, dy + 6, TK_ACCENT_700, 20, 1);
+    }
 
     const char *s = calc_entry;
+    uint8_t ink = calc_error ? TK_RED_700 : TK_TEXT;
     int tw = logo_string_w(s);
     int use_logo = 1;
     for (const char *q = s; *q; q++) {
@@ -2436,15 +2918,15 @@ static void draw_calc(int wx, int wy, int ww, int wh, int inactive) {
             break;
         }
     }
-    if (use_logo && tw <= dw - 20) {
+    if (use_logo && tw <= dw - 36) {
         int tx = dx + dw - 12 - tw;
-        draw_logo_string(s, tx, dy + (dh - LOGO_FONT_H) / 2, ui_text);
+        draw_logo_string(s, tx, dy + (dh - LOGO_FONT_H) / 2, ink);
     } else {
-        tw = uib_string_w(s);
+        tw = kit_text_w(s, 1);
         int tx = dx + dw - 12 - tw;
-        if (tx < dx + 6)
-            tx = dx + 6;
-        draw_string_bold_clip(s, tx, dy + (dh - CHAR_H) / 2, ui_text, dx + dw - 6);
+        if (tx < dx + 24)
+            tx = dx + 24;
+        kit_text(s, tx, kit_ty(dy, dh), ink, dx + dw - 12 - tx, 1);
     }
 
     int kx = wx + CALC_MARGIN;
@@ -2452,11 +2934,26 @@ static void draw_calc(int wx, int wy, int ww, int wh, int inactive) {
     for (int i = 0; i < CALC_NKEYS; i++) {
         int x, y, w, h;
         calc_key_rect(kx, ky, i, &x, &y, &w, &h);
-        char lab[2];
+        char lab[4];
         lab[0] = calc_keys[i].ch;
         lab[1] = 0;
         char ch = calc_keys[i].ch;
-        draw_button_styled(x, y, w, h, lab, ch == '=');
+        if (ch == 'E') kstrcpy(lab, "CE");
+        else if (ch == 'B') kstrcpy(lab, "<");
+        else if (ch == 'N') kstrcpy(lab, "+/-");
+        else if (ch == '*') kstrcpy(lab, "x");
+        int digit = (ch >= '0' && ch <= '9') || ch == '.';
+        int st = hot(x, y, w, h);
+        /* Digits are plain keys, operators and Clear are tinted, = is primary. */
+        if (ch == '=') kit_button(x, y, w, h, lab, -1, KB_PRIMARY, st);
+        else if (digit) kit_button(x, y, w, h, lab, -1, KB_DEFAULT, st);
+        else {
+            int on = calc_op == ch && calc_fresh;
+            uint8_t fill = on ? TK_ACCENT_100 : (st & KIT_PRESSED) ? TK_HOVER : (st & KIT_HOVER) ? TK_HOVER : MODERN ? TK_SUNKEN : TK_BASE;
+            kit_box(x, y, w, h, ui_theme.r_control, fill, MODERN ? 0 : TK_LINE);
+            uint8_t ink = ch == 'C' || ch == 'E' ? TK_RED_700 : ch == 'B' || ch == 'N' ? TK_TEXT : TK_ACCENT_700;
+            if (!calc_glyph(ch, x + w / 2, y + h / 2, ink)) kit_text_center(lab, x, kit_ty(y, h), w, ink, 1);
+        }
     }
 }
 
@@ -2525,10 +3022,14 @@ static const uint8_t paint_well[PAINT_NWELL] = {
 
 /* Second row: picks from the 6x6x6 cube (>= 16), none of which exist in 0..15. */
 static const uint32_t paint_well2_rgb[PAINT_NWELL2] = {
-    0xFF00AF, 0xFFAFD7, 0xFFAFAF, 0xAF5F00, 0xFFAF00, 0xFFFF00, 0xD7FF00, 0x00FF00,
+    0xFF00AF, 0xFFAFD7, 0x870000, 0xAF5F00, 0xFFAF00, 0xFFFF00, 0xD7FF00, 0x00FF00,
     0x00FFAF, 0x00FFFF, 0x87D7FF, 0x0087FF, 0x5F00FF, 0xAF00FF, 0xD7AFFF, 0xFFD7AF
 };
 static uint8_t paint_well2[PAINT_NWELL2];
+
+/* The status bar under the color well. */
+static int paint_status_h(void) { return MODERN ? 28 : 24; }
+static int paint_hover_x = -1, paint_hover_y = -1;  /* canvas cell under the pointer */
 
 static int plot_dest; /* 0 = paint_pix, 1 = 3x screen overlay */
 static int plot_ox, plot_oy;
@@ -2755,7 +3256,7 @@ static void paint_canvas_geom(int wx, int wy, int ww, int wh,
     *px = wx + 1;
     *py = wy + TITLE_H + PAINT_TOOL_H;
     *pw = ww - 2;
-    *ph = wh - TITLE_H - PAINT_TOOL_H - PAINT_WELL_H;
+    *ph = wh - TITLE_H - PAINT_TOOL_H - PAINT_WELL_H - paint_status_h();
     int cw = PAINT_W * PAINT_SCALE;
     int ch = PAINT_H * PAINT_SCALE;
     *cx = *px + (*pw - cw) / 2;
@@ -2801,12 +3302,12 @@ static void paint_chip_cell(int wx, int wy, int ww, int *x, int *y) {
 
 static void paint_well_cell(int wx, int wy, int wh, int i, int *x, int *y) {
     *x = wx + 12 + i * (22 + 4);
-    *y = wy + wh - 24;
+    *y = wy + wh - paint_status_h() - 24;
 }
 
 static void paint_well2_cell(int wx, int wy, int wh, int i, int *x, int *y) {
     *x = wx + 12 + i * (22 + 4);
-    *y = wy + wh - 48;
+    *y = wy + wh - paint_status_h() - 48;
 }
 
 static uint8_t doodle_ink;
@@ -2862,63 +3363,56 @@ static void draw_tool_doodle(int kind, int x, int y) {
     }
 }
 
+/* A tool cell: flat until hovered, accent-tinted while selected. */
+static void paint_cell_bg(int x, int y, int on) {
+    int st = hot(x, y, PAINT_CELL, PAINT_CELL);
+    if (on) kit_box(x, y, PAINT_CELL, PAINT_CELL, ui_theme.r_control, TK_ACCENT_100, MODERN ? 0 : TK_ACCENT_300);
+    else if (st & (KIT_HOVER | KIT_PRESSED)) kit_box(x, y, PAINT_CELL, PAINT_CELL, ui_theme.r_control, TK_HOVER, MODERN ? 0 : TK_LINE);
+}
+
 static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
     paint_init();
     gui_draw_window(wx, wy, ww, wh, "Paint", 0,
                     inactive ? WIN_INACTIVE : 0);
 
-    /* tool strip */
+    /* Tool strip: tools, brush sizes, then the current color. */
     int strip_y = wy + TITLE_H;
-    draw_rect(wx, strip_y + 1, ww, PAINT_TOOL_H - 1, ui_chrome);
-    draw_hline(wx, strip_y + PAINT_TOOL_H, ww, ui_chrome_dk);
+    kit_toolbar(wx + 1, strip_y, ww - 2, PAINT_TOOL_H + 1);
     for (int i = 0; i < PAINT_NTOOLS; i++) {
         int tx, ty;
         paint_tool_cell(wx, wy, i, &tx, &ty);
-        if (i == paint_tool) {
-            draw_round_rect(tx, ty, PAINT_CELL, PAINT_CELL, 6, ui_accent_dk);
-            draw_round_rect(tx + 1, ty + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, PAL_ACCENT + 2);
-        } else {
-            draw_round_rect(tx, ty, PAINT_CELL, PAINT_CELL, 6, INK(10));
-            draw_round_rect(tx + 1, ty + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, INK(6));
-        }
-        doodle_ink = i == paint_tool ? ui_on_accent : ui_text;
+        paint_cell_bg(tx, ty, i == paint_tool);
+        doodle_ink = i == paint_tool ? TK_ACCENT_700 : TK_ICON;
         draw_tool_doodle(i, tx, ty);
     }
 
     {
         int dx, dy;
         paint_brush_cell(wx, wy, 0, &dx, &dy);
-        draw_vline(dx - 9, dy + 2, PAINT_CELL - 4, ui_chrome_dk);
+        kit_vseparator(dx - 9, dy + 4, PAINT_CELL - 8);
         for (int i = 0; i < 3; i++) {
             int bx, by;
             paint_brush_cell(wx, wy, i, &bx, &by);
             int on = (paint_brush == i + 1);
-            if (on) {
-                draw_round_rect(bx, by, PAINT_CELL, PAINT_CELL, 6, ui_accent_dk);
-                draw_round_rect(bx + 1, by + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, PAL_ACCENT + 2);
-            } else {
-                draw_round_rect(bx, by, PAINT_CELL, PAINT_CELL, 6, INK(10));
-                draw_round_rect(bx + 1, by + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, INK(6));
-            }
+            paint_cell_bg(bx, by, on);
             int rad = i + 1;
-            uint8_t dotc = on ? ui_on_accent : ui_text;
+            uint8_t dotc = on ? TK_ACCENT_700 : TK_ICON;
             draw_round_rect(bx + PAINT_CELL / 2 - rad, by + PAINT_CELL / 2 - rad,
                             rad * 2, rad * 2, rad, dotc);
         }
         int cx, cy;
         paint_chip_cell(wx, wy, ww, &cx, &cy);
-        draw_round_rect(cx - 2, cy - 2, 44, 28, 7, INK(12));
-        draw_round_rect(cx - 1, cy - 1, 42, 26, 6, INK(2));
-        draw_round_rect(cx + 2, cy + 2, 36, 20, 4, paint_color);
+        kit_box(cx - 2, cy - 2, 44, 28, ui_theme.r_control, TK_RAISED, TK_LINE_STRONG);
+        kit_fill(cx + 2, cy + 2, 36, 20, MODERN ? 3 : 0, paint_color, 0);
     }
 
-    /* canvas pane + 1px black inset */
+    /* Canvas on a workspace, with the window shadow under it. */
     int px, py, pw, ph, cx, cy;
     paint_canvas_geom(wx, wy, ww, wh, &px, &py, &pw, &ph, &cx, &cy);
-    draw_rect(px, py, pw, 1, INK(9));
-    draw_rect(px, py + ph - 1, pw, 1, INK(9));
-    draw_rect(px, py, 1, ph, INK(9));
-    draw_rect(px + pw - 1, py, 1, ph, INK(9));
+    draw_rect(wx + 1, strip_y + PAINT_TOOL_H + 1, ww - 2, ph - 1, MODERN ? TK_SUNKEN : TK_HOVER);
+    kit_shadow(cx, cy, PAINT_W * PAINT_SCALE, PAINT_H * PAINT_SCALE, 0);
+    draw_frame(cx - 1, cy - 1, PAINT_W * PAINT_SCALE + 2, PAINT_H * PAINT_SCALE + 2, TK_LINE_STRONG);
+    (void)px; (void)py; (void)pw; (void)ph;
 
     for (int ly = 0; ly < PAINT_H; ly++) {
         for (int lx = 0; lx < PAINT_W; lx++) {
@@ -2943,10 +3437,34 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
         plot_dest = 0;
     }
 
-    /* color well */
-    int well_top = wy + wh - PAINT_WELL_H;
-    draw_rect(wx, well_top, ww, PAINT_WELL_H, ui_chrome);
-    draw_hline(wx, well_top, ww, ui_chrome_dk);
+    /* Color well, then the status bar: the tool's hint on the left, the
+     * pointer's canvas position and the canvas size on the right. */
+    int sh = paint_status_h(), well_top = wy + wh - sh - PAINT_WELL_H, status_y = wy + wh - 1 - sh;
+    draw_hline(wx + 1, well_top, ww - 2, TK_LINE_SUBTLE);
+    draw_rect(wx + 1, well_top + 1, ww - 2, status_y - well_top - 1, MODERN ? ui_theme.content : TK_BASE);
+    if (MODERN) {
+        draw_hline(wx + 1, status_y, ww - 2, TK_LINE_SUBTLE);
+        kit_fill_bottom(wx + 1, status_y + 1, ww - 2, sh - 1, ui_theme.r_window - 1, ui_theme.statusbar);
+    } else kit_statusbar(wx + 1, status_y, ww - 2, sh);
+    {
+        static const char *const hints[PAINT_NTOOLS] = {
+            "Pencil: drag to draw", "Fill: click an area", "Line: drag from end to end",
+            "Rectangle: drag a corner", "Ellipse: drag its bounds", "Text: click, then type",
+            "Eraser: drag to erase",
+        };
+        char right[48], n[12];
+        right[0] = 0;
+        if (paint_hover_x >= 0) {
+            fmt_uint(n, (unsigned)paint_hover_x); kstrcpy(right, n); kstrcpy(right + kstrlen(right), ", ");
+            fmt_uint(n, (unsigned)paint_hover_y); kstrcpy(right + kstrlen(right), n);
+            kstrcpy(right + kstrlen(right), "      ");
+        }
+        fmt_uint(n, PAINT_W); kstrcpy(right + kstrlen(right), n); kstrcpy(right + kstrlen(right), " x ");
+        fmt_uint(n, PAINT_H); kstrcpy(right + kstrlen(right), n); kstrcpy(right + kstrlen(right), " px");
+        int ty = kit_ty(status_y + 1, sh - 1), pad = MODERN ? 12 : 8, rw = kit_text_w(right, 0);
+        kit_text_right(right, wx + ww - 1 - pad, ty, TK_TEXT2, 0);
+        kit_text(hints[paint_tool], wx + 1 + pad, ty, TK_TEXT2, ww - 2 - 2 * pad - rw - 16, 0);
+    }
     for (int i = 0; i < PAINT_NWELL + PAINT_NWELL2; i++) {
         int sx, sy;
         uint8_t c;
@@ -2958,12 +3476,10 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
             c = paint_well2[i - PAINT_NWELL];
         }
         int cur = (paint_color == c);
-        draw_round_rect(sx, sy, 22, 18, 4, cur ? ui_text : INK(10));
-        draw_round_rect(sx + 1, sy + 1, 20, 16, 3, c);
-        if (cur) {
-            uint8_t mk = gfx_luma(c) < 128 ? COLOR_WHITE : ui_text;
-            draw_round_frame(sx + 3, sy + 3, 16, 12, 2, mk);
-        }
+        int r = MODERN ? 4 : 0;
+        if (cur) kit_frame(sx - 2, sy - 2, 26, 22, r ? r + 2 : 0, TK_ACCENT);
+        kit_box(sx, sy, 22, 18, r, c, cur ? TK_ACCENT_700 : TK_LINE);
+        (void)hot(sx, sy, 22, 18);
     }
 }
 
@@ -3002,14 +3518,16 @@ static int unique_untitled_pbm(int parent, char *out) {
     return -1;
 }
 
-static int paint_write_named(const char *name) {
+/* Save the picture in parent, or in Pictures (made when missing) when
+ * parent is not a folder. */
+static int paint_write_in(int parent, const char *name) {
     name_failure_message=0;
     if (fs_sync_busy()) {
         name_failure_message="Disk saving. Retry Save shortly.";
         return 0;
     }
     paint_init();
-    int pics = fs_find_child(fs_root(), "Pictures");
+    int pics = fs_is_dir(parent) ? parent : fs_find_child(fs_root(), "Pictures");
     if (pics >= 0 && !fs_is_dir(pics)) {
         name_failure_message="Pictures is not a folder.";
         return 0;
@@ -3103,9 +3621,21 @@ static void open_view(int file_id) {
     open_dlg=0;dirty=1;
 }
 
+/* Client rectangle of Browser, Image Viewer, Media Player and System
+ * Monitor, shared by drawing, clicks and the player's fast paths. Classic
+ * starts under the menu row; in Modern an app with a toolbar starts on the
+ * header rule, so its toolbar continues the header. */
+static void app_client(int wx, int wy, int ww, int wh, int toolbar, int *x, int *y, int *cw, int *ch) {
+    int top = MODERN ? wy + TITLE_BAR - (toolbar ? 1 : 0) : wy + TITLE_H;
+    *x = wx + 1; *y = top; *cw = ww - 2; *ch = wy + wh - 1 - top;
+}
+
 static void draw_view(int wx,int wy,int ww,int wh,int inactive) {
+    int cx, cy, cw, ch;
     gui_draw_window(wx,wy,ww,wh,image_viewer_title(),0,inactive?WIN_INACTIVE:0);
-    image_viewer_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
+    app_client(wx, wy, ww, wh, 1, &cx, &cy, &cw, &ch);
+    image_viewer_set_hover(inactive ? 0 : hot);
+    image_viewer_draw(cx, cy, cw, ch);
 }
 
 static void handle_paint_click(int wx, int wy, int ww, int wh) {
@@ -3187,6 +3717,14 @@ static void handle_paint_click(int wx, int wy, int ww, int wh) {
         paint_text_last_adv = 0;
         dirty = 1;
     }
+}
+
+/* Tracks the canvas cell under the pointer for the status bar. */
+static void paint_hover_tick(void) {
+    int wx, wy, ww, wh, lx = -1, ly = -1;
+    if (front_kind() != WK_PAINT || !win_geom_kind(WK_PAINT, &wx, &wy, &ww, &wh)) return;
+    if (!paint_mouse_logical(wx, wy, ww, wh, mouse_x, mouse_y, &lx, &ly)) lx = ly = -1;
+    if (lx != paint_hover_x || ly != paint_hover_y) { paint_hover_x = lx; paint_hover_y = ly; dirty = 1; }
 }
 
 static void paint_drag_tick(void) {
@@ -3294,6 +3832,7 @@ static int snk_next_dir;
 static int snk_food_x;
 static int snk_food_y;
 static int snk_score;
+static int snk_best;   /* best score since boot */
 static int snk_over;
 static uint32_t snk_last_tick;
 static unsigned snk_rng;
@@ -3385,6 +3924,8 @@ static void snake_tick(void) {
     snk_y[0] = (unsigned char)ny;
     if (ate) {
         snk_score++;
+        if (snk_score > snk_best)
+            snk_best = snk_score;
         snk_place_food();
     }
     dirty = 1;
@@ -3401,6 +3942,10 @@ static void handle_snake_key(void) {
         close_front();
         return;
     }
+    if (snk_over && (key_sc == KEY_ENTER || key_sc == KEY_SPACE)) {
+        snake_reset();
+        return;
+    }
     if (key_sc == KEY_RIGHT)
         snake_turn(0);
     else if (key_sc == KEY_DOWN)
@@ -3411,52 +3956,82 @@ static void handle_snake_key(void) {
         snake_turn(3);
 }
 
-static void snake_info(char *out, int cap) {
-    const char *lbl = "Score: ";
-    char num[12];
-    int i = 0;
-    for (int p = 0; lbl[p] && i < cap - 1; p++)
-        out[i++] = lbl[p];
-    utoa((unsigned)snk_score, num);
-    for (int p = 0; num[p] && i < cap - 1; p++)
-        out[i++] = num[p];
-    if (snk_over) {
-        const char *go = "  GAME OVER";
-        for (int p = 0; go[p] && i < cap - 1; p++)
-            out[i++] = go[p];
-    }
-    out[i] = 0;
+/* Snake layout: a toolbar with the score and New game, the playfield, and
+ * a status bar. Drawing and clicks share snake_layout. */
+#define SNK_MARGIN 16
+typedef struct {
+    PaneRect field, again, card, card_button;
+    int cx, cy, cw, ch;
+} SnakeLayout;
+
+static void snake_layout(int wx, int wy, int ww, int wh, SnakeLayout *L) {
+    L->cx = wx + 1; L->cy = wy + TITLE_H; L->cw = ww - 2; L->ch = wh - TITLE_H - 1;
+    int body = pane_body_y(L->cy), bottom = pane_status_y(L->cy, L->ch);
+    int fw = SNK_COLS * SNK_CELL, fh = SNK_ROWS * SNK_CELL;
+    L->field = (PaneRect){L->cx + (L->cw - fw) / 2, body + (bottom - body - fh) / 2, fw, fh};
+    int bw = pane_tool_w("New game");
+    L->again = (PaneRect){L->cx + L->cw - pane_pad() - bw, pane_ctl_y(L->cy), bw, BTN_H};
+    pane_card_layout(L->field.x, L->field.y, fw, fh, &L->card, &L->card_button);
+}
+
+static int snake_window_h(void) {
+    return TITLE_H + pane_tool_h() - (MODERN ? 1 : 0) + 2 * SNK_MARGIN + SNK_ROWS * SNK_CELL +
+           pane_status_h() + 1;
 }
 
 static void draw_snake(int wx, int wy, int ww, int wh, int inactive) {
-    char info[32];
-    snake_info(info, 32);
-    gui_draw_window(wx, wy, ww, wh, "Snake", info,
-                    WIN_INFO | (inactive ? WIN_INACTIVE : 0));
-
-    int bx = wx + 1;
-    int by = wy + TITLE_H + INFO_H + 1;
-    int bw = ww - 2;
-    int bh = wh - TITLE_H - INFO_H - 2;
-    if (bw < 1 || bh < 1)
-        return;
+    gui_draw_window(wx, wy, ww, wh, "Snake", 0, inactive ? WIN_INACTIVE : 0);
+    SnakeLayout L;
+    snake_layout(wx, wy, ww, wh, &L);
+    PaneHot hp = inactive ? 0 : hot;
+    /* Toolbar: score, length and best, then New game. */
+    pane_toolbar(L.cx, L.cy, L.cw);
+    char num[12];
+    int x = L.cx + pane_pad() + 4, ty = pane_ctl_y(L.cy);
+    utoa((unsigned)snk_score, num);
+    x += pane_inline_stat(x, ty, BTN_H, "Score", num) + 20;
+    utoa((unsigned)snk_len, num);
+    x += pane_inline_stat(x, ty, BTN_H, "Length", num) + 20;
+    utoa((unsigned)snk_best, num);
+    pane_inline_stat(x, ty, BTN_H, "Best", num);
+    pane_tool(&L.again, ICON_REFRESH, "New game", KB_DEFAULT,
+              pane_hot(hp, L.again.x, L.again.y, L.again.w, L.again.h));
+    /* Playfield art: a dark board with a faint grid. */
+    PaneRect *f = &L.field;
     uint8_t field = gfx_rgb(0x16, 0x1A, 0x24);
     uint8_t grid = gfx_rgb(0x1E, 0x23, 0x30);
-    draw_rect(bx, by, bw, bh, field);
-
-    int gx = bx + (bw - SNK_COLS * SNK_CELL) / 2;
-    int gy = by + (bh - SNK_ROWS * SNK_CELL) / 2;
-    for (int r = 0; r <= SNK_ROWS; r++)
+    kit_fill(f->x - 1, f->y - 1, f->w + 2, f->h + 2, MODERN ? 8 : KIT_R_SQUARE, TK_LINE, 1);
+    kit_fill(f->x, f->y, f->w, f->h, MODERN ? 7 : KIT_R_SQUARE, field, 1);
+    int gx = f->x, gy = f->y;
+    for (int r = 1; r < SNK_ROWS; r++)
         draw_hline(gx, gy + r * SNK_CELL, SNK_COLS * SNK_CELL, grid);
-    for (int c = 0; c <= SNK_COLS; c++)
+    for (int c = 1; c < SNK_COLS; c++)
         draw_vline(gx + c * SNK_CELL, gy, SNK_ROWS * SNK_CELL, grid);
     for (int i = 0; i < snk_len; i++) {
-        uint8_t body = (i == 0) ? PAL_ACCENT + 4 : ui_accent;
+        uint8_t body = (i == 0) ? TK_ACCENT_700 : ui_accent;
         draw_round_rect(gx + snk_x[i] * SNK_CELL + 1, gy + snk_y[i] * SNK_CELL + 1,
                         SNK_CELL - 2, SNK_CELL - 2, 3, body);
     }
     draw_round_rect(gx + snk_food_x * SNK_CELL + 2, gy + snk_food_y * SNK_CELL + 2,
                     SNK_CELL - 4, SNK_CELL - 4, (SNK_CELL - 4) / 2, gfx_rgb(0xF0, 0x50, 0x48));
+    if (snk_over) {
+        shade_rect(f->x, f->y, f->w, f->h, 1);
+        char text[40];
+        utoa((unsigned)snk_score, num);
+        pane_join(text, sizeof text, "You scored ", num, snk_score == 1 ? " point." : " points.");
+        pane_card(&L.card, &L.card_button, "Game over", text, "Play again",
+                  pane_hot(hp, L.card_button.x, L.card_button.y, L.card_button.w, L.card_button.h));
+    }
+    pane_statusbar(L.cx, L.cy, L.cw, L.ch,
+                   snk_over ? "Enter or Space plays again; Esc closes" : "Arrow keys steer; Esc closes",
+                   TK_TEXT2, snk_over ? "Game over" : "Playing", snk_over ? TK_RED_700 : TK_TEXT2);
+}
+
+static void handle_snake_click(int wx, int wy, int ww, int wh) {
+    SnakeLayout L;
+    snake_layout(wx, wy, ww, wh, &L);
+    if (pane_hit(mouse_x, mouse_y, &L.again) || (snk_over && pane_hit(mouse_x, mouse_y, &L.card_button)))
+        snake_reset();
 }
 
 static void open_snake(void) {
@@ -3483,6 +4058,68 @@ static int term_text(const char *s, int x, int y, int col, int cols) {
         col++;
     }
     return col;
+}
+
+/* Output lines are plain text; colors come from their shape. A prompt line
+ * shows its folder in blue, errors are red, usage lines amber, and words that
+ * end in a slash (folders in ls) blue. */
+enum { TL_PLAIN, TL_PROMPT, TL_ERROR, TL_USAGE, TL_NOTE };
+static int term_line_kind(const char *s, int index) {
+    static const char *const errors[] = { "Cannot ", "Error", "No manual", "Command exceeds", "Input was lost",
+                                          "Program stopped", "Stop this terminal", "Disk is saving", "Network is busy" };
+    for (unsigned k = 0; k < sizeof errors / sizeof errors[0]; k++) {
+        int n = kstrlen(errors[k]), i = 0;
+        while (i < n && s[i] == errors[k][i]) i++;
+        if (i == n) return TL_ERROR;
+    }
+    if (s[0] == 'U' && s[1] == 's' && s[2] == 'a' && s[3] == 'g' && s[4] == 'e' && s[5] == ':') return TL_USAGE;
+    return index < 2 ? TL_NOTE : TL_PLAIN;
+}
+/* The prompt (folder and marker) and folder names are bold. */
+static uint8_t term_char_ink(const char *s, int len, int at, int kind, int *prompt_end, int *bold) {
+    *bold = 0;
+    if (kind == TL_ERROR) return TERM_ANSI(9);
+    if (kind == TL_USAGE) return TERM_ANSI(11);
+    if (kind == TL_NOTE) return TERM_ANSI(8);
+    if (kind == TL_PROMPT) {
+        if (*prompt_end < 0) { int i = 0; while (s[i] && !(s[i] == '>' && s[i + 1] == ' ')) i++; *prompt_end = i; }
+        *bold = at <= *prompt_end;
+        if (at < *prompt_end) return TERM_ANSI(12);
+        if (at <= *prompt_end + 1) return TERM_ANSI(10);
+        *bold = 0;
+        return TERM_ANSI(15);
+    }
+    /* A word that ends in a slash. */
+    int a = at, b = at;
+    if (s[at] == ' ') return TERM_FG;
+    while (a > 0 && s[a - 1] != ' ') a--;
+    while (b < len && s[b] != ' ') b++;
+    *bold = b > a + 1 && s[b - 1] == '/';
+    return *bold ? TERM_ANSI(12) : TERM_FG;
+}
+/* One wrapped chunk of a line: characters [from, from + cols) of s. The
+ * monospace font has no bold face, so bold is the glyph drawn twice, one
+ * pixel apart. */
+static void term_line_chunk(const char *s, int len, int kind, int from, int cols, int x, int y) {
+    int prompt_end = -1, bold;
+    for (int c = 0; c < cols && from + c < len; c++) {
+        uint8_t ink = term_char_ink(s, len, from + c, kind, &prompt_end, &bold);
+        draw_edit_char(s[from + c], x + c * EDIT_CHAR_W, y, ink);
+        if (bold) draw_edit_char(s[from + c], x + c * EDIT_CHAR_W + 1, y, ink);
+    }
+}
+/* Terminal and native-task bodies: dark in both styles, rounded at the
+ * bottom in Modern. */
+static void term_body(int wx, int top, int ww, int h) {
+    if (MODERN && !(chrome_flags & WIN_MAXED)) kit_fill_bottom(wx + 1, top, ww - 2, h, ui_theme.r_window - 1, TERM_BG);
+    else draw_rect(wx + 1, top, ww - 2, h, TERM_BG);
+}
+/* Scroll position along the right edge; the wheel and Page keys scroll. */
+static void term_scroll_marker(int x, int y, int h, int first, int rows, int total) {
+    if (total <= rows || h < 16) return;
+    int at, size;
+    kit_scroll_thumb(h, first, rows, total, &at, &size);
+    kit_fill(x, y + at, 6, size, 3, TERM_ANSI(8), 0);
 }
 
 /* Both full composition and stable native-task updates use this exact layout.
@@ -3564,10 +4201,10 @@ static void draw_native_window(int slot,int inactive){
     Win *w=&wins[slot];char title[APP_VIEW_TITLE_LEN];
     gui_draw_window(w->x,w->y,w->w,w->h,win_display_title(slot,title),0,inactive?WIN_INACTIVE:0);
     int top=w->y+TITLE_H+1;
-    draw_rect(w->x+1,top,w->w-2,w->h-TITLE_H-2,INK(30));
-    draw_rect(w->x+1,top,w->w-2,NATIVE_TOOLBAR_H,ui_chrome_dk);
+    term_body(w->x,top-1,w->w,w->h-TITLE_H-1);
+    kit_toolbar(w->x+1,top-1,w->w-2,NATIVE_TOOLBAR_H+1);
     int output=app_view_output_visible(slot);
-    tool_button(w->x+8,top+3,100,NATIVE_TOOLBAR_H-6,ICON_LIST,app_view_output_dropped(slot)?"Output*":"Output",
+    tool_button(w->x+8,top+2,76,NATIVE_TOOLBAR_H-4,ICON_LIST,app_view_output_dropped(slot)?"Output*":"Output",
                 output?TB_ACTIVE:TB_FLAT);
     AppViewResult result;
     int ended=app_view_result(slot,&result);
@@ -3575,7 +4212,7 @@ static void draw_native_window(int slot,int inactive){
         (result.reason==PROCESS_EXIT_STOP?"Stopped":"Ended; see Output"):
         "Ctrl+C stops; Close ends task";
     if(output&&app_view_output_dropped(slot))status="Older output discarded";
-    draw_string_clip(status,w->x+90,top+7,ui_text_dim,w->x+w->w-12);
+    kit_text(status,w->x+96,kit_ty(top,NATIVE_TOOLBAR_H-1),TK_TEXT2,w->w-108,0);
     if(output){
         int rows=native_output_rows(w),count=app_view_output_count(slot);
         int total=native_output_total(slot),max=total>rows?total-rows:0;
@@ -3595,15 +4232,22 @@ static void draw_native_window(int slot,int inactive){
     }else{
         AppCanvasFrame frame=app_view_frame(slot);CanvasView view=native_canvas_geometry(slot);
         if(frame.pixels)draw_app_canvas(frame,&view);
-        else draw_string_clip(ended?"No published frame; see Output":"Starting...",
-                              w->x+16,top+NATIVE_TOOLBAR_H+16,TERM_FG,w->x+w->w-16);
+        else kit_text(ended?"No published frame; see Output":"Starting...",
+                      w->x+16,top+NATIVE_TOOLBAR_H+16,TERM_ANSI(8),w->w-32,0);
     }
 }
 
 static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
-    char title[TERM_TASK_TITLE_LEN];
+    char title[TERM_TASK_TITLE_LEN], size[24];
+    int tcols = (ww - 2 - TERM_PAD * 2) / EDIT_CHAR_W, trows = (wh - TITLE_H - 2 - TERM_PAD * 2) / EDIT_LINE_H;
+    kstrcpy(size, "~ ");
+    fmt_uint(size + 2, (unsigned)(tcols > 0 ? tcols : 0));
+    kstrcpy(size + kstrlen(size), "x");
+    fmt_uint(size + kstrlen(size), (unsigned)(trows > 0 ? trows : 0));
+    chrome_subtitle = size;
     gui_draw_window(wx, wy, ww, wh, win_display_title(context_slot, title), 0, inactive ? WIN_INACTIVE : 0);
-    draw_rect(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1, INK(30));
+    chrome_subtitle = 0;
+    term_body(wx, wy + TITLE_H, ww, wh - TITLE_H - 1);
 
     int ax = wx + 1 + TERM_PAD;
     int canvas_height=draw_term_canvas(wx,wy,ww,wh);
@@ -3628,15 +4272,21 @@ static void draw_term(int wx, int wy, int ww, int wh, int inactive) {
     for(int i=0;i<=count;i++){
         const char *text=i==count?live:term_get(i);int len=kstrlen(text);
         int chunks=i==count?len/cols+1:(len?(len+cols-1)/cols:1);
+        int kind=i==count?(term_task_running(context_slot)?TL_NOTE:TL_PROMPT):term_is_echo(i)?TL_PROMPT:term_line_kind(text,i);
         for(int chunk=0;chunk<chunks;chunk++,visual++){
             int row=visual-first;
             if(row<0||row>=rows)continue;
             int y=ay+row*EDIT_LINE_H;
-            term_text(text+chunk*cols,ax,y,0,cols);
-            if(i==count&&chunk==chunks-1&&!inactive)
-                draw_rect(ax+(len%cols)*EDIT_CHAR_W,y,1,EDIT_FONT_H,TERM_FG);
+            term_line_chunk(text,len,kind,chunk*cols,cols,ax,y);
+            /* Block cursor; hollow while another window has focus. */
+            if(i==count&&chunk==chunks-1){
+                int cx=ax+(len%cols)*EDIT_CHAR_W;
+                if(inactive)draw_frame(cx,y,EDIT_CHAR_W,EDIT_FONT_H,TERM_ANSI(8));
+                else if((frame_count/35)%2==0)draw_rect(cx,y,EDIT_CHAR_W,EDIT_FONT_H,TERM_ANSI(15));
+            }
         }
     }
+    term_scroll_marker(wx+ww-1-10,wy+TITLE_H+6,wh-TITLE_H-14,first,rows,total);
 }
 
 static void open_term(void) {
@@ -3647,110 +4297,104 @@ static void open_term(void) {
 
 /* ---------- Todo ---------- */
 
-#define TODO_CIRCLE  12
-#define TODO_MARK_X  12
-#define TODO_LABEL_X 32
+/* Todo layout: a toolbar with the new-task field, Add and Save, the task
+ * rows with check boxes, and a status bar with the counts and the save
+ * state. Drawing and clicks share todo_layout. */
+typedef struct {
+    PaneRect field, add, save;
+    int cx, cw, list_y, rows;
+} TodoLayout;
 
-static void draw_todo_mark(int x, int y, int done) {
-    int s = TODO_CIRCLE + 4;
-    if (done) {
-        draw_round_rect(x - 2, y - 2, s, s, s / 2, ui_accent);
-        uint8_t w = ui_on_accent;
-        draw_line(x + 2, y + 6, x + 5, y + 9, w);
-        draw_line(x + 3, y + 6, x + 6, y + 9, w);
-        draw_line(x + 5, y + 9, x + 11, y + 3, w);
-        draw_line(x + 6, y + 9, x + 12, y + 3, w);
-    } else {
-        draw_round_rect(x - 2, y - 2, s, s, s / 2, INK(12));
-        draw_round_rect(x - 1, y - 1, s - 2, s - 2, s / 2 - 1, ui_field);
-    }
+static void todo_layout(int wx, int wy, int ww, int wh, TodoLayout *L) {
+    int cx = wx + 1, cy = wy + TITLE_H, cw = ww - 2, ch = wh - TITLE_H - 1;
+    int pad = pane_pad(), y = pane_ctl_y(cy), sw = pane_tool_w("Save"), aw = kit_button_w("Add", -1);
+    L->cx = cx; L->cw = cw;
+    L->save = (PaneRect){cx + cw - pad - sw, y, sw, BTN_H};
+    L->add = (PaneRect){L->save.x - 10 - aw, y, aw, BTN_H};
+    L->field = (PaneRect){cx + pad, y, L->add.x - 8 - cx - pad, BTN_H};
+    L->list_y = pane_body_y(cy) + (MODERN ? 6 : 4);
+    int n = (pane_status_y(cy, ch) - 4 - L->list_y) / ROW_H;
+    L->rows = n < 0 ? 0 : n > TODO_MAX ? TODO_MAX : n;
 }
 
-static void todo_field_box(int wx, int wy, int ww, int wh,
-                           int *fx, int *fy, int *fw, int *fh) {
-    *fx = wx + 12;
-    *fy = wy + wh - TODO_FOOT_H + 8;
-    *fw = ww - 100;
-    *fh = 24;
-}
-
-static int todo_rows_fit(int wh) {
-    int room = wh - TITLE_H - 8 - TODO_FOOT_H;
-    int n = room / TODO_ROW_H;
-    if (n > TODO_MAX)
-        n = TODO_MAX;
-    return n < 0 ? 0 : n;
+/* Default height: every task row fits. */
+static int todo_window_h(void) {
+    return TITLE_H + pane_tool_h() - (MODERN ? 1 : 0) + (MODERN ? 6 : 4) + TODO_MAX * ROW_H + 4 +
+           pane_status_h() + 1;
 }
 
 static void draw_todo(int wx, int wy, int ww, int wh, int inactive) {
     gui_draw_window(wx, wy, ww, wh, "Todo", 0, inactive ? WIN_INACTIVE : 0);
-    draw_rect(wx + 1, wy + TITLE_H + 1, ww - 2, wh - TITLE_H - 2, ui_body);
-
-    int rows = todo_rows_fit(wh);
-    int n = todo_count();
-    if (n > rows)
-        n = rows;
-    if (!n) {
-        const char *empty = "No tasks yet", *hint = "Type below and press Enter to add one.";
-        int my = wy + TITLE_H + (wh - TITLE_H - TODO_FOOT_H) / 2 - CHAR_H;
-        draw_string_bold(empty, wx + (ww - uib_string_w(empty)) / 2, my, ui_text);
-        draw_string(hint, wx + (ww - ui_string_w(hint)) / 2, my + CHAR_H + 6, ui_text_dim);
-    }
-    for (int i = 0; i < n; i++) {
-        int ry = wy + TITLE_H + 8 + i * TODO_ROW_H;
-        draw_todo_mark(wx + TODO_MARK_X, ry + (TODO_ROW_H - TODO_CIRCLE) / 2,
-                       todo_done(i));
-        draw_string_clip(todo_text(i), wx + TODO_LABEL_X,
-                         ry + (TODO_ROW_H - CHAR_H) / 2,
-                         todo_done(i) ? ui_text_dim : ui_text, wx + ww - 12);
-        if (todo_done(i))
-            draw_hline(wx + TODO_LABEL_X, ry + TODO_ROW_H / 2,
-                       ui_string_w(todo_text(i)), ui_text_dim);
-    }
-
-    int ruley = wy + wh - TODO_FOOT_H;
-    draw_rect(wx, ruley, ww, TODO_FOOT_H, ui_chrome);
-    draw_hline(wx, ruley, ww, ui_chrome_dk);
-
-    int fx, fy, fw, fh;
-    todo_field_box(wx, wy, ww, wh, &fx, &fy, &fw, &fh);
-    tool_button(wx+ww-76, fy, 64, fh, ICON_SAVE, 0, TB_NORMAL);
-    draw_string_clip(todo_status(), wx+12, ruley+37, ui_text_dim, wx+ww-12);
-    int active = todo_field_active();
-    draw_round_rect(fx, fy, fw, fh, 5, active ? ui_accent : ui_border);
-    draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 4, ui_field);
-
+    TodoLayout L;
+    todo_layout(wx, wy, ww, wh, &L);
+    int cy = wy + TITLE_H, ch = wh - TITLE_H - 1, n = todo_count();
+    PaneHot hp = inactive ? 0 : hot;
+    /* Toolbar: field, Add, Save. */
+    pane_toolbar(L.cx, cy, L.cw);
+    int active = todo_field_active() && !inactive, full = n >= TODO_MAX;
     const char *txt = todo_field();
-    int ty = fy + (fh - CHAR_H) / 2;
-    if (txt[0])
-        draw_string_clip(txt, fx + 8, ty, ui_text, fx + fw - 6);
-    else
-        draw_string_clip("Add a task and press Enter", fx + 8, ty, ui_text_dim, fx + fw - 6);
-    if (active) {
-        int cx = fx + 8 + ui_string_w(txt);
-        if (cx < fx + fw - 6)
-            draw_rect(cx, fy + 4, 1, fh - 8, ui_text);
+    PaneRect *f = &L.field;
+    int tx = kit_field(f->x, f->y, f->w, f->h, active ? KIT_FOCUS : 0), ty = kit_ty(f->y, f->h);
+    int room = f->x + f->w - (MODERN ? 10 : 6) - tx, start = 0;
+    while (txt[start] && kit_text_w(txt + start, 0) > room - 2) start++;
+    if (txt[0]) kit_text(txt + start, tx, ty, TK_TEXT, room, 0);
+    else kit_text(full ? "The list is full" : "Add a task", tx, ty, TK_TEXT2, room, 0);
+    if (active && ((frame_count / 35) & 1) == 0) kit_caret(tx + kit_text_w(txt + start, 0), ty);
+    int can_add = txt[0] && !full;
+    kit_button(L.add.x, L.add.y, L.add.w, L.add.h, "Add", -1, KB_PRIMARY,
+               can_add ? pane_hot(hp, L.add.x, L.add.y, L.add.w, L.add.h) : KIT_DISABLED);
+    kit_vseparator(L.save.x - 5, L.save.y + 4, L.save.h - 8);
+    pane_tool(&L.save, ICON_SAVE, "Save", KB_DEFAULT, pane_hot(hp, L.save.x, L.save.y, L.save.w, L.save.h));
+    /* Rows */
+    int shown = n < L.rows ? n : L.rows, done = 0, pad = pane_pad();
+    for (int i = 0; i < n; i++) done += todo_done(i) != 0;
+    for (int i = 0; i < shown; i++) {
+        int ry = L.list_y + i * ROW_H, d = todo_done(i);
+        int state = pane_hot(hp, L.cx, ry, L.cw, ROW_H);
+        uint8_t ink = kit_row(L.cx, ry, L.cw, ROW_H, state);
+        int bx = L.cx + pad + (MODERN ? 6 : 0), lx = bx + ui_theme.check + 10;
+        kit_check(bx, ry + (ROW_H - ui_theme.check) / 2, d ? KIT_ON : 0);
+        const char *s = todo_text(i);
+        int lw = kit_text(s, lx, kit_ty(ry, ROW_H), d ? TK_TEXT2 : ink, L.cx + L.cw - pad - lx, 0);
+        if (d) draw_hline(lx, ry + ROW_H / 2, lw, TK_TEXT2);
     }
+    if (!n) {
+        int my = L.list_y + (pane_status_y(cy, ch) - L.list_y) / 2 - UI_FONT_H;
+        kit_text_center("No tasks yet", L.cx, my, L.cw, TK_TEXT, 1);
+        kit_text_center("Type a task above and press Enter.", L.cx, my + UI_FONT_H + 4, L.cw, TK_TEXT2, 0);
+    }
+    /* Status bar: counts, then the save state. */
+    char left[48], a[12], b[12];
+    pane_num(a, (unsigned)n);
+    pane_num(b, (unsigned)done);
+    pane_join(left, sizeof left, a, n == 1 ? " task, " : " tasks, ", b);
+    pane_append(left, sizeof left, full ? " done (list full)" : " done");
+    pane_statusbar(L.cx, cy, L.cw, ch, left, TK_TEXT2, todo_status(), TK_TEXT2);
 }
 
 static void handle_todo_click(int wx, int wy, int ww, int wh) {
-    int fx, fy, fw, fh;
-    todo_field_box(wx, wy, ww, wh, &fx, &fy, &fw, &fh);
-    if(hit(mouse_x,mouse_y,wx+ww-76,fy,64,fh)){
+    TodoLayout L;
+    todo_layout(wx, wy, ww, wh, &L);
+    if (pane_hit(mouse_x, mouse_y, &L.save)) {
         todo_retry_save();dirty=1;return;
     }
-    if (hit(mouse_x, mouse_y, fx, fy, fw, fh)) {
+    if (pane_hit(mouse_x, mouse_y, &L.add)) {
+        todo_focus_field();
+        todo_field_enter();
+        dirty = 1;
+        return;
+    }
+    if (pane_hit(mouse_x, mouse_y, &L.field)) {
         todo_focus_field();
         dirty = 1;
         return;
     }
-    int rows = todo_rows_fit(wh);
     int n = todo_count();
-    if (n > rows)
-        n = rows;
+    if (n > L.rows)
+        n = L.rows;
     for (int i = 0; i < n; i++) {
-        int ry = wy + TITLE_H + 8 + i * TODO_ROW_H;
-        if (hit(mouse_x, mouse_y, wx + 1, ry, ww - 2, TODO_ROW_H)) {
+        int ry = L.list_y + i * ROW_H;
+        if (hit(mouse_x, mouse_y, L.cx, ry, L.cw, ROW_H)) {
             todo_toggle(i);
             dirty = 1;
             return;
@@ -3831,7 +4475,7 @@ static int native_window_start(int id,unsigned identity,const char *argument,uns
     if(slot<0)return NATIVE_LAUNCH_WINDOW;
     Win prepared={0};prepared.kind=WK_NATIVE;
     layout_window(WK_NATIVE,&prepared.x,&prepared.y,&prepared.w,&prepared.h);
-    prepared.x+=slot*18;prepared.y+=slot*14;win_clamp(&prepared);
+    win_place(&prepared);
     int result=app_view_start_owned_file(slot,id,identity,argument,length);
     if(result)return result;
     /* START invokes no output, and no scheduler can run before publication. */
@@ -3872,6 +4516,7 @@ static void open_fs_file(int id) {
     if (!fs_valid(id))
         return;
     const char *n = fs_name(id);
+    if(!fs_is_dir(id)&&!fs_is_app(id))recent_add(id);
     if(fs_is_app(id)&&!kstrcmp(n,"Browser")){open_browser(-1);return;}
     if(fs_is_app(id)&&!kstrcmp(n,"Media Player")){open_player(-1);return;}
     if(fs_is_app(id)&&!kstrcmp(n,"Writer")){open_writer(-1);return;}
@@ -3961,12 +4606,17 @@ static void open_fs_file(int id) {
 
 
 
+static int help_window_h(void);
 static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     switch (kind) {
     case WK_NATIVE:
         *w=640;*h=480;break;
     case WK_SPREADSHEET:
-        *w=SPREADSHEET_W+2;*h=SPREADSHEET_H+TITLE_H+2;break;
+        { /* The client starts below the title (Modern) or menu row (Classic). */
+            int co=MODERN?TITLE_BAR-1:TITLE_H;
+            *w=SPREADSHEET_W+2;*h=spreadsheet_fit_height(SPREADSHEET_W,SPREADSHEET_H+TITLE_H+1-co)+1+co;
+        }
+        break;
     case WK_WRITER:
         *w=WRITER_W+2;*h=WRITER_H+TITLE_H+2;break;
     case WK_BROWSER:
@@ -3974,21 +4624,21 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     case WK_PLAYER:
         *w=PLAYER_W+2;*h=PLAYER_H+TITLE_H+2;break;
     case WK_PROPERTIES:
-        *x=300;*y=140;*w=500;*h=380;break;
+        *w=380;*h=properties_h();break;
     case WK_HELLO:
         *w = 520;
-        *h = 170;
+        *h = TITLE_H + 140;
         break;
     case WK_HELP:
-        *w = 640;
-        *h = 262;
+        *w = 560;
+        *h = help_window_h();
         break;
     case WK_ABOUT:
-        *w = 520;
-        *h = 344;
+        *w = 460;
+        *h = MODERN ? 280 : 260;
         break;
     case WK_SETTINGS:
-        *w = 560;
+        *w = 800;
         *h = settings_window_h();
         break;
     case WK_FILES:
@@ -4005,17 +4655,17 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         break;
     case WK_PAINT:
         *w = 760;
-        *h = 500;
+        *h = 500 + paint_status_h();
         break;
     case WK_VIEW:
         *w=IMAGE_VIEWER_W+2;*h=IMAGE_VIEWER_H+TITLE_H+2;break;
     case WK_SNAKE:
         *w = 520;
-        *h = 400;
+        *h = snake_window_h();
         break;
     case WK_WORDLE:
-        *w = WORDLE_W;
-        *h = WORDLE_WIN_H;
+        *w = WORDLE_W + 2;
+        *h = TITLE_H + wordle_client_h() + 1;
         break;
     case WK_TERM:
         *w = TERM_WIN_W;
@@ -4023,27 +4673,27 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         break;
     case WK_TODO:
         *w = TODO_W;
-        *h = TODO_WIN_H;
+        *h = todo_window_h();
         break;
     case WK_CLOCK:
-        *w = CLOCK_W;
-        *h = CLOCK_H + TITLE_H;
+        *w = CLOCK_W + 2;
+        *h = CLOCK_H + TITLE_H + 1;
         break;
     case WK_CAL:
-        *w = CAL_W;
-        *h = CAL_H + TITLE_H;
+        *w = CAL_W + 2;
+        *h = CAL_H + TITLE_H + 1;
         break;
     case WK_MINES:
-        *w = MINES_W;
-        *h = MINES_H + TITLE_H;
+        *w = MINES_W + 2;
+        *h = TITLE_H + mines_client_h() + 1;
         break;
     case WK_2048:
-        *w = G2048_W;
-        *h = G2048_H + TITLE_H;
+        *w = G2048_W + 2;
+        *h = TITLE_H + g2048_client_h() + 1;
         break;
     case WK_BREAKOUT:
-        *w = BO_W;
-        *h = BO_H + TITLE_H;
+        *w = BO_CLIENT_W + 2;
+        *h = TITLE_H + bo_client_h() + 1;
         break;
     case WK_SYSMON:
         *w = SYSMON_W;
@@ -4056,8 +4706,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     }
     /* These sizes predate the window menu strip; give back its height so the
      * content keeps its original bottom margin. */
-    if (kind == WK_CALC || kind == WK_SNAKE ||
-        kind == WK_WORDLE || kind == WK_TERM || kind == WK_TODO || kind == WK_PAINT)
+    if (kind == WK_CALC || kind == WK_TERM || kind == WK_PAINT)
         *h += WMENU_H;
     int maxh = fb_h - MENUBAR_H - TASKBAR_H - 8;
     if (*w > fb_w - 24)
@@ -4098,14 +4747,24 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *y = MENUBAR_H;
 }
 
+/* Line number gutter: wide enough for the last line's number. */
+static int edit_gutter_w(void) {
+    if (!(win_options & WINOPT_LINE_NUMBERS)) return 0;
+    int lines = 1, digits = 1;
+    for (int i = 0; i < edit_len; i++) if (edit_buf[i] == '\n') lines++;
+    for (int n = lines; n >= 10; n /= 10) digits++;
+    if (digits < 2) digits = 2;
+    return digits * EDIT_CHAR_W + 20;
+}
+
 static void edit_area(int wx, int wy, int ww, int wh,
                       int *ax, int *ay, int *aw, int *ah) {
-    int top = TITLE_H + INFO_H;
-    *ax = wx + 18;
-    *ay = wy + top + 14;
-    *aw = ww - 36 - SB;
-    *ah = wh - top - 24 - SB - edit_search_height();
-    if(*ah<EDIT_LINE_H)*ah=EDIT_LINE_H;
+    *ax = wx + 1 + edit_gutter_w() + (MODERN ? 12 : 8);
+    *ay = edit_text_top(wy) + (MODERN ? 10 : 6);
+    *aw = wx + ww - 1 - SB - 4 - *ax;
+    *ah = edit_text_bottom(wy, wh) - 4 - *ay;
+    if (*aw < EDIT_CHAR_W) *aw = EDIT_CHAR_W;
+    if (*ah < EDIT_LINE_H) *ah = EDIT_LINE_H;
 }
 
 static void edit_caret_cell(int cols, int *row, int *col) {
@@ -4162,7 +4821,7 @@ static void edit_ensure_caret_visible(int rows, int cols) {
 
 static int double_click(int item, int *last_item, uint32_t *last_frame) {
     unsigned dt = input_gesture_ticks() - *last_frame;
-    int is_dbl = (item == *last_item && dt < TIMER_HZ * 2 / 5);
+    int is_dbl = (item == *last_item && dt < dbl_click_ticks());
     *last_item = item;
     *last_frame = input_gesture_ticks();
     return is_dbl;
@@ -4210,7 +4869,7 @@ static void fm_navigate(int id) {
     fm_rename_cancel();
     fm_set_cwd(id);
     fm_history_sync();
-    fm_selected = 0;
+    fm_selected = -1;
     fm_refresh();
     dirty = 1;
 }
@@ -4220,12 +4879,8 @@ static void fm_open_selected(void) {
     if (vis <= 0 || fm_selected < 0 || fm_selected >= vis)
         return;
     int id = fm_row_id(fm_selected);
-    if (id == -1) {
-        fm_go_up();
-        return;
-    }
     if (id < 0) {fm_refresh();dirty=1;return;}
-    int index=fm_selected-(fm_has_parent()?1:0);
+    int index=fm_selected;
     if(fs_identity(id)!=fm_ids_identity[index]){fm_refresh();dirty=1;return;}
     if (fs_is_dir(id)) {
         fm_navigate(id);
@@ -4267,7 +4922,7 @@ static void fm_select_id(int id) {
         fm_view.filter[0]=0;fm_filter_select_all=0;fm_refresh();
     }
     int index=file_view_find(fm_ids,fm_ids_identity,fm_count,id,identity);
-    fm_selected=index>=0?index+(fm_has_parent()?1:0):-1;
+    fm_selected=index;
     fm_manual_scroll=0;
 }
 
@@ -4409,7 +5064,634 @@ static void do_empty_trash(void) {
     dirty = 1;
 }
 
+/* ---------- Drawing ---------- */
+
+static int file_extension(const char *name,const char *suffix);
+/* Application nodes are named like their launcher entry; Hello has none. */
+static int app_icon_by_name(const char *name) {
+    for (int i = 0; i < ICON_DESK_COUNT; i++)
+        if (kstrcmp(icons[i].label, name) == 0) return icons[i].icon;
+    if (kstrcmp(name, "Hello") == 0) return ICON_APP_HELLO;
+    return ICON_WINDOW;
+}
+/* ---------- File browser parts ----------
+ * The Places sidebar, the path bar and the detail list. Files, Open and
+ * Save As draw with these and hit test the rectangles they were drawn in. */
+
+#define PLACE_MAX 10
+typedef struct { const char *name; int id, icon; } Place;
+static const char *const place_folders[] = {"Desktop", "Documents", "Downloads", "Pictures", "Media", "Programs"};
+
+/* Folders first, then devices from *devices on. */
+static int places_build(Place *p, int *devices, int with_trash) {
+    int n = 0;
+    p[n++] = (Place){"Home", fs_root(), UI_ICON_HOME};
+    for (unsigned i = 0; i < sizeof place_folders / sizeof *place_folders; i++) {
+        int id = fs_find_child(fs_root(), place_folders[i]);
+        if (fs_is_dir(id)) p[n++] = (Place){place_folders[i], id, i == 0 ? UI_ICON_DESK : UI_ICON_FOLDER};
+    }
+    *devices = n;
+    p[n++] = (Place){"System", fs_root(), UI_ICON_DISK};
+    if (with_trash && fs_is_dir(trash_id)) p[n++] = (Place){"Trash", trash_id, UI_ICON_TRASH};
+    return n;
+}
+
+static int places_head_h(void) { return MODERN ? 28 : 26; }
+static int places_row_y(int y, int k, int devices) {
+    int ry = y + 4 + places_head_h() + k * ROW_H;
+    return k >= devices ? ry + 6 + places_head_h() : ry;
+}
+
+static void places_draw(int x, int y, int w, int h, int cwd, int with_trash) {
+    Place p[PLACE_MAX];
+    int dev, n = places_build(p, &dev, with_trash), lit = -1;
+    for (int k = 0; k < n && lit < 0; k++) if (p[k].id == cwd) lit = k;
+    int hh = places_head_h(), hx = x + (MODERN ? 18 : 12);
+    int ix = x + (MODERN ? 10 : 12), tx = ix + (MODERN ? 26 : 20);
+    draw_rect(x, y, w - 1, h, ui_theme.sidebar);
+    draw_vline(x + w - 1, y, h, TK_LINE_SUBTLE);
+    for (int k = 0; k < n; k++) {
+        int ry = places_row_y(y, k, dev);
+        if (ry + ROW_H > y + h) break;
+        if (k == 0 || k == dev)
+            kit_text(k ? "Devices" : "Places", hx, kit_ty(ry - hh + 2, hh), TK_TEXT2, w - 24, 1);
+        uint8_t paper = ui_theme.sidebar, ink = TK_TEXT;
+        int on = k == lit;
+        if (on) {
+            paper = TK_ACCENT_100;
+            if (MODERN) { kit_fill(x + 4, ry, w - 20, ROW_H, 6, paper, 1); ink = TK_ACCENT_700; }
+            else draw_rect(x + 1, ry, w - 9, ROW_H, paper);
+        } else if (hot(x, ry, w - 8, ROW_H) & KIT_HOVER) {
+            paper = TK_HOVER;
+            if (MODERN) kit_fill(x + 4, ry, w - 20, ROW_H, 6, paper, 1);
+            else draw_rect(x + 1, ry, w - 9, ROW_H, paper);
+        }
+        ui_icon_draw(p[k].icon, ix, ry + (ROW_H - 16) / 2, 16, TK_ICON, paper);
+        kit_text(p[k].name, tx, kit_ty(ry, ROW_H), ink, x + w - 10 - tx, on);
+    }
+}
+
+static int places_hit(int x, int y, int w, int h, int with_trash) {
+    if (!hit(mouse_x, mouse_y, x, y, w, h)) return -1;
+    Place p[PLACE_MAX];
+    int dev, n = places_build(p, &dev, with_trash);
+    for (int k = 0; k < n; k++) {
+        int ry = places_row_y(y, k, dev);
+        if (ry + ROW_H > y + h) break;
+        if (hit(mouse_x, mouse_y, x, ry, w, ROW_H)) return p[k].id;
+    }
+    return -1;
+}
+
+/* Path bar: a Home icon and the folder names split by chevrons. Classic
+ * draws it in a field, Modern flat on the toolbar. Leading folders drop out
+ * when the path does not fit. */
+#define CRUMB_MAX 16
+static const char *crumb_name(int id) { return id == fs_root() ? "Home" : fs_name(id); }
+static int crumbs_layout(int x, int w, int cwd, int *xs, int *ws, int *ids) {
+    int chain[CRUMB_MAX], cw[CRUMB_MAX], n = 0, total = 0;
+    for (int id = cwd; fs_valid(id) && n < CRUMB_MAX; id = fs_parent(id)) {
+        chain[n++] = id;
+        if (id == fs_root()) break;
+    }
+    for (int k = 0; k < n; k++) {
+        cw[k] = kit_text_w(crumb_name(chain[k]), 0) + 8 + (chain[k] == fs_root() ? 20 : 0);
+        total += cw[k] + (k ? 16 : 0);
+    }
+    int first = n - 1, count = 0, cx = x;
+    while (first > 0 && total > w) { total -= cw[first] + 16; first--; }
+    for (int k = first; k >= 0; k--) {
+        int width = cw[k];
+        if (cx + width > x + w) width = x + w - cx;
+        if (width < 16) break;
+        xs[count] = cx; ws[count] = width; ids[count++] = chain[k];
+        cx += width + 16;
+    }
+    return count;
+}
+
+static int crumbs_inner(int *x, int *w) {
+    int pad = MODERN ? 4 : 6;
+    *x += pad; *w -= pad * 2;
+    return pad;
+}
+
+static void crumbs_draw(int x, int y, int w, int h, int cwd) {
+    uint8_t paper = MODERN ? ui_theme.chrome : TK_RAISED;
+    if (!MODERN) kit_field(x, y, w, h, 0);
+    int ix = x, iw = w, xs[CRUMB_MAX], ws[CRUMB_MAX], ids[CRUMB_MAX];
+    crumbs_inner(&ix, &iw);
+    int n = crumbs_layout(ix, iw, cwd, xs, ws, ids), ty = kit_ty(y, h);
+    for (int k = 0; k < n; k++) {
+        int tx = xs[k] + 4;
+        if (ids[k] == fs_root()) {
+            ui_icon_draw(UI_ICON_HOME, tx - 2, y + (h - 16) / 2, 16, TK_ICON, paper);
+            tx += 20;
+        }
+        kit_text(crumb_name(ids[k]), tx, ty, TK_TEXT, xs[k] + ws[k] - tx, 0);
+        if (k < n - 1) ui_icon_draw(UI_ICON_RIGHT, xs[k] + ws[k], y + (h - 16) / 2, 16, TK_TEXT2, paper);
+    }
+}
+
+static int crumbs_hit(int x, int y, int w, int h, int cwd) {
+    if (!hit(mouse_x, mouse_y, x, y, w, h)) return -1;
+    int ix = x, iw = w, xs[CRUMB_MAX], ws[CRUMB_MAX], ids[CRUMB_MAX];
+    crumbs_inner(&ix, &iw);
+    int n = crumbs_layout(ix, iw, cwd, xs, ws, ids);
+    for (int k = 0; k < n; k++)
+        if (mouse_x >= xs[k] && mouse_x < xs[k] + ws[k]) return ids[k];
+    return -1;
+}
+
+/* Back, forward and up, each a square icon button. */
+static int nav_size(void) { return MODERN ? 30 : 26; }
+static int nav_x(int x, int i) { return x + (MODERN ? 12 : 8) + i * (nav_size() + (MODERN ? 4 : 2)); }
+static int nav_end(int x) { return nav_x(x, 3) + 4; }
+static void nav_draw(int x, int y, int h, const int *enabled) {
+    static const int icon[3] = {UI_ICON_BACK, UI_ICON_FWD, UI_ICON_UP};
+    int s = nav_size(), by = y + (h - s) / 2;
+    for (int i = 0; i < 3; i++)
+        kit_icon_button(nav_x(x, i), by, s, icon[i], enabled[i] ? hot(nav_x(x, i), by, s, s) : KIT_DISABLED);
+}
+static int nav_hit(int x, int y, int h) {
+    int s = nav_size(), by = y + (h - s) / 2;
+    for (int i = 0; i < 3; i++) if (hit(mouse_x, mouse_y, nav_x(x, i), by, s, s)) return i;
+    return -1;
+}
+
+/* Node icons: the app's own icon for applications, else by kind. */
+static int code_name(const char *nm) {
+    static const char *const ext[] = {".c", ".h", ".asm", ".s", ".py", ".js", ".sh", ".ld", ".mk"};
+    for (unsigned i = 0; i < sizeof ext / sizeof *ext; i++) if (file_extension(nm, ext[i])) return 1;
+    return 0;
+}
+static void node_icon_draw(int id, int x, int y, int size, uint8_t paper) {
+    const char *nm = fs_name(id);
+    int big = size >= 32;
+    if (fs_is_app(id)) { app_icon_draw(app_icon_for(app_icon_by_name(nm)), x, y, big ? AI_BIG : AI_SMALL); return; }
+    if (!fs_is_dir(id) && file_extension(nm, ".bex")) { app_icon_draw(AI_NATIVE, x, y, big ? AI_BIG : AI_SMALL); return; }
+    int icon = big ? UI_ICON_A_DOC : UI_ICON_DOC;
+    if (id == trash_id) icon = big ? UI_ICON_A_TRASH : UI_ICON_TRASH;
+    else if (fs_is_dir(id)) icon = big ? UI_ICON_A_FILES : UI_ICON_FOLDER;
+    else if (is_image_file(id)) icon = big ? UI_ICON_A_IMG : UI_ICON_IMG;
+    else if (code_name(nm)) icon = big ? UI_ICON_A_CODE : UI_ICON_CODE;
+    else if (file_extension(nm, ".bsh") || file_extension(nm, ".csv")) icon = big ? UI_ICON_A_TABLE : UI_ICON_TABLE;
+    else if (file_extension(nm, ".html") || file_extension(nm, ".htm")) icon = big ? UI_ICON_A_WEB : UI_ICON_WEB;
+    ui_icon_draw(icon, x, y, size, TK_ICON, paper);
+}
+
+static void size_text(unsigned bytes, char *out) {
+    if (bytes < 1024u * 1024u) {
+        fmt_uint(out, (bytes + 1023) / 1024);
+        kstrcpy(out + kstrlen(out), " KB");
+        return;
+    }
+    unsigned tenths = (unsigned)(((unsigned long long)bytes * 10 + 524288) / 1048576);
+    fmt_uint(out, tenths / 10);
+    int n = kstrlen(out);
+    if (tenths < 1000) { out[n++] = '.'; out[n++] = (char)('0' + tenths % 10); }
+    kstrcpy(out + n, " MB");
+}
+
+/* "4 KB", "3 items" or "App" (lists leave an app's size blank). */
+static void node_size_text(int id, char *out) {
+    if (fs_is_dir(id)) {
+        int n = fs_child_count(id);
+        fmt_uint(out, (unsigned)n);
+        kstrcpy(out + kstrlen(out), n == 1 ? " item" : " items");
+    } else if (fs_is_app(id)) kstrcpy(out, "App");
+    else size_text((unsigned)fs_size(id), out);
+}
+
+static int leap_year(unsigned y) { return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0); }
+/* Timestamps count seconds from 2000-01-01. */
+static unsigned day_number(int year, int month, int day) {
+    unsigned n = 0;
+    for (int y = 2000; y < year; y++) n += leap_year((unsigned)y) ? 366 : 365;
+    for (int m = 1; m < month; m++) n += (unsigned)rtc_days_in_month(year, m);
+    return n + (unsigned)day - 1;
+}
+static void day_date(unsigned days, int *year, int *month, int *day) {
+    unsigned y = 2000;
+    for (;;) {
+        unsigned yd = leap_year(y) ? 366 : 365;
+        if (days < yd) break;
+        days -= yd; y++;
+    }
+    int m = 1;
+    while (m < 12 && days >= (unsigned)rtc_days_in_month((int)y, m)) days -= (unsigned)rtc_days_in_month((int)y, m++);
+    *year = (int)y; *month = m; *day = (int)days + 1;
+}
+/* "14:30" or "2:30 PM", following the clock setting. */
+static void clock_text(int hour, int min, char *out) {
+    int n = 0;
+    if (clock_flags & CLOCK_12H) {
+        int h = hour % 12 ? hour % 12 : 12;
+        fmt_uint(out, (unsigned)h);
+        n = kstrlen(out);
+    } else { fmt_pad2(out, hour); n = 2; }
+    out[n++] = ':';
+    fmt_pad2(out + n, min); n += 2;
+    if (clock_flags & CLOCK_12H) { kstrcpy(out + n, hour < 12 ? " AM" : " PM"); n += 3; }
+    out[n] = 0;
+}
+/* "Today 14:30", "Yesterday 18:02" or "18 Oct 2026". */
+static void stamp_text(unsigned stamp, char *out) {
+    if (!stamp) { kstrcpy(out, "Unknown"); return; }
+    RtcTime now;
+    rtc_read(&now);
+    unsigned today = day_number(now.year, now.month, now.day), day = stamp / 86400;
+    if (day == today || day + 1 == today) {
+        kstrcpy(out, day == today ? "Today " : "Yesterday ");
+        clock_text((int)(stamp / 3600 % 24), (int)(stamp / 60 % 60), out + kstrlen(out));
+        return;
+    }
+    int y, m, d;
+    day_date(day, &y, &m, &d);
+    fmt_uint(out, (unsigned)d);
+    int n = kstrlen(out);
+    out[n++] = ' ';
+    for (int i = 0; i < 3; i++) out[n++] = rtc_month_name[m - 1][i];
+    out[n++] = ' ';
+    fmt_uint(out + n, (unsigned)y);
+}
+
+/* Detail list: Name, then Size, Kind and Modified at the right when there
+ * is room. Size, kind and date columns start at the returned x values (0:
+ * hidden). */
+enum { FL_SIZE = 1, FL_DATE = 2, FL_KIND = 4 };
+static const char *kind_name(int id, int brief);
+static int flist_head_h(void) { return MODERN ? 32 : 24; }
+static void flist_layout(int x, int w, int cols, int *name_x, int *size_x, int *kind_x, int *date_x) {
+    int dw = (cols & FL_DATE) && w >= 360 ? (MODERN ? 128 : 124) : 0;
+    /* Kind narrows before it goes, so the Open dialog's list keeps it. */
+    int kw = !(cols & FL_KIND) ? 0 : w >= 520 ? 104 : w >= 460 ? 88 : 0;
+    int sw = (cols & FL_SIZE) && w >= 420 ? 72 : 0;
+    *name_x = x + (MODERN ? 16 : 8);
+    *date_x = dw ? x + w - dw : 0;
+    *kind_x = kw ? (dw ? *date_x : x + w) - kw : 0;
+    *size_x = sw ? (kw ? *kind_x : dw ? *date_x : x + w) - sw : 0;
+}
+static void flist_columns(int x, int w, int cols, int *name_x, int *size_x, int *date_x) {
+    int kx;
+    flist_layout(x, w, cols, name_x, size_x, &kx, date_x);
+}
+static int flist_name_end(int x, int w, int cols) {
+    int nx, sx, kx, dx;
+    flist_layout(x, w, cols, &nx, &sx, &kx, &dx);
+    return (sx ? sx : kx ? kx : dx ? dx : x + w) - 8;
+}
+
+static void sort_arrow(int x, int y, int up) {
+    for (int r = 0; r < 4; r++) draw_hline(x + r, up ? y + r : y + 3 - r, 7 - 2 * r, TK_TEXT2);
+}
+
+static void flist_header(int x, int y, int w, int cols, const FileViewOptions *v) {
+    int h = flist_head_h(), nx, sx, kx, dx, ty = kit_ty(y, h);
+    flist_layout(x, w, cols, &nx, &sx, &kx, &dx);
+    kit_list_header(x, y, w, h);
+    static const int sorts[4] = {FILE_VIEW_NAME, FILE_VIEW_SIZE, FILE_VIEW_TYPE, FILE_VIEW_MODIFIED};
+    static const char *const names[4] = {"Name", "Size", "Kind", "Modified"};
+    int at[4] = {nx, sx ? sx + 8 : 0, kx ? kx + 8 : 0, dx ? dx + 8 : 0};
+    for (int c = 0; c < 4; c++) {
+        if (!at[c]) continue;
+        if (!MODERN && c) draw_vline(at[c] - 8, y + 4, h - 8, TK_LINE_SUBTLE);
+        int tw = kit_text(names[c], at[c], ty, TK_TEXT, x + w - at[c], 1);
+        if (v && v->sort == sorts[c]) sort_arrow(at[c] + tw + 6, ty + 7, !v->descending);
+    }
+}
+
+/* FILE_VIEW_* for a header click, or -1. */
+static int flist_header_hit(int x, int y, int w, int cols) {
+    int nx, sx, kx, dx;
+    if (!hit(mouse_x, mouse_y, x, y, w, flist_head_h())) return -1;
+    flist_layout(x, w, cols, &nx, &sx, &kx, &dx);
+    if (dx && mouse_x >= dx) return FILE_VIEW_MODIFIED;
+    if (kx && mouse_x >= kx) return FILE_VIEW_TYPE;
+    if (sx && mouse_x >= sx) return FILE_VIEW_SIZE;
+    return FILE_VIEW_NAME;
+}
+
+/* One row. warn tints it amber (a name that would be replaced). */
+static void flist_row(int x, int y, int w, int cols, int id, int state, int warn) {
+    int h = ROW_H, nx, sx, kx, dx;
+    flist_layout(x, w, cols, &nx, &sx, &kx, &dx);
+    if (warn && !(state & KIT_ON)) kit_fill(MODERN ? x + 6 : x, y, MODERN ? w - 12 : w, h, MODERN ? 6 : 0, TK_AMBER_50, 1);
+    uint8_t ink = kit_row(x, y, w, h, state), dim = kit_row_dim(state);
+    uint8_t paper = (state & KIT_ON) ? ((state & KIT_UNFOCUSED) ? TK_ACCENT_100 : TK_ACCENT) :
+                    warn ? TK_AMBER_50 : ui_theme.content;
+    int ty = kit_ty(y, h), tx = nx + (MODERN ? 24 : 22);
+    char text[32];
+    node_icon_draw(id, nx, y + (h - 16) / 2, 16, paper);
+    kit_text(fs_name(id), tx, ty, ink, flist_name_end(x, w, cols) - tx, 0);
+    if (sx && !fs_is_app(id)) {  /* an app has no file size to show */
+        node_size_text(id, text);
+        kit_text_right(text, (kx ? kx : dx ? dx : x + w) - 16, ty, dim, 0);
+    }
+    if (kx) kit_text(kind_name(id, 1), kx + 8, ty, dim, (dx ? dx : x + w) - kx - 16, 0);
+    if (dx) {
+        stamp_text(fs_modified(id), text);
+        kit_text(text, dx + 8, ty, dim, x + w - dx - 12, 0);
+    }
+}
+
+static void files_title(char *title, int max) {
+    const char *nm = fm_cwd == fs_root() ? "Home" : fs_name(fm_cwd);
+    int i = 0;
+    while (nm[i] && i < max - 1) {
+        title[i] = nm[i];
+        i++;
+    }
+    title[i] = 0;
+}
+
+/* Status bar: a pending file action's message, else the item count and
+ * the selection; the free space goes at the right. */
+static void files_status(char *left, int max, char *right) {
+    int n = 0;
+    if((files_action_busy&&(int32_t)(files_message_until-frame_count)>0)||
+       (file_clipboard_status()[0]&&((int32_t)(files_message_until-frame_count)>0||file_clipboard_pending_sync()))){
+        const char *message=files_action_busy&&(int32_t)(files_message_until-frame_count)>0?
+            "Disk saving. Retry the file action.":file_clipboard_status();
+        while(n+1<max&&message[n]){left[n]=message[n];n++;}
+        left[n]=0;
+    } else {
+        char number[16];
+        fmt_uint(number, (unsigned)fm_count);
+        kstrcpy(left, number);
+        if (fm_view.filter[0]) {
+            kstrcpy(left + kstrlen(left), " of ");
+            fmt_uint(number, (unsigned)fm_total);
+            kstrcpy(left + kstrlen(left), number);
+        }
+        kstrcpy(left + kstrlen(left), fm_count == 1 && !fm_view.filter[0] ? " item" : " items");
+        int id = fm_row_id(fm_selected);
+        if (id >= 0) {
+            kstrcpy(left + kstrlen(left), ", 1 selected");
+            if (!fs_is_dir(id) && !fs_is_app(id)) {
+                kstrcpy(left + kstrlen(left), " (");
+                size_text((unsigned)fs_size(id), left + kstrlen(left));
+                kstrcpy(left + kstrlen(left), ")");
+            }
+        }
+    }
+    unsigned cap = fs_capacity(), used = fs_used_bytes();
+    size_text(cap > used ? cap - used : 0, right);
+    kstrcpy(right + kstrlen(right), " free");
+}
+
+/* Files layout: Places sidebar at the left, a toolbar across the top (back,
+ * forward, up, path, view buttons and search), the items as icon tiles or
+ * detail rows, and a status bar. fm_first is the first item shown; in the
+ * icon view it starts a row. */
+#define FILES_TOOL_H (MODERN ? 44 : 34)
+#define FILES_COLS (FL_SIZE | FL_KIND | FL_DATE)
+#define FILES_STATUS_H (MODERN ? 28 : 24)
+#define FILES_TILE_W (MODERN ? 96 : 92)
+#define FILES_TILE_H (MODERN ? 92 : 84)
+#define FILES_GAP 4
+#define FILES_PAD 12
+static int files_side_w(int ww) { return ww >= 560 ? (MODERN ? 176 : 160) : 0; }
+static int files_tool_y(int wy) { return MODERN ? wy + TITLE_BAR - 1 : wy + TITLE_H; }
+static int files_body_y(int wy) { return files_tool_y(wy) + FILES_TOOL_H; }
+static int files_status_y(int wy, int wh) { return wy + wh - 1 - FILES_STATUS_H; }
+static int files_content_x(int wx, int ww) { return wx + 1 + files_side_w(ww); }
+static int files_content_w(int ww) { return ww - 2 - files_side_w(ww); }
+static int files_header_h(void) { return MODERN ? 32 : 24; }
+static int files_list_y(int wy) { return files_body_y(wy) + (fm_details ? files_header_h() : FILES_PAD); }
+static int files_list_bottom(int wy, int wh) { return files_status_y(wy, wh) - (fm_details ? 0 : 4); }
+static int files_cols(int ww) {
+    if (fm_details) return 1;
+    int c = (files_content_w(ww) - 2 * FILES_PAD - SB + FILES_GAP) / (FILES_TILE_W + FILES_GAP);
+    return c < 1 ? 1 : c;
+}
+static int files_item_h(void) { return fm_details ? ROW_H : FILES_TILE_H + FILES_GAP; }
+/* Rows that fit whole (scrolling keeps the selection in these), and rows
+ * on screen at all: a last row that only partly fits is drawn cut at the
+ * list's bottom edge. */
+static int files_rows(int wy, int wh) {
+    int r = (files_list_bottom(wy, wh) - files_list_y(wy)) / files_item_h();
+    return r < 1 ? 1 : r;
+}
+static int files_shown_rows(int wy, int wh) {
+    int r = (files_list_bottom(wy, wh) - files_list_y(wy) + files_item_h() - 1) / files_item_h();
+    return r < 1 ? 1 : r;
+}
+static int files_scrolls(int ww, int wy, int wh) { return fm_vis_count() > files_rows(wy, wh) * files_cols(ww); }
+/* The rectangle of item i, when it is on screen, cut at the list's bottom. */
+static int files_item_rect(int wx, int wy, int ww, int wh, int i, int *x, int *y, int *w, int *h) {
+    int cols = files_cols(ww), k = i - fm_first;
+    if (i < 0 || i >= fm_vis_count() || k < 0 || k >= files_shown_rows(wy, wh) * cols) return 0;
+    if (fm_details) {
+        *x = files_content_x(wx, ww);
+        *y = files_list_y(wy) + k * ROW_H;
+        *w = files_content_w(ww) - (files_scrolls(ww, wy, wh) ? SB : 0);
+        *h = ROW_H;
+    } else {
+        *x = files_content_x(wx, ww) + FILES_PAD + (k % cols) * (FILES_TILE_W + FILES_GAP);
+        *y = files_list_y(wy) + (k / cols) * (FILES_TILE_H + FILES_GAP);
+        *w = FILES_TILE_W;
+        *h = FILES_TILE_H;
+    }
+    int bottom = files_list_bottom(wy, wh);
+    if (*y + *h > bottom) *h = bottom - *y;
+    return 1;
+}
+/* The item under the pointer: an index, -1 for empty space among the
+ * items, or -2 outside them. */
+static int files_item_at(int wx, int wy, int ww, int wh) {
+    int ax = files_content_x(wx, ww), ay = files_list_y(wy) - (fm_details ? 0 : FILES_PAD);
+    int aw = files_content_w(ww) - (files_scrolls(ww, wy, wh) ? SB : 0);
+    if (!hit(mouse_x, mouse_y, ax, ay, aw, files_list_bottom(wy, wh) - ay)) return -2;
+    int cols = files_cols(ww), page = files_shown_rows(wy, wh) * cols;
+    for (int i = fm_first; i < fm_vis_count() && i < fm_first + page; i++) {
+        int x, y, w, h;
+        if (files_item_rect(wx, wy, ww, wh, i, &x, &y, &w, &h) && hit(mouse_x, mouse_y, x, y, w, h)) return i;
+    }
+    return -1;
+}
+/* The label part of an item, where a click on the selection renames. */
+static int files_label_hit(int x, int y, int w, int h) {
+    if (fm_details) return mouse_x >= x + (MODERN ? 40 : 30) && hit(mouse_x, mouse_y, x, y, w, h);
+    return hit(mouse_x, mouse_y, x, y + 46, w, h - 46);
+}
+
+static void files_scroll(int rows, int cols) {
+    if (rows < 1) rows = 1;
+    if (cols < 1) cols = 1;
+    int page = rows * cols, vis = fm_vis_count();
+    if (!fm_manual_scroll && fm_selected >= 0) {
+        if (fm_selected < fm_first) fm_first = fm_selected / cols * cols;
+        if (fm_selected >= fm_first + page) fm_first = (fm_selected / cols - rows + 1) * cols;
+    }
+    int max = (vis + cols - 1) / cols - rows;
+    if (max < 0) max = 0;
+    if (fm_first > max * cols) fm_first = max * cols;
+    if (fm_first < 0) fm_first = 0;
+    fm_first -= fm_first % cols;
+}
+
+static void tile_label_ex(const char *s, int x, int y, int w, uint8_t ink, int bold, int selected);
+
+/* Drawing clips to the frame buffer, so while a partly visible row draws,
+ * the buffer's height stands in for the bottom edge of its list. */
+static int clip_bottom_begin(int bottom) {
+    int saved = fb_h;
+    if (bottom < fb_h) fb_h = bottom < 0 ? 0 : bottom;
+    return saved;
+}
+static void clip_bottom_end(int saved) { fb_h = saved; }
+
+/* An icon tile: the 32px icon and up to two lines of name. The selection
+ * tints the tile; while the list has focus the name also sits on the
+ * accent (Classic outlines the tile instead of tinting it). */
+static void draw_file_tile(int x, int y, int w, int h, int id, int state, int cut) {
+    int on = state & KIT_ON, focused = on && !(state & KIT_UNFOCUSED);
+    uint8_t bg = 0;
+    if (on) bg = MODERN || !focused ? TK_ACCENT_100 : 0;
+    else if (state & KIT_HOVER) bg = MODERN ? TK_SUNKEN : TK_ACCENT_50;
+    if (bg) kit_fill(x, y, w, h, MODERN ? 8 : 0, bg, 1);
+    if (focused && !MODERN) kit_frame(x, y, w, h, 0, TK_ACCENT);
+    node_icon_draw(id, x + (w - 32) / 2, y + 10, 32, bg ? bg : ui_theme.content);
+    tile_label_ex(fs_name(id), x + 4, y + 48, w - 8, cut ? TK_TEXT2 : TK_TEXT, 0, focused);
+}
+
+static int files_is_cut(int id) {
+    return file_clipboard_mode() == FILE_CLIPBOARD_CUT && file_clipboard_source() == id &&
+           file_clipboard_identity() == fs_identity(id);
+}
+
+/* Toolbar pieces, shared by drawing and clicks. */
+static int files_search_w(int ww) { return ww >= 640 ? 200 : ww >= 480 ? 150 : 0; }
+static int files_search_x(int wx, int ww) { return wx + ww - (MODERN ? 12 : 8) - files_search_w(ww); }
+static int files_view_x(int wx, int ww) {
+    int right = files_search_w(ww) ? files_search_x(wx, ww) - 8 : wx + ww - 8;
+    return right - 2 * nav_size();
+}
+static int files_ctl_y(int wy) { return files_tool_y(wy) + (FILES_TOOL_H - 1 - BTN_H) / 2; }
+
+static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
+    char title[FS_NAME_LEN], left[FS_PATH_LEN], right[24];
+    fm_history_sync();
+    files_title(title, sizeof title);
+    gui_draw_window(wx, wy, ww, wh, title, 0, inactive ? WIN_INACTIVE : 0);
+    int ty = files_tool_y(wy), by = files_body_y(wy), sy = files_status_y(wy, wh), side = files_side_w(ww);
+    /* Toolbar */
+    kit_toolbar(wx + 1, ty, ww - 2, FILES_TOOL_H);
+    int enabled[3] = {fm_history_target(-1) >= 0, fm_history_target(1) >= 0, fm_has_parent()};
+    nav_draw(wx, ty, FILES_TOOL_H - 1, enabled);
+    int cy = files_ctl_y(wy), vx = files_view_x(wx, ww), vs = nav_size(), vy = ty + (FILES_TOOL_H - 1 - vs) / 2;
+    crumbs_draw(nav_end(wx), cy, vx - 8 - nav_end(wx), BTN_H, fm_cwd);
+    if (MODERN) kit_box(vx - 2, vy - 2, 2 * vs + 4, vs + 4, 8, TK_SUNKEN, 0);
+    kit_icon_button(vx, vy, vs, UI_ICON_LIST, fm_details ? KIT_ON : hot(vx, vy, vs, vs));
+    kit_icon_button(vx + vs, vy, vs, UI_ICON_GRID, !fm_details ? KIT_ON : hot(vx + vs, vy, vs, vs));
+    int sw = files_search_w(ww);
+    if (sw) {
+        int sx = files_search_x(wx, ww), focus = fm_filter_focus && !inactive;
+        char placeholder[FS_NAME_LEN + 8];
+        kstrcpy(placeholder, "Search ");
+        kstrcpy(placeholder + 7, title);
+        int tx = kit_search(sx, cy, sw, BTN_H, fm_view.filter, placeholder, focus ? KIT_FOCUS : 0);
+        if (focus && fm_filter_select_all && fm_view.filter[0]) {
+            int fw = kit_text_w(fm_view.filter, 0), lim = kit_search_clear_x(sx, sw) - tx - 4;
+            draw_rect(tx - 1, kit_ty(cy, BTN_H), (fw < lim ? fw : lim) + 2, UI_FONT_H, TK_ACCENT);
+            kit_text(fm_view.filter, tx, kit_ty(cy, BTN_H), TK_ON_ACCENT, lim, 0);
+        } else if (focus && ((frame_count / 35) & 1) == 0)
+            kit_caret(tx + kit_text_w(fm_view.filter, 0), kit_ty(cy, BTN_H));
+    }
+    /* Sidebar */
+    if (side) places_draw(wx + 1, by, side, sy - by, fm_cwd, 1);
+    /* Items */
+    int cx = files_content_x(wx, ww), cw = files_content_w(ww), cols = files_cols(ww), rows = files_rows(wy, wh);
+    int vis = fm_vis_count(), unfocused = inactive || fm_filter_focus ? KIT_UNFOCUSED : 0;
+    files_scroll(rows, cols);
+    if (fm_details) flist_header(cx, by, cw, FILES_COLS, &fm_view);
+    int shown = files_shown_rows(wy, wh), clip = clip_bottom_begin(files_list_bottom(wy, wh));
+    for (int i = fm_first; i < vis && i < fm_first + shown * cols; i++) {
+        int x, y, w, h, id = fm_row_id(i);
+        if (id < 0 || !files_item_rect(wx, wy, ww, wh, i, &x, &y, &w, &h)) continue;
+        int renaming = fm_renaming && id == fm_rename_id && fs_identity(id) == fm_rename_identity;
+        int state = i == fm_selected ? KIT_ON | unfocused : renaming || inactive ? 0 : hot(x, y, w, h);
+        if (fm_details) {
+            flist_row(x, y, w, FILES_COLS, id, state, 0);
+        } else draw_file_tile(x, y, w, FILES_TILE_H, id, state, files_is_cut(id));
+    }
+    clip_bottom_end(clip);
+    if (!fm_count) {
+        const char *empty = fm_view.filter[0] ? "No matching names" : "This folder is empty";
+        int ey = files_list_y(wy) + (fm_details ? 8 : 24);
+        if (ey + UI_FONT_H <= sy) kit_text_center(empty, cx, ey, cw, TK_TEXT2, 0);
+    }
+    if (files_scrolls(ww, wy, wh)) {
+        int top = fm_details ? files_list_y(wy) : by + 2, len = sy - top - 2;
+        int total_rows = (vis + cols - 1) / cols;
+        kit_vscroll(cx + cw - SB, top, len, fm_first / cols, rows, total_rows, 0);
+    }
+    /* Status bar */
+    files_status(left, sizeof left, right);
+    if (MODERN) {
+        draw_hline(wx + 1, sy, ww - 2, TK_LINE_SUBTLE);
+        kit_fill_bottom(wx + 1, sy + 1, ww - 2, FILES_STATUS_H, ui_theme.r_window - 1, ui_theme.statusbar);
+    } else kit_statusbar(wx + 1, sy, ww - 2, FILES_STATUS_H);
+    int tty = kit_ty(sy + 1, FILES_STATUS_H - 1), pad = MODERN ? 12 : 8;
+    int rw = kit_text_w(right, 0);
+    kit_text(left, wx + pad, tty, TK_TEXT2, ww - pad * 3 - rw, 0);
+    kit_text_right(right, wx + ww - pad, tty, TK_TEXT2, 0);
+}
+
+/* The rename field sits over the name: in the row, or under the icon. */
+static int files_rename_rect(int wx, int wy, int ww, int wh, int *fx, int *fy, int *fw, int *fh) {
+    int row = -1;
+    for (int i = 0; i < fm_count; i++)
+        if (fm_ids[i] == fm_rename_id && fm_ids_identity[i] == fm_rename_identity) { row = i; break; }
+    int x, y, w, h;
+    if (row < 0 || !files_item_rect(wx, wy, ww, wh, row, &x, &y, &w, &h)) return 0;
+    int tw = kit_text_w(fm_rename_buf, 0) + 16;
+    if (fm_details) {
+        *fx = x + (MODERN ? 36 : 26); *fy = y + 1; *fh = h - 2;
+        *fw = tw < 120 ? 120 : tw;
+        int end = flist_name_end(x, w, FILES_COLS);
+        if (*fx + *fw > end) *fw = end - *fx;
+    } else {
+        *fw = tw < w ? w : tw;
+        if (*fw > w + 40) *fw = w + 40;
+        *fx = x + (w - *fw) / 2; *fy = y + 46; *fh = 22;
+    }
+    if (*fw < 24) *fw = 24;
+    return 1;
+}
+
+static void draw_rename_overlay(void) {
+    int wx, wy, ww, wh, fx, fy, fw, fh;
+    if (!fm_renaming || !win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh)) return;
+    if (!files_rename_rect(wx, wy, ww, wh, &fx, &fy, &fw, &fh)) return;
+    int tx = kit_field(fx, fy, fw, fh, KIT_FOCUS), ty = kit_ty(fy, fh);
+    int used = kit_text(fm_rename_buf, tx, ty, TK_TEXT, fw - (tx - fx) - 4, 0);
+    if ((frame_count / 35) % 2 == 0) kit_caret(tx + used, ty);
+}
+
+/* ---------- Open and Save As ----------
+ * One browser serves both: Open hides what the app cannot open, Save As
+ * shows everything and dims other types. Both keep their own back and
+ * forward history. */
+
+static FileViewOptions pick_view;
+static int pick_hidden, pick_show_all, pick_save, pick_manual;
+static int pick_hist[16], pick_hist_n, pick_hist_pos;
+static char pick_typed[FS_NAME_LEN];
+static int pick_typed_len;
+static const char *pick_message;
+
+static const char *const saveas_exts[7] = {".txt", ".pbm", ".bwr", ".rtf", ".bsh", ".csv", ".pdf"};
+static const char *const saveas_types[7] = {
+    "Plain text (.txt)", "Picture (.pbm)", "Writer document (.bwr)", "Rich text (.rtf)",
+    "Spreadsheet (.bsh)", "CSV values (.csv)", "PDF document (.pdf)"
+};
+static int name_target_valid(void) { return name_target >= 0 && name_target < 7; }
+
 static int od_row_enabled(int id) {
+    if (pick_save) return fs_is_dir(id) || (!fs_is_app(id) && name_target_valid() &&
+                                           file_extension(fs_name(id), saveas_exts[name_target]));
     if (pick_sheet) return fs_is_dir(id) || (!fs_is_app(id) &&
         (file_extension(fs_name(id),".bsh") || file_extension(fs_name(id),".csv")));
     if (pick_writer) return !fs_is_app(id);
@@ -4431,6 +5713,7 @@ static int od_next_enabled(int from, int dir) {
 }
 
 static void od_refresh(void) {
+    if (!fs_is_dir(pick_cwd)) pick_cwd = fs_root();
     int listed = fs_child_count(pick_cwd);
     if (listed > pick_capacity) {
         int *ids = kmalloc((uint32_t)listed * sizeof *ids);
@@ -4442,38 +5725,352 @@ static void od_refresh(void) {
             kfree(ids); kfree(identities);
         }
     }
-    int *raw = kmalloc((uint32_t)(listed ? listed : 1) * sizeof *raw);
-    int n = raw ? fs_list(pick_cwd, raw, listed < pick_capacity ? listed : pick_capacity) : 0;
-    pick_count = 0;
+    pick_view.hidden[0] = pick_cwd == fs_root() ? trash_id : -1;
+    pick_view.hidden[1] = pick_cwd == fs_root() ? prefs_id : -1;
+    int total = 0, n = pick_ids ? file_view_build(pick_cwd, &pick_view, pick_ids, pick_identity, pick_capacity, &total) : 0;
+    pick_count = pick_hidden = 0;
     for (int i = 0; i < n; i++) {
-        if (pick_cwd == fs_root() && trash_id >= 0 && raw[i] == trash_id)
-            continue;
-        if (pick_cwd == fs_root() && prefs_id >= 0 && raw[i] == prefs_id)
-            continue;
-        pick_identity[pick_count] = fs_identity(raw[i]);
-        pick_ids[pick_count++] = raw[i];
+        if (!pick_save && !pick_show_all && !od_row_enabled(pick_ids[i])) { pick_hidden++; continue; }
+        pick_ids[pick_count] = pick_ids[i];
+        pick_identity[pick_count++] = pick_identity[i];
     }
-    kfree(raw);
     if (pick_selected >= pick_count)
-        pick_selected = pick_count ? pick_count - 1 : 0;
+        pick_selected = pick_count - 1;
     if (pick_selected < 0)
-        pick_selected = 0;
-    if (pick_count && !od_row_enabled(pick_ids[pick_selected]))
-        pick_selected = od_next_enabled(pick_selected, 1);
+        pick_selected = pick_save ? -1 : 0;
+    if (pick_selected >= 0 && pick_count && !od_row_enabled(pick_ids[pick_selected]))
+        pick_selected = pick_save ? -1 : od_next_enabled(pick_selected, 1);
+}
+
+static void pick_go(int id, int record) {
+    if (!fs_is_dir(id)) return;
+    if (record && id != pick_cwd) {
+        if (pick_hist_n == 0) { pick_hist[0] = pick_cwd; pick_hist_n = 1; pick_hist_pos = 0; }
+        pick_hist_n = pick_hist_pos + 1;
+        if (pick_hist_n == 16) {
+            for (int i = 1; i < 16; i++) pick_hist[i - 1] = pick_hist[i];
+            pick_hist_n--;
+        }
+        pick_hist[pick_hist_n++] = id;
+        pick_hist_pos = pick_hist_n - 1;
+    }
+    pick_cwd = id;
+    pick_first = pick_manual = 0;
+    pick_selected = pick_save ? -1 : 0;
+    pick_view.filter[0] = 0;
+    pick_typed_len = 0; pick_typed[0] = 0;
+    pick_message = 0;
+    od_refresh();
+    dirty = 1;
+}
+
+static void pick_history_step(int dir) {
+    int p = pick_hist_pos + dir;
+    if (p < 0 || p >= pick_hist_n || !fs_is_dir(pick_hist[p])) return;
+    pick_hist_pos = p;
+    pick_go(pick_hist[p], 0);
+}
+
+static void pick_reset(int cwd, int save) {
+    pick_save = save;
+    pick_manual = 0;
+    pick_focus = pick_first = 0;
+    pick_show_all = 0;
+    pick_view.filter[0] = 0;
+    pick_view.sort = FILE_VIEW_NAME;
+    pick_view.descending = 0;
+    pick_hist_n = pick_hist_pos = 0;
+    pick_last_click_item = -1;
+    pick_cwd = fs_is_dir(cwd) ? cwd : fs_root();
+    pick_selected = save ? -1 : 0;
+    pick_typed_len = 0; pick_typed[0] = 0;
+    pick_message = 0;
+    od_refresh();
+}
+
+static int pick_row_id(int row) {
+    if (row < 0 || row >= pick_count) return -1;
+    return fs_identity(pick_ids[row]) == pick_identity[row] ? pick_ids[row] : -1;
+}
+
+static void pick_sort(int sort) {
+    if (pick_view.sort == sort) pick_view.descending = !pick_view.descending;
+    else { pick_view.sort = sort; pick_view.descending = sort == FILE_VIEW_MODIFIED; }
+    int id = pick_row_id(pick_selected);
+    od_refresh();
+    for (int i = 0; i < pick_count; i++) if (pick_ids[i] == id) pick_selected = i;
+    dirty = 1;
+}
+
+static void pick_scroll(int rows, int visible) {
+    int max = pick_count - visible;
+    if (max < 0) max = 0;
+    pick_first += rows;
+    pick_manual = 1;
+    if (pick_first > max) pick_first = max;
+    if (pick_first < 0) pick_first = 0;
+    dirty = 1;
+}
+
+/* Shared layout of the two dialogs. band is the height above the toolbar
+ * (Save As puts its name field there), foot the height of the footer. */
+typedef struct {
+    int x, y, w, h, band_y, tool_y, tool_h, body_y, body_h, side_w, list_x, list_w, rows_y, rows, foot_y, foot_h;
+} Chooser;
+
+static void chooser_layout(Chooser *c, int x, int y, int w, int h, int band, int foot) {
+    c->x = x; c->y = y; c->w = w; c->h = h;
+    c->band_y = y + TITLE_BAR - (MODERN ? 1 : 0);
+    c->tool_y = c->band_y + band;
+    c->tool_h = MODERN ? 44 : 34;
+    c->body_y = c->tool_y + c->tool_h;
+    c->foot_h = foot;
+    c->foot_y = y + h - foot;
+    c->body_h = c->foot_y - c->body_y;
+    c->side_w = w >= 520 ? (MODERN ? 156 : 148) : 0;
+    c->list_x = x + 1 + c->side_w;
+    c->list_w = w - 2 - c->side_w;
+    c->rows_y = c->body_y + flist_head_h();
+    c->rows = (c->foot_y - c->rows_y - 4) / ROW_H;
+    if (c->rows < 1) c->rows = 1;
+}
+
+static int chooser_cols(void) { return pick_save ? FL_DATE : FL_SIZE | FL_KIND | FL_DATE; }
+/* Modern rows sit 2px in from the list on both sides, so with kit_row's own
+ * 6px the selection is inset 8px left and right. */
+static int chooser_row_x(const Chooser *c) { return c->list_x + (MODERN ? 2 : 0); }
+static int chooser_row_w(const Chooser *c) { return c->list_w - (pick_count > c->rows ? SB : 0) - (MODERN ? 4 : 0); }
+static int chooser_right_w(void) { return pick_save ? kit_button_w("New Folder", UI_ICON_NEWF) : 168; }
+static int chooser_right_x(const Chooser *c) { return c->x + c->w - (MODERN ? 12 : 8) - chooser_right_w(); }
+static int chooser_ctl_y(const Chooser *c) { return c->tool_y + (c->tool_h - 1 - BTN_H) / 2; }
+
+/* Footer band: Classic paints the base color, Modern the chrome color with
+ * the window's rounded bottom. */
+static void dlg_footer(int x, int w, int fy, int fh) {
+    if (MODERN) {
+        draw_hline(x + 1, fy, w - 2, TK_LINE);
+        kit_fill_bottom(x + 1, fy + 1, w - 2, fh - 2, ui_theme.r_window - 1, ui_theme.chrome);
+    } else {
+        draw_hline(x + 1, fy, w - 2, TK_LINE_SUBTLE);
+        draw_rect(x + 1, fy + 1, w - 2, fh - 2, TK_BASE);
+    }
+}
+
+/* The name of a row that would be replaced, for Save As. */
+static int saveas_existing(void) {
+    if (!pick_save || !name_len) return -1;
+    for (int i = 0; i < pick_count; i++)
+        if (kstrcmp(fs_name(pick_ids[i]), name_buf) == 0) return i;
+    return -1;
+}
+
+static void chooser_draw(const Chooser *c) {
+    int x = c->x, w = c->w;
+    kit_toolbar(x + 1, c->tool_y, w - 2, c->tool_h);
+    int enabled[3] = {pick_hist_pos > 0, pick_hist_pos < pick_hist_n - 1, pick_cwd != fs_root()};
+    nav_draw(x, c->tool_y, c->tool_h - 1, enabled);
+    int cy = chooser_ctl_y(c), rx = chooser_right_x(c);
+    crumbs_draw(nav_end(x), cy, rx - 8 - nav_end(x), BTN_H, pick_cwd);
+    if (pick_save) kit_button(rx, cy, chooser_right_w(), BTN_H, "New Folder", UI_ICON_NEWF, KB_DEFAULT,
+                              hot(rx, cy, chooser_right_w(), BTN_H));
+    else kit_search(rx, cy, chooser_right_w(), BTN_H, pick_view.filter, "Search",
+                    pick_focus == 3 ? KIT_FOCUS : 0);
+    if (!pick_save && pick_focus == 3 && ((frame_count / 35) & 1) == 0)
+        kit_caret(rx + (MODERN ? 11 : 7) + 21 + kit_text_w(pick_view.filter, 0), kit_ty(cy, BTN_H));
+    if (c->side_w) places_draw(x + 1, c->body_y, c->side_w, c->body_h, pick_cwd, 0);
+    int cols = chooser_cols(), rw = chooser_row_w(c);
+    flist_header(c->list_x, c->body_y, c->list_w, cols, &pick_view);
+    if (pick_selected >= 0 && !pick_manual) {
+        if (pick_selected < pick_first) pick_first = pick_selected;
+        if (pick_selected >= pick_first + c->rows) pick_first = pick_selected - c->rows + 1;
+    }
+    if (pick_first > pick_count - c->rows) pick_first = pick_count - c->rows;
+    if (pick_first < 0) pick_first = 0;
+    int warn = saveas_existing(), y = c->rows_y;
+    for (int i = pick_first; i < pick_count && i < pick_first + c->rows; i++, y += ROW_H) {
+        int id = pick_ids[i], state = 0;
+        if (!od_row_enabled(id)) state = KIT_DISABLED;
+        else if (i == pick_selected && i != warn) state = KIT_ON | (pick_focus ? KIT_UNFOCUSED : 0);
+        flist_row(chooser_row_x(c), y, rw, cols, id, state, i == warn);
+    }
+    int nx, sx, dx;
+    flist_columns(chooser_row_x(c), rw, cols, &nx, &sx, &dx);
+    if (!pick_count && !pick_hidden)
+        kit_text(pick_view.filter[0] ? "No matching names" : "This folder is empty", nx, kit_ty(y, ROW_H),
+                 TK_TEXT2, rw - 24, 0);
+    if (pick_hidden && y + ROW_H <= c->foot_y) {
+        char note[64];
+        fmt_uint(note, (unsigned)pick_hidden);
+        kstrcpy(note + kstrlen(note), pick_hidden == 1 ? " file hidden by the filter" : " files hidden by the filter");
+        kit_text(note, nx, kit_ty(y + 4, ROW_H), TK_TEXT2, rw - 24, 0);
+    }
+    if (pick_count > c->rows)
+        kit_vscroll(c->list_x + c->list_w - SB, c->rows_y, c->rows * ROW_H, pick_first, c->rows, pick_count, 0);
+}
+
+static int saveas_click_row(int i, int dbl);
+static void files_refresh_all(void);
+static void od_open_selected(void);
+
+/* Clicks in the toolbar, sidebar and list. Returns 1 when handled. */
+static int chooser_click(const Chooser *c) {
+    int n = nav_hit(c->x, c->tool_y, c->tool_h - 1);
+    if (n == 0) { pick_history_step(-1); return 1; }
+    if (n == 1) { pick_history_step(1); return 1; }
+    if (n == 2) { if (pick_cwd != fs_root()) pick_go(fs_parent(pick_cwd), 1); return 1; }
+    int cy = chooser_ctl_y(c), rx = chooser_right_x(c), id;
+    if ((id = crumbs_hit(nav_end(c->x), cy, rx - 8 - nav_end(c->x), BTN_H, pick_cwd)) >= 0) {
+        if (id != pick_cwd) pick_go(id, 1);
+        return 1;
+    }
+    if (hit(mouse_x, mouse_y, rx, cy, chooser_right_w(), BTN_H)) {
+        if (!pick_save) {
+            if (pick_view.filter[0] && mouse_x >= kit_search_clear_x(rx, chooser_right_w())) {
+                pick_view.filter[0] = 0; od_refresh();
+            }
+            pick_focus = 3; dirty = 1;
+            return 1;
+        }
+        if (fs_sync_busy()) { pick_message = "Disk saving. Retry New Folder shortly."; dirty = 1; return 1; }
+        char name[FS_NAME_LEN];
+        int made = fs_unique_dir(pick_cwd, name) < 0 ? -1 : fs_mkdir(pick_cwd, name);
+        if (made < 0) { pick_message = "Could not create a folder here."; dirty = 1; return 1; }
+        pick_message = 0;
+        od_refresh();
+        for (int i = 0; i < pick_count; i++) if (pick_ids[i] == made) pick_selected = i;
+        files_refresh_all();
+        dirty = 1;
+        return 1;
+    }
+    if (c->side_w && (id = places_hit(c->x + 1, c->body_y, c->side_w, c->body_h, 0)) >= 0) {
+        if (id != pick_cwd) pick_go(id, 1);
+        return 1;
+    }
+    int cols = chooser_cols(), rw = chooser_row_w(c), sort = flist_header_hit(c->list_x, c->body_y, c->list_w, cols);
+    if (sort >= 0) { pick_sort(sort); return 1; }
+    if (pick_count > c->rows && hit(mouse_x, mouse_y, c->list_x + c->list_w - SB, c->rows_y, SB, c->rows * ROW_H)) {
+        int at, size;
+        kit_scroll_thumb(c->rows * ROW_H, pick_first, c->rows, pick_count, &at, &size);
+        pick_scroll(mouse_y < c->rows_y + at ? -c->rows : c->rows, c->rows);
+        return 1;
+    }
+    if (!hit(mouse_x, mouse_y, chooser_row_x(c), c->rows_y, rw, c->foot_y - c->rows_y)) return 0;
+    int i = pick_first + (mouse_y - c->rows_y) / ROW_H;
+    if (i >= pick_count || i >= pick_first + c->rows) {
+        if (pick_save) pick_selected = -1;
+        dirty = 1;
+        return 1;
+    }
+    if (fs_identity(pick_ids[i]) != pick_identity[i]) { od_refresh(); dirty = 1; return 1; }
+    if (!od_row_enabled(pick_ids[i])) return 1;
+    int dbl = double_click(i, &pick_last_click_item, &pick_last_click_frame);
+    pick_selected = i;
+    pick_typed_len = 0; pick_typed[0] = 0;
+    if (pick_save) saveas_click_row(i, dbl);
+    else {
+        pick_focus = 0;
+        if (dbl) od_open_selected();
+    }
+    dirty = 1;
+    return 1;
+}
+
+static void open_title(char *out) {
+    kstrcpy(out, pick_pics_only ? "Open Picture" : "Open");
+}
+static const char *open_filter_name(void) {
+    if (pick_pics_only) return "Image files";
+    if (pick_sheet) return "Spreadsheets (.bsh, .csv)";
+    if (pick_writer) return "Documents";
+    return "All files";
+}
+static int open_has_filter(void) { return pick_pics_only || pick_sheet || pick_writer; }
+
+static void pick_geom(int *px, int *py, int *pw, int *ph) {
+    int top = MENUBAR_H, avail = TASKBAR_Y - top - 16;
+    *pw = fb_w - 16 < 640 ? fb_w - 16 : 640;
+    *ph = avail < 460 ? avail : 460;
+    *px = (fb_w - *pw) / 2;
+    *py = top + (TASKBAR_Y - top - *ph) / 2;
+}
+
+static int open_foot_h(void) { return (MODERN ? 28 : 24) + BTN_H * 2 + 10; }
+
+static void open_layout(Chooser *c) {
+    int x, y, w, h;
+    pick_geom(&x, &y, &w, &h);
+    chooser_layout(c, x, y, w, h, 0, open_foot_h());
+}
+
+/* Footer: file name and filter on the first row, buttons on the second. */
+static void od_footer(const Chooser *c, int *lx, int *fx, int *fw, int *dx, int *dw, int *row1, int *row2) {
+    int pad = MODERN ? 16 : 12;
+    *lx = c->x + pad;
+    *fx = c->x + 92;
+    *dw = 176;
+    *dx = c->x + c->w - pad - *dw;
+    *fw = *dx - 8 - *fx;
+    *row1 = c->foot_y + (MODERN ? 14 : 12);
+    *row2 = *row1 + BTN_H + 10;
+}
+
+static void od_buttons(int px, int py, int pw, int ph, int *ox, int *oy, int *ow,
+                       int *cx, int *cy, int *cw) {
+    (void)py;
+    *ow = *cw = MODERN ? 84 : 80;
+    *oy = *cy = py + ph - (MODERN ? 14 : 12) - BTN_H;
+    *ox = px + pw - (MODERN ? 16 : 12) - *ow;
+    *cx = *ox - 8 - *cw;
+}
+
+static void draw_open_dialog(void) {
+    Chooser c;
+    open_layout(&c);
+    char title[24];
+    open_title(title);
+    shade_rect(0, 0, fb_w, fb_h, 1);
+    chrome_icon = AI_FILES;
+    gui_draw_window(c.x, c.y, c.w, c.h, title, 0, WIN_NOMENU | WIN_DIALOG);
+    chrome_icon = -1;
+    hot(close_box_x(c.x, c.w), cap_y(c.y), CAP_CLOSE_W, CAP_H);
+    chooser_draw(&c);
+    dlg_footer(c.x, c.w, c.foot_y, c.foot_h);
+    int lx, fx, fw, dx, dw, r1, r2;
+    od_footer(&c, &lx, &fx, &fw, &dx, &dw, &r1, &r2);
+    kit_text("File name", lx, kit_ty(r1, BTN_H), TK_TEXT, fx - lx - 8, 0);
+    int tx = kit_field(fx, r1, fw, BTN_H, pick_focus == 0 ? KIT_FOCUS : 0);
+    int id = pick_row_id(pick_selected);
+    const char *shown = pick_typed_len ? pick_typed : id >= 0 && !fs_is_dir(id) ? fs_name(id) : "";
+    int used = kit_text(shown, tx, kit_ty(r1, BTN_H), TK_TEXT, fw - (tx - fx) - 8, 0);
+    if (pick_focus == 0 && pick_typed_len && ((frame_count / 35) & 1) == 0) kit_caret(tx + used, kit_ty(r1, BTN_H));
+    const char *filter = open_has_filter() && pick_show_all ? "All files" : open_filter_name();
+    /* "All files" with no other choice is still the real filter: an enabled,
+     * passive box, as Save As draws a single type. */
+    kit_dropdown(dx, r1, dw, BTN_H, filter, open_has_filter() ? hot(dx, r1, dw, BTN_H) : 0);
+    int ox, oy, ow, cx, cy, cw;
+    od_buttons(c.x, c.y, c.w, c.h, &ox, &oy, &ow, &cx, &cy, &cw);
+    int can = id >= 0;
+    kit_button(cx, oy, cw, BTN_H, "Cancel", -1, KB_DEFAULT, hot(cx, oy, cw, BTN_H) | (pick_focus == 1 ? KIT_FOCUS : 0));
+    kit_button(ox, oy, ow, BTN_H, "Open", -1, KB_PRIMARY,
+               can ? hot(ox, oy, ow, BTN_H) | (pick_focus != 1 ? KIT_DEFAULT : 0) : KIT_DISABLED);
 }
 
 static void start_open_dialog(int pics_only) {
     open_dlg = 1;
-    pick_focus=0;pick_first=0;
     pick_pics_only = pics_only;
     pick_owner = win_front();
     pick_writer = pick_owner >= 0 && wins[pick_owner].kind == WK_WRITER && !pics_only;
     pick_sheet = pick_owner >= 0 && wins[pick_owner].kind == WK_SPREADSHEET && !pics_only;
     pick_owner_seq = pick_owner >= 0 ? wins[pick_owner].seq : 0;
-    pick_cwd = fs_root();
-    pick_selected = 0;
-    od_refresh();
+    pick_reset(fs_root(), 0);
     dirty = 1;
+}
+
+static void files_refresh_all(void) {
+    int original = context_slot;
+    for (int i = 0; i < MAX_WIN; i++)
+        if (wins[i].open && wins[i].kind == WK_FILES) { context_set(i); fm_refresh(); }
+    context_set(original);
 }
 
 static void close_open_dialog(void) {
@@ -4489,10 +6086,7 @@ static void od_open_selected(void) {
     if (!od_row_enabled(id))
         return;
     if (fs_is_dir(id)) {
-        pick_cwd = id;
-        pick_selected = 0;
-        od_refresh();
-        dirty = 1;
+        pick_go(id, 1);
         return;
     }
     open_dlg = 0;
@@ -4503,507 +6097,20 @@ static void od_open_selected(void) {
     } else open_fs_file(id);
 }
 
-/* ---------- Drawing ---------- */
 
-static void files_title(char *title, int max) {
-    if (fm_cwd == fs_root()) {
-        kstrcpy(title, "Files");
-        return;
-    }
-    const char *nm = fs_name(fm_cwd);
-    int i = 0;
-    while (nm[i] && i < max - 1) {
-        title[i] = nm[i];
-        i++;
-    }
-    title[i] = 0;
-}
-
-static void files_info(char *info, int max) {
-    if((files_action_busy&&(int32_t)(files_message_until-frame_count)>0)||
-       (file_clipboard_status()[0]&&((int32_t)(files_message_until-frame_count)>0||file_clipboard_pending_sync()))){
-        const char *message=files_action_busy&&(int32_t)(files_message_until-frame_count)>0?
-            "Disk saving. Retry the file action.":file_clipboard_status();int i=0;
-        while(i+1<max&&message[i]){info[i]=message[i];i++;}
-        if(max>0)info[i]=0;
-    }else {
-        char number[12];int n=0;
-        fmt_uint(number,(unsigned)fm_count);
-        while(number[n]&&n+1<max){info[n]=number[n];n++;}
-        info[n]=0;
-        const char *label=fm_view.filter[0]?" of ":fm_count==1?" item | ":" items | ";
-        for(int i=0;label[i]&&n+1<max;i++)info[n++]=label[i];
-        if(fm_view.filter[0]){
-            fmt_uint(number,(unsigned)fm_total);
-            for(int i=0;number[i]&&n+1<max;i++)info[n++]=number[i];
-            label=" shown | ";
-            for(int i=0;label[i]&&n+1<max;i++)info[n++]=label[i];
-        }
-        info[n]=0;
-        if(n+1<max)fs_path(fm_cwd,info+n,max-n);
-    }
-}
-
-static int file_extension(const char *name,const char *suffix);
-/* Filled, color-coded file icons for unselected rows. */
-/* Application nodes are named after their desktop icon; a few have longer names. */
-static int app_icon_by_name(const char *name) {
-    for (int i = 0; i < ICON_DESK_COUNT; i++)
-        if (kstrcmp(icons[i].label, name) == 0) return icons[i].icon;
-    if (kstrcmp(name, "Image Viewer") == 0) return ICON_APP_VIEWER;
-    if (kstrcmp(name, "Minesweeper") == 0) return ICON_APP_MINES;
-    if (kstrcmp(name, "Hello") == 0) return ICON_APP_HELLO;
-    return ICON_WINDOW;
-}
-static void draw_file_row_named(int x, int y, int w, const char *name,
-                               int is_dir, int is_app, int sel, int dim, int cut,
-                               const char *detail, int detail_width) {
-    uint8_t fg = dim ? ui_text_dim : (sel ? ui_on_accent : ui_text);
-    uint8_t bg = sel ? ui_accent : ui_body;
-    if (dim) {
-        sel = 0;
-        bg = ui_body;
-    }
-    if (sel)
-        draw_round_rect(x + 2, y, w - 4, ROW_H - 2, 5, ui_accent);
-    (void)bg;
-    int icon_y = y + (ROW_H - AI_SMALL) / 2;
-    app_icon_draw(is_dir ? AI_FILES : is_app ? app_icon_for(app_icon_by_name(name)) : AI_DOCUMENT, x + 4, icon_y, AI_SMALL);
-    int ty = y + (ROW_H - CHAR_H) / 2;
-    int end=x+w-12;
-    if(detail&&detail_width){
-        if(cut)detail="Cut";
-        draw_string_clip(detail,x+w-detail_width,ty,sel?ui_on_accent:ui_text_dim,x+w-10);
-        end=x+w-detail_width-12;
-    }else if(w>420){
-        const char *kind=cut?"Cut":is_dir?"Folder":(is_app?"Application":"Document");
-        draw_string(kind,x+w-110,ty,sel?ui_on_accent:ui_text_dim);
-        end=x+w-130;
-    }else if(cut){
-        draw_string("Cut",x+w-38,ty,sel?ui_on_accent:ui_text_dim);
-        end=x+w-46;
-    }
-    draw_string_clip(name, x + 28, ty, fg, end);
-}
-
-static void draw_file_row_detail(int x, int y, int w, int id, int sel, int dim,
-                                 const char *detail, int detail_width) {
-    const char *nm = fs_name(id);
-    int is_app = 0;
-    if (fs_is_app(id) || kstrcmp(nm, "Calculator") == 0) {
-        if (kstrcmp(nm, "Paint") == 0)
-            is_app = 2;
-        else if (kstrcmp(nm, "Image Viewer") == 0)
-            is_app = 3;
-        else if (kstrcmp(nm, "Snake") == 0)
-            is_app = 5;
-        else if (kstrcmp(nm, "Terminal") == 0)
-            is_app = 6;
-        else if (kstrcmp(nm, "Wordle") == 0)
-            is_app = 7;
-        else
-            is_app = 1;
-    } else if (!fs_is_dir(id) && file_extension(nm,".bex")) {
-        is_app = 6;
-    } else if (is_image_file(id)) {
-        is_app = 4;
-    }
-    int renaming = fm_renaming && id == fm_rename_id && fs_identity(id)==fm_rename_identity;
-    draw_file_row_named(x, y, w, renaming ? "" : fs_name(id),
-                        fs_is_dir(id), is_app, sel, dim,
-                        file_clipboard_mode()==FILE_CLIPBOARD_CUT&&file_clipboard_source()==id&&
-                        file_clipboard_identity()==fs_identity(id),detail,detail_width);
-    if (!renaming)
-        return;
-    int fx = x + 26;
-    int fy = y - 1;
-    int fh = ROW_H - 2;
-    int tw = ui_string_w(fm_rename_buf) + 16;
-    if (tw < 80)
-        tw = 80;
-    int fw = tw;
-    int end=x+w-(detail_width?detail_width+12:4);
-    if (fx + fw > end)
-        fw = end - fx;
-    if (fw < 24)
-        fw = 24;
-    /* Field with accent outline. */
-    draw_rect(fx, fy, fw, fh, ui_field);
-    draw_rect(fx, fy, fw, 1, ui_accent);
-    draw_rect(fx, fy + fh - 1, fw, 1, ui_accent);
-    draw_rect(fx, fy, 1, fh, ui_accent);
-    draw_rect(fx + fw - 1, fy, 1, fh, ui_accent);
-    int ty = fy + (fh - CHAR_H) / 2;
-    draw_string_clip(fm_rename_buf, fx + 4, ty, ui_text, fx + fw - 4);
-    {
-        int cw = ui_string_w(fm_rename_buf);
-        int cx = fx + 4 + cw;
-        if (cx < fx + fw - 3 && (frame_count / 35) % 2 == 0)
-            draw_rect(cx, ty, 1, CHAR_H, ui_text);
-    }
-}
-
-static void draw_file_row(int x, int y, int w, int id, int sel, int dim) {
-    draw_file_row_detail(x,y,w,id,sel,dim,0,0);
-}
-
-static const int files_sort_width[FILE_VIEW_SORT_COUNT]={60,58,52,82};
-static const char *files_sort_name[FILE_VIEW_SORT_COUNT]={"Name","Type","Size","Modified"};
-
-/* Files layout: Places sidebar on the left, toolbar (back/forward/up, path,
- * Filter) across the top of the content, column headers, list, and a footer. */
-#define FILES_TOOL_H 42
-#define FILES_FOOT_H 24
-#define FILES_PLACES 6
-static int files_side_w(int ww) {return ww>=520?164:0;}
-static int files_list_x(int wx,int ww) {return wx+files_side_w(ww)+8;}
-static int files_list_w(int ww) {return ww-files_side_w(ww)-28;}
-static int files_header_y(int wy) {return wy+TITLE_H+FILES_TOOL_H+3;}
-static int files_filter_y(int wy) {return files_header_y(wy)+30;}
-static int files_list_y(int wy) {return files_filter_y(wy)+(fm_filter_open?34:0);}
-static int files_list_bottom(int wy,int wh) {return wy+wh-FILES_FOOT_H-2;}
-static int files_rows(int wy,int wh) {return (files_list_bottom(wy,wh)-files_list_y(wy))/ROW_H;}
-static const char *files_place_name[FILES_PLACES]={"Home","Documents","Pictures","Media","Programs","Trash"};
-static int files_place_id(int i) {
-    if(i==0)return fs_root();
-    if(i==5)return fs_is_dir(trash_id)?trash_id:-1;
-    int id=fs_find_child(fs_root(),files_place_name[i]);
-    return fs_is_dir(id)?id:-1;
-}
-static int files_place_y(int wy,int i) {return wy+TITLE_H+40+i*32;}
-static int files_nav_x(int wx,int ww,int i) {return wx+files_side_w(ww)+10+i*36;}
-/* Breadcrumb segments from the root (shown as "Home") to the current folder;
- * leading segments are dropped when the path does not fit. */
-static int files_crumbs(int wx,int ww,int *xs,int *ws,int *ids) {
-    int chain[16],n=0,id=fm_cwd;
-    while(id>=0&&n<16){chain[n++]=id;if(id==fs_root())break;id=fs_parent(id);}
-    int left=files_nav_x(wx,ww,3)+6,right=wx+ww-56,count=0,x=left;
-    int first=n-1,total=0;
-    for(int k=n-1;k>=0;k--)total+=ui_string_w(chain[k]==fs_root()?"Home":fs_name(chain[k]))+22;
-    while(first>0&&total>right-left){total-=ui_string_w(chain[first]==fs_root()?"Home":fs_name(chain[first]))+22;first--;}
-    for(int k=first;k>=0&&count<16;k--){
-        const char *name=chain[k]==fs_root()?"Home":fs_name(chain[k]);
-        int w=ui_string_w(name)+10;
-        if(x+w>right)w=right-x;
-        if(w<=10)break;
-        xs[count]=x;ws[count]=w;ids[count]=chain[k];count++;
-        x+=w+12;
-    }
-    return count;
-}
-
-static void files_scroll(int rows){
-    if(rows<1)rows=1;
-    if(!fm_manual_scroll&&fm_selected>=0){
-        if(fm_selected<fm_first)fm_first=fm_selected;
-        if(fm_selected>=fm_first+rows)fm_first=fm_selected-rows+1;
-    }
-    int max=fm_vis_count()-rows;if(max<0)max=0;
-    if(fm_first>max)fm_first=max;
-    if(fm_first<0)fm_first=0;
-}
-
-static void files_modified_label(int id,char *out,int with_time) {
-    unsigned stamp=fs_modified(id);
-    if(!stamp){kstrcpy(out,"Unknown");return;}
-    unsigned days=stamp/86400,year=2000,month=1;
-    int md[]={31,28,31,30,31,30,31,31,30,31,30,31};
-    for(;;){unsigned yd=(year%4==0&&(year%100!=0||year%400==0))?366:365;
-        if(days<yd)break;
-        days-=yd;year++;}
-    md[1]=(year%4==0&&(year%100!=0||year%400==0))?29:28;
-    while(month<12&&days>=(unsigned)md[month-1])days-=md[month++-1];
-    fmt_uint(out,year);int n=kstrlen(out);out[n++]='-';fmt_pad2(out+n,month);n+=2;
-    out[n++]='-';fmt_pad2(out+n,days+1);n+=2;out[n]=0;
-    if(with_time){out[n++]=' ';fmt_pad2(out+n,stamp/3600%24);n+=2;
-        out[n++]=':';fmt_pad2(out+n,stamp/60%60);n+=2;out[n]=0;}
-}
-
-static int files_detail_width(int width) {
-    if(fm_view.sort==FILE_VIEW_MODIFIED)return width>=560?154:106;
-    if(fm_view.sort==FILE_VIEW_SIZE)return 110;
-    return width>420?110:0;
-}
-
-static void draw_files_place_icon(int i,int x,int y,uint8_t ink,uint8_t bg) {
-    (void)bg;
-    icon_draw(i==0?ICON_HOME:i==5?ICON_TRASH:ICON_FOLDER,x-3,y-3,ink);
-}
-static void draw_files_controls(int wx,int wy,int ww,int inactive) {
-    int x=files_list_x(wx,ww),y=files_header_y(wy);
-    /* Sort is a segmented control; the right-hand caption names the detail
-     * column, which follows the active sort. */
-    int seg_w=0;
-    for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++)seg_w+=files_sort_width[sort]+3;
-    draw_round_rect(x-2,y-1,seg_w+1,28,6,ui_chrome);
-    for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++){
-        int width=files_sort_width[sort],active=fm_view.sort==sort;
-        if(active){draw_round_rect(x,y+1,width,24,5,ui_field);draw_round_frame(x,y+1,width,24,5,ui_chrome_dk);}
-        draw_string(files_sort_name[sort],x+6,y+4,active?ui_text:ui_text_dim);
-        if(active){int ax=x+width-12,ay=y+10;
-            for(int n=0;n<4;n++)draw_hline(ax-n,ay+(fm_view.descending?3-n:n),2*n+1,ui_text);}
-        x+=width+3;
-    }
-    {
-        int lw=files_list_w(ww),detail=files_detail_width(lw);
-        const char *caption=fm_view.sort==FILE_VIEW_MODIFIED?"Modified":fm_view.sort==FILE_VIEW_SIZE?"Size":"Kind";
-        int cx=files_list_x(wx,ww)+lw-detail;
-        if(detail&&cx>x+12)draw_string(caption,cx,y+4,ui_text_dim);
-    }
-    draw_hline(files_list_x(wx,ww),y+29,files_list_w(ww),ui_chrome_dk);
-    int end=wx+ww-12;
-    if(!fm_filter_open)return;
-    y=files_filter_y(wy);
-    int field_x=files_list_x(wx,ww),field_w=end-field_x-76;
-    draw_round_rect(field_x,y,field_w,28,4,ui_field);
-    draw_round_frame(field_x,y,field_w,28,4,fm_filter_focus&&!inactive?ui_accent:ui_chrome_dk);
-    int text_x=field_x+7,limit=field_x+field_w-7;
-    const char *text=fm_view.filter;
-    while(*text&&ui_string_w(text)>field_w-16)text++;
-    if(fm_filter_select_all&&fm_filter_focus&&!inactive&&text[0])
-        draw_rect(text_x,y+4,ui_string_w(text),CHAR_H,ui_accent);
-    draw_string_clip(text[0]?text:"Name contains...",text_x,y+5,
-        text[0]?(fm_filter_select_all&&fm_filter_focus&&!inactive?ui_on_accent:ui_text):ui_text_dim,limit);
-    if(fm_filter_focus&&!inactive&&!fm_filter_select_all&&(frame_count/35)%2==0){
-        int caret=text_x+ui_string_w(text);
-        if(caret<limit)draw_rect(caret,y+5,1,CHAR_H,ui_text);
-    }
-    tool_button(end-68,y,32,28,ICON_CLEAR,0,TB_FLAT);
-    tool_button(end-32,y,32,28,ICON_CLOSE,0,TB_FLAT);
-}
-
-static void draw_files(int wx, int wy, int ww, int wh, int inactive) {
-    char title[24];
-    char info[FS_PATH_LEN];
-    fm_history_sync();
-    files_title(title, 24);
-    files_info(info, FS_PATH_LEN);
-    for(int i=0;info[i];i++)if(info[i]=='|'){info[i>0?i-1:0]=0;break;}
-    gui_draw_window(wx, wy, ww, wh, title, 0, inactive ? WIN_INACTIVE : 0);
-    int side=files_side_w(ww),top=wy+TITLE_H+1;
-    /* Sidebar: places and storage */
-    if(side){
-        draw_rect(wx+1,top,side-1,wh-TITLE_H-2,INK(2));
-        draw_vline(wx+side,top,wh-TITLE_H-2,INK(5));
-        draw_string("PLACES",wx+16,wy+TITLE_H+14,ui_text_dim);
-        for(int i=0;i<FILES_PLACES;i++){
-            int id=files_place_id(i),py=files_place_y(wy,i);
-            if(id<0)continue;
-            int here=id==fm_cwd;
-            if(here)draw_round_rect(wx+8,py,side-16,28,7,INK(6));
-            if(here)draw_round_rect(wx+8,py+7,3,14,1,ui_accent);
-            draw_files_place_icon(i,wx+20,py+7,here?ui_accent:ui_text_dim,here?INK(6):INK(2));
-            draw_string_clip(files_place_name[i],wx+42,py+(28-CHAR_H)/2,here?ui_text:INK(24),wx+side-10);
-        }
-        unsigned cap=fs_capacity(),used=fs_used_bytes();
-        int sy=wy+wh-62;
-        if(cap&&sy>files_place_y(wy,FILES_PLACES)+8){
-            char line[40];fmt_uint(line,used/1024);kstrcpy(line+kstrlen(line)," KB of ");
-            fmt_uint(line+kstrlen(line),cap/1024);kstrcpy(line+kstrlen(line)," KB");
-            draw_string("STORAGE",wx+16,sy,ui_text_dim);
-            draw_round_rect(wx+16,sy+22,side-32,6,3,INK(6));
-            unsigned cap_kb=cap/1024?cap/1024:1;
-            int fill=(int)((used/1024)*(unsigned)(side-32)/cap_kb);
-            if(fill<6&&used)fill=6;
-            if(fill>side-32)fill=side-32;
-            if(fill)draw_round_rect(wx+16,sy+22,fill,6,3,ui_accent);
-            draw_string_clip(line,wx+16,sy+34,ui_text_dim,wx+side-8);
-        }
-    }
-    /* Toolbar: back, forward, up, breadcrumbs, filter */
-    int tx=wx+side+1,tw=ww-side-2;
-    draw_rect(tx,top,tw,FILES_TOOL_H-1,inactive?ui_chrome:ui_title);
-    draw_hline(tx,top+FILES_TOOL_H-1,tw,INK(7));
-    static const int nav_icon[3]={ICON_BACK,ICON_FORWARD,ICON_UP};
-    for(int i=0;i<3;i++){
-        int enabled=i==0?fm_history_target(-1)>=0:i==1?fm_history_target(1)>=0:fm_has_parent();
-        tool_button(files_nav_x(wx,ww,i),top+7,30,28,nav_icon[i],0,enabled?TB_FLAT:TB_DISABLED);
-    }
-    int xs[16],widths[16],ids[16],n=files_crumbs(wx,ww,xs,widths,ids);
-    for(int k=0;k<n;k++){
-        int last=k==n-1;
-        if(last)draw_round_rect(xs[k]-2,top+8,widths[k]+4,26,6,INK(7));
-        draw_string_clip(ids[k]==fs_root()?"Home":fs_name(ids[k]),xs[k]+3,top+(FILES_TOOL_H-CHAR_H)/2-1,
-                         last?ui_text:ui_text_dim,xs[k]+widths[k]);
-        if(!last){int cx=xs[k]+widths[k]+4,cy=top+FILES_TOOL_H/2-1;
-            draw_line(cx,cy-3,cx+3,cy,INK(13));draw_line(cx+3,cy,cx,cy+3,INK(13));}
-    }
-    tool_button(wx+ww-44,top+7,32,28,ICON_FILTER,0,fm_filter_open?TB_ACTIVE:TB_FLAT);
-    draw_files_controls(wx,wy,ww,inactive);
-    /* List */
-    int lx=files_list_x(wx,ww),lw=files_list_w(ww);
-    int list_y=files_list_y(wy),rows=files_rows(wy,wh);
-    int vis=fm_vis_count(),up=fm_has_parent()?1:0;
-    files_scroll(rows);
-    for(int i=fm_first;i<vis&&i<fm_first+rows;i++){
-        int iy=list_y+(i-fm_first)*ROW_H;
-        if(up&&i==0)
-            draw_file_row_named(lx,iy,lw,"..",1,0,i==fm_selected,0,0,0,0);
-        else {
-            int id=fm_ids[i-up],detail_width=files_detail_width(lw);
-            char detail[32];
-            if(fm_view.sort==FILE_VIEW_MODIFIED)files_modified_label(id,detail,lw>=560);
-            else if(fm_view.sort==FILE_VIEW_SIZE){
-                if(fs_is_dir(id)||fs_is_app(id))kstrcpy(detail,file_view_type(id));
-                else {fmt_uint(detail,(unsigned)fs_size(id));kstrcpy(detail+kstrlen(detail)," B");}
-            }else kstrcpy(detail,file_view_type(id));
-            draw_file_row_detail(lx,iy,lw,id,i==fm_selected,0,detail,detail_width);
-        }
-    }
-    if(!fm_count){
-        int y=list_y+up*ROW_H+4;
-        if(y+CHAR_H<=files_list_bottom(wy,wh))
-            draw_string_clip(fm_view.filter[0]?"No matching names":"This folder is empty",lx+12,y,ui_text_dim,lx+lw);
-    }
-    if(vis>rows&&rows>0){
-        int track=rows*ROW_H,sx=wx+ww-11;
-        int th=track*rows/vis;if(th<24)th=24;
-        int ty=list_y+(track-th)*fm_first/(vis-rows>0?vis-rows:1);
-        draw_round_rect(sx,list_y,5,track,2,INK(3));
-        draw_round_rect(sx,ty,5,th,2,INK(11));
-    }
-    /* Footer */
-    int fy=wy+wh-FILES_FOOT_H;
-    draw_rect(tx,fy,tw,FILES_FOOT_H-1,ui_chrome);
-    draw_hline(tx,fy,tw,INK(5));
-    draw_string_clip(info,tx+12,fy+(FILES_FOOT_H-CHAR_H)/2,ui_text_dim,wx+ww-12);
-}
-
-static void draw_rename_overlay(void) {
-    int wx, wy, ww, wh, vis, iy, fx, fy, fh, tw, fw, ty;
-    if (!fm_renaming)
-        return;
-    if (!win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh))
-        return;
-    vis = fm_vis_count();
-    if (fm_selected < 0 || fm_selected >= vis)
-        return;
-    iy = files_list_y(wy) + (fm_selected-fm_first) * ROW_H;
-    fx = files_list_x(wx, ww) + 26;
-    fy = iy - 1;
-    fh = ROW_H - 2;
-    tw = ui_string_w(fm_rename_buf) + 16;
-    if (tw < 96)
-        tw = 96;
-    fw = tw;
-    int detail=files_detail_width(files_list_w(ww));
-    int end=files_list_x(wx,ww)+files_list_w(ww)-(detail?detail+12:4);
-    if (fx + fw > end)
-        fw = end - fx;
-    if (fw < 24)
-        fw = 24;
-    draw_rect(fx, fy, fw, fh, ui_field);
-    draw_rect(fx, fy, fw, 1, ui_accent);
-    draw_rect(fx, fy + fh - 1, fw, 1, ui_accent);
-    draw_rect(fx, fy, 1, fh, ui_accent);
-    draw_rect(fx + fw - 1, fy, 1, fh, ui_accent);
-    ty = fy + (fh - CHAR_H) / 2;
-    draw_string_clip(fm_rename_buf, fx + 4, ty, ui_text, fx + fw - 4);
-    {
-        int cx = fx + 4 + ui_string_w(fm_rename_buf);
-        if (cx < fx + fw - 3)
-            draw_rect(cx, ty, 1, CHAR_H, ui_text);
-    }
-}
-
-static void pick_geom(int *px, int *py, int *pw, int *ph) {
-    *pw = 480;
-    *ph = 340;
-    *px = (fb_w - *pw) / 2;
-    *py = (fb_h - *ph) / 2;
-}
-
-static void od_buttons(int px, int py, int pw, int ph, int *ox, int *oy, int *ow,
-                       int *cx, int *cy, int *cw) {
-    *ow = btn_w("Open");
-    *cw = btn_w("Cancel");
-    *oy = *cy = py + ph - 16 - BTN_H;
-    *cx = px + pw - 20 - *cw;
-    *ox = *cx - 12 - *ow;
-}
-
-static int od_list_y(int py) { return py + TITLE_H + 12; }
-
-static void draw_open_dialog(void) {
-    int px, py, pw, ph;
-    pick_geom(&px, &py, &pw, &ph);
-    gui_draw_window(px, py, pw, ph, "Open", 0, WIN_NOCLOSE | WIN_NOMENU);
-
-    int ox, oy, ow, cx, cy, cw;
-    od_buttons(px, py, pw, ph, &ox, &oy, &ow, &cx, &cy, &cw);
-    draw_default_button(ox, oy, ow, BTN_H, "Open");
-    draw_button(cx, cy, cw, BTN_H, "Cancel");
-    if(pick_focus)draw_frame((pick_focus==1?cx:ox)-3,oy-3,(pick_focus==1?cw:ow)+6,BTN_H+6,ui_accent);
-
-    int ly = od_list_y(py);
-    int lb = oy - 12;
-    int rows = (lb - ly) / ROW_H;
-    int lw = pw - 16;
-    {
-        /* The band above the list names the folder being browsed. */
-        const char *where = pick_cwd == fs_root() ? "Home" : fs_name(pick_cwd);
-        int ty = py + TITLE_BAR + (ly - py - TITLE_BAR - CHAR_H) / 2;
-        draw_string("Look in", px + 16, ty, ui_text_dim);
-        draw_string_bold_clip(where, px + 26 + ui_string_w("Look in"), ty, ui_text, px + pw - 16);
-    }
-    if (pick_count == 0) {
-        draw_string("(empty)", px + 16, ly, ui_text_dim);
-        return;
-    }
-    if(pick_selected<pick_first)pick_first=pick_selected;
-    if(pick_selected>=pick_first+rows)pick_first=pick_selected-rows+1;
-    for (int i = pick_first; i < pick_count && i < pick_first+rows; i++)
-        draw_file_row(px + 8, ly + (i-pick_first) * ROW_H, lw, pick_ids[i],
-                      i == pick_selected, !od_row_enabled(pick_ids[i]));
-}
-
+#define EDIT_MARKS 128
+static void fmt_grouped(char *out, unsigned v);
+static const char *kind_text(int id);
 static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
-    char title[40];
-    char info[112];
-    if (edit_file >= 0 && fs_identity(edit_file) == edit_identity) {
-        const char *nm = fs_name(edit_file);
-        int t = 0;
-        while (nm[t] && t < 28) {
-            title[t] = nm[t];
-            t++;
-        }
-        title[t] = 0;
-    } else {
-        kstrcpy(title, "untitled");
-    }
-    if (!edit_saved_ok) {
-        int t = kstrlen(title);
-        if (t < 36) {
-            title[t++] = ' ';
-            title[t++] = '*';
-            title[t] = 0;
-        }
-    }
-
-    char nbuf[8];
-    utoa((unsigned)edit_len, nbuf);
-    int i = 0, p = 0;
-    while (nbuf[p] && i < 20)
-        info[i++] = nbuf[p++];
-    const char *s = edit_len == 1 ? " byte" : " bytes";
-    p = 0;
-    while (s[p] && i < 30)
-        info[i++] = s[p++];
-    if (!edit_saved_ok && i < 28) {
-        info[i++] = ' ';
-        info[i++] = '*';
-    }
-    info[i] = 0;
-    if(edit_save_busy)kstrcpy(info+i," | Save not started; retry");
-    else if(edit_search.open&&edit_search.message[0]){kstrcpy(info+i," | ");kstrcpy(info+i+3,edit_search.message);}
-
-    gui_draw_window(wx, wy, ww, wh, title, info,
-                    WIN_INFO | WIN_SCROLL | (inactive ? WIN_INACTIVE : 0));
+    char title[FS_NAME_LEN];
+    kstrcpy(title, edit_binding_valid() ? fs_name(edit_file) : "Untitled");
+    chrome_dirty = !edit_saved_ok;
+    gui_draw_window(wx, wy, ww, wh, title, 0, inactive ? WIN_INACTIVE : 0);
+    chrome_dirty = 0;
 
     int ax, ay, aw, ah;
     edit_area(wx, wy, ww, wh, &ax, &ay, &aw, &ah);
-    /* The text sits directly on the page, without an inset black rule. */
-
+    int top = edit_text_top(wy), bottom = edit_text_bottom(wy, wh), g = edit_gutter_w();
     int cols = aw / EDIT_CHAR_W;
     int rows = ah / EDIT_LINE_H;
     if (cols < 1)
@@ -5012,50 +6119,108 @@ static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
         rows = 1;
     if(!edit_manual_scroll)edit_ensure_caret_visible(rows, cols);
 
-    int r = 0, c = 0;
     int sel_lo = edit_sel_a < edit_sel_b ? edit_sel_a : edit_sel_b;
     int sel_hi = edit_sel_a > edit_sel_b ? edit_sel_a : edit_sel_b;
     int has_sel = sel_lo != sel_hi;
+    int caret_row, caret_col;
+    edit_caret_cell(cols, &caret_row, &caret_col);
+    if (g && !MODERN) draw_vline(wx + g, top, bottom - top, TK_LINE_SUBTLE);
+    /* The current line, while nothing is selected. */
+    int cur = caret_row - edit_scroll;
+    if (!has_sel && !inactive && cur >= 0 && cur < rows) {
+        int hx = MODERN ? wx + 1 : wx + 1 + g + (g ? 1 : 0);
+        draw_rect(hx, ay + cur * EDIT_LINE_H, wx + ww - 1 - SB - hx, EDIT_LINE_H, TK_ACCENT_50);
+    }
+    const char *needle = edit_search.open ? edit_search.text[0] : "";
+    int needle_n = kstrlen(needle), match_end = -1;
 
+    int r = 0, c = 0, line = 1, caret_line = 1, marks = 0, mark_row[EDIT_MARKS];
     for (int ei = 0; ei <= edit_len; ei++) {
         int vis_row = r - edit_scroll;
-        int selected = has_sel && ei >= sel_lo && ei < sel_hi;
-        if (selected && vis_row >= 0 && vis_row < rows) {
-            int cw = (ei < edit_len && edit_buf[ei] == '\n') ? 4 : EDIT_CHAR_W;
-            draw_rect(ax + c * EDIT_CHAR_W, ay + vis_row * EDIT_LINE_H, cw,
-                      EDIT_LINE_H, ui_accent);
+        if (ei == edit_caret) caret_line = line;
+        /* A row that starts a line gets its number. */
+        if (g && c == 0 && (ei == 0 || edit_buf[ei - 1] == '\n') && vis_row >= 0 && vis_row < rows) {
+            char num[12];
+            fmt_uint(num, (unsigned)line);
+            int on = r == caret_row, nw = kstrlen(num) * EDIT_CHAR_W;
+            int nx = wx + 1 + g - 10 - nw;
+            for (int k = 0; num[k]; k++)
+                draw_edit_char(num[k], nx + k * EDIT_CHAR_W, ay + vis_row * EDIT_LINE_H, on ? TK_TEXT : TK_LINE_STRONG);
         }
-        if (!has_sel && ei == edit_caret && vis_row >= 0 && vis_row < rows) {
+        int selected = has_sel && ei >= sel_lo && ei < sel_hi;
+        if (needle_n && ei >= match_end && text_match(edit_buf, edit_len, ei, needle, edit_search_flags())) {
+            match_end = ei + needle_n;
+            if (marks < EDIT_MARKS && (!marks || mark_row[marks - 1] != r)) mark_row[marks++] = r;
+        }
+        if (vis_row >= 0 && vis_row < rows && ei < edit_len) {
+            int cw = edit_buf[ei] == '\n' ? 4 : EDIT_CHAR_W;
+            if (selected)
+                draw_rect(ax + c * EDIT_CHAR_W, ay + vis_row * EDIT_LINE_H, cw, EDIT_LINE_H, inactive ? TK_ACCENT_100 : TK_ACCENT);
+            else if (ei < match_end && edit_buf[ei] != '\n')
+                draw_rect(ax + c * EDIT_CHAR_W, ay + vis_row * EDIT_LINE_H, cw, EDIT_LINE_H, TK_FIND);
+        }
+        if (!has_sel && !inactive && ei == edit_caret && vis_row >= 0 && vis_row < rows) {
             int cx = ax + c * EDIT_CHAR_W;
             int cy = ay + vis_row * EDIT_LINE_H;
             if ((frame_count / 35) % 2 == 0)
-                draw_rect(cx, cy, 2, EDIT_FONT_H, ui_accent);
+                draw_rect(cx, cy, 2, EDIT_FONT_H, TK_TEXT);
         }
         if (ei == edit_len)
             break;
         if (edit_buf[ei] == '\n') {
             r++;
             c = 0;
+            line++;
             continue;
         }
-        vis_row = r - edit_scroll;
         if (vis_row >= 0 && vis_row < rows)
             draw_edit_char(edit_buf[ei], ax + c * EDIT_CHAR_W,
                            ay + vis_row * EDIT_LINE_H,
-                           selected ? ui_on_accent : ui_text);
+                           selected && !inactive ? TK_ON_ACCENT : TK_TEXT);
         c++;
         if (c >= cols) {
             r++;
             c = 0;
         }
     }
-    draw_edit_search(wx,wy,ww,wh);
-}
+    kit_vscroll(wx + ww - 1 - SB, top, bottom - top, edit_scroll, rows, r + 1, 0);
+    /* Overview marks on the scrollbar: matches in amber, the caret in accent. */
+    if (r + 1 > rows) {
+        int mx = wx + ww - 1 - 5, track = bottom - top - 8;
+        for (int i = 0; i < marks; i++) draw_rect(mx, top + 4 + mark_row[i] * track / (r + 1), 4, 2, TK_AMBER);
+        draw_rect(mx, top + 4 + caret_row * track / (r + 1), 4, 2, TK_ACCENT);
+    }
+    draw_edit_search(wx, wy, ww, wh);
 
-static void draw_string_in_win(const char *str, int wx, int ww, int y, uint8_t color) {
-    int tw = ui_string_w(str);
-    int x = wx + (ww - tw) / 2;
-    draw_string(str, x, y, color);
+    /* Status bar: position, kind, size, line endings, tab, then the state. */
+    int sy = wy + wh - 1 - edit_status_h(), pad = MODERN ? 12 : 8;
+    if (MODERN) {
+        draw_hline(wx + 1, sy, ww - 2, TK_LINE_SUBTLE);
+        kit_fill_bottom(wx + 1, sy + 1, ww - 2, edit_status_h(), ui_theme.r_window - 1, ui_theme.statusbar);
+    } else kit_statusbar(wx + 1, sy, ww - 2, edit_status_h());
+    int col = 1;
+    for (int i = edit_caret - 1; i >= 0 && edit_buf[i] != '\n'; i--) col++;
+    char pos[32], size[24];
+    kstrcpy(pos, "Ln ");
+    fmt_uint(pos + 3, (unsigned)caret_line);
+    kstrcpy(pos + kstrlen(pos), ", Col ");
+    fmt_uint(pos + kstrlen(pos), (unsigned)col);
+    fmt_grouped(size, (unsigned)edit_len);
+    kstrcpy(size + kstrlen(size), edit_len == 1 ? " byte" : " bytes");
+    const char *kind = edit_binding_valid() ? kind_text(edit_file) : "Plain text";
+    const char *items[5] = {pos, kind, size, "LF", "Tab: 2 spaces"};
+    const char *state = edit_save_busy ? "Save not started; retry" :
+                        edit_search.open && edit_search.message[0] ? edit_search.message :
+                        edit_saved_ok ? (edit_binding_valid() ? "Saved" : "") : "Modified";
+    int ty = kit_ty(sy + 1, edit_status_h() - 1), x = wx + pad;
+    int right = wx + ww - pad - kit_text_w(state, 0) - 16;
+    for (int i = 0; i < 5; i++) {
+        int w = kit_text_w(items[i], 0);
+        if (x + w > right) break;
+        kit_text(items[i], x, ty, TK_TEXT2, w, 0);
+        x += w + 18;
+    }
+    kit_text_right(state, wx + ww - pad, ty, edit_save_busy ? TK_RED_700 : TK_TEXT2, 0);
 }
 
 static const char *win_app_name(int kind) {
@@ -5068,7 +6233,7 @@ static const char *win_app_name(int kind) {
     case WK_HELLO: return "Hello";
     case WK_SETTINGS: return "Settings";
     case WK_PAINT: return "Paint";
-    case WK_VIEW: return "Viewer";
+    case WK_VIEW: return "Image Viewer";
     case WK_SNAKE: return "Snake";
     case WK_WORDLE: return "Wordle";
     case WK_TERM: return "Terminal";
@@ -5076,10 +6241,10 @@ static const char *win_app_name(int kind) {
     case WK_TODO: return "Todo";
     case WK_CLOCK: return "Clock";
     case WK_CAL: return "Calendar";
-    case WK_MINES: return "Mines";
+    case WK_MINES: return "Minesweeper";
     case WK_2048: return "2048";
     case WK_BREAKOUT: return "Breakout";
-    case WK_SYSMON: return "Monitor";
+    case WK_SYSMON: return "System Monitor";
     case WK_PROPERTIES: return "Properties";
     case WK_BROWSER: return "Browser";
     case WK_PLAYER: return "Media Player";
@@ -5095,6 +6260,26 @@ static const char *win_display_title(int slot, char *buffer) {
         app_view_title(slot, buffer, APP_VIEW_TITLE_LEN))
         return buffer;
     return win_app_name(wins[slot].kind);
+}
+
+/* A task's label: a document window shows its document as its title bar
+ * does, with *unsaved set when it has unsaved changes; others show the
+ * window's name. */
+static const char *win_task_title(int slot, char *buffer, int *unsaved) {
+    *unsaved = 0;
+    if (slot < 0 || slot >= MAX_WIN) return win_display_title(slot, buffer);
+    int kind = wins[slot].kind;
+    if (kind == WK_EDIT) {
+        const Document *doc = &window_state[slot].doc;
+        int bound = fs_valid(doc->file) && !fs_is_dir(doc->file) && !fs_is_app(doc->file) &&
+                    fs_identity(doc->file) == doc->identity;
+        *unsaved = !doc->saved_ok;
+        return bound ? fs_name(doc->file) : "Untitled";
+    }
+    if (kind == WK_WRITER) { *unsaved = writer_dirty(); return writer_title(); }
+    if (kind == WK_SPREADSHEET) { *unsaved = spreadsheet_dirty(); return spreadsheet_title(); }
+    if (kind == WK_VIEW) return image_viewer_title();
+    return win_display_title(slot, buffer);
 }
 
 /* Lucide glyph for a window kind (taskbar, Start menu, Files rows). */
@@ -5115,70 +6300,395 @@ static int kind_icon(int kind) {
     default: return ICON_WINDOW;
     }
 }
-static void draw_tb_icon(int kind, int x, int y, uint8_t ink) { (void)ink; app_icon_draw(app_icon_for(kind_icon(kind)), x, y, AI_SMALL); }
+
+/* ---------- Properties ----------
+ * The item's icon and name (editable for ordinary files and folders), its
+ * details, the app that opens it, and for the volume root its storage. */
+
+static char prop_buf[FS_NAME_LEN];
+static int prop_len, prop_for = -1, prop_failed;
+static unsigned prop_identity;
+
+static int prop_editable(int id) {
+    return fs_valid(id) && id != fs_root() && !fs_is_app(id) && id != trash_id && id != prefs_id;
+}
+
+static void prop_sync(void) {
+    int id = properties_id;
+    if (prop_for == id && prop_identity == fs_identity(id)) return;
+    prop_for = id;
+    prop_identity = fs_identity(id);
+    prop_failed = 0;
+    prop_len = 0;
+    const char *nm = id == fs_root() ? "System" : fs_name(id);
+    while (nm[prop_len] && prop_len < FS_NAME_LEN - 1) { prop_buf[prop_len] = nm[prop_len]; prop_len++; }
+    prop_buf[prop_len] = 0;
+}
+
+/* 4198 as "4,198". */
+static void fmt_grouped(char *out, unsigned v) {
+    char digits[12];
+    fmt_uint(digits, v);
+    int n = kstrlen(digits), o = 0;
+    for (int i = 0; i < n; i++) {
+        if (i && (n - i) % 3 == 0) out[o++] = ',';
+        out[o++] = digits[i];
+    }
+    out[o] = 0;
+}
+
+/* What an item is: in full for Properties and the Editor status bar, brief
+ * for the Kind column. */
+static const char *kind_name(int id, int brief) {
+    const char *n = fs_name(id);
+    static const struct { const char *ext, *kind, *brief; } kinds[] = {
+        {".txt", "Plain text", "Text"}, {".bwr", "Writer document", "Writer"}, {".rtf", "Rich text", "Rich text"},
+        {".bsh", "Spreadsheet", "Spreadsheet"}, {".csv", "CSV values", "CSV"}, {".pdf", "PDF document", "PDF"},
+        {".bex", "Program", "Program"}, {".c", "C source", "C source"}, {".h", "C header", "C header"},
+        {".html", "Web page", "Web page"}, {".htm", "Web page", "Web page"}, {".wav", "Sound", "Sound"},
+        {".mp3", "Sound", "Sound"}, {".mpg", "Video", "Video"}, {".mpeg", "Video", "Video"},
+        {".log", "Log file", "Log"},
+    };
+    if (id == fs_root()) return "Volume";
+    if (fs_is_dir(id)) return "Folder";
+    if (fs_is_app(id)) return brief ? "App" : "Application";
+    for (unsigned i = 0; i < sizeof kinds / sizeof *kinds; i++)
+        if (file_extension(n, kinds[i].ext)) return brief ? kinds[i].brief : kinds[i].kind;
+    if (is_image_file(id)) return brief ? "Image" : "Picture";
+    return "File";
+}
+static const char *kind_text(int id) { return kind_name(id, 0); }
+
+/* The app open_fs_file would use; 0 when nothing opens it. */
+static const char *opens_with(int id, int *ai) {
+    const char *n = fs_name(id);
+    *ai = AI_DOCUMENT;
+    if (fs_is_dir(id)) { *ai = AI_FILES; return "Files"; }
+    if (fs_is_app(id)) return 0;
+    if (file_extension(n, ".bex")) { *ai = AI_NATIVE; return "Runs as a program"; }
+    if (file_extension(n, ".bwr")) { *ai = AI_WRITER; return "Writer"; }
+    if (file_extension(n, ".bsh") || file_extension(n, ".csv")) { *ai = AI_SHEET; return "Spreadsheet"; }
+    if (file_extension(n, ".html") || file_extension(n, ".htm")) { *ai = AI_BROWSER; return "Browser"; }
+    if (file_extension(n, ".wav") || file_extension(n, ".wave") || file_extension(n, ".mp3") ||
+        file_extension(n, ".mpg") || file_extension(n, ".mpeg")) { *ai = AI_PLAYER; return "Media Player"; }
+    if (is_image_file(id) || file_extension(n, ".jpg") || file_extension(n, ".jpeg") || file_extension(n, ".png") ||
+        file_extension(n, ".bmp") || file_extension(n, ".gif")) { *ai = AI_VIEWER; return "Image Viewer"; }
+    if (fs_size(id) >= EDIT_BUF_SIZE) return 0;
+    *ai = AI_EDITOR;
+    return "Editor";
+}
+
+static int ow_sound(const char *n) {
+    return file_extension(n, ".wav") || file_extension(n, ".wave") || file_extension(n, ".mp3") ||
+           file_extension(n, ".mpg") || file_extension(n, ".mpeg");
+}
+static int ow_image(int id) {
+    const char *n = fs_name(id);
+    return is_image_file(id) || file_extension(n, ".jpg") || file_extension(n, ".jpeg") ||
+           file_extension(n, ".png") || file_extension(n, ".bmp") || file_extension(n, ".gif");
+}
+static const char *const ow_names[OW_N] = {"Editor", "Writer", "Spreadsheet", "Browser", "Image Viewer", "Media Player"};
+
+/* Whether app can open file id: the same file types open_fs_file sends
+ * it, and Editor for any small file that is not media, a program or a
+ * binary document. */
+static int ow_can(int id, int app) {
+    if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id)) return 0;
+    const char *n = fs_name(id);
+    switch (app) {
+    case OW_EDITOR:
+        return fs_size(id) < EDIT_BUF_SIZE && !fs_streamed(id) && !ow_image(id) && !ow_sound(n) &&
+               !file_extension(n, ".bex") && !file_extension(n, ".bwr") && !file_extension(n, ".pdf");
+    case OW_WRITER: return file_extension(n, ".bwr") || file_extension(n, ".txt") || file_extension(n, ".rtf");
+    case OW_SHEET: return file_extension(n, ".bsh") || file_extension(n, ".csv");
+    case OW_BROWSER: return file_extension(n, ".html") || file_extension(n, ".htm");
+    case OW_VIEWER: return ow_image(id);
+    case OW_PLAYER: return ow_sound(n);
+    default: return 0;
+    }
+}
+
+static int ow_build(int id) {
+    int ai;
+    const char *usual = fs_valid(id) ? opens_with(id, &ai) : 0;
+    ow_target = id;
+    ow_identity = fs_valid(id) ? fs_identity(id) : 0;
+    mi_open_with_n = 0;
+    for (int pass = 0; pass < 2; pass++)
+        for (int app = 0; app < OW_N; app++) {
+            int first = usual && !kstrcmp(usual, ow_names[app]);
+            if (pass == !first && ow_can(id, app))
+                mi_open_with[mi_open_with_n++] = (MItem){ow_names[app], "", ACT_OPEN_WITH + app, 0};
+        }
+    if (!mi_open_with_n) mi_open_with[mi_open_with_n++] = (MItem){"No app opens this file", "", ACT_NONE, 0};
+    return mi_open_with_n;
+}
+
+static void ow_open(int id, int app) {
+    if (!ow_can(id, app)) return;
+    recent_add(id);
+    switch (app) {
+    case OW_EDITOR:
+        if (win_open(WK_EDIT) < 0) return;
+        fm_set_cwd(fs_parent(id));
+        edit_load(id);
+        break;
+    case OW_WRITER: open_writer(id); break;
+    case OW_SHEET: open_spreadsheet(id); break;
+    case OW_BROWSER: open_browser(id); break;
+    case OW_VIEWER: open_view(id); break;
+    case OW_PLAYER: open_player(id); break;
+    }
+    dirty = 1;
+}
+
+static int prop_root(void) { return properties_id == fs_root(); }
+static int prop_rows(void) {
+    if (!fs_valid(properties_id)) return 1;
+    return prop_root() ? 6 : 4;
+}
+static int prop_pad(void) { return MODERN ? 20 : 16; }
+static int prop_foot_h(void) { return MODERN ? 58 : BTN_H + 28; }
+static int properties_h(void) {
+    int h = TITLE_BAR + prop_pad() + 32 + 16 + prop_rows() * (MODERN ? 26 : 24) + (MODERN ? 24 : 12);
+    if (fs_valid(properties_id) && !prop_root() && !fs_is_app(properties_id)) h += 16 + BTN_H;
+    if (properties_reason[0]) h += 28;
+    return h + 12 + prop_foot_h();
+}
+
+static void prop_buttons(int wx, int wy, int ww, int wh, int *ok, int *cancel, int *by, int *bw) {
+    (void)wy;
+    *bw = MODERN ? 84 : 80;
+    *by = wy + wh - (prop_foot_h() + BTN_H) / 2 - (MODERN ? 0 : 2);
+    *ok = wx + ww - prop_pad() - *bw;
+    *cancel = *ok - 8 - *bw;
+}
+static void prop_field(int wx, int wy, int ww, int *fx, int *fy, int *fw) {
+    *fx = wx + prop_pad() + 32 + 12;
+    *fy = wy + TITLE_BAR + prop_pad() + (32 - BTN_H) / 2;
+    *fw = ww - (*fx - wx) - prop_pad();
+}
+
+/* The Opens with row, under the details; shared by drawing and clicks. */
+static void prop_opens_geom(int wx, int wy, int ww, int *x, int *y, int *w) {
+    int pad = prop_pad(), rows = prop_rows();
+    *y = wy + TITLE_BAR + pad + 32 + 12 + (MODERN ? rows * 26 + 16 + 16 : 8 + rows * 24 + 4 + 12);
+    *x = wx + pad + 108;
+    *w = wx + ww - pad - *x;
+}
+
+static void prop_row(int lx, int vx, int *y, int right, const char *label, const char *value) {
+    int rh = MODERN ? 26 : 24;
+    kit_text(label, lx, kit_ty(*y, rh), TK_TEXT2, vx - lx - 8, 0);
+    kit_text(value, vx, kit_ty(*y, rh), TK_TEXT, right - vx, 0);
+    *y += rh;
+}
+
+static void draw_properties(int wx, int wy, int ww, int wh, int fl) {
+    prop_sync();
+    int id = properties_id, pad = prop_pad(), valid = fs_valid(id);
+    char title[FS_NAME_LEN + 16];
+    kstrcpy(title, valid ? (prop_root() ? "System" : fs_name(id)) : "Item");
+    kstrcpy(title + kstrlen(title), " Properties");
+    if (valid) chrome_icon = fs_is_dir(id) ? AI_FILES : fs_is_app(id) ? app_icon_for(app_icon_by_name(fs_name(id))) : AI_DOCUMENT;
+    gui_draw_window(wx, wy, ww, wh, title, 0, fl | WIN_NOMENU | WIN_DIALOG);
+    int top = wy + TITLE_BAR, y = top + pad, right = wx + ww - pad;
+    if (valid) {
+        if (prop_root()) ui_icon_draw(UI_ICON_A_DISK, wx + pad, y, 32, TK_ICON, ui_theme.content);
+        else node_icon_draw(id, wx + pad, y, 32, ui_theme.content);
+    }
+    int fx, fy, fw;
+    prop_field(wx, wy, ww, &fx, &fy, &fw);
+    if (valid && prop_editable(id)) {
+        int focus = !(fl & WIN_INACTIVE);
+        int tx = kit_field(fx, fy, fw, BTN_H, (focus ? KIT_FOCUS : 0) | (prop_failed ? KIT_ERROR : 0));
+        int used = kit_text(prop_buf, tx, kit_ty(fy, BTN_H), TK_TEXT, fw - (tx - fx) - 8, 0);
+        if (focus && ((frame_count / 35) & 1) == 0) kit_caret(tx + used, kit_ty(fy, BTN_H));
+    } else kit_text(valid ? prop_buf : "This item is no longer available.", fx, kit_ty(fy, BTN_H), TK_TEXT, fw, 1);
+    y += 32 + 12;
+    int lx = wx + pad, vx = wx + pad + 108;
+    char value[FS_PATH_LEN], number[16];
+    if (MODERN) {
+        int rows = prop_rows();
+        kit_box(wx + pad, y, ww - pad * 2, rows * 26 + 16, 8, TK_RAISED, TK_LINE_SUBTLE);
+        lx += 14; vx += 14; right -= 14; y += 8;
+    } else { kit_separator(wx + pad, y, ww - pad * 2); y += 8; }
+    if (valid && !prop_root()) {
+        prop_row(lx, vx, &y, right, "Kind", kind_text(id));
+        int parent = fs_parent(id);
+        if (fs_valid(parent)) fs_path(parent, value, sizeof value);
+        else kstrcpy(value, "/");
+        prop_row(lx, vx, &y, right, "Location", value);
+        if (fs_is_dir(id)) node_size_text(id, value);
+        /* Programs are built in and take no file space of their own. */
+        else if (fs_is_app(id) && !fs_size(id)) kstrcpy(value, "Built into the system");
+        else {
+            size_text((unsigned)fs_size(id), value);
+            kstrcpy(value + kstrlen(value), " (");
+            fmt_grouped(number, (unsigned)fs_size(id));
+            kstrcpy(value + kstrlen(value), number);
+            kstrcpy(value + kstrlen(value), fs_size(id) == 1 ? " byte)" : " bytes)");
+        }
+        prop_row(lx, vx, &y, right, "Size", value);
+        stamp_text(fs_modified(id), value);
+        prop_row(lx, vx, &y, right, "Modified", value);
+    } else if (valid) {
+        unsigned cap = fs_capacity(), used = fs_used_bytes();
+        prop_row(lx, vx, &y, right, "Volume", fs_storage_name());
+        size_text(used, value);
+        prop_row(lx, vx, &y, right, "Used", value);
+        size_text(cap > used ? cap - used : 0, value);
+        prop_row(lx, vx, &y, right, "Free", value);
+        if (fs_node_limit() <= FS_MAX_NODES) fmt_uint(value, (unsigned)(fs_node_limit() - fs_node_count()));
+        else kstrcpy(value, "No limit");
+        prop_row(lx, vx, &y, right, "Free slots", value);
+        size_text(fs_file_limit(), value);
+        prop_row(lx, vx, &y, right, "Largest file", value);
+        prop_row(lx, vx, &y, right, "Status", fs_storage_status() ? fs_storage_status() :
+                 fs_needs_sync() ? "Changes waiting to be saved" : "Saved to disk");
+    } else prop_row(lx, vx, &y, right, "Status", "Removed or renamed elsewhere");
+    if (MODERN) { y += 8; lx -= 14; vx -= 14; right += 14; }
+    y += MODERN ? 16 : 4;
+    if (valid && !prop_root() && !fs_is_app(id)) {
+        if (!MODERN) { kit_separator(wx + pad, y, ww - pad * 2); y += 12; }
+        int ai, dx, dw;
+        const char *app = opens_with(id, &ai);
+        prop_opens_geom(wx, wy, ww, &dx, &y, &dw);
+        kit_text("Opens with", lx, kit_ty(y, BTN_H), TK_TEXT2, vx - lx - 8, 0);
+        if (app && ow_build(id) && mi_open_with[0].act != ACT_NONE) {
+            /* The dropdown lists every app that can open the item. */
+            kit_dropdown(dx, y, dw, BTN_H, "", (fl & WIN_INACTIVE) ? 0 : hot(dx, y, dw, BTN_H));
+            int tx = dx + (MODERN ? 10 : 6);
+            app_icon_draw(ai, tx, y + (BTN_H - 16) / 2, AI_SMALL);
+            kit_text(app, tx + 22, kit_ty(y, BTN_H), TK_TEXT, dw - 22 - 36, 0);
+        } else {
+            int tx = kit_field(dx, y, dw, BTN_H, KIT_DISABLED);
+            if (app) {
+                app_icon_draw(ai, tx, y + (BTN_H - 16) / 2, AI_SMALL);
+                kit_text(app, tx + 22, kit_ty(y, BTN_H), TK_TEXT, right - tx - 30, 0);
+            } else kit_text("No app opens this file", tx, kit_ty(y, BTN_H), TK_TEXT2, right - tx - 8, 0);
+        }
+        y += BTN_H + 16;
+    }
+    if (properties_reason[0]) {
+        ui_icon_draw(UI_ICON_WARN, lx, y + 2, 16, TK_ICON, ui_theme.content);
+        kit_text(properties_reason, lx + 22, y + 2, TK_AMBER_700, right - lx - 22, 0);
+        y += 28;
+    }
+    if (prop_failed) kit_text(fs_sync_busy() ? "Disk saving. Try again shortly." : "That name cannot be used here.",
+                              wx + pad, wy + wh - prop_foot_h() - 22, TK_RED_700, ww - pad * 2, 0);
+    if (MODERN) dlg_footer(wx, ww, wy + wh - prop_foot_h(), prop_foot_h());
+    int ok, cancel, by, bw;
+    prop_buttons(wx, wy, ww, wh, &ok, &cancel, &by, &bw);
+    if (valid && prop_editable(id))
+        kit_button(cancel, by, bw, BTN_H, "Cancel", -1, KB_DEFAULT, hot(cancel, by, bw, BTN_H));
+    kit_button(ok, by, bw, BTN_H, "OK", -1, KB_PRIMARY, hot(ok, by, bw, BTN_H) | KIT_DEFAULT);
+}
+
+/* OK renames when the name changed; the window stays open on failure. */
+static void properties_commit(void) {
+    int id = properties_id;
+    prop_buf[prop_len] = 0;
+    if (prop_editable(id) && prop_for == id && prop_identity == fs_identity(id) &&
+        kstrcmp(prop_buf, fs_name(id)) != 0) {
+        if (!prop_len || fs_rename(id, prop_buf) < 0) { prop_failed = 1; dirty = 1; return; }
+        files_refresh_all();
+        if (open_dlg || name_dlg) od_refresh();
+    }
+    prop_for = -1;
+    close_front();
+}
+
+static void handle_properties_click(int wx, int wy, int ww, int wh) {
+    int ok, cancel, by, bw, ox, oy, ow, id = properties_id, ai;
+    prop_opens_geom(wx, wy, ww, &ox, &oy, &ow);
+    if (fs_valid(id) && !prop_root() && !fs_is_app(id) && hit(mouse_x, mouse_y, ox, oy, ow, BTN_H) &&
+        opens_with(id, &ai) && ow_build(id) && mi_open_with[0].act != ACT_NONE) {
+        menu_open_context(mi_open_with, mi_open_with_n, ox, oy + BTN_H + 2);
+        return;
+    }
+    prop_buttons(wx, wy, ww, wh, &ok, &cancel, &by, &bw);
+    if (hit(mouse_x, mouse_y, ok, by, bw, BTN_H)) properties_commit();
+    else if (prop_editable(properties_id) && hit(mouse_x, mouse_y, cancel, by, bw, BTN_H)) { prop_for = -1; close_front(); }
+}
+
+static void properties_key(void) {
+    if (key_sc == KEY_ESC) { prop_for = -1; close_front(); return; }
+    if (key_sc == KEY_ENTER) { properties_commit(); return; }
+    if (!prop_editable(properties_id)) return;
+    prop_sync();
+    if (key_sc == KEY_BACKSPACE) { if (prop_len) prop_buf[--prop_len] = 0; }
+    else if (key_char >= 32 && key_char != '/' && prop_len < FS_NAME_LEN - 1) { prop_buf[prop_len++] = key_char; prop_buf[prop_len] = 0; }
+    else return;
+    prop_failed = 0;
+    dirty = 1;
+}
+
+/* ---------- Hello and Help ---------- */
+
+static void draw_hello(int wx, int wy, int ww, int wh, int fl) {
+    gui_draw_window(wx, wy, ww, wh, "Hello", 0, fl);
+    int top = wy + TITLE_H, lw = logo_string_w("BaseOS"), gap = 14;
+    int x = wx + (ww - (40 + gap + lw)) / 2, y = top + 26;
+    ui_icon_draw(UI_ICON_LOGO, x, y + (LOGO_FONT_H - 40) / 2, 40, TK_ACCENT, ui_theme.content);
+    draw_logo_string("BaseOS", x + 40 + gap, y, TK_ACCENT_700);
+    kit_text_center("Hello, world. Everything you see is drawn from scratch.", wx, y + LOGO_FONT_H + 14, ww, TK_TEXT2, 0);
+}
+
+/* Keyboard reference: sections of shortcut chips and what they do. */
+typedef struct { const char *keys, *text; } HelpRow;
+static const HelpRow help_rows[] = {
+    {0, "Getting around"},
+    {"Ctrl+Space", "Search apps and files"},
+    {"Alt+Tab", "Switch between windows"},
+    {"Ctrl+C / X / V", "Copy, cut and paste files or selected text"},
+    {0, "Files"},
+    {"Ctrl+F", "Filter the current folder"},
+    {"Ctrl+1 to Ctrl+4", "Choose the sort column"},
+    {0, "Writer"},
+    {"Ctrl+S", "Save the document as BWR"},
+    {"Ctrl+Shift+P", "Export the document as PDF"},
+    {0, "Programs"},
+    {".bex", "Open a .bex file to run a native app"},
+    {"Ctrl+C", "Stop the native task in Terminal"},
+};
+#define HELP_ROWS ((int)(sizeof help_rows / sizeof help_rows[0]))
+static int help_window_h(void) {
+    int h = TITLE_H + 20 + 24;
+    for (int i = 0; i < HELP_ROWS; i++) h += help_rows[i].keys ? 28 : (i ? 38 : 28);
+    return h + 24 + 20;
+}
+static void draw_help(int wx, int wy, int ww, int wh, int fl) {
+    gui_draw_window(wx, wy, ww, wh, "Help", 0, fl);
+    int pad = ui_theme.pad_dialog + 4, x = wx + pad, y = wy + TITLE_H + 20, kx = x + 170;
+    kit_text("Keyboard shortcuts", x, y, TK_TEXT, ww - 2 * pad, 1);
+    y += 24;
+    for (int i = 0; i < HELP_ROWS; i++) {
+        const HelpRow *r = &help_rows[i];
+        if (!r->keys) {
+            if (i) { kit_separator(x, y + 12, ww - 2 * pad); y += 10; }
+            kit_text(r->text, x, y + 8, TK_TEXT2, ww - 2 * pad, 1);
+            y += 28;
+            continue;
+        }
+        kit_kbd(x, y + 3, r->keys);
+        kit_text(r->text, kx, kit_ty(y, 28), TK_TEXT, wx + ww - pad - kx, 0);
+        y += 28;
+    }
+    kit_text("Documents has Writer and Spreadsheet quick starts.", x, y + 8, TK_TEXT2, ww - 2 * pad, 0);
+}
 
 static void draw_window_contents(Win *w, int inactive) {
     context_set((int)(w - wins));
     chrome_icon = app_icon_for(kind_icon(w->kind));
     int wx = w->x, wy = w->y, ww = w->w, wh = w->h;
     int fl = inactive ? WIN_INACTIVE : 0;
-    if(w->kind==WK_PROPERTIES){
-        gui_draw_window(wx,wy,ww,wh,"Properties",0,fl|WIN_NOMENU);
-        int y=wy+TITLE_BAR+20,lx=wx+24,vx=wx+176;char row[96],number[16];
-        /* Header: the item's icon and name, then label / value rows in two
-         * aligned columns, grouped into the item and its volume. */
-        #define PROP(label,text) do { draw_string_clip(label,lx,y,ui_text_dim,vx-12);draw_string_clip(text,vx,y,ui_text,wx+ww-24);y+=26; }while(0)
-        #define PROP_RULE() do { y+=6;draw_hline(lx,y,ww-48,ui_chrome_dk);y+=16; }while(0)
-        if(fs_valid(properties_id)){
-            int id=properties_id;
-            app_icon_draw(fs_is_dir(id)?AI_FILES:fs_is_app(id)?app_icon_for(app_icon_by_name(fs_name(id))):AI_DOCUMENT,lx,y-4,AI_BIG);
-            draw_string_bold_clip(fs_name(id),lx+AI_BIG+14,y+(AI_BIG-CHAR_H)/2-4,ui_text,wx+ww-24);
-            y+=AI_BIG+4;PROP_RULE();
-            PROP("Type",fs_is_dir(id)?"Folder":fs_is_app(id)?"Application":"File");
-            fmt_uint(number,fs_size(id));kstrcpy(row,number);kstrcpy(row+kstrlen(row),fs_size(id)==1?" byte":" bytes");PROP("Size",row);
-            unsigned stamp=fs_modified(id);
-            if(!stamp)PROP("Modified","Unknown (older file)");
-            else {unsigned days=stamp/86400,year=2000,month=1;int md[]={31,28,31,30,31,30,31,31,30,31,30,31};
-                for(;;){unsigned yd=(year%4==0&&(year%100!=0||year%400==0))?366:365;if(days<yd)break;days-=yd;year++;}
-                md[1]=(year%4==0&&(year%100!=0||year%400==0))?29:28;
-                while(month<12&&days>=(unsigned)md[month-1])days-=md[month++-1];
-                fmt_uint(row,year);int n=kstrlen(row);row[n++]='-';fmt_pad2(row+n,month);n+=2;row[n++]='-';fmt_pad2(row+n,days+1);n+=2;row[n++]=' ';fmt_pad2(row+n,stamp/3600%24);n+=2;row[n++]=':';fmt_pad2(row+n,stamp/60%60);n+=2;kstrcpy(row+n," UTC");PROP("Modified",row);
-            }
-        }else {draw_string_clip("This item is no longer available.",lx,y,ui_text,wx+ww-24);y+=26;}
-        if(properties_reason[0]){draw_string_clip(properties_reason,lx,y,ui_text_dim,wx+ww-24);y+=26;}
-        PROP_RULE();
-        PROP("Volume",fs_storage_name());
-        fmt_uint(number,fs_used_bytes());kstrcpy(row,number);kstrcpy(row+kstrlen(row)," bytes");PROP("Used",row);
-        if(fs_node_limit()<=FS_MAX_NODES){fmt_uint(number,fs_node_limit()-fs_node_count());PROP("Free slots",number);}
-        fmt_uint(number,fs_file_limit());kstrcpy(row,number);kstrcpy(row+kstrlen(row)," bytes");PROP("Largest file",row);
-        PROP("Status",fs_storage_status()?fs_storage_status():fs_needs_sync()?"Changes waiting to be saved":"Saved to disk");
-        #undef PROP
-        #undef PROP_RULE
+    if (w->kind == WK_PROPERTIES) {
+        draw_properties(wx, wy, ww, wh, fl);
     } else if (w->kind == WK_HELLO) {
-        gui_draw_window(wx, wy, ww, wh, "Hello", 0, fl | WIN_NOMENU);
-        int lw = logo_string_w("BaseOS");
-        draw_logo_string("BaseOS", wx + (ww - lw) / 2, wy + TITLE_BAR + 30, ui_accent);
-        draw_string_in_win("Hello, world. Everything you see is drawn from scratch.", wx, ww,
-                           wy + TITLE_BAR + 30 + LOGO_FONT_H + 10, ui_text_dim);
+        draw_hello(wx, wy, ww, wh, fl);
     } else if (w->kind == WK_HELP) {
-        gui_draw_window(wx, wy, ww, wh, "Help", 0, fl | WIN_NOMENU);
-        int y = wy + TITLE_BAR + 22;
-        int x = wx + 24;
-        static const char *tips[] = {
-            "Ctrl+Space searches apps/files; Alt+Tab changes windows",
-            "Files: Ctrl+F filters; Ctrl+1 through Ctrl+4 select sorting",
-            "Ctrl+C/X/V copy, cut and paste files or selected text",
-            "Writer: Ctrl+S saves BWR; Ctrl+Shift+P exports PDF",
-            "Open .bex files to run native apps; Ctrl+C stops a task",
-            "Documents includes Writer and Spreadsheet quick starts",
-        };
-        draw_string_bold("Getting around", x, y, ui_text);
-        y += LINE_H + 8;
-        for (int t = 0; t < 6; t++) {
-            draw_round_rect(x, y + CHAR_H / 2 - 2, 6, 6, 3, ui_accent);
-            draw_string(tips[t], x + 16, y, ui_text);
-            y += LINE_H + 4;
-        }
+        draw_help(wx, wy, ww, wh, fl);
     } else if (w->kind == WK_ABOUT) {
         draw_about(wx, wy, ww, wh, fl);
     } else if (w->kind == WK_SETTINGS) {
@@ -5198,7 +6708,7 @@ static void draw_window_contents(Win *w, int inactive) {
         draw_snake(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_WORDLE) {
         gui_draw_window(wx, wy, ww, wh, "Wordle", 0, fl);
-        wordle_draw(wx, wy + TITLE_H);
+        wordle_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_TERM) {
         draw_term(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_NATIVE) {
@@ -5207,45 +6717,56 @@ static void draw_window_contents(Win *w, int inactive) {
         draw_todo(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_CLOCK) {
         gui_draw_window(wx, wy, ww, wh, "Clock", 0, fl);
-        clock_draw(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1);
+        clock_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1);
     } else if (w->kind == WK_CAL) {
         gui_draw_window(wx, wy, ww, wh, "Calendar", 0, fl);
-        cal_draw(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1);
+        cal_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_MINES) {
         gui_draw_window(wx, wy, ww, wh, "Minesweeper", 0, fl);
-        mines_draw(wx, wy + TITLE_H + 1);
+        mines_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_2048) {
         gui_draw_window(wx, wy, ww, wh, "2048", 0, fl);
-        g2048_draw(wx, wy + TITLE_H + 1);
+        g2048_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_BREAKOUT) {
         gui_draw_window(wx, wy, ww, wh, "Breakout", 0, fl);
-        bo_draw(wx, wy + TITLE_H + 1);
-    } else if (w->kind == WK_SPREADSHEET) {
-        gui_draw_window(wx,wy,ww,wh,spreadsheet_title(),0,fl);
-        spreadsheet_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
-    } else if (w->kind == WK_WRITER) {
-        gui_draw_window(wx,wy,ww,wh,writer_title(),0,fl);
-        writer_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
+        bo_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
+    } else if (w->kind == WK_SPREADSHEET || w->kind == WK_WRITER) {
+        int sheet = w->kind == WK_SPREADSHEET, cx, cy, cw, ch;
+        chrome_dirty = sheet ? spreadsheet_dirty() : writer_dirty();
+        gui_draw_window(wx, wy, ww, wh, sheet ? spreadsheet_title() : writer_title(), 0, fl);
+        chrome_dirty = 0;
+        doc_client(w, &cx, &cy, &cw, &ch);
+        if (sheet) { spreadsheet_set_active(!inactive); spreadsheet_draw(cx, cy, cw, ch); }
+        else { writer_set_active(!inactive); writer_draw(cx, cy, cw, ch); }
     } else if (w->kind == WK_BROWSER) {
+        int cx, cy, cw, ch;
         gui_draw_window(wx,wy,ww,wh,"Browser",0,fl);
-        browser_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
+        app_client(wx, wy, ww, wh, 1, &cx, &cy, &cw, &ch);
+        browser_set_hover(inactive ? 0 : hot);
+        browser_draw(cx, cy, cw, ch);
     } else if (w->kind == WK_PLAYER) {
+        int cx, cy, cw, ch;
         gui_draw_window(wx,wy,ww,wh,"Media Player",0,fl);
-        player_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
+        app_client(wx, wy, ww, wh, 0, &cx, &cy, &cw, &ch);
+        player_set_hover(inactive ? 0 : hot);
+        player_draw(cx, cy, cw, ch);
     } else if (w->kind == WK_SYSMON) {
+        int cx, cy, cw, ch;
         gui_draw_window(wx, wy, ww, wh, "System Monitor", 0, fl);
         SysInfo si;
         sysinfo_fill(&si);
-        sysmon_draw(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1, &si);
+        app_client(wx, wy, ww, wh, 1, &cx, &cy, &cw, &ch);
+        sysmon_set_hover(inactive ? 0 : hot);
+        sysmon_draw(cx, cy, cw, ch, &si);
     }
 }
 
 static void draw_one_window(Win *w,int inactive) {
-    uint8_t corners[256];
-    gfx_window_corners(w->x-1,w->y-1,w->w+2,w->h+2,corners,0,ui_border);
+    int slot=(int)(w-wins);
+    chrome_kind=w->kind; chrome_slot=slot;
+    chrome_flags=(w->maximized?WIN_MAXED:0)|(win_is_dialog(w->kind)?WIN_DIALOG:0);
     draw_window_contents(w,inactive);
-    chrome_icon=-1;
-    gfx_window_corners(w->x-1,w->y-1,w->w+2,w->h+2,corners,1,ui_border);
+    chrome_icon=chrome_kind=chrome_slot=-1; chrome_flags=0;
 }
 static int render_skip=-1,drag_cached=-1;
 void draw_ui(void) {
@@ -5258,125 +6779,404 @@ void draw_ui(void) {
     context_set(front);
 }
 
-static int start_btn_w(void);
+static void launcher_close(void);
+/* ---------- Taskbar, dock and top bar ----------
+ * Classic: a 34px taskbar along the bottom (Apps, one button per window,
+ * tray). Modern: a floating dock (Apps, windows, Show desktop) and a 28px top
+ * bar with the system button, the front app's menus, volume and clock. */
+static Rect tb_apps, tb_vol, tb_clock, tb_desk, tb_dock, tb_sys, tb_appname;
+static int tb_task_y, tb_task_h;
+static int volume_on;  /* volume popup */
+enum { HOT_NONE = -2, HOT_APPS = -1, HOT_VOL = -3, HOT_CLOCK = -4, HOT_DESK = -5,
+       HOT_SYS = -6, HOT_APPNAME = -7, HOT_MENU = -100 /* - index */ };
+static int taskbar_hover = HOT_NONE;
+
+/* Taskbar date and time, following the clock settings: no date when it is
+ * turned off, and 12- or 24-hour time. */
+static void date_time_text(char *date, char *time) {
+    RtcTime now;
+    rtc_read(&now);
+    static const char *dshort[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+    char t[4];
+    date[0] = 0;
+    if (!(clock_flags & CLOCK_NO_DATE)) {
+        kstrcpy(date, dshort[now.wday]);
+        kstrcpy(date + kstrlen(date), " ");
+        fmt_uint(t, (unsigned)now.day);
+        kstrcpy(date + kstrlen(date), t);
+        kstrcpy(date + kstrlen(date), " ");
+        int n = kstrlen(date);
+        const char *mn = rtc_month_name[now.month - 1];
+        for (int i = 0; i < 3 && mn[i]; i++) date[n++] = mn[i];
+        date[n] = 0;
+    }
+    clock_text(now.hour, now.min, time);
+}
+static int clock_w(void) {
+    char d[24], t[12];
+    date_time_text(d, t);
+    return (d[0] ? ui_string_w(d) + 8 : 0) + uib_string_w(t);
+}
+static void draw_clock(int x, int y, uint8_t ink) {
+    char d[24], t[12];
+    date_time_text(d, t);
+    if (d[0]) draw_string(d, x, y, ink);
+    draw_string_bold(t, x + (d[0] ? ui_string_w(d) + 8 : 0), y, ink);
+}
+
+static void taskbar_order(int *order, int *n) {
+    *n = 0;
+    for (int i = 0; i < MAX_WIN; i++) if (wins[i].open) order[(*n)++] = i;
+    for (int a = 0; a < *n; a++)
+        for (int b = a + 1; b < *n; b++)
+            if (wins[order[b]].seq < wins[order[a]].seq) { int t = order[a]; order[a] = order[b]; order[b] = t; }
+}
+
+static const char *tray_status(void) {
+    const char *status = fs_storage_status();
+    if (!status && session_status[0]) status = session_status;
+    if (!status && native_launch_status[0]) status = native_launch_status;
+    return status;
+}
+
+#define TASK_DOT_W 10  /* room for a task's unsaved-changes dot */
 static void taskbar_layout(void) {
-    int order[MAX_WIN];
-    int n = 0;
-    for (int i = 0; i < MAX_WIN; i++) {
-        if (wins[i].open)
-            order[n++] = i;
-    }
-    for (int a = 0; a < n; a++) {
-        for (int b = a + 1; b < n; b++) {
-            if (wins[order[b]].seq < wins[order[a]].seq) {
-                int t = order[a];
-                order[a] = order[b];
-                order[b] = t;
-            }
-        }
-    }
+    int order[MAX_WIN], n;
+    taskbar_order(order, &n);
     tb_n = 0;
-    int x=8+start_btn_w()+8;
-    int limit=n?(fb_w-x-176-(n-1)*6)/n:0;
-    for (int k = 0; k < n; k++) {
-        int i = order[k];
-        char title[TERM_TASK_TITLE_LEN];
-        int tile_w = 50 + ui_string_w(win_display_title(i, title));
-        if(tile_w>limit)tile_w=limit;
-        if(tile_w<40)tile_w=40;
-        tb_id[tb_n] = i;
-        tb_w[tb_n] = tile_w;
-        tb_x[tb_n++] = x;
-        x+=tile_w+6;
+    char title[TERM_TASK_TITLE_LEN];
+    if (MODERN) {
+        tb_task_h = 36;
+        int apps_w = 36 + uib_string_w("Apps") + 14;
+        int fixed = 6 + apps_w + 9 + 9 + 30 + 6;   /* pads, separators, show desktop */
+        int room = fb_w - 32 - fixed - (n ? (n - 1) * 4 : 0);
+        int each = n ? room / n : 0;
+        if (each > 168) each = 168;
+        int total = fixed;
+        int widths[MAX_WIN];
+        for (int k = 0; k < n; k++) {
+            int unsaved, w = 36 + 12 + uib_string_w(win_task_title(order[k], title, &unsaved)) + (unsaved ? TASK_DOT_W : 0);
+            if (w > each) w = each;
+            if (w < 72) w = 44;
+            widths[k] = w;
+            total += w + (k ? 4 : 0);
+        }
+        tb_dock = (Rect){(fb_w - total) / 2, fb_h - 56, total, 48};
+        tb_task_y = tb_dock.y + 6;
+        int x = tb_dock.x + 6;
+        tb_apps = (Rect){x, tb_task_y, apps_w, 36};
+        x += apps_w + 9;
+        for (int k = 0; k < n; k++) {
+            tb_id[tb_n] = order[k];
+            tb_x[tb_n] = x;
+            tb_w[tb_n++] = widths[k];
+            x += widths[k] + 4;
+        }
+        if (n) x += 5;
+        tb_desk = (Rect){tb_dock.x + tb_dock.w - 6 - 30, tb_dock.y + 9, 30, 30};
+        int cw = clock_w() + 18;
+        tb_clock = (Rect){fb_w - 6 - cw, 3, cw, 22};
+        tb_vol = (Rect){tb_clock.x - 2 - 34, 3, 34, 22};
+        tb_sys = (Rect){TOPBAR_SYS_X, 3, TOPBAR_SYS_W, 22};
+        tb_appname = (Rect){topbar_app_x(), 3, topbar_app_w(), 22};
+        return;
+    }
+    int y = TASKBAR_Y + 1;
+    tb_task_y = y;
+    tb_task_h = TASKBAR_H - 1;
+    tb_apps = (Rect){0, y, 84, tb_task_h};
+    tb_desk = (Rect){fb_w - 32, y, 32, tb_task_h};
+    int cw = clock_w() + 20;
+    tb_clock = (Rect){tb_desk.x - cw, y, cw, tb_task_h};
+    tb_vol = (Rect){tb_clock.x - 32, y, 32, tb_task_h};
+    int left = 84, right = tb_vol.x - 1;
+    const char *status = tray_status();
+    if (status) right -= ui_string_w(status) + 20 < (right - left) / 2 ? ui_string_w(status) + 20 : (right - left) / 2;
+    int free = right - left, w = n ? free / n : 0;
+    if (w > 168) w = 168;
+    if (w < 40) w = 40;
+    for (int k = 0; k < n && left + w <= right + w / 2; k++) {
+        tb_id[tb_n] = order[k];
+        tb_x[tb_n] = left;
+        tb_w[tb_n++] = w;
+        left += w;
     }
 }
 
-static int taskbar_hover = -2;
-static int start_btn_w(void) { return 36 + uib_string_w("Apps") + 12; }
-/* The in-window menu strip. Only the front window's open menu is highlighted. */
-static void draw_win_menu_strip(int x, int y, int w, int inactive, int nomenu) {
-    int sy = y + TITLE_BAR;
-    draw_rect(x, sy, w, WMENU_H, ui_body);
-    if (nomenu) return;
-    int ly = sy + (WMENU_H - CHAR_H) / 2;
-    for (int i = 0; i < MENU_N; i++) {
-        if (bar_x[i] + bar_w[i] > w - 8) break;
-        int open = !inactive && open_menu == i;
-        if (open) {
-            draw_round_rect(x + bar_x[i], sy + 2, bar_w[i], WMENU_H - 4, 5, INK(5));
-            draw_round_frame(x + bar_x[i], sy + 2, bar_w[i], WMENU_H - 4, 5, INK(10));
+static int rect_hit(Rect r) { return hit(mouse_x, mouse_y, r.x, r.y, r.w, r.h); }
+
+static int taskbar_hover_at(void) {
+    if (open_dlg || name_dlg || edit_close_dlg || display_pending) return HOT_NONE;
+    taskbar_layout();
+    if (MODERN) {
+        if (mouse_y < MENUBAR_H) {
+            if (rect_hit(tb_sys)) return HOT_SYS;
+            if (rect_hit(tb_appname)) return HOT_APPNAME;
+            if (rect_hit(tb_vol)) return HOT_VOL;
+            if (rect_hit(tb_clock)) return HOT_CLOCK;
+            int m = win_menu_at(mouse_x, mouse_y);
+            return m >= 0 ? HOT_MENU - m : HOT_NONE;
         }
-        draw_string(bar_name[i], x + bar_x[i] + 10, ly, open ? INK(31) : inactive ? ui_text_dim : INK(27));
+        if (!rect_hit(tb_dock)) return HOT_NONE;
+    } else {
+        if (mouse_y < TASKBAR_Y) {
+            int m = open_menu < 0 ? win_menu_at(mouse_x, mouse_y) : -1;
+            return m >= 0 ? HOT_MENU - m : HOT_NONE;
+        }
+        if (rect_hit(tb_vol)) return HOT_VOL;
+        if (rect_hit(tb_clock)) return HOT_CLOCK;
+    }
+    if (rect_hit(tb_apps)) return HOT_APPS;
+    if (rect_hit(tb_desk)) return HOT_DESK;
+    for (int t = 0; t < tb_n; t++)
+        if (hit(mouse_x, mouse_y, tb_x[t], tb_task_y, tb_w[t], tb_task_h)) return tb_id[t];
+    return HOT_NONE;
+}
+
+/* A task's label, cut to fit, then the unsaved-changes dot one space on. */
+static void task_label(const char *title, int unsaved, int x, int y, int maxw, uint8_t ink, int bold) {
+    int used = kit_text(title, x, y, ink, maxw - (unsaved ? TASK_DOT_W : 0), bold);
+    if (unsaved) kit_fill(x + used + 5, y + UI_FONT_H / 2 - 2, 5, 5, 2, ink, 1);
+}
+
+static void draw_task_button(int t, int front) {
+    int i = tb_id[t], x = tb_x[t], w = tb_w[t], y = tb_task_y, h = tb_task_h, unsaved;
+    char native_title[TERM_TASK_TITLE_LEN];
+    const char *title = win_task_title(i, native_title, &unsaved);
+    int active = i == front && !wins[i].min, hover = taskbar_hover == i;
+    int pressed = hover && mouse_left;
+    uint8_t ink = wins[i].min ? TK_TEXT2 : TK_TEXT, bg;
+    int icon = app_icon_for(kind_icon(wins[i].kind));
+    if (MODERN) {
+        bg = active ? TK_ACCENT_100 : pressed ? TK_HOVER : hover ? TK_LINE_SUBTLE : ui_theme.chrome;
+        if (bg != ui_theme.chrome) kit_fill(x, y, w, h, 8, bg, 1);
+        if (active) ink = TK_ACCENT_700;
+        if (w < 72) { app_icon_draw(icon, x + (w - 16) / 2, y + 10, AI_SMALL); }
+        else {
+            app_icon_draw(icon, x + 12, y + 10, AI_SMALL);
+            task_label(title, unsaved, x + 36, kit_ty(y, h), w - 36 - 12, ink, active);
+        }
+        if (active) kit_fill(x + w / 2 - 8, y + 31, 16, 3, 2, TK_ACCENT, 1);
+        return;
+    }
+    bg = active ? TK_46 : pressed ? TK_HOVER : hover ? TK_BASE : TK_SUNKEN;
+    draw_rect(x, y, w, h, bg);
+    draw_vline(x + w - 1, y, h, active ? TK_LINE : TK_LINE_SUBTLE);
+    if (active) {
+        draw_vline(x - 1, y, h, TK_LINE);
+        draw_rect(x, y, w - 1, 3, TK_ACCENT);
+    }
+    int ty = kit_ty(y + 3, h - 3);
+    if (w < 72) app_icon_draw(icon, x + (w - 16) / 2, y + 9, AI_SMALL);
+    else {
+        app_icon_draw(icon, x + 10, y + 9, AI_SMALL);
+        task_label(title, unsaved, x + 32, ty, w - 32 - 10, ink, active);
     }
 }
-static int taskbar_hover_at(void) {
-    if(open_dlg||name_dlg||edit_close_dlg||launcher_on||mouse_y<TASKBAR_Y)return -2;
-    if(hit(mouse_x,mouse_y,8,TASKBAR_Y+5,start_btn_w(),30))return -1;
-    taskbar_layout();
-    for(int t=0;t<tb_n;t++)if(hit(mouse_x,mouse_y,tb_x[t],TASKBAR_Y+5,tb_w[t],30))return tb_id[t];
-    return -2;
+
+static void draw_volume_icon(Rect r, int hover) {
+    uint8_t bg = MODERN ? (hover ? TK_HOVER : TK_45) : (hover ? TK_BASE : TK_SUNKEN);
+    if (hover || volume_on) {
+        if (MODERN) kit_fill(r.x, r.y, r.w, r.h, 6, volume_on ? TK_ACCENT : TK_HOVER, 1);
+        else draw_rect(r.x, r.y, r.w, r.h, volume_on ? TK_HOVER : TK_BASE);
+        if (volume_on) bg = MODERN ? TK_ACCENT : TK_HOVER;
+    }
+    ui_icon_draw(UI_ICON_VOL, r.x + (r.w - 16) / 2, r.y + (r.h - 16) / 2, 16,
+                 MODERN && volume_on ? TK_ON_ACCENT : TK_ICON, bg);
 }
+
 static void draw_taskbar(void) {
     taskbar_layout();
-    int y = TASKBAR_Y;
-    /* Light glass over the wallpaper. */
-    glass_round(0, y, fb_w, TASKBAR_H, 0, 0, COLOR_WHITE, 165, 200);
-    draw_hline(0, y, fb_w, INK(14));
-    glass_round(0, y + 1, fb_w, 1, 0, 0, COLOR_WHITE, 120, 120);
     int front = win_front();
-    int ty = y + (TASKBAR_H - CHAR_H) / 2;
-    int iy = y + (TASKBAR_H - AI_SMALL) / 2;
-    /* Apps button: the BaseOS mark and its label. */
-    if (launcher_on || taskbar_hover == -1) {
-        glass_round(8, y + 5, start_btn_w(), 30, 8, 1, launcher_on ? INK(31) : COLOR_WHITE, launcher_on ? 40 : 120, launcher_on ? 40 : 120);
-        draw_round_frame(8, y + 5, start_btn_w(), 30, 8, INK(14));
+    if (MODERN) {
+        kit_shadow(tb_dock.x, tb_dock.y, tb_dock.w, tb_dock.h, 12);
+        kit_fill(tb_dock.x, tb_dock.y, tb_dock.w, tb_dock.h, 12, TK_45, 1);
+        kit_frame(tb_dock.x, tb_dock.y, tb_dock.w, tb_dock.h, 12, TK_LINE_STRONG);
+        Rect a = tb_apps;
+        int hover = taskbar_hover == HOT_APPS;
+        kit_fill(a.x, a.y, a.w, a.h, 8, launcher_on ? TK_ACCENT_100 : hover ? TK_ACCENT_300 : TK_ACCENT_100, 1);
+        if (launcher_on) kit_frame(a.x, a.y, a.w, a.h, 8, TK_ACCENT);
+        if (launcher_on) kit_frame(a.x + 1, a.y + 1, a.w - 2, a.h - 2, 7, TK_ACCENT);
+        ui_icon_draw(UI_ICON_LOGO, a.x + 10, a.y + 9, 18, TK_ACCENT, TK_ACCENT_100);
+        draw_string_bold("Apps", a.x + 36, kit_ty(a.y, a.h), TK_ACCENT_700);
+        draw_vline(a.x + a.w + 4, tb_dock.y + 12, 24, TK_LINE_SUBTLE);
+        for (int t = 0; t < tb_n; t++) draw_task_button(t, front);
+        if (tb_n) draw_vline(tb_desk.x - 5, tb_dock.y + 12, 24, TK_LINE_SUBTLE);
+        Rect d = tb_desk;
+        if (taskbar_hover == HOT_DESK) kit_fill(d.x, d.y, d.w, d.h, 6, TK_HOVER, 1);
+        ui_icon_draw(UI_ICON_SCREEN, d.x + 7, d.y + 7, 16, TK_ICON, taskbar_hover == HOT_DESK ? TK_HOVER : TK_45);
+        return;
     }
-    draw_logo(18,y+11,18);
-    draw_string_bold("Apps",44,ty,INK(29));
-    for (int t = 0; t < tb_n; t++) {
-        int i = tb_id[t];
-        char native_title[TERM_TASK_TITLE_LEN];
-        const char *title = win_display_title(i, native_title);
-        int active = (i == front);
-        uint8_t ink = wins[i].min ? INK(17) : INK(29);
-        if (active || taskbar_hover == i) {
-            glass_round(tb_x[t], y + 5, tb_w[t], 30, 8, 1, active ? INK(31) : COLOR_WHITE, active ? 36 : 110, active ? 36 : 110);
-            draw_round_frame(tb_x[t], y + 5, tb_w[t], 30, 8, active ? INK(15) : INK(12));
-        }
-        draw_tb_icon(wins[i].kind,tb_x[t]+8,iy,ink);
-        draw_string_clip(title,tb_x[t]+32,ty,ink,tb_x[t]+tb_w[t]-8);
-        if(!wins[i].min)draw_round_rect(tb_x[t]+tb_w[t]/2-(active?8:2),y+TASKBAR_H-4,active?16:4,2,1,active?PAL_ACCENT+8:INK(14));
+    int y = TASKBAR_Y;
+    draw_hline(0, y, fb_w, TK_LINE);
+    draw_rect(0, y + 1, fb_w, TASKBAR_H - 1, TK_SUNKEN);
+    /* Apps button */
+    Rect a = tb_apps;
+    int hover = taskbar_hover == HOT_APPS;
+    if (launcher_on || hover) {
+        draw_rect(a.x, a.y, a.w, a.h, launcher_on ? TK_46 : mouse_left ? TK_HOVER : TK_BASE);
+        if (launcher_on) draw_rect(a.x, a.y, a.w, 3, TK_ACCENT);
     }
-    if(tb_n==0)draw_string("Ctrl + Space to search",8+start_btn_w()+8,ty,INK(16));
-    char clk[40];clock_text(clk);
-    int clock_x=fb_w-14-ui_string_w(clk);
-    draw_string(clk,clock_x,ty,INK(29));
-    /* Tray text: storage, session or launch status, left of the clock. */
-    const char *status = fs_storage_status();
-    if(!status && session_status[0])status=session_status;
-    if(!status && native_launch_status[0])status=native_launch_status;
+    draw_vline(a.x + a.w - 1, a.y, a.h, TK_LINE_SUBTLE);
+    ui_icon_draw(UI_ICON_LOGO, a.x + 12, y + 8, 20, TK_ACCENT, TK_SUNKEN);
+    draw_string_bold("Apps", a.x + 38, kit_ty(a.y + 1, a.h - 1), TK_TEXT);
+    for (int t = 0; t < tb_n; t++) draw_task_button(t, front);
+    /* Tray */
+    const char *status = tray_status();
+    draw_vline(tb_vol.x - 1, y + 1, TASKBAR_H - 1, TK_LINE);
     if (status) {
-        int sx = clock_x - 20 - ui_string_w(status), left = tb_n ? tb_x[tb_n-1] + tb_w[tb_n-1] + 12 : 8 + start_btn_w() + 8;
-        draw_string_clip(status, sx > left ? sx : left, ty, fs_sync_busy() ? INK(17) : gfx_rgb(0xC0, 0x30, 0x30), clock_x - 12);
+        int left = tb_n ? tb_x[tb_n - 1] + tb_w[tb_n - 1] + 10 : 94;
+        int sx = tb_vol.x - 12 - ui_string_w(status);
+        kit_text(status, sx > left ? sx : left, kit_ty(y + 1, TASKBAR_H - 1),
+                 fs_sync_busy() ? TK_TEXT2 : TK_RED, tb_vol.x - 12 - (sx > left ? sx : left), 0);
+    }
+    draw_volume_icon(tb_vol, taskbar_hover == HOT_VOL);
+    if (taskbar_hover == HOT_CLOCK) draw_rect(tb_clock.x, tb_clock.y, tb_clock.w, tb_clock.h, TK_BASE);
+    draw_clock(tb_clock.x + 10, kit_ty(y + 1, TASKBAR_H - 1), TK_TEXT);
+    Rect d = tb_desk;
+    if (taskbar_hover == HOT_DESK) draw_rect(d.x, d.y, d.w, d.h, TK_BASE);
+    draw_vline(d.x, d.y, d.h, TK_LINE_SUBTLE);
+    ui_icon_draw(UI_ICON_SCREEN, d.x + 8, y + 9, 16, TK_ICON, taskbar_hover == HOT_DESK ? TK_BASE : TK_SUNKEN);
+}
+
+/* Modern top bar. */
+static void draw_topbar(void) {
+    if (!MODERN) return;
+    taskbar_layout();
+    menu_bar_init();
+    draw_rect(0, 0, fb_w, MENUBAR_H - 1, TK_45);
+    draw_hline(0, MENUBAR_H - 1, fb_w, TK_LINE);
+    int sys_on = open_menu == MENU_CONTEXT && popup_n && popup[0].items == mi_system;
+    Rect s = tb_sys;
+    uint8_t bg = TK_45;
+    if (sys_on || taskbar_hover == HOT_SYS) { bg = sys_on ? TK_ACCENT : TK_HOVER; kit_fill(s.x, s.y, s.w, s.h, 6, bg, 1); }
+    ui_icon_draw(UI_ICON_LOGO, s.x + 6, s.y + 3, 16, sys_on ? TK_ON_ACCENT : TK_ACCENT, bg);
+    Rect a = tb_appname;
+    draw_string_bold(topbar_app_name(), a.x + 9, kit_ty(a.y, a.h), TK_TEXT);
+    int rx, ry, rh;
+    menu_row_origin(&rx, &ry, &rh);
+    int limit = tb_vol.x - 8;
+    for (int i = 0; i < bar_n; i++) {
+        int x = rx + bar_x[i];
+        if (x + bar_w[i] > limit) break;
+        int open = (open_menu == i && popup_n) || (open_menu == MENU_BAR && menu_bar_focus == i);
+        int hover = taskbar_hover == HOT_MENU - i && open_menu < 0;
+        uint8_t ink = TK_TEXT, fill = TK_45;
+        if (open) { fill = TK_ACCENT; ink = TK_ON_ACCENT; }
+        else if (hover) fill = TK_HOVER;
+        if (fill != TK_45) kit_fill(x, ry, bar_w[i], rh, 6, fill, 1);
+        draw_mnemonic(bar_menus[i].name, x + 9, kit_ty(ry, rh), ink, bar_w[i] - 12,
+                      alt_down || open_menu == MENU_BAR);
+    }
+    draw_volume_icon(tb_vol, taskbar_hover == HOT_VOL);
+    if (taskbar_hover == HOT_CLOCK) kit_fill(tb_clock.x, tb_clock.y, tb_clock.w, tb_clock.h, 6, TK_HOVER, 1);
+    draw_clock(tb_clock.x + 9, kit_ty(3, 22), TK_TEXT);
+    const char *status = tray_status();
+    if (status) {
+        int sx = tb_vol.x - 12 - ui_string_w(status);
+        if (sx > rx + 200) kit_text(status, sx, kit_ty(3, 22), fs_sync_busy() ? TK_TEXT2 : TK_RED, tb_vol.x - 12 - sx, 0);
     }
 }
 
-static int taskbar_hit(void) {
-    if (mouse_y < TASKBAR_Y)
-        return 0;
-    if (hit(mouse_x,mouse_y,8,TASKBAR_Y+5,start_btn_w(),30)) { launcher_open(); return 1; }
-    taskbar_layout();
-    for (int t = 0; t < tb_n; t++) {
-        if (hit(mouse_x, mouse_y, tb_x[t], TASKBAR_Y, tb_w[t], TASKBAR_H)) {
-            int id = tb_id[t];
-            if (!wins[id].min && win_front() == id)
-                win_minimize(id);
-            else
-                win_focus(id);
-            return 1;
-        }
+/* The Classic menu row inside a window. */
+static void draw_win_menu_strip(int x, int y, int w, int inactive, int nomenu) {
+    if (nomenu || MODERN) return;
+    int n;
+    const MMenu *menus = menubar_for(chrome_kind, &n);
+    int front = chrome_slot >= 0 && chrome_slot == win_front();
+    int ry = y + TITLE_BAR, rh = WMENU_H - 2, ix = x + 1 + 3;
+    for (int i = 0; i < n; i++) {
+        char t[32];
+        mi_text(menus[i].name, t, sizeof t, 0);
+        int iw = ui_string_w(t) + 16;
+        if (ix + iw > x + w - 4) break;
+        int open = front && ((open_menu == i && popup_n) || (open_menu == MENU_BAR && menu_bar_focus == i));
+        int hover = front && open_menu < 0 && taskbar_hover == HOT_MENU - i;
+        uint8_t ink = inactive ? TK_TEXT2 : TK_TEXT;
+        if (open) { draw_rect(ix, ry, iw, rh, TK_ACCENT); ink = TK_ON_ACCENT; }
+        else if (hover) draw_rect(ix, ry, iw, rh, TK_HOVER);
+        draw_mnemonic(menus[i].name, ix + 8, kit_ty(ry, rh), ink, iw - 8,
+                      front && (alt_down || open_menu == MENU_BAR));
+        ix += iw;
     }
-    return 1; /* swallow clicks on empty strip */
+}
+
+/* Volume popup above (Classic) or below (Modern) the tray button. */
+#define VOLUME_W 220
+#define VOLUME_H 64
+static void volume_geom(int *x, int *y) {
+    *x = tb_vol.x + tb_vol.w - VOLUME_W;
+    if (*x < 4) *x = 4;
+    *y = MODERN ? MENUBAR_H + 2 : TASKBAR_Y - VOLUME_H - 2;
+}
+static void draw_volume_popup(void) {
+    if (!volume_on) return;
+    taskbar_layout();
+    int x, y;
+    volume_geom(&x, &y);
+    kit_menu_frame(x, y, VOLUME_W, VOLUME_H);
+    unsigned v = audio_status()->volume;
+    char line[24];
+    kstrcpy(line, "Volume  ");
+    fmt_uint(line + kstrlen(line), v);
+    kstrcpy(line + kstrlen(line), "%");
+    draw_string_bold(line, x + 14, y + 10, TK_TEXT);
+    kit_slider(x + 14, y + 34, VOLUME_W - 28, (int)v, 100, ctl_state(x + 14, y + 34, VOLUME_W - 28, 18));
+}
+static int volume_click(void) {
+    if (!volume_on) return 0;
+    int x, y;
+    volume_geom(&x, &y);
+    if (!hit(mouse_x, mouse_y, x, y, VOLUME_W, VOLUME_H)) { volume_on = 0; dirty = 1; return rect_hit(tb_vol); }
+    if (hit(mouse_x, mouse_y, x + 8, y + 28, VOLUME_W - 16, 30)) {
+        int v = (mouse_x - (x + 14) - 6) * 100 / (VOLUME_W - 28 - 12);
+        audio_set_volume((unsigned)(v < 0 ? 0 : v > 100 ? 100 : v));
+        dirty = 1;
+    }
+    return 1;
+}
+static void volume_drag(void) {
+    if (!volume_on || !mouse_left) return;
+    int x, y;
+    volume_geom(&x, &y);
+    if (!hit(mouse_x, mouse_y, x, y + 20, VOLUME_W, VOLUME_H - 20)) return;
+    int v = (mouse_x - (x + 14) - 6) * 100 / (VOLUME_W - 28 - 12);
+    audio_set_volume((unsigned)(v < 0 ? 0 : v > 100 ? 100 : v));
+    dirty = 1;
+}
+
+static void taskbar_task_click(int id) {
+    if (!wins[id].min && win_front() == id) win_minimize(id);
+    else win_focus(id);
+}
+
+/* Clicks on the taskbar, dock or top bar. Returns 1 when used. */
+static int taskbar_hit(void) {
+    int h = taskbar_hover_at();
+    int on_bar = MODERN ? (mouse_y < MENUBAR_H || rect_hit(tb_dock)) : mouse_y >= TASKBAR_Y;
+    if (!on_bar) return 0;
+    if (h != HOT_VOL) volume_on = 0;
+    if (h == HOT_APPS) { if (launcher_on) launcher_close(); else launcher_open(); }
+    else if (h == HOT_DESK) show_desktop();
+    else if (h == HOT_VOL) volume_on = !volume_on;
+    else if (h == HOT_CLOCK) { cal_reset(); win_open(WK_CAL); }
+    else if (h == HOT_SYS) menu_open_context(mi_system, (int)(sizeof mi_system / sizeof mi_system[0]), tb_sys.x, 30);
+    else if (h == HOT_APPNAME) { int f = win_front(); if (f >= 0) menu_open_window(f); }
+    else if (h <= HOT_MENU) menu_open_bar(HOT_MENU - h);
+    else if (h >= 0) taskbar_task_click(h);
+    dirty = 1;
+    return 1;
+}
+static int taskbar_rclick(void) {
+    int h = taskbar_hover_at();
+    if (h < 0) return MODERN ? (mouse_y < MENUBAR_H || rect_hit(tb_dock)) : mouse_y >= TASKBAR_Y;
+    win_focus(h);
+    int n = (int)(sizeof mi_window / sizeof mi_window[0]), x = mouse_x, y;
+    Popup probe = {mi_window, n, 0, 0, 0, 0, -1};
+    popup_size(&probe);
+    y = MODERN ? tb_dock.y - probe.h - 4 : TASKBAR_Y - probe.h;
+    menu_open_context(mi_window, n, x, y);
+    return 1;
 }
 
 /* ---------- Input handling ---------- */
@@ -5406,143 +7206,103 @@ static int max_hit(int wx, int wy, int ww) {
     return hit(mouse_x, mouse_y, max_box_x(wx, ww), cy, CAP_W, CAP_H);
 }
 
-static int fm_name_hit(int wx, int ww, int iy, int id) {
-    /* Label side of the row: past the 12px icon, not the icon itself. */
-    int nx = files_list_x(wx, ww) + 20;
-    int ny = iy;
-    int nh = ROW_H;
-    int nw;
-    if (fm_renaming && fm_rename_id == id && fs_identity(id)==fm_rename_identity) {
-        nw = ui_string_w(fm_rename_buf) + 24;
-        if (nw < 100)
-            nw = 100;
-    } else {
-        nw = ui_string_w(fs_name(id)) + 24;
-        if (nw < 100)
-            nw = 100;
-    }
-    return hit(mouse_x, mouse_y, nx, ny, nw, nh);
+static int click_on_rename_field(void) {
+    int wx, wy, ww, wh, fx, fy, fw, fh;
+    if (!fm_renaming || !win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh)) return 0;
+    return files_rename_rect(wx, wy, ww, wh, &fx, &fy, &fw, &fh) && hit(mouse_x, mouse_y, fx, fy, fw, fh);
 }
 
-static int click_on_rename_field(void) {
-    int wx, wy, ww, wh;
-    int up, row, iy, i;
-    if (!fm_renaming)
-        return 0;
-    if (!win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh))
-        return 0;
-    up = fm_has_parent() ? 1 : 0;
-    row = -1;
-    for (i = 0; i < fm_count; i++) {
-        if (fm_ids[i] == fm_rename_id && fm_ids_identity[i]==fm_rename_identity) {
-            row = i + up;
-            break;
+/* Toolbar, sidebar, column headers and scrollbar. Returns 1 when the click
+ * was one of these. */
+static int files_chrome_click(int wx, int wy, int ww, int wh) {
+    int ty = files_tool_y(wy), by = files_body_y(wy), sy = files_status_y(wy, wh), side = files_side_w(ww);
+    if (mouse_y >= sy) return 1;
+    if (mouse_y < by) {
+        if (mouse_y < ty) return 1;
+        int n = nav_hit(wx, ty, FILES_TOOL_H - 1);
+        if (n == 0 || n == 1) { fm_history_step(n == 0 ? -1 : 1); return 1; }
+        if (n == 2) { fm_rename_cancel(); fm_go_up(); return 1; }
+        int cy = files_ctl_y(wy), vx = files_view_x(wx, ww), vs = nav_size(), vy = ty + (FILES_TOOL_H - 1 - vs) / 2;
+        int id = crumbs_hit(nav_end(wx), cy, vx - 8 - nav_end(wx), BTN_H, fm_cwd);
+        if (id >= 0) { if (id != fm_cwd) fm_navigate(id); return 1; }
+        if (hit(mouse_x, mouse_y, vx, vy, 2 * vs, vs)) {
+            int details = mouse_x < vx + vs;
+            if (details != fm_details) { fm_rename_cancel(); fm_details = details; fm_first = fm_manual_scroll = 0; }
+            dirty = 1;
+            return 1;
         }
+        int sw = files_search_w(ww), sx = files_search_x(wx, ww);
+        if (sw && hit(mouse_x, mouse_y, sx, cy, sw, BTN_H)) {
+            if (fm_view.filter[0] && mouse_x >= kit_search_clear_x(sx, sw)) fm_filter_clear(0);
+            else fm_filter_show();
+            dirty = 1;
+        }
+        return 1;
     }
-    if (row < 0)
-        return 0;
-    iy = files_list_y(wy) + (row-fm_first) * ROW_H;
-    return fm_name_hit(wx, ww, iy, fm_rename_id);
+    if (side && mouse_x < wx + 1 + side) {
+        int id = places_hit(wx + 1, by, side, sy - by, 1);
+        if (id >= 0 && id != fm_cwd) fm_navigate(id);
+        return 1;
+    }
+    int cx = files_content_x(wx, ww), cw = files_content_w(ww);
+    if (fm_details) {
+        int sort = flist_header_hit(cx, by, cw, FILES_COLS);
+        if (sort >= 0) { fm_sort_by(sort); return 1; }
+    }
+    if (files_scrolls(ww, wy, wh) && mouse_x >= cx + cw - SB) {
+        int rows = files_rows(wy, wh), cols = files_cols(ww), at, size;
+        int top = fm_details ? files_list_y(wy) : by + 2, len = sy - top - 2;
+        kit_scroll_thumb(len, fm_first / cols, rows, (fm_vis_count() + cols - 1) / cols, &at, &size);
+        fm_first += (mouse_y < top + at ? -rows : rows) * cols;
+        fm_manual_scroll = 1;
+        files_scroll(rows, cols);
+        dirty = 1;
+        return 1;
+    }
+    return 0;
 }
 
 static void handle_files_click(int wx, int wy, int ww, int wh) {
-    int side=files_side_w(ww),top=wy+TITLE_H+1;
     fm_history_sync();
-    if(side&&mouse_x<wx+side){
-        for(int i=0;i<FILES_PLACES;i++){
-            int id=files_place_id(i);
-            if(id>=0&&hit(mouse_x,mouse_y,wx+8,files_place_y(wy,i),side-16,28)){fm_navigate(id);return;}
-        }
+    if (files_chrome_click(wx, wy, ww, wh)) return;
+    fm_filter_focus = fm_filter_select_all = 0;
+    files_scroll(files_rows(wy, wh), files_cols(ww));
+    int i = files_item_at(wx, wy, ww, wh);
+    if (i == -2) return;
+    dirty = 1;
+    if (i < 0) {
+        fm_rename_cancel();
+        fm_selected = -1;
         return;
     }
-    if(mouse_y<top+FILES_TOOL_H){
-        for(int i=0;i<3;i++)if(hit(mouse_x,mouse_y,files_nav_x(wx,ww,i),top+7,30,28)){
-            if(i==2){fm_rename_cancel();fm_go_up();}else fm_history_step(i==0?-1:1);
-            return;
-        }
-        int xs[16],widths[16],ids[16],n=files_crumbs(wx,ww,xs,widths,ids);
-        for(int k=0;k<n-1;k++)if(hit(mouse_x,mouse_y,xs[k]-2,top+8,widths[k]+4,26)){fm_navigate(ids[k]);return;}
-        if(hit(mouse_x,mouse_y,wx+ww-44,top+7,32,28)){fm_filter_show();return;}
+    int id = fm_row_id(i);
+    if (id < 0) { fm_refresh(); return; }
+    int x, y, w, h;
+    files_item_rect(wx, wy, ww, wh, i, &x, &y, &w, &h);
+    int already = i == fm_selected;
+    int dbl = double_click(i, &fm_last_click_item, &fm_last_click_frame);
+    fm_dragging = fm_drag_active = 0;
+    fm_drag_id = -1;
+    if (dbl) {
+        fm_rename_cancel();
+        fm_selected = i;
+        fm_open_selected();
         return;
     }
-    if(mouse_y>=wy+wh-FILES_FOOT_H)return;
-    int x=files_list_x(wx,ww),y=files_header_y(wy),end=wx+ww-12;
-    for(int sort=0;sort<FILE_VIEW_SORT_COUNT;sort++){
-        if(hit(mouse_x,mouse_y,x,y,files_sort_width[sort],26)){fm_sort_by(sort);return;}
-        x+=files_sort_width[sort]+3;
+    /* A click on the name of the selected item renames it in place. */
+    if (already && files_label_hit(x, y, w, h)) {
+        fm_rename_begin(id);
+        return;
     }
-    if(fm_filter_open){
-        y=files_filter_y(wy);
-        if(hit(mouse_x,mouse_y,end-68,y,32,28)){fm_filter_clear(0);return;}
-        if(hit(mouse_x,mouse_y,end-32,y,32,28)){fm_filter_clear(1);return;}
-        if(hit(mouse_x,mouse_y,files_list_x(wx,ww),y,end-files_list_x(wx,ww)-76,28)){
-            fm_rename_cancel();fm_filter_focus=1;fm_filter_select_all=fm_view.filter[0]!=0;dirty=1;return;
-        }
-    }
-    fm_filter_focus=fm_filter_select_all=0;
-    int list_y = files_list_y(wy);
-    int rows = files_rows(wy, wh);
-    int lw = files_list_w(ww);
-    int vis = fm_vis_count();
-    int up = fm_has_parent() ? 1 : 0;
-    files_scroll(rows);
-    for (int i = fm_first; i < vis && i < fm_first+rows; i++) {
-        int iy = list_y + (i-fm_first) * ROW_H;
-        if (hit(mouse_x, mouse_y, files_list_x(wx, ww), iy, lw, ROW_H)) {
-            int id = fm_row_id(i);
-            if(id < -1){fm_refresh();dirty=1;return;}
-            int already = (i == fm_selected);
-            int dbl = double_click(i, &fm_last_click_item, &fm_last_click_frame);
-            int fast = dbl;
-            dirty = 1;
-            if (up && i == 0) {
-                /* Click or double-click on ".." goes up. Synthetic row. */
-                fm_rename_cancel();
-                fm_selected = i;
-                fm_dragging = 0;
-                fm_drag_active = 0;
-                fm_drag_id = -1;
-                fm_go_up();
-                return;
-            }
-            if (fast) {
-                fm_rename_cancel();
-                fm_selected = i;
-                fm_dragging = 0;
-                fm_drag_active = 0;
-                fm_drag_id = -1;
-                fm_open_selected();
-                return;
-            }
-            /* Name of an already-selected row: rename-in-place.
-             * Hit anywhere on the label side (past the icon). */
-            if (already && id >= 0 && mouse_x >= files_list_x(wx, ww) + 20) {
-                fm_selected = i;
-                fm_dragging = 0;
-                fm_drag_active = 0;
-                fm_drag_id = -1;
-                fm_rename_begin(id);
-                return;
-            }
-            if (fm_renaming && id == fm_rename_id) {
-                fm_dragging = 0;
-                fm_drag_active = 0;
-                fm_drag_id = -1;
-                return;
-            }
-            fm_rename_cancel();
-            fm_selected = i;
-            fm_dragging = 1;
-            fm_drag_active = 0;
-            fm_drag_id = id;
-            fm_drag_identity=fs_identity(id);
-            fm_drag_parent=fm_cwd;
-            fm_drag_sx = mouse_x;
-            fm_drag_sy = mouse_y;
-            return;
-        }
-    }
+    if (fm_renaming && id == fm_rename_id) return;
     fm_rename_cancel();
+    fm_selected = i;
+    fm_dragging = 1;
+    fm_drag_id = id;
+    fm_drag_identity = fs_identity(id);
+    fm_drag_parent = fm_cwd;
+    fm_drag_sx = mouse_x;
+    fm_drag_sy = mouse_y;
 }
 
 static void files_drop(void) {
@@ -5627,39 +7387,98 @@ static void handle_edit_click(int wx, int wy, int ww, int wh) {
 }
 
 static void handle_open_dlg_click(void) {
-    int px, py, pw, ph;
-    pick_geom(&px, &py, &pw, &ph);
+    Chooser c;
+    open_layout(&c);
+    if (hit(mouse_x, mouse_y, close_box_x(c.x, c.w), cap_y(c.y), CAP_CLOSE_W, CAP_H)) {
+        close_open_dialog();
+        return;
+    }
     int ox, oy, ow, cx, cy, cw;
-    od_buttons(px, py, pw, ph, &ox, &oy, &ow, &cx, &cy, &cw);
-
-    /* Modal: no close box. Only Cancel dismisses (ESC is handled in keys). */
+    od_buttons(c.x, c.y, c.w, c.h, &ox, &oy, &ow, &cx, &cy, &cw);
     if (hit(mouse_x, mouse_y, cx, cy, cw, BTN_H)) {
         close_open_dialog();
         return;
     }
-    if (hit(mouse_x, mouse_y, ox - 3, oy - 3, ow + 6, BTN_H + 6)) {
+    if (hit(mouse_x, mouse_y, ox, oy, ow, BTN_H)) {
         od_open_selected();
         return;
     }
-    int ly = od_list_y(py);
-    int lb = oy - 12;
-    int rows = (lb - ly) / ROW_H;
-    int lw = pw - 16;
-    for (int i = pick_first; i < pick_count && i < pick_first+rows; i++) {
-        int iy = ly + (i-pick_first) * ROW_H;
-        if (hit(mouse_x, mouse_y, px + 8, iy, lw, ROW_H)) {
-            if (!od_row_enabled(pick_ids[i]))
-                return;
-            int dbl =
-                double_click(i, &pick_last_click_item, &pick_last_click_frame);
+    int lx, fx, fw, dx, dw, r1, r2;
+    od_footer(&c, &lx, &fx, &fw, &dx, &dw, &r1, &r2);
+    if (hit(mouse_x, mouse_y, fx, r1, fw, BTN_H)) { pick_focus = 0; dirty = 1; return; }
+    if (hit(mouse_x, mouse_y, dx, r1, dw, BTN_H)) {
+        if (open_has_filter()) { pick_show_all = !pick_show_all; od_refresh(); dirty = 1; }
+        return;
+    }
+    /* Modal: clicks outside the dialog are swallowed. */
+    if (hit(mouse_x, mouse_y, c.x, c.y, c.w, c.h)) chooser_click(&c);
+}
+
+/* Case-insensitive prefix test for type-ahead. */
+static int name_has_prefix(const char *name, const char *prefix) {
+    for (; *prefix; name++, prefix++) {
+        char a = *name, b = *prefix;
+        if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+        if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+        if (!a || a != b) return 0;
+    }
+    return 1;
+}
+
+static void pick_type_select(void) {
+    if (!pick_typed_len) return;
+    for (int i = 0; i < pick_count; i++)
+        if (od_row_enabled(pick_ids[i]) && name_has_prefix(fs_name(pick_ids[i]), pick_typed)) {
             pick_selected = i;
-            dirty = 1;
-            if (dbl)
-                od_open_selected();
             return;
         }
+}
+
+static void open_dlg_key(void) {
+    static const int order[4] = {0, 3, 1, 2};
+    if (key_sc == KEY_TAB) {
+        int k = 0;
+        while (k < 3 && order[k] != pick_focus) k++;
+        pick_focus = order[(k + (shift_down ? 3 : 1)) % 4];
+        dirty = 1;
+        return;
     }
-    /* Modal: swallow clicks on the desktop/window underneath. */
+    if (alt_down && (key_sc == KEY_LEFT || key_sc == KEY_RIGHT)) { pick_history_step(key_sc == KEY_LEFT ? -1 : 1); return; }
+    if (alt_down && key_sc == KEY_UP) { if (pick_cwd != fs_root()) pick_go(fs_parent(pick_cwd), 1); return; }
+    if (key_sc == KEY_ESC) {
+        if (pick_focus == 3 && pick_view.filter[0]) { pick_view.filter[0] = 0; od_refresh(); dirty = 1; return; }
+        close_open_dialog();
+        return;
+    }
+    if (key_sc == KEY_ENTER) {
+        if (pick_focus == 1) close_open_dialog();
+        else od_open_selected();
+        return;
+    }
+    if (key_sc == KEY_UP || key_sc == KEY_DOWN) {
+        if (pick_count) {
+            int from = pick_selected < 0 ? (key_sc == KEY_UP ? 0 : pick_count - 1) : pick_selected;
+            int next = od_next_enabled(from, key_sc == KEY_UP ? -1 : 1);
+            if (next >= 0) pick_selected = next;
+        }
+        pick_typed_len = 0; pick_typed[0] = 0;
+        pick_manual = 0;
+        dirty = 1;
+        return;
+    }
+    char *text = pick_focus == 3 ? pick_view.filter : pick_focus == 0 ? pick_typed : 0;
+    if (!text) return;
+    int n = kstrlen(text);
+    if (key_sc == KEY_BACKSPACE) {
+        if (n) text[n - 1] = 0;
+        else if (pick_focus == 0 && pick_cwd != fs_root()) { pick_go(fs_parent(pick_cwd), 1); return; }
+    } else if (key_char >= 32 && key_char != '/' && n < FS_NAME_LEN - 1) {
+        text[n] = key_char;
+        text[n + 1] = 0;
+    } else return;
+    if (pick_focus == 3) { od_refresh(); pick_first = 0; }
+    else { pick_typed_len = kstrlen(pick_typed); pick_type_select(); pick_manual = 0; }
+    dirty = 1;
 }
 
 static void icon_open(int id) {
@@ -5684,6 +7503,7 @@ static void icon_open(int id) {
     case ICON_PLAYER: open_player(-1); break;
     case ICON_WRITER: open_writer(-1); break;
     case ICON_SPREADSHEET: open_spreadsheet(-1); break;
+    case ICON_HELP: win_open(WK_HELP); break;
     case ICON_DESK_TRASH: open_files(trash_id >= 0 ? trash_id : fs_root()); break;
     default: break;
     }
@@ -5720,6 +7540,12 @@ static void menu_activate(int m, int item) {
                 snake_reset();
             } else if (front_kind() == WK_WORDLE) {
                 wordle_new_game(frame_count);
+            } else if (front_kind() == WK_MINES) {
+                mines_new(frame_count);
+            } else if (front_kind() == WK_2048) {
+                g2048_new(frame_count);
+            } else if (front_kind() == WK_BREAKOUT) {
+                bo_new();
             } else if (front_kind() == WK_CAL) {
                 cal_new();dirty=1;
             } else if (front_kind() == WK_TODO) {
@@ -5786,6 +7612,485 @@ static void menu_activate(int m, int item) {
     }
 }
 
+/* ---------- Menu model ----------
+ * Shared actions keep their File / Edit / Window implementations above
+ * (LEG codes); the rest are dispatched here. */
+
+static int menu_kind(void) { return front_kind(); }
+
+static const MMenu *menubar_for(int kind, int *n) {
+#define BAR(m) do { *n = (int)(sizeof(m) / sizeof(m[0])); return m; } while (0)
+    switch (kind) {
+    case WK_NONE: BAR(mb_desktop);
+    case WK_FILES: BAR(mb_files);
+    case WK_EDIT: BAR(mb_editor);
+    case WK_WRITER: BAR(mb_writer);
+    case WK_SPREADSHEET: BAR(mb_sheet);
+    case WK_PAINT: BAR(mb_paint);
+    case WK_TERM: BAR(mb_term);
+    case WK_SNAKE: case WK_WORDLE: case WK_MINES: case WK_2048: case WK_BREAKOUT: BAR(mb_game);
+    case WK_CALC: BAR(mb_calc);
+    case WK_VIEW: BAR(mb_viewer);
+    case WK_TODO: case WK_CAL: BAR(mb_save);
+    default: BAR(mb_plain);
+    }
+#undef BAR
+}
+
+static void recent_add(int id) {
+    if (!fs_valid(id) || fs_is_dir(id) || fs_is_app(id)) return;
+    unsigned identity = fs_identity(id);
+    int at = recent_n < RECENT_N ? recent_n : RECENT_N - 1;
+    for (int i = 0; i < recent_n; i++)
+        if (recent[i].id == id && recent[i].identity == identity) { at = i; break; }
+    for (int i = at; i > 0; i--) recent[i] = recent[i - 1];
+    recent[0].id = id;
+    recent[0].identity = identity;
+    if (at == recent_n && recent_n < RECENT_N) recent_n++;
+}
+static int recent_valid(int i) {
+    return i >= 0 && i < recent_n && fs_valid(recent[i].id) && !fs_is_dir(recent[i].id) &&
+           fs_identity(recent[i].id) == recent[i].identity;
+}
+static void recent_prune(void) {
+    int n = 0;
+    for (int i = 0; i < recent_n; i++) if (recent_valid(i)) recent[n++] = recent[i];
+    recent_n = n;
+}
+/* The folder name shown beside a recent file. */
+static const char *recent_folder(int id) {
+    int parent = fs_parent(id);
+    return parent < 0 || parent == fs_root() ? "Home" : fs_name(parent);
+}
+static char recent_label[RECENT_N][FS_NAME_LEN + 1];
+static void recent_build_menu(void) {
+    recent_prune();
+    mi_recent_n = 0;
+    for (int i = 0; i < recent_n; i++) {
+        /* An '&' in a file name is shown, not taken as a mnemonic. */
+        const char *name = fs_name(recent[i].id);
+        int n = 0;
+        for (int k = 0; name[k] && n < FS_NAME_LEN; k++) if (name[k] != '&') recent_label[i][n++] = name[k];
+        recent_label[i][n] = 0;
+        mi_recent[mi_recent_n++] = (MItem){recent_label[i], recent_folder(recent[i].id), ACT_RECENT + i, 0};
+    }
+    if (!recent_n) mi_recent[mi_recent_n++] = (MItem){"No recent files", "", ACT_NONE, 0};
+    mi_recent[mi_recent_n++] = (MItem){"-", "", ACT_SEP, 0};
+    mi_recent[mi_recent_n++] = (MItem){"&Clear Recent", "", ACT_RECENT_CLEAR, 0};
+}
+
+static int place_dir(const char *name) {
+    int id = fs_find_child(fs_root(), name);
+    return fs_is_dir(id) ? id : -1;
+}
+
+static void fm_sort_set(int sort, int descending) {
+    fm_rename_cancel();
+    fm_filter_focus = fm_filter_select_all = 0;
+    fm_view.sort = sort;
+    fm_view.descending = descending;
+    fm_manual_scroll = 0;
+    if (fm_selected < 0) fm_first = 0;
+    fm_last_click_item = -1;
+    fm_refresh();
+    dirty = 1;
+}
+
+/* Move the selected Files row to the Trash. */
+static void fm_trash_selected(void) {
+    int id = fm_row_id(fm_selected);
+    if (id < 0 || trash_id < 0 || id == trash_id || id == fs_root() || fs_is_app(id) ||
+        fs_parent(id) == trash_id) return;
+    if (files_storage_busy()) return;
+    fm_rename_cancel();
+    if (fs_move(id, trash_id) < 0) { dirty = 1; return; }
+    int owner = context_slot;
+    for (int i = 0; i < MAX_WIN; i++) if (wins[i].open && wins[i].kind == WK_FILES) {
+        context_set(i);
+        if (!fm_cwd_valid()) fm_set_cwd(fs_root());
+        fm_refresh();
+    }
+    context_set(owner);
+    if (open_dlg) od_refresh();
+    dirty = 1;
+}
+
+static int files_selected_item(void) {
+    if (front_kind() != WK_FILES) return -2;
+    int id = fm_row_id(fm_selected);
+    return id >= 0 && id != fs_root() ? id : -2;
+}
+
+static int act_enabled(int act) {
+    if (act == ACT_NONE || act == ACT_SEP) return 0;
+    if (act >= ACT_RECENT && act < ACT_RECENT + RECENT_N) return recent_valid(act - ACT_RECENT);
+    if (act >= ACT_OPEN_WITH && act < ACT_OPEN_WITH + OW_N)
+        return fs_valid(ow_target) && fs_identity(ow_target) == ow_identity && ow_can(ow_target, act - ACT_OPEN_WITH);
+    if (act >= 0x100 && act < 0x200) return menu_item_enabled((act >> 4) & 15, act & 15);
+    if (open_dlg) return act == ACT_ABOUT || act == ACT_HELP;
+    int fk = front_kind(), f = win_front(), id;
+    switch (act) {
+    case ACT_NEW_WINDOW: return fk == WK_EDIT || fk == WK_FILES || fk == WK_TERM;
+    case ACT_SAVE_AS: return fk == WK_EDIT || fk == WK_WRITER || fk == WK_SPREADSHEET;
+    case ACT_REVERT: return fk == WK_EDIT && edit_binding_valid() && !edit_saved_ok;
+    case ACT_UNDO: case ACT_REDO:
+        return fk == WK_EDIT || fk == WK_PAINT || fk == WK_WRITER || fk == WK_SPREADSHEET;
+    case ACT_SELECT_ALL: return fk == WK_EDIT || fk == WK_WRITER || fk == WK_SPREADSHEET;
+    case ACT_FIND_NEXT: return fk == WK_EDIT;
+    case ACT_OPEN_ITEM: return fk == WK_FILES && fm_row_id(fm_selected) >= -1;
+    case ACT_RENAME: case ACT_TRASH:
+        id = files_selected_item();
+        return id >= 0 && !fs_is_app(id) && id != trash_id && id != prefs_id &&
+               (act != ACT_TRASH || (trash_id >= 0 && fs_parent(id) != trash_id));
+    case ACT_COPY_PATH: return files_selected_item() >= 0;
+    case ACT_OPEN_WITH_MENU:
+        id = files_selected_item();
+        return id >= 0 && !fs_is_dir(id) && !fs_is_app(id);
+    case ACT_NEW_FILE: case ACT_REFRESH: case ACT_FILTER:
+    case ACT_SORT_NAME: case ACT_SORT_KIND: case ACT_SORT_SIZE: case ACT_SORT_MODIFIED:
+    case ACT_SORT_DESCENDING: case ACT_VIEW_ICONS: case ACT_VIEW_DETAILS:
+        return fk == WK_FILES;
+    case ACT_GO_BACK: return fk == WK_FILES && fm_history_target(-1) >= 0;
+    case ACT_GO_FORWARD: return fk == WK_FILES && fm_history_target(1) >= 0;
+    case ACT_GO_UP: return fk == WK_FILES && fm_has_parent();
+    case ACT_GO_DOCUMENTS: return place_dir("Documents") >= 0;
+    case ACT_GO_PICTURES: return place_dir("Pictures") >= 0;
+    case ACT_GO_TRASH: return fs_is_dir(trash_id);
+    case ACT_LINE_NUMBERS: return fk == WK_EDIT;
+    case ACT_RESTORE: return f >= 0 && wins[f].maximized;
+    case ACT_MOVE: case ACT_SIZE: return f >= 0 && !wins[f].maximized;
+    case ACT_RECENT_CLEAR: return recent_n > 0;
+    case ACT_QUIT: return f >= 0;
+    case ACT_DOC_PROPERTIES: return fk == WK_EDIT && edit_binding_valid();
+    case ACT_TERM_CLEAR: return fk == WK_TERM && !term_task_running(f);
+    case ACT_TERM_BOTTOM: return fk == WK_TERM && term_scroll_offset() > 0;
+    case ACT_DESK_OPEN: case ACT_DESK_PROPERTIES: return icon_sel >= 0;
+    default: return 1;
+    }
+}
+
+static int act_checked(int act) {
+    if (front_kind() == WK_FILES) {
+        if (act == ACT_SORT_NAME) return fm_view.sort == FILE_VIEW_NAME;
+        if (act == ACT_SORT_KIND) return fm_view.sort == FILE_VIEW_TYPE;
+        if (act == ACT_SORT_SIZE) return fm_view.sort == FILE_VIEW_SIZE;
+        if (act == ACT_SORT_MODIFIED) return fm_view.sort == FILE_VIEW_MODIFIED;
+        if (act == ACT_SORT_DESCENDING) return fm_view.descending;
+        if (act == ACT_VIEW_ICONS) return !fm_details;
+        if (act == ACT_VIEW_DETAILS) return fm_details;
+    }
+    if (act == ACT_LINE_NUMBERS) return !!(win_options & WINOPT_LINE_NUMBERS);
+    return 0;
+}
+
+static void menu_close(void) {
+    open_menu = MENU_NONE;
+    menu_sel = -1;
+    popup_n = 0;
+    menu_bar_focus = -1;
+    dirty = 1;
+}
+
+static void do_restart(void);
+static void windows_save(void);
+
+static void act_run(int act) {
+    menu_close();
+    if (!act_enabled(act)) return;
+    fm_last_click_item = -1;
+    if (act >= ACT_RECENT && act < ACT_RECENT + RECENT_N) { open_fs_file(recent[act - ACT_RECENT].id); return; }
+    if (act >= ACT_OPEN_WITH && act < ACT_OPEN_WITH + OW_N) { ow_open(ow_target, act - ACT_OPEN_WITH); return; }
+    if (act >= 0x100 && act < 0x200) { menu_activate((act >> 4) & 15, act & 15); return; }
+    int fk = front_kind(), f = win_front();
+    switch (act) {
+    case ACT_NEW_WINDOW:
+        if (fk == WK_FILES) open_files(fm_cwd);
+        else if (fk == WK_TERM) open_term();
+        else open_edit();
+        break;
+    case ACT_SAVE_AS:
+        if (fk == WK_EDIT) namedlg_open(0, edit_binding_valid() ? fs_name(edit_file) : "untitled.txt");
+        else if (fk == WK_WRITER) namedlg_open(2, writer_file() >= 0 ? fs_name(writer_file()) : "untitled.bwr");
+        else namedlg_open(4, spreadsheet_file() >= 0 ? fs_name(spreadsheet_file()) : "untitled.bsh");
+        break;
+    case ACT_REVERT:
+        edit_record();
+        edit_load(edit_file);
+        break;
+    case ACT_UNDO: case ACT_REDO:
+        if (fk == WK_EDIT) edit_undo(act == ACT_REDO);
+        else if (fk == WK_PAINT) paint_undo(act == ACT_REDO);
+        else if (fk == WK_WRITER) writer_result(writer_key(act == ACT_REDO ? 0x15 : 0x2c, 0, WRITER_MOD_CTRL));
+        else spreadsheet_result(spreadsheet_key(act == ACT_REDO ? 0x15 : 0x2c, 0, SPREADSHEET_MOD_CTRL));
+        break;
+    case ACT_SELECT_ALL:
+        if (fk == WK_EDIT) { edit_sel_a = 0; edit_sel_b = edit_caret = edit_len; }
+        else if (fk == WK_WRITER) writer_result(writer_key(0x1e, 0, WRITER_MOD_CTRL));
+        else spreadsheet_result(spreadsheet_key(0x1e, 0, SPREADSHEET_MOD_CTRL));
+        break;
+    case ACT_FIND_NEXT:
+        if (!edit_search.open) edit_search_open(0);
+        edit_find_next(1);
+        break;
+    case ACT_OPEN_ITEM: fm_open_selected(); break;
+    case ACT_NEW_FILE: fm_new_file(); break;
+    case ACT_RENAME: fm_rename_begin(fm_row_id(fm_selected)); break;
+    case ACT_TRASH: fm_trash_selected(); break;
+    case ACT_REFRESH: fm_refresh(); break;
+    case ACT_FILTER: fm_filter_show(); break;
+    case ACT_GO_BACK: fm_history_step(-1); break;
+    case ACT_GO_FORWARD: fm_history_step(1); break;
+    case ACT_GO_UP: fm_go_up(); break;
+    case ACT_GO_HOME: case ACT_GO_DOCUMENTS: case ACT_GO_PICTURES: case ACT_GO_TRASH: {
+        int target = act == ACT_GO_HOME ? fs_root() : act == ACT_GO_TRASH ? trash_id :
+                     place_dir(act == ACT_GO_DOCUMENTS ? "Documents" : "Pictures");
+        if (fk == WK_FILES) fm_navigate(target);
+        else open_files(target);
+        break;
+    }
+    case ACT_SORT_NAME: case ACT_SORT_KIND: case ACT_SORT_SIZE: case ACT_SORT_MODIFIED: {
+        int sort = act - ACT_SORT_NAME;
+        fm_sort_set(sort, fm_view.sort == sort ? fm_view.descending : sort == FILE_VIEW_MODIFIED);
+        break;
+    }
+    case ACT_SORT_DESCENDING: fm_sort_set(fm_view.sort, !fm_view.descending); break;
+    case ACT_VIEW_ICONS: case ACT_VIEW_DETAILS:
+        fm_rename_cancel(); fm_details = act == ACT_VIEW_DETAILS; fm_first = fm_manual_scroll = 0; break;
+    case ACT_LINE_NUMBERS: win_options ^= WINOPT_LINE_NUMBERS; windows_save(); break;
+    case ACT_RESTORE: win_arrange(f, 3); break;
+    case ACT_MOVE: case ACT_SIZE:
+        win_kbd_mode = act == ACT_MOVE ? 1 : 2;
+        win_kbd_slot = f;
+        win_kbd_begin();
+        break;
+    case ACT_SETTINGS: win_open(WK_SETTINGS); break;
+    case ACT_RECENT_CLEAR: recent_n = 0; break;
+    case ACT_COPY_PATH: {
+        char path[FS_PATH_LEN];
+        fs_path(files_selected_item(), path, sizeof path);
+        clip_len = kstrlen(path);
+        kmemcpy(clip_buf, path, clip_len + 1);
+        clipboard_changed();
+        break;
+    }
+    case ACT_QUIT:
+        for (int i = 0; i < MAX_WIN; i++)
+            if (wins[i].open && wins[i].kind == fk && edit_close_owner < 0) win_request_close(i);
+        break;
+    case ACT_TERM_CLEAR: term_clear(); break;
+    case ACT_TERM_BOTTOM: term_scroll(-term_scroll_offset()); break;
+    case ACT_DOC_PROPERTIES:
+        properties_id = edit_file;
+        properties_reason = "";
+        win_open(WK_PROPERTIES);
+        break;
+    case ACT_RESTART: do_restart(); break;
+    case ACT_DESK_OPEN: desk_open(icon_sel); break;
+    case ACT_DESK_PROPERTIES:
+        properties_id = icon_sel == DESK_TRASH && trash_id >= 0 ? trash_id : fs_root();
+        properties_reason = "";
+        win_open(WK_PROPERTIES);
+        break;
+    case ACT_SHUTDOWN: do_shutdown(); break;
+    default: break;
+    }
+    dirty = 1;
+}
+
+/* ---------- Menu input ---------- */
+
+static int popup_at(int px, int py, int *item) {
+    for (int k = popup_n - 1; k >= 0; k--) {
+        int i = popup_item_at(&popup[k], px, py);
+        if (i >= 0 || hit(px, py, popup[k].x, popup[k].y, popup[k].w, popup[k].h)) {
+            *item = i;
+            return k;
+        }
+    }
+    *item = -1;
+    return -1;
+}
+
+static void menu_open_bar(int m) {
+    menu_bar_init();
+    if (m < 0 || m >= bar_n) return;
+    menu_open(m);
+    open_menu = m;
+    menu_bar_focus = m;
+    dirty = 1;
+}
+
+static void menu_open_context(const MItem *items, int n, int x, int y) {
+    menu_open_popup(items, n, x, y);
+    open_menu = MENU_CONTEXT;
+    menu_bar_focus = -1;
+    dirty = 1;
+}
+
+static void menu_open_window(int slot) {
+    if (slot < 0) return;
+    win_focus(slot);
+    Win *w = &wins[slot];
+    menu_open_context(mi_window, (int)(sizeof mi_window / sizeof mi_window[0]),
+                      w->x + (MODERN ? 8 : 4), w->y + TITLE_BAR - (MODERN ? 4 : 1));
+}
+
+/* Pointer moved while a menu is open: track the item and follow submenus
+ * and neighbouring menus of the row. */
+static void menu_hover(void) {
+    int item, k = popup_at(mouse_x, mouse_y, &item);
+    if (k >= 0) {
+        if (popup[k].sel != item && (item >= 0 || k == popup_n - 1)) {
+            popup[k].sel = item;
+            if (k == 0 && item >= 0) {
+                if (popup[0].items[item].flags & KIT_MENU_SUB) menu_open_sub(item);
+                else popup_n = 1;
+            }
+            dirty = 1;
+        }
+        return;
+    }
+    if (open_menu >= 0 && open_menu < MENU_CONTEXT) {
+        int bar = win_menu_at(mouse_x, mouse_y);
+        if (bar >= 0 && bar != open_menu) menu_open_bar(bar);
+    }
+}
+
+static void menu_click(void) {
+    int item, k = popup_at(mouse_x, mouse_y, &item);
+    if (k >= 0) {
+        if (item < 0) return;
+        const MItem *it = &popup[k].items[item];
+        if (it->flags & KIT_MENU_SUB) { popup[0].sel = item; menu_open_sub(item); dirty = 1; return; }
+        if (act_enabled(it->act)) act_run(it->act);
+        return;
+    }
+    int bar = win_menu_at(mouse_x, mouse_y);
+    if (bar >= 0) {
+        if (bar == open_menu) menu_close();
+        else menu_open_bar(bar);
+        return;
+    }
+    menu_close();
+}
+
+static int menu_item_selectable(const Popup *p, int i) {
+    return !mi_is_sep(&p->items[i]) && (act_enabled(p->items[i].act) || (p->items[i].flags & KIT_MENU_SUB));
+}
+
+static void menu_step(Popup *p, int dir) {
+    for (int n = 0; n < p->n; n++) {
+        p->sel = p->sel < 0 ? (dir > 0 ? 0 : p->n - 1) : (p->sel + dir + p->n) % p->n;
+        if (menu_item_selectable(p, p->sel)) return;
+    }
+    p->sel = -1;
+}
+
+/* Keys while a menu or the focused menu row is up. Returns 1 when used. */
+static int menu_key(void) {
+    /* A Ctrl shortcut leaves the menus and runs, as if they were closed
+     * (Ctrl itself and the other modifiers only change the state). */
+    if (ctrl_down && key_sc != 0x1D && key_sc != 0x2A && key_sc != 0x36 && key_sc != 0x38) {
+        menu_close();
+        return 0;
+    }
+    if (open_menu == MENU_BAR) {
+        menu_bar_init();
+        if (key_sc == KEY_ESC || key_sc == 0x44) { menu_close(); return 1; }
+        if (key_sc == KEY_LEFT || key_sc == KEY_RIGHT) {
+            if (bar_n) menu_bar_focus = (menu_bar_focus + (key_sc == KEY_LEFT ? bar_n - 1 : 1)) % bar_n;
+            dirty = 1;
+            return 1;
+        }
+        if (key_sc == KEY_DOWN || key_sc == KEY_UP || key_sc == KEY_ENTER || key_sc == KEY_SPACE) {
+            int m = menu_bar_focus;
+            menu_open_bar(m);
+            if (popup_n) menu_step(&popup[0], key_sc == KEY_UP ? -1 : 1);
+            return 1;
+        }
+        char c = key_char >= 'A' && key_char <= 'Z' ? (char)(key_char + 32) : key_char;
+        for (int i = 0; c && i < bar_n; i++)
+            if (mi_mnemonic(bar_menus[i].name) == c) {
+                menu_open_bar(i);
+                if (popup_n) menu_step(&popup[0], 1);
+                return 1;
+            }
+        return 1;
+    }
+    if (open_menu < 0 || !popup_n) return 0;
+    Popup *p = &popup[popup_n - 1];
+    if (key_sc == KEY_ESC) {
+        if (popup_n == 2) popup_n = 1;
+        else if (open_menu < MENU_CONTEXT) { popup_n = 0; open_menu = MENU_BAR; }
+        else menu_close();
+        dirty = 1;
+        return 1;
+    }
+    if (key_sc == KEY_UP || key_sc == KEY_DOWN) { menu_step(p, key_sc == KEY_UP ? -1 : 1); dirty = 1; return 1; }
+    if (key_sc == KEY_RIGHT) {
+        if (popup_n == 1 && p->sel >= 0 && (p->items[p->sel].flags & KIT_MENU_SUB)) {
+            menu_open_sub(p->sel);
+            menu_step(&popup[1], 1);
+        } else if (open_menu < MENU_CONTEXT) {
+            menu_bar_init();
+            menu_open_bar((open_menu + 1) % (bar_n ? bar_n : 1));
+            if (popup_n) menu_step(&popup[0], 1);
+        }
+        dirty = 1;
+        return 1;
+    }
+    if (key_sc == KEY_LEFT) {
+        if (popup_n == 2) popup_n = 1;
+        else if (open_menu < MENU_CONTEXT) {
+            menu_bar_init();
+            menu_open_bar((open_menu + bar_n - 1) % (bar_n ? bar_n : 1));
+            if (popup_n) menu_step(&popup[0], 1);
+        }
+        dirty = 1;
+        return 1;
+    }
+    if (key_sc == KEY_ENTER || key_sc == KEY_SPACE) {
+        if (p->sel < 0) return 1;
+        const MItem *it = &p->items[p->sel];
+        if (it->flags & KIT_MENU_SUB) { menu_open_sub(p->sel); menu_step(&popup[1], 1); dirty = 1; return 1; }
+        if (act_enabled(it->act)) act_run(it->act);
+        return 1;
+    }
+    char c = key_char >= 'A' && key_char <= 'Z' ? (char)(key_char + 32) : key_char;
+    for (int i = 0; c && i < p->n; i++) {
+        if (mi_is_sep(&p->items[i]) || mi_mnemonic(p->items[i].label) != c) continue;
+        if (p->items[i].flags & KIT_MENU_SUB) { p->sel = i; menu_open_sub(i); menu_step(&popup[1], 1); dirty = 1; return 1; }
+        if (act_enabled(p->items[i].act)) act_run(p->items[i].act);
+        return 1;
+    }
+    return 1;
+}
+
+/* Alt+letter opens a menu of the row by its mnemonic. */
+static int menu_mnemonic_open(void) {
+    if (!alt_down || ctrl_down || !key_char) return 0;
+    if (!MODERN && (win_front() < 0 || !win_has_menu(front_kind()))) return 0;
+    menu_bar_init();
+    char c = key_char >= 'A' && key_char <= 'Z' ? (char)(key_char + 32) : key_char;
+    for (int i = 0; i < bar_n; i++)
+        if (mi_mnemonic(bar_menus[i].name) == c) {
+            menu_open_bar(i);
+            if (popup_n) menu_step(&popup[0], 1);
+            return 1;
+        }
+    return 0;
+}
+
+static void menu_focus_row(void) {
+    if (!MODERN && (win_front() < 0 || !win_has_menu(front_kind()))) return;
+    menu_bar_init();
+    if (!bar_n) return;
+    popup_n = 0;
+    open_menu = MENU_BAR;
+    menu_bar_focus = 0;
+    dirty = 1;
+}
+
 typedef struct {
     char name[FS_NAME_LEN]; /* A result owns its display name and node identity. */
     int icon;
@@ -5793,8 +8098,12 @@ typedef struct {
     unsigned identity;
 } LaunchItem;
 
-static LaunchItem launch_items[24];
-static int launch_n = 0;
+/* Every app plus up to 24 matching files. */
+#define LAUNCH_MAX (ICON_DESK_COUNT + 24)
+static LaunchItem launch_items[LAUNCH_MAX];
+static int launch_n = 0, launch_apps = 0;
+static int launch_recent_view;  /* the Recent files list is showing */
+static int launch_recent_sel;
 
 static int str_has(const char *hay, const char *needle) {
     if (!needle[0])
@@ -5815,43 +8124,53 @@ static int str_has(const char *hay, const char *needle) {
     return 0;
 }
 
+static int name_before(const char *a, const char *b) {
+    for (;; a++, b++) {
+        char x = *a >= 'A' && *a <= 'Z' ? (char)(*a + 32) : *a;
+        char y = *b >= 'A' && *b <= 'Z' ? (char)(*b + 32) : *b;
+        if (x != y || !x) return x < y;
+    }
+}
+
+/* Apps in name order, then, while searching, matching files. */
 static void launcher_refresh(void) {
     launch_n = 0;
     launch_buf[launch_len] = 0;
-    for (int i = 0; i < ICON_DESK_TRASH && launch_n < 24; i++) {
-        if (str_has(icons[i].label, launch_buf)) {
-            kstrcpy(launch_items[launch_n].name, icons[i].label);
-            launch_items[launch_n].identity = 0;
-            launch_items[launch_n].icon = i;
-            launch_items[launch_n].file = -1;
-            launch_n++;
-        }
+    for (int i = 0; i < ICON_DESK_TRASH && launch_n < LAUNCH_MAX; i++) {
+        if (!str_has(icons[i].label, launch_buf)) continue;
+        LaunchItem it = {{0}, i, -1, 0};
+        kstrcpy(it.name, icons[i].label);
+        int at = launch_n++;
+        while (at > 0 && name_before(it.name, launch_items[at - 1].name)) { launch_items[at] = launch_items[at - 1]; at--; }
+        launch_items[at] = it;
     }
-    for (int id = 0; id < fs_node_slots() && launch_n < 24; id++) {
-        if (!fs_valid(id) || fs_is_app(id) || fs_is_dir(id))
+    launch_apps = launch_n;
+    for (int id = 0; launch_len && id < fs_node_slots() && launch_n < LAUNCH_MAX; id++) {
+        if (!fs_valid(id) || fs_is_app(id) || fs_is_dir(id) || !str_has(fs_name(id), launch_buf))
             continue;
-        if (launch_len == 0 && launch_n >= 8)
-            break;
-        if (str_has(fs_name(id), launch_buf)) {
-            kstrcpy(launch_items[launch_n].name, fs_name(id));
-            launch_items[launch_n].identity = fs_identity(id);
-            launch_items[launch_n].icon = -1;
-            launch_items[launch_n].file = id;
-            launch_n++;
-        }
+        kstrcpy(launch_items[launch_n].name, fs_name(id));
+        launch_items[launch_n].identity = fs_identity(id);
+        launch_items[launch_n].icon = -1;
+        launch_items[launch_n].file = id;
+        launch_n++;
     }
     if (launch_sel >= launch_n)
         launch_sel = launch_n ? launch_n - 1 : 0;
-    if (launch_sel < 0)
+    if (launch_sel < 0 && launch_len)
         launch_sel = 0;
 }
 
 static void launcher_open(void) {
+    if (switcher_on) switcher_cancel();
     launcher_on = 1;
     launch_len = 0;
     launch_sel = 0;
     launch_scroll = 0;
+    launch_recent_view = 0;
+    volume_on = 0;
     open_menu = MENU_NONE;
+    popup_n = 0;
+    recent_prune();
     launcher_refresh();
     dirty = 1;
 }
@@ -5861,58 +8180,95 @@ static void launcher_close(void) {
     dirty = 1;
 }
 
-/* App launcher: a centered glass panel with a search field over a grid of
- * applications. Typing filters applications and files; the grid scrolls by
- * rows when it does not fit. */
-#define LP_CELL_W 108
-#define LP_CELL_H 92
-#define LP_FIELD_H 34
-#define LP_PAD 24
-#define LP_FOOT 44
-#define LP_HEAD (LP_PAD + LP_FIELD_H + 18)
-static int launcher_cols(void) {
-    int c = (fb_w - 80 - 2 * LP_PAD) / LP_CELL_W;
-    return c > 6 ? 6 : c < 3 ? 3 : c;
-}
-static int launcher_fit(void) {
-    int rows = (TASKBAR_Y - 40 - LP_HEAD - 12 - LP_FOOT) / LP_CELL_H;
-    return rows < 2 ? 2 : rows;
-}
-static int launcher_total_rows(void) { int c = launcher_cols(); return (launch_n + c - 1) / c; }
-static int launcher_rows(void) {
-    int total = launcher_total_rows(), fit = launcher_fit();
-    return total < fit ? total : fit;
-}
+/* Launcher panel. Classic: 400 wide, 4px above the taskbar at the left.
+ * Modern: 480 wide, centered 8px above the dock. A search field, the
+ * Recent files row, the app grid (or matching files while searching), and
+ * a footer with Settings, Restart and Shut down. */
+static int lp_pad(void) { return MODERN ? 14 : 12; }
+static int lp_field_h(void) { return MODERN ? 34 : 26; }
+static int lp_cols(void) { return MODERN ? 5 : 4; }
+static int lp_tile_h(void) { return MODERN ? 88 : 84; }
+static int lp_foot_h(void) { return MODERN ? 49 : 41; }
+static int lp_row_h(void) { return MODERN ? 30 : 24; }
+static int lp_section_h(void) { return MODERN ? 30 : 28; }
+
 static void launcher_geom(int *x, int *y, int *w, int *h) {
-    int rows = launcher_rows();
-    *w = launcher_cols() * LP_CELL_W + 2 * LP_PAD;
-    *h = LP_HEAD + (rows ? rows * LP_CELL_H : 40) + 12 + LP_FOOT;
-    *x = (fb_w - *w) / 2;
-    *y = (TASKBAR_Y - *h) / 2;
-    if (*y < 16) *y = 16;
+    int work = TASKBAR_Y - MENUBAR_H;
+    if (MODERN) {
+        *w = 480;
+        *h = work - 16 < 480 ? work - 16 : 480;
+        *x = (fb_w - *w) / 2;
+        *y = tb_dock.y - 8 - *h;
+    } else {
+        *w = 400;
+        *h = work - 8 < 460 ? work - 8 : 460;
+        *x = 4;
+        *y = TASKBAR_Y - 4 - *h;
+    }
 }
-static void launcher_cell(int x, int y, int i, int *cx, int *cy) {
-    int c = launcher_cols(), k = i - launch_scroll * c;
-    *cx = x + LP_PAD + (k % c) * LP_CELL_W;
-    *cy = y + LP_HEAD + (k / c) * LP_CELL_H;
+static int lp_field_y(int y) { return y + lp_pad(); }
+/* Top of the Recent files row (no search) or of the results. */
+static int lp_body_y(int y) { return lp_field_y(y) + lp_field_h() + (MODERN ? 10 : 8); }
+static int lp_recent_h(void) { return MODERN ? 40 : 36; }
+static int lp_grid_y(int y) {
+    int top = lp_body_y(y);
+    if (!launch_len) top += lp_recent_h() + (MODERN ? 6 : 0);
+    return top + lp_section_h();
 }
+static int lp_grid_bottom(int y, int h) { return y + h - lp_foot_h() - 4; }
+static int lp_grid_x(int x) { return x + (MODERN ? 12 : 8); }
+static int lp_grid_w(int w) { return w - (MODERN ? 12 + 4 + 10 : 8 + 8 + 12); }
+static int lp_cell_w(int w) { return (lp_grid_w(w) - (lp_cols() - 1) * 4) / lp_cols(); }
+
+static int launcher_visible_rows(void) {
+    int x, y, w, h;
+    launcher_geom(&x, &y, &w, &h);
+    int rows = (lp_grid_bottom(y, h) - lp_grid_y(y)) / (lp_tile_h() + 4);
+    return rows < 1 ? 1 : rows;
+}
+/* Rows on screen: with no matching files listed under the grid, a last row
+ * that only partly fits is drawn cut at the grid's bottom, when at least a
+ * third of it shows (a thinner sliver reads as stray lines). */
+static int launcher_shown_rows(void) {
+    if (launch_n > launch_apps) return launcher_visible_rows();
+    int x, y, w, h;
+    launcher_geom(&x, &y, &w, &h);
+    int avail = lp_grid_bottom(y, h) - lp_grid_y(y), step = lp_tile_h() + 4;
+    int rows = avail / step;
+    if (avail - rows * step >= lp_tile_h() / 3) rows++;
+    return rows < 1 ? 1 : rows;
+}
+static int launcher_total_rows(void) { int c = lp_cols(); return (launch_apps + c - 1) / c; }
 static void launcher_clamp_scroll(void) {
-    int rows = launcher_rows(), total = launcher_total_rows();
+    int rows = launcher_visible_rows(), total = launcher_total_rows();
     if (launch_scroll > total - rows) launch_scroll = total - rows;
     if (launch_scroll < 0) launch_scroll = 0;
 }
 static void launcher_reveal(void) {
-    int c = launcher_cols(), row = launch_sel / c, rows = launcher_rows();
+    if (launch_sel < 0 || launch_sel >= launch_apps) return;
+    int row = launch_sel / lp_cols(), rows = launcher_visible_rows();
     launcher_clamp_scroll();
     if (row < launch_scroll) launch_scroll = row;
-    if (rows && row >= launch_scroll + rows) launch_scroll = row - rows + 1;
+    if (row >= launch_scroll + rows) launch_scroll = row - rows + 1;
 }
 static void launcher_scroll(int amount) {
     launch_scroll += amount;
     launcher_clamp_scroll();
     dirty = 1;
 }
-static int launcher_footer_x(int x, int w, int button) { return x + w - 16 - (4 - button) * 36; }
+static void launcher_cell(int x, int y, int w, int i, int *cx, int *cy) {
+    int c = lp_cols(), k = i - launch_scroll * c, cw = lp_cell_w(w);
+    *cx = lp_grid_x(x) + (k % c) * (cw + 4);
+    *cy = lp_grid_y(y) + (k / c) * (lp_tile_h() + 4);
+}
+/* Files matching a search are listed under the app grid rows that fit. */
+static int lp_files_y(int x, int y, int w) {
+    int rows = (launch_apps + lp_cols() - 1) / lp_cols();
+    int vis = launcher_visible_rows();
+    (void)x; (void)w;
+    if (rows > vis) rows = vis;
+    return lp_grid_y(y) + rows * (lp_tile_h() + 4) + (launch_apps ? 4 : 0) + lp_section_h();
+}
 
 static void launcher_run(int i) {
     if (i < 0 || i >= launch_n)
@@ -5926,30 +8282,53 @@ static void launcher_run(int i) {
     else
         icon_open(it.icon);
 }
+static void launcher_run_recent(int i) {
+    if (!recent_valid(i)) { recent_prune(); dirty = 1; return; }
+    int id = recent[i].id;
+    launcher_close();
+    open_fs_file(id);
+}
 
 static void launcher_key(void) {
-    int c = launcher_cols();
+    int c = lp_cols();
+    if (launch_recent_view) {
+        if (key_sc == KEY_ESC || key_sc == KEY_LEFT || key_sc == KEY_BACKSPACE) launch_recent_view = 0;
+        else if (key_sc == KEY_UP && launch_recent_sel > 0) launch_recent_sel--;
+        else if (key_sc == KEY_DOWN && launch_recent_sel + 1 < recent_n) launch_recent_sel++;
+        else if (key_sc == KEY_ENTER) { launcher_run_recent(launch_recent_sel); return; }
+        dirty = 1;
+        return;
+    }
     if (key_sc == KEY_ESC) {
+        if (launch_len) { launch_len = 0; launch_sel = 0; launcher_refresh(); dirty = 1; return; }
         launcher_close();
         return;
     } else if (key_sc == KEY_ENTER) {
+        if (launch_sel < 0) { launch_recent_view = 1; launch_recent_sel = 0; dirty = 1; return; }
         launcher_run(launch_sel);
         return;
     } else if (key_sc == KEY_LEFT) {
         if (launch_sel > 0) launch_sel--;
     } else if (key_sc == KEY_RIGHT) {
-        if (launch_sel + 1 < launch_n) launch_sel++;
+        if (launch_sel < 0) { launch_recent_view = 1; launch_recent_sel = 0; }
+        else if (launch_sel + 1 < launch_n) launch_sel++;
     } else if (key_sc == KEY_UP) {
-        if (launch_sel - c >= 0) launch_sel -= c;
+        if (launch_sel >= launch_apps) launch_sel = launch_sel > launch_apps ? launch_sel - 1 : launch_apps - 1;
+        else if (launch_sel - c >= 0) launch_sel -= c;
+        else if (!launch_len) launch_sel = -1;
     } else if (key_sc == KEY_DOWN) {
-        if (launch_sel + c < launch_n) launch_sel += c;
-        else if (launch_sel / c < (launch_n - 1) / c) launch_sel = launch_n - 1;
+        if (launch_sel < 0) launch_sel = 0;
+        else if (launch_sel >= launch_apps) { if (launch_sel + 1 < launch_n) launch_sel++; }
+        else if (launch_sel + c < launch_apps) launch_sel += c;
+        else if (launch_apps < launch_n) launch_sel = launch_apps;
+        else if (launch_sel / c < (launch_apps - 1) / c) launch_sel = launch_apps - 1;
     } else if (key_sc == KEY_BACKSPACE) {
         if (launch_len > 0)
             launch_len--;
         launcher_refresh();
-    } else if (key_char && launch_len < 22) {
+    } else if (key_char && launch_len < (int)sizeof launch_buf - 2) {
         launch_buf[launch_len++] = key_char;
+        launch_sel = 0;
         launcher_refresh();
     } else return;
     launcher_reveal();
@@ -5961,63 +8340,198 @@ static int launcher_item_icon(int i) {
     return file_extension(launch_items[i].name, ".bex") ? AI_NATIVE : AI_DOCUMENT;
 }
 
+/* One centered label line; a selected label sits on an accent box. */
+static void tile_line(const char *s, int x, int y, int w, uint8_t ink, int bold, int selected) {
+    int tw = kit_text_w(s, bold) < w ? kit_text_w(s, bold) : w, lx = x + (w - tw) / 2;
+    if (selected) {
+        kit_fill(lx - 3, y, tw + 6, CHAR_H + 1, MODERN ? 4 : KIT_R_SQUARE, TK_ACCENT, 1);
+        ink = TK_ON_ACCENT;
+    }
+    kit_text(s, lx, y, ink, w, bold);
+}
+
+/* A tile label on up to two centered lines, split at the last space that
+ * fits the first line. A long name with no such space still wraps: before
+ * its extension dot, after a dash or underscore, or else at the last
+ * character that fits, so only the second line is ever cut. */
+static void tile_label_ex(const char *s, int x, int y, int w, uint8_t ink, int bold, int selected) {
+    int n = kstrlen(s);
+    char first[FS_NAME_LEN];
+    int cut = -1, skip = 1;
+    if (kit_text_w(s, bold) > w) {
+        for (int i = 0; i < n && i < FS_NAME_LEN - 1; i++) {
+            if (s[i] != ' ') continue;
+            kmemcpy(first, s, i); first[i] = 0;
+            if (kit_text_w(first, bold) <= w) cut = i;
+        }
+        if (cut < 0) {
+            int fit = 0;
+            while (fit < n && fit < FS_NAME_LEN - 1) {
+                kmemcpy(first, s, fit + 1); first[fit + 1] = 0;
+                if (kit_text_w(first, bold) > w) break;
+                fit++;
+            }
+            int mark = -1;
+            for (int i = 1; i <= fit && i < n; i++) {
+                if (s[i] == '.') mark = i;
+                else if ((s[i - 1] == '-' || s[i - 1] == '_') && i > 1) mark = i;
+            }
+            cut = mark > 0 ? mark : fit;
+            skip = 0;
+        }
+    }
+    if (cut <= 0 || cut >= n) { tile_line(s, x, y, w, ink, bold, selected); return; }
+    kmemcpy(first, s, cut); first[cut] = 0;
+    tile_line(first, x, y, w, ink, bold, selected);
+    tile_line(s + cut + skip, x, y + CHAR_H + 1, w, ink, bold, selected);
+}
+static void tile_label(const char *s, int x, int y, int w, uint8_t ink, int bold) {
+    tile_label_ex(s, x, y, w, ink, bold, 0);
+}
+
+static int lp_hover(int x, int y, int w, int h) { return hit(mouse_x, mouse_y, x, y, w, h); }
+
+static void lp_list_item(int x, int y, int w, int icon, const char *name, const char *detail, int sel) {
+    int h = lp_row_h(), hov = lp_hover(x, y, w, h);
+    if (sel || hov) kit_fill(x, y, w, h, MODERN ? 6 : KIT_R_SQUARE, sel ? TK_ACCENT_100 : (MODERN ? TK_HOVER : TK_ACCENT_50), 1);
+    app_icon_draw(icon, x + (MODERN ? 10 : 8), y + (h - 16) / 2, AI_SMALL);
+    int tx = x + (MODERN ? 10 : 8) + 16 + (MODERN ? 8 : 6);
+    int dw = detail ? kit_text_w(detail, 0) : 0;
+    kit_text(name, tx, kit_ty(y, h), TK_TEXT, x + w - tx - dw - 16, 0);
+    if (detail) kit_text_right(detail, x + w - (MODERN ? 10 : 8), kit_ty(y, h), TK_TEXT2, 0);
+}
+
+static const char *const lp_foot_labels[3] = {"Settings", "Restart", "Shut down"};
+static const int lp_foot_icons[3] = {UI_ICON_GEAR, UI_ICON_RESTART, UI_ICON_POWER};
+static void lp_foot_geom(int x, int y, int w, int h, int b, int *bx, int *by, int *bw, int *bh) {
+    *bh = MODERN ? 30 : 26;
+    *by = y + h - lp_foot_h() + (lp_foot_h() - *bh) / 2 + (MODERN ? 0 : 1);
+    int ws[3];
+    for (int i = 0; i < 3; i++) ws[i] = kit_text_w(lp_foot_labels[i], 0) + 16 + 6 + (MODERN ? 20 : 24);
+    int pad = MODERN ? 10 : 8;
+    if (b == 0) *bx = x + pad;
+    else if (b == 2) *bx = x + w - pad - ws[2];
+    else *bx = x + w - pad - ws[2] - (MODERN ? 4 : 6) - ws[1];
+    *bw = ws[b];
+}
+
 static void draw_launcher(void) {
     if (!launcher_on)
         return;
     int x, y, w, h;
     launcher_geom(&x, &y, &w, &h);
     launcher_clamp_scroll();
-    shade_rect(0, 0, fb_w, TASKBAR_Y, 1);
-    draw_shadow(x, y, w, h);
-    glass_round(x, y, w, h, 14, 1, COLOR_WHITE, 205, 215);
-    draw_round_frame(x - 1, y - 1, w + 2, h + 2, 15, INK(14));
-    draw_round_frame(x, y, w, h, 14, INK(0));
-    int fx = x + LP_PAD, fy = y + LP_PAD, fw = w - 2 * LP_PAD, fh = LP_FIELD_H;
-    draw_round_rect(fx, fy, fw, fh, 8, INK(0));
-    draw_round_frame(fx, fy, fw, fh, 8, launch_len ? ui_accent : INK(12));
-    icon_draw(ICON_SEARCH, fx + 11, fy + (fh - ICON_SIZE) / 2, INK(16));
+    uint8_t panel = MODERN ? TK_46 : TK_RAISED;
+    if (MODERN) {
+        kit_shadow(x, y, w, h, 12);
+        kit_box(x, y, w, h, 12, panel, TK_LINE_STRONG);
+    } else {
+        kit_shadow(x, y, w, h, 0);
+        kit_box(x, y, w, h, KIT_R_SQUARE, panel, TK_TEXT2);
+    }
+    /* Search */
+    int pad = lp_pad(), fx = x + pad, fy = lp_field_y(y), fw = w - 2 * pad, fh = lp_field_h();
     launch_buf[launch_len] = 0;
-    int tx = fx + 36;
-    int ty = fy + (fh - CHAR_H) / 2;
-    if (launch_len)
-        draw_string(launch_buf, tx, ty, ui_text);
-    else
-        draw_string("Search apps and files", tx, ty, INK(15));
-    int cx = tx + ui_string_w(launch_buf);
-    if ((frame_count / 35) & 1)
-        draw_rect(cx + 1, fy + 8, 1, fh - 16, INK(28));
-    int c = launcher_cols(), rows = launcher_rows();
-    int first = launch_scroll * c, last = first + rows * c;
-    if (last > launch_n) last = launch_n;
-    for (int i = first; i < last; i++) {
-        int gx, gy;
-        launcher_cell(x, y, i, &gx, &gy);
-        int sel = i == launch_sel;
-        if (sel) {
-            draw_round_rect(gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6, 10, INK(3));
-            draw_round_frame(gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6, 10, PAL_ACCENT + 4);
+    int tx = kit_search(fx, fy, fw, fh, launch_buf, "Search apps and files", KIT_FOCUS);
+    if (!launch_recent_view && ((frame_count / 35) & 1) == 0)
+        kit_caret(tx + kit_text_w(launch_buf, 0) + (launch_len ? 1 : -2), fy + (fh - 17) / 2);
+    int body = lp_body_y(y);
+    char count[12];
+    if (launch_recent_view) {
+        /* Recent files list */
+        int rh = MODERN ? 40 : 37, bx = x + (MODERN ? 12 : 8);
+        kit_icon_button(bx, body + (rh - (MODERN ? 30 : 26)) / 2 - (MODERN ? 0 : 2), MODERN ? 30 : 26, UI_ICON_BACK,
+                        lp_hover(bx, body, 30, rh) ? KIT_HOVER : 0);
+        draw_string_bold("Recent files", bx + (MODERN ? 36 : 30), kit_ty(body, rh - 4), TK_TEXT);
+        int cw = kit_text_w("Clear", 0) + 20, cx = x + w - (MODERN ? 12 : 8) - cw;
+        kit_button(cx, body + (rh - 26) / 2 - (MODERN ? 0 : 2), cw, MODERN ? 30 : 26, "Clear", -1, KB_FLAT,
+                   lp_hover(cx, body, cw, rh) ? KIT_HOVER : 0);
+        if (!MODERN) draw_hline(x + 1, body + rh - 1, w - 2, TK_LINE_SUBTLE);
+        int ly = body + rh + 4, lx = x + (MODERN ? 8 : 4), lw = w - 2 * (MODERN ? 8 : 4);
+        recent_prune();
+        if (!recent_n) kit_text("No recent files", lx + 10, ly + 6, TK_TEXT2, lw, 0);
+        for (int i = 0; i < recent_n && ly + lp_row_h() < y + h - lp_foot_h(); i++, ly += lp_row_h())
+            lp_list_item(lx, ly, lw, AI_DOCUMENT, fs_name(recent[i].id), recent_folder(recent[i].id), i == launch_recent_sel);
+    } else {
+        if (!launch_len) {
+            /* Recent files row */
+            int rx = x + (MODERN ? 12 : 4), rw = w - 2 * (MODERN ? 12 : 4), rh = MODERN ? 40 : 32;
+            int sel = launch_sel < 0, hov = lp_hover(rx, body, rw, rh);
+            if (MODERN) kit_box(rx, body, rw, rh, 8, sel ? TK_ACCENT_50 : hov ? TK_HOVER : ui_theme.content, sel ? TK_ACCENT : TK_LINE_SUBTLE);
+            else if (sel || hov) draw_rect(rx, body, rw, rh, sel ? TK_ACCENT_100 : TK_ACCENT_50);
+            ui_icon_draw(UI_ICON_RECENT, rx + (MODERN ? 12 : 8), body + (rh - 16) / 2, 16, TK_ICON, MODERN ? ui_theme.content : panel);
+            kit_text("Recent files", rx + (MODERN ? 12 : 8) + 16 + (MODERN ? 10 : 8), kit_ty(body, rh), TK_TEXT, rw - 100, MODERN);
+            fmt_uint(count, (unsigned)recent_n);
+            int cxr = rx + rw - (MODERN ? 12 : 8) - 16;
+            ui_icon_draw(UI_ICON_RIGHT, cxr, body + (rh - 16) / 2, 16, TK_ICON, MODERN ? ui_theme.content : panel);
+            if (MODERN) {
+                int pw = kit_text_w(count, 0) + 14, px = cxr - 10 - pw;
+                kit_fill(px, body + (rh - 20) / 2, pw, 20, 10, TK_HOVER, 1);
+                kit_text_center(count, px, kit_ty(body + (rh - 20) / 2, 20), pw, TK_ICON, 0);
+            } else kit_text_right(count, cxr - 12, kit_ty(body, rh), TK_TEXT2, 0);
+            if (!MODERN) draw_hline(x + 1, body + lp_recent_h() - 1, w - 2, TK_LINE_SUBTLE);
         }
-        app_icon_draw(launcher_item_icon(i), gx + (LP_CELL_W - AI_BIG) / 2, gy + 10, AI_BIG);
-        const char *label = launch_items[i].name;
-        int lw = ui_string_w(label);
-        if (lw > LP_CELL_W - 12) lw = LP_CELL_W - 12;
-        draw_string_clip(label, gx + (LP_CELL_W - lw) / 2, gy + 10 + AI_BIG + 8, sel ? INK(31) : INK(27), gx + LP_CELL_W - 6);
+        /* All apps */
+        int sy = lp_grid_y(y) - lp_section_h(), sx = x + (MODERN ? 18 : 12), sr = x + w - (MODERN ? 18 : 12);
+        kit_text(launch_len ? "Apps" : "All apps", sx, kit_ty(sy, lp_section_h()), TK_TEXT2, 200, 1);
+        fmt_uint(count, (unsigned)launch_apps);
+        kit_text_right(count, sr, kit_ty(sy, lp_section_h()), TK_TEXT2, 0);
+        int c = lp_cols(), rows = launcher_visible_rows(), cw = lp_cell_w(w), th = lp_tile_h();
+        int first = launch_scroll * c, last = first + launcher_shown_rows() * c;
+        if (last > launch_apps) last = launch_apps;
+        int clip = clip_bottom_begin(lp_grid_bottom(y, h));
+        for (int i = first; i < last; i++) {
+            int gx, gy;
+            launcher_cell(x, y, w, i, &gx, &gy);
+            int sel = i == launch_sel, hov = !sel && lp_hover(gx, gy, cw, th);
+            if (sel) {
+                if (MODERN) {
+                    kit_fill(gx, gy, cw, th, 8, TK_ACCENT_100, 1);
+                    kit_frame(gx, gy, cw, th, 8, TK_ACCENT);
+                    kit_frame(gx + 1, gy + 1, cw - 2, th - 2, 7, TK_ACCENT);
+                } else {
+                    draw_rect(gx, gy, cw, th, TK_ACCENT_100);
+                    draw_frame(gx, gy, cw, th, TK_ACCENT);
+                }
+            } else if (hov) kit_fill(gx, gy, cw, th, MODERN ? 8 : KIT_R_SQUARE, MODERN ? TK_HOVER : TK_ACCENT_50, 1);
+            int top = MODERN ? 12 : 10;
+            app_icon_draw(launcher_item_icon(i), gx + (cw - AI_BIG) / 2, gy + top, AI_BIG);
+            tile_label(launch_items[i].name, gx + 3, gy + top + AI_BIG + (MODERN ? 6 : 4), cw - 6, TK_TEXT, 0);
+        }
+        clip_bottom_end(clip);
+        if (!launch_apps && launch_len)
+            kit_text("No apps match", sx, lp_grid_y(y) + 6, TK_TEXT2, w, 0);
+        if (launcher_total_rows() > rows) {
+            int gy = lp_grid_y(y), len = lp_grid_bottom(y, h) - gy;
+            kit_vscroll(x + w - 1 - (MODERN ? 10 : 12), gy, len, launch_scroll, rows, launcher_total_rows(), 0);
+        }
+        /* Matching files */
+        if (launch_len && launch_n > launch_apps) {
+            int fy2 = lp_files_y(x, y, w);
+            kit_text("Files", sx, kit_ty(fy2 - lp_section_h(), lp_section_h()), TK_TEXT2, 200, 1);
+            fmt_uint(count, (unsigned)(launch_n - launch_apps));
+            kit_text_right(count, sr, kit_ty(fy2 - lp_section_h(), lp_section_h()), TK_TEXT2, 0);
+            int lx = x + (MODERN ? 8 : 4), lw = w - 2 * (MODERN ? 8 : 4);
+            for (int i = launch_apps; i < launch_n && fy2 + lp_row_h() <= y + h - lp_foot_h() - 4; i++, fy2 += lp_row_h())
+                lp_list_item(lx, fy2, lw, launcher_item_icon(i), launch_items[i].name,
+                             recent_folder(launch_items[i].file), i == launch_sel);
+        }
     }
-    if (launch_n == 0)
-        draw_string("No matches", fx + 6, y + LP_HEAD + 8, ui_text_dim);
-    if (launcher_total_rows() > rows) {
-        int track = rows * LP_CELL_H - 8, total = launcher_total_rows();
-        int thumb = track * rows / total, top = track * launch_scroll / total;
-        draw_round_rect(x + w - 10, y + LP_HEAD, 4, track, 2, INK(5));
-        draw_round_rect(x + w - 10, y + LP_HEAD + top, 4, thumb < 16 ? 16 : thumb, 2, INK(14));
+    /* Footer */
+    int foot = y + h - lp_foot_h();
+    if (MODERN) {
+        kit_fill_bottom(x + 1, foot, w - 2, lp_foot_h() - 1, 11, TK_45);
+        draw_hline(x + 1, foot, w - 2, TK_LINE_SUBTLE);
+    } else {
+        draw_rect(x + 1, foot, w - 2, lp_foot_h() - 1, TK_BASE);
+        draw_hline(x + 1, foot, w - 2, TK_LINE_SUBTLE);
     }
-    /* Footer: identity on the left; About, Settings, Sleep and Power on the right. */
-    int foot = y + h - LP_FOOT;
-    draw_hline(x + LP_PAD, foot, w - 2 * LP_PAD, INK(7));
-    draw_string_bold("BaseOS", x + LP_PAD + 4, foot + (LP_FOOT - CHAR_H) / 2, INK(18));
-    static const int foot_icon[4] = {ICON_APP_ABOUT, ICON_SETTINGS, ICON_MOON, ICON_POWER};
-    for (int b = 0; b < 4; b++)
-        tool_button(launcher_footer_x(x, w, b), foot + 8, 32, 28, foot_icon[b], 0, TB_FLAT);
+    for (int b = 0; b < 3; b++) {
+        int bx, by, bw, bh;
+        lp_foot_geom(x, y, w, h, b, &bx, &by, &bw, &bh);
+        int kind = MODERN || b == 0 ? KB_FLAT : KB_DEFAULT;
+        kit_button(bx, by, bw, bh, lp_foot_labels[b], lp_foot_icons[b], kind, lp_hover(bx, by, bw, bh) ? KIT_HOVER : 0);
+    }
 }
 
 static int launcher_click(void) {
@@ -6027,26 +8541,53 @@ static int launcher_click(void) {
         launcher_close();
         return 1;
     }
-    int foot = y + h - LP_FOOT;
-    for (int b = 0; b < 4; b++) {
-        if (!hit(mouse_x, mouse_y, launcher_footer_x(x, w, b), foot + 8, 32, 28)) continue;
+    for (int b = 0; b < 3; b++) {
+        int bx, by, bw, bh;
+        lp_foot_geom(x, y, w, h, b, &bx, &by, &bw, &bh);
+        if (!hit(mouse_x, mouse_y, bx, by, bw, bh)) continue;
         launcher_close();
-        if (b == 0) win_open(WK_ABOUT);
-        else if (b == 1) icon_open(ICON_DESK_SETTINGS);
-        else if (b == 2) saver_start();
+        if (b == 0) win_open(WK_SETTINGS);
+        else if (b == 1) do_restart();
         else do_shutdown();
         return 1;
     }
-    int c = launcher_cols(), rows = launcher_rows();
-    int first = launch_scroll * c, last = first + rows * c;
-    if (last > launch_n) last = launch_n;
+    int pad = lp_pad(), fy = lp_field_y(y), fh = lp_field_h();
+    if (launch_len && hit(mouse_x, mouse_y, kit_search_clear_x(x + pad, w - 2 * pad), fy, 24, fh)) {
+        launch_len = 0; launch_sel = 0; launcher_refresh(); dirty = 1; return 1;
+    }
+    int body = lp_body_y(y);
+    if (launch_recent_view) {
+        int rh = MODERN ? 40 : 37;
+        if (hit(mouse_x, mouse_y, x + (MODERN ? 12 : 8), body, 30, rh)) { launch_recent_view = 0; dirty = 1; return 1; }
+        int cw = kit_text_w("Clear", 0) + 20, cx = x + w - (MODERN ? 12 : 8) - cw;
+        if (hit(mouse_x, mouse_y, cx, body, cw, rh)) { recent_n = 0; dirty = 1; return 1; }
+        int ly = body + rh + 4;
+        for (int i = 0; i < recent_n; i++, ly += lp_row_h())
+            if (hit(mouse_x, mouse_y, x, ly, w, lp_row_h())) { launcher_run_recent(i); return 1; }
+        return 1;
+    }
+    if (!launch_len && hit(mouse_x, mouse_y, x, body, w, lp_recent_h())) {
+        launch_recent_view = 1;
+        launch_recent_sel = 0;
+        dirty = 1;
+        return 1;
+    }
+    int c = lp_cols(), cw = lp_cell_w(w), bottom = lp_grid_bottom(y, h);
+    int first = launch_scroll * c, last = first + launcher_shown_rows() * c;
+    if (last > launch_apps) last = launch_apps;
     for (int i = first; i < last; i++) {
         int gx, gy;
-        launcher_cell(x, y, i, &gx, &gy);
-        if (hit(mouse_x, mouse_y, gx + 4, gy, LP_CELL_W - 8, LP_CELL_H - 6)) {
+        launcher_cell(x, y, w, i, &gx, &gy);
+        int th = gy + lp_tile_h() > bottom ? bottom - gy : lp_tile_h();
+        if (hit(mouse_x, mouse_y, gx, gy, cw, th)) {
             launcher_run(i);
             return 1;
         }
+    }
+    if (launch_len && launch_n > launch_apps) {
+        int fy2 = lp_files_y(x, y, w);
+        for (int i = launch_apps; i < launch_n; i++, fy2 += lp_row_h())
+            if (hit(mouse_x, mouse_y, x, fy2, w, lp_row_h())) { launcher_run(i); return 1; }
     }
     return 1;
 }
@@ -6154,11 +8695,11 @@ static void sysinfo_fill(SysInfo *si) {
     si->redraws = redraw_count;
 }
 
-static int name_target = 0;
-static char name_buf[FS_NAME_LEN];
-static int name_len = 0;
-static int name_focus, name_owner, name_owner_seq;
-static unsigned name_pdf_paper;
+
+static void saveas_reset(void);
+static int saveas_dir(void);
+static int saveas_click(int x, int y, int w, int h);
+static int saveas_family_next(int target);
 
 static void namedlg_open(int target, const char *initial) {
     fm_checked_cwd();
@@ -6169,7 +8710,7 @@ static void namedlg_open(int target, const char *initial) {
     name_owner_seq = wins[name_owner].seq;
     name_target = target;
     name_pdf_paper = WRITER_PDF_LETTER;
-    name_len = 0;
+    name_len = name_sel = 0;
     for (int i = 0; initial && initial[i] && i < FS_NAME_LEN - 1; i++)
         name_buf[name_len++] = initial[i];
     name_buf[name_len] = 0;
@@ -6177,6 +8718,10 @@ static void namedlg_open(int target, const char *initial) {
         if (writer_export_retry_name(target == 6 ? DOCUMENT_SAVE_PDF : DOCUMENT_SAVE_RTF,
                                      name_buf, sizeof name_buf, &name_pdf_paper)) name_len = kstrlen(name_buf);
     } else if (target == 5 && spreadsheet_export_retry_name(name_buf, sizeof name_buf)) name_len = kstrlen(name_buf);
+    saveas_reset();
+    /* The name without its extension starts selected, the caret after it. */
+    for (int i = 0; i < name_len; i++) if (name_buf[i] == '.') name_sel = i;
+    name_caret = name_sel ? name_sel : name_len;
     dirty = 1;
 }
 
@@ -6187,18 +8732,52 @@ static void namedlg_close(void) {
     dirty = 1;
 }
 
+/* Save As: a name band (with paper choice for PDF), the folder browser and
+ * a footer with the type and the buttons. */
 static void namedlg_geom(int *x, int *y, int *w, int *h) {
-    *w = 420;
-    *h = name_target == 6 ? 260 : 168;
+    int avail = fb_h - MENUBAR_H - 64;
+    *w = fb_w - 16 < 640 ? fb_w - 16 : 640;
+    *h = 500 + (name_target == 6 ? 34 : 0);
+    if (*h > avail) *h = avail;
     *x = (fb_w - *w) / 2;
-    *y = MENUBAR_H + 140;
+    *y = MENUBAR_H + 8 + (avail - *h) / 2;
 }
 
+static int namedlg_pad(void) { return MODERN ? 16 : 12; }
+static void namedlg_field(int x, int y, int w, int *fx, int *fy, int *fw, int *fh) {
+    *fx = x + 92;
+    *fy = y + TITLE_BAR + (MODERN ? 9 : 10);
+    *fw = w - 92 - namedlg_pad();
+    *fh = BTN_H;
+}
+/* The message line under the field, then the paper row for PDF. */
+static int namedlg_message_y(int x, int y, int w) {
+    int fx, fy, fw, fh;
+    namedlg_field(x, y, w, &fx, &fy, &fw, &fh);
+    return fy + fh + 6;
+}
+static int namedlg_message_h(void) { return MODERN ? 30 : 22; }
+static void namedlg_paper(int x, int y, int w, int i, int *px, int *py, int *pw, int *ph) {
+    *px = x + 92 + i * 140;
+    *py = namedlg_message_y(x, y, w) + namedlg_message_h() + 6;
+    *pw = 132;
+    *ph = 24;
+}
+/* The message line takes room only while there is a message (PDF keeps it,
+ * so its paper row stays put). */
+static int saveas_has_message(void);
+static int namedlg_band_h(void) {
+    int msg = name_target == 6 || saveas_has_message() ? 6 + namedlg_message_h() : 0;
+    return (MODERN ? 9 : 10) + BTN_H + msg + (name_target == 6 ? 30 : 0) + (MODERN ? 10 : 8);
+}
+static int namedlg_foot_h(void) { return MODERN ? 56 : 48; }
+
 static void namedlg_buttons(int x, int y, int w, int h, int *sx, int *cx, int *by, int *bw) {
-    *bw = 96;
-    *by = y + h - 20 - BTN_H;
-    *sx = x + w - 20 - *bw;
-    *cx = *sx - 12 - *bw;
+    int fh = namedlg_foot_h();
+    *bw = MODERN ? 84 : 80;
+    *by = y + h - fh + (fh - BTN_H) / 2;
+    *sx = x + w - namedlg_pad() - *bw;
+    *cx = *sx - 8 - *bw;
 }
 
 static void namedlg_commit(void) {
@@ -6210,9 +8789,12 @@ static void namedlg_commit(void) {
     int close_after = edit_close_valid() && edit_close_owner == name_owner;
     int action = document_action, target = document_target;
     unsigned identity = document_target_identity;
+    /* The chosen folder becomes the document window's folder. */
+    int chosen = saveas_dir();
+    if (chosen >= 0 && name_target != 1) fm_set_cwd(chosen);
     int parent = fm_checked_cwd();
     int result = name_target == 0 ? edit_write_named(name_buf) :
-                 name_target == 1 ? paint_write_named(name_buf) :
+                 name_target == 1 ? paint_write_in(chosen, name_buf) :
                  name_target == 2 ? writer_save_as(parent, name_buf) :
                  name_target == 3 ? writer_export_rtf(parent, name_buf) :
                  name_target == 6 ? writer_export_pdf(parent, name_buf, name_pdf_paper) :
@@ -6235,50 +8817,94 @@ static void namedlg_commit(void) {
     } else { name_failed = 1; dirty = 1; }
 }
 
+/* ---------- Alerts ----------
+ * A 32px icon, a bold question and a line of detail; the buttons sit on the
+ * content in Classic and on a footer band in Modern. */
+
+static int alert_w(void) { return 440; }
+static int alert_body_h(void) { return MODERN ? 76 : 64; }
+static int alert_foot_h(void) { return MODERN ? 58 : BTN_H + 16; }
+static int alert_h(void) { return TITLE_BAR + alert_body_h() + alert_foot_h(); }
+static void alert_buttons_y(int y, int *by) { *by = y + alert_h() - (alert_foot_h() + BTN_H) / 2 - (MODERN ? 0 : 4); }
+
+static void draw_alert(int x, int y, int w, int h, const char *title, int app_icon, int icon,
+                       const char *heading, const char *detail) {
+    shade_rect(0, 0, fb_w, fb_h, 1);
+    chrome_icon = app_icon;
+    gui_draw_window(x, y, w, h, title, 0, WIN_NOMENU | WIN_DIALOG);
+    chrome_icon = -1;
+    hot(close_box_x(x, w), cap_y(y), CAP_CLOSE_W, CAP_H);
+    int top = y + TITLE_BAR, ix = x + (MODERN ? 20 : 16), tx = ix + 32 + (MODERN ? 14 : 16);
+    ui_icon_draw(icon, ix, top + (MODERN ? 16 : 14), 32, TK_ICON, ui_theme.content);
+    kit_text(heading, tx, top + (MODERN ? 18 : 16), TK_TEXT, x + w - 16 - tx, 1);
+    kit_text(detail, tx, top + (MODERN ? 40 : 37), TK_TEXT2, x + w - 16 - tx, 0);
+    if (MODERN) dlg_footer(x, w, y + h - alert_foot_h(), alert_foot_h());
+}
+
 static void edit_close_geom(int *x, int *y) {
-    *x = (fb_w - 460) / 2;
-    *y = (fb_h - 184) / 2;
+    *x = (fb_w - alert_w()) / 2;
+    *y = (fb_h - alert_h()) / 2;
+}
+
+/* Don't Save at the left; Cancel and Save at the right. */
+static void edit_close_button(int x, int i, int *bx, int *bw) {
+    int pad = MODERN ? 16 : 16;
+    *bw = i == 1 ? kit_button_w("Don't Save", -1) : MODERN ? 84 : 80;
+    if (i == 1) *bx = x + pad;
+    else if (i == 0) *bx = x + alert_w() - pad - *bw;
+    else *bx = x + alert_w() - pad - *bw - 8 - (MODERN ? 84 : 80);
+}
+
+static const char *edit_close_doc_name(void) {
+    const Document *doc = &window_state[edit_close_owner].doc;
+    return wins[edit_close_owner].kind == WK_SPREADSHEET ? spreadsheet_title() :
+        wins[edit_close_owner].kind == WK_WRITER ? writer_title() :
+        doc->file >= 0 && fs_identity(doc->file) == doc->identity ? fs_name(doc->file) : "Untitled";
 }
 
 static void draw_edit_close(void) {
     if (!edit_close_dlg) return;
-    int x, y;
+    int x, y, w = alert_w(), h = alert_h();
     edit_close_geom(&x, &y);
-    shade_rect(0, 0, fb_w, fb_h, 1);
-    draw_shadow(x, y, 460, 184);
-    draw_round_rect(x - 1, y - 1, 462, 186, 11, ui_border);
-    draw_round_rect(x, y, 460, 184, 10, INK(1));
-    draw_string_bold(document_pending_owner ? "Saving changes..." : document_action == DOCUMENT_CLOSE ? "Save changes before closing?"
-        : "Save changes before replacing?", x + 22, y + 20, ui_text);
-    const Document *doc = &window_state[edit_close_owner].doc;
-    const char *name = wins[edit_close_owner].kind == WK_SPREADSHEET ? spreadsheet_title() :
-        wins[edit_close_owner].kind == WK_WRITER ? writer_title() :
-        doc->file >= 0 && fs_identity(doc->file) == doc->identity
-                     ? fs_name(doc->file) : "untitled";
-    draw_string_clip(name, x + 22, y + 50, ui_text, x + 438);
-    draw_string(edit_close_failed && fs_sync_busy() ? "Disk saving. Retry Save shortly."
+    char heading[FS_NAME_LEN + 48];
+    if (document_pending_owner) kstrcpy(heading, "Saving changes...");
+    else {
+        kstrcpy(heading, "Save changes to \"");
+        kstrcpy(heading + kstrlen(heading), edit_close_doc_name());
+        kstrcpy(heading + kstrlen(heading), document_action == DOCUMENT_CLOSE ? "\" before closing?" : "\" before replacing?");
+    }
+    const char *detail = edit_close_failed && fs_sync_busy() ? "Disk saving. Retry Save shortly."
                 : document_pending_owner ? "Saving to disk. Cancel keeps this document open."
                 : edit_close_failed == 3 ? "Requested file changed. Cancel and choose it again."
                 : edit_close_failed == 2 ? "Newer changes still need saving."
                 : edit_close_failed ? "Save failed. Your document is still open."
-                                 : "Your unsaved changes will be lost if discarded.",
-                x + 22, y + 82, ui_text_dim);
-    const char *labels[] = {"Save", "Discard", "Cancel"};
+                : "If you don't save, everything since your last save is lost.";
+    int kind = wins[edit_close_owner].kind;
+    draw_alert(x, y, w, h, win_app_name(kind), app_icon_for(kind_icon(kind)),
+               edit_close_failed ? UI_ICON_A_ERR : UI_ICON_A_WARN, heading, detail);
+    static const char *const labels[] = {"Save", "Don't Save", "Cancel"};
+    int by;
+    alert_buttons_y(y, &by);
     for (int i = 0; i < 3; i++) {
         if ((document_pending_owner || edit_close_failed == 3) && i != 2) continue;
-        int bx = x + 126 + 106 * i;
-        if (i == edit_close_focus) draw_default_button(bx, y + 132, 96, BTN_H, labels[i]);
-        else draw_button(bx, y + 132, 96, BTN_H, labels[i]);
+        int bx, bw;
+        edit_close_button(x, i, &bx, &bw);
+        kit_button(bx, by, bw, BTN_H, labels[i], -1, i == 0 ? KB_PRIMARY : KB_DEFAULT,
+                   hot(bx, by, bw, BTN_H) | (i == edit_close_focus ? KIT_FOCUS : 0));
     }
 }
 
 static void edit_close_click(void) {
-    int x, y;
+    int x, y, by;
     edit_close_geom(&x, &y);
-    for (int i = 0; i < 3; i++)
-        if (hit(mouse_x, mouse_y, x + 126 + 106 * i, y + 132, 96, BTN_H)) {
-            edit_close_choose(i); return;
-        }
+    alert_buttons_y(y, &by);
+    if (hit(mouse_x, mouse_y, close_box_x(x, alert_w()), cap_y(y), CAP_CLOSE_W, CAP_H)) { edit_close_choose(2); return; }
+    for (int i = 0; i < 3; i++) {
+        if ((document_pending_owner || edit_close_failed == 3) && i != 2) continue;
+        int bx, bw;
+        edit_close_button(x, i, &bx, &bw);
+        if (hit(mouse_x, mouse_y, bx, by, bw, BTN_H)) { edit_close_choose(i); return; }
+    }
     /* Outside clicks cannot silently discard or dismiss a close request. */
 }
 
@@ -6288,74 +8914,238 @@ static void edit_close_key(void) {
         edit_close_focus = document_pending_owner || edit_close_failed == 3 ? 2 : (edit_close_focus + (shift_down ? 2 : 1)) % 3;
         dirty = 1;
     } else if (key_sc == KEY_ENTER) edit_close_choose(edit_close_focus);
-}
-
-/* PDF errors must remain readable rather than disappearing beyond one line. */
-static void namedlg_pdf_message(const char *message, int x, int y, int width) {
-    for (int row = 0; row < 3 && *message; row++) {
-        char line[112]; int n = 0, last_space = -1;
-        while (message[n] && n < (int)sizeof(line) - 1) {
-            line[n] = message[n]; line[n + 1] = 0;
-            if (ui_string_w(line) > width) break;
-            if (message[n] == ' ') last_space = n;
-            n++;
-        }
-        if (message[n] && last_space > 0) n = last_space;
-        if (!n) n = 1;
-        line[n] = 0;
-        draw_string_clip(line, x, y + row * 18, ui_text_dim, x + width);
-        message += n; while (*message == ' ') message++;
+    else if (key_char == 'd' || key_char == 'D') {
+        if (!document_pending_owner && edit_close_failed != 3) edit_close_choose(1);
     }
 }
+
+/* ---------- Save As ---------- */
+
+static int saveas_dir(void) { return name_dlg && fs_is_dir(pick_cwd) ? pick_cwd : -1; }
+
+/* The folder a document would be saved next to: its own folder, else the
+ * window's folder (Paint defaults to Pictures). */
+static void saveas_reset(void) {
+    int dir = fm_checked_cwd(), file = -1;
+    if (name_target == 0 && edit_binding_valid()) file = edit_file;
+    else if (name_target == 2 || name_target == 3 || name_target == 6) file = writer_file();
+    else if (name_target == 4 || name_target == 5) file = spreadsheet_file();
+    if (file >= 0 && fs_is_dir(fs_parent(file))) dir = fs_parent(file);
+    if (name_target == 1) {
+        int pics = fs_find_child(fs_root(), "Pictures");
+        if (fs_is_dir(pics)) dir = pics;
+    }
+    pick_reset(dir, 1);
+}
+
+static Chooser saveas_layout_of(int x, int y, int w, int h) {
+    Chooser c;
+    chooser_layout(&c, x, y, w, h, namedlg_band_h(), namedlg_foot_h());
+    return c;
+}
+
+/* The file this window already owns, which Save As may replace. */
+static int saveas_own_file(void) {
+    if (name_owner < 0 || name_owner >= MAX_WIN) return -1;
+    if (name_target == 0) {
+        const Document *doc = &window_state[name_owner].doc;
+        return doc->file >= 0 && fs_identity(doc->file) == doc->identity ? doc->file : -1;
+    }
+    if (name_target == 2) return writer_file();
+    if (name_target == 4) return spreadsheet_file();
+    return -1;
+}
+
+/* Writer saves BWR or exports RTF and PDF; Spreadsheet saves BSH or
+ * exports CSV. A close request keeps the plain save. */
+static int saveas_family_next(int target) {
+    if (edit_close_valid() && edit_close_owner == name_owner) return target;
+    if (target == 2) return 3;
+    if (target == 3) return 6;
+    if (target == 6) return 2;
+    if (target == 4) return 5;
+    if (target == 5) return 4;
+    return target;
+}
+
+static void saveas_set_target(int target) {
+    if (target == name_target) return;
+    const char *ext = saveas_exts[target];
+    int dot = -1;
+    for (int i = 0; i < name_len; i++) if (name_buf[i] == '.') dot = i;
+    if (dot < 0) dot = name_len;
+    int elen = kstrlen(ext);
+    if (dot + elen < FS_NAME_LEN) { kstrcpy(name_buf + dot, ext); name_len = dot + elen; }
+    if (name_caret > dot) name_caret = dot < name_len ? dot : name_len;
+    name_target = target;
+    name_sel = 0;
+    name_failed = 0;
+    name_focus = 0;
+    od_refresh();
+    dirty = 1;
+}
+
+static int saveas_click_row(int i, int dbl) {
+    int id = pick_ids[i];
+    if (fs_is_dir(id)) {
+        if (dbl) pick_go(id, 1);
+        return 0;
+    }
+    const char *nm = fs_name(id);
+    name_len = 0;
+    while (nm[name_len] && name_len < FS_NAME_LEN - 1) { name_buf[name_len] = nm[name_len]; name_len++; }
+    name_buf[name_len] = 0;
+    name_sel = 0;
+    name_caret = name_len;
+    name_failed = 0;
+    name_focus = 0;
+    if (dbl) namedlg_commit();
+    return 0;
+}
+
+static void saveas_type_rect(const Chooser *c, int *tx, int *ty, int *tw) {
+    *tx = c->x + 92;
+    *ty = c->foot_y + (c->foot_h - BTN_H) / 2;
+    *tw = 220;
+}
+
+/* Returns 1 for the close box. */
+static int saveas_click(int x, int y, int w, int h) {
+    if (hit(mouse_x, mouse_y, close_box_x(x, w), cap_y(y), CAP_CLOSE_W, CAP_H)) return 1;
+    Chooser c = saveas_layout_of(x, y, w, h);
+    int tx, ty, tw;
+    saveas_type_rect(&c, &tx, &ty, &tw);
+    if (hit(mouse_x, mouse_y, tx, ty, tw, BTN_H)) { saveas_set_target(saveas_family_next(name_target)); return 0; }
+    chooser_click(&c);
+    return 0;
+}
+
+static const char *saveas_title(void) {
+    return name_target == 6 ? "Export PDF" : name_target == 5 ? "Export CSV" :
+           name_target == 3 ? "Export Rich Text" : name_target == 1 ? "Save Picture As" : "Save As";
+}
+
+/* Message line: errors, a name that exists, or a note about the type.
+ * Returns 0 when there is nothing to say. */
+static const char *saveas_message_text(int existing, char *text, int *kind_out) {
+    const char *message = 0;
+    int kind = KIT_INFO;
+    if (name_failed) {
+        message = (name_target == 4 || name_target == 5) ? spreadsheet_status() : name_target >= 2 ? writer_status() :
+                  name_failure_message ? name_failure_message : "Save failed. Check storage and file name.";
+        kind = KIT_ERROR_MSG;
+    } else if (pick_message) {
+        message = pick_message; kind = KIT_ERROR_MSG;
+    } else if (existing >= 0) {
+        kstrcpy(text, name_buf);
+        kstrcpy(text + kstrlen(text), pick_ids[existing] == saveas_own_file() ?
+                " already exists here. Saving will replace it." : " already exists here. Choose another name.");
+        message = text; kind = KIT_WARN;
+    } else if (name_target == 5) message = "Other apps may run formula-like CSV text.";
+    *kind_out = kind;
+    return message && message[0] ? message : 0;
+}
+
+static int saveas_has_message(void) {
+    char text[FS_NAME_LEN + 64];
+    int kind;
+    return saveas_message_text(saveas_existing(), text, &kind) != 0;
+}
+
+static void saveas_message(int x, int y, int w, int existing) {
+    char text[FS_NAME_LEN + 64];
+    int kind;
+    const char *message = saveas_message_text(existing, text, &kind);
+    if (!message) return;
+    static const uint8_t fills[] = {TK_ACCENT_50, TK_AMBER_50, TK_RED_50, TK_GREEN_50};
+    static const uint8_t inks[] = {TK_ACCENT_700, TK_AMBER_700, TK_RED_700, TK_GREEN_700};
+    static const int icons[] = {UI_ICON_INFO_C, UI_ICON_WARN, UI_ICON_ERR, UI_ICON_OK};
+    int h = namedlg_message_h(), ix = x;
+    uint8_t paper = MODERN ? ui_theme.chrome : TK_BASE;
+    if (MODERN) { kit_fill(x, y, w, h, 6, fills[kind], 1); ix += 10; paper = fills[kind]; }
+    ui_icon_draw(icons[kind], ix, y + (h - 16) / 2, 16, TK_ICON, paper);
+    kit_text(message, ix + 22, kit_ty(y, h), inks[kind], x + w - ix - 30, 0);
+}
+
 static void draw_namedlg(void) {
     if (!name_dlg)
         return;
     int x, y, w, h;
     namedlg_geom(&x, &y, &w, &h);
-    shade_rect(0, MENUBAR_H, fb_w, TASKBAR_Y - MENUBAR_H, 1);
-    draw_shadow(x, y, w, h);
-    draw_round_rect(x - 1, y - 1, w + 2, h + 2, 11, ui_border);
-    draw_round_rect(x, y, w, h, 10, INK(1));
-    int pdf = name_target == 6;
-    draw_string_bold(pdf ? "Export PDF pages" : name_target == 5 ? "Export values (CSV)" :
-                     name_target == 4 ? "Save spreadsheet as" :
-                     name_target == 3 ? "Export rich text (RTF)" :
-                     name_target == 1 ? "Save picture as" : "Save document as",
-                     x + 22, y + 20, ui_text);
-    char location[FS_NAME_LEN + 16];
-    kstrcpy(location, "Folder: ");
-    kstrcpy(location + 8, fs_is_dir(fm_cwd) && fm_cwd != fs_root() ? fs_name(fm_cwd) : "/");
-    const char *message = name_failed ?
-        ((name_target == 4 || name_target == 5) ? spreadsheet_status() : name_target >= 2 ? writer_status() : name_failure_message ? name_failure_message :
-         "Save failed. Check storage and file name.") :
-        name_target == 5 ? "Other apps may run formula-like CSV text." :
-        name_target == 1 ? "Saved to the Pictures folder" : location;
-    if (pdf) namedlg_pdf_message(message, x + 22, y + 44, w - 44);
-    else draw_string_clip(message, x + 22, y + 20 + CHAR_H + 6, ui_text_dim, x + w - 22);
-    int fx = x + 22, fy = y + (pdf ? 108 : 64), fw = w - 44, fh = 34;
-    draw_round_rect(fx, fy, fw, fh, 7, !pdf || !name_focus ? ui_accent : ui_border);
-    draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 6, ui_field);
-    name_buf[name_len] = 0;
-    draw_string(name_buf, fx + 12, fy + (fh - CHAR_H) / 2, ui_text);
-    int cx2 = fx + 12 + ui_string_w(name_buf);
-    if ((!pdf || !name_focus) && ((frame_count / 35) & 1))
-        draw_rect(cx2 + 1, fy + 8, 2, fh - 16, ui_accent);
-    if (pdf) {
-        draw_string("Paper:", x + 22, y + 158, ui_text);
-        const char *labels[] = {"Letter (US)", "A4"};
-        for (int i = 0; i < 2; i++) {
-            int bx = x + 88 + i * 156;
-            if (name_pdf_paper == (unsigned)i) draw_default_button(bx, y + 152, 148, BTN_H, labels[i]);
-            else draw_button(bx, y + 152, 148, BTN_H, labels[i]);
-            if (name_focus == i + 1) draw_frame(bx - 3, y + 149, 154, BTN_H + 6, ui_accent);
-        }
-        draw_string("Tab: focus   Arrows/Space: paper   Esc: cancel", x + 22, y + 186, ui_text_dim);
+    Chooser c = saveas_layout_of(x, y, w, h);
+    shade_rect(0, 0, fb_w, fb_h, 1);
+    int owner_kind = name_owner >= 0 && name_owner < MAX_WIN ? wins[name_owner].kind : WK_EDIT;
+    chrome_icon = app_icon_for(kind_icon(owner_kind));
+    gui_draw_window(x, y, w, h, saveas_title(), 0, WIN_NOMENU | WIN_DIALOG);
+    chrome_icon = -1;
+    hot(close_box_x(x, w), cap_y(y), CAP_CLOSE_W, CAP_H);
+    int band = namedlg_band_h(), pad = namedlg_pad();
+    if (MODERN) {
+        draw_rect(x + 1, c.band_y, w - 2, band - 1, ui_theme.chrome);
+        draw_hline(x + 1, c.band_y + band - 1, w - 2, TK_LINE);
+    } else {
+        draw_rect(x + 1, c.band_y, w - 2, band - 1, TK_BASE);
+        draw_hline(x + 1, c.band_y + band - 1, w - 2, TK_LINE_SUBTLE);
     }
+    int pdf = name_target == 6;
+    int fx, fy, fw, fh;
+    namedlg_field(x, y, w, &fx, &fy, &fw, &fh);
+    kit_text("Name", x + pad, kit_ty(fy, fh), TK_TEXT, fx - x - pad - 8, 0);
+    /* Only the control that has focus shows it: the field, a paper choice
+     * or a button. */
+    int focused = !name_focus;
+    int tx = kit_field(fx, fy, fw, fh, focused ? KIT_FOCUS : 0), ty = kit_ty(fy, fh);
+    name_buf[name_len] = 0;
+    if (name_caret < 0 || name_caret > name_len) name_caret = name_len;
+    if (name_sel > 0 && name_sel <= name_len && focused) {
+        char stem[FS_NAME_LEN];
+        for (int i = 0; i < name_sel; i++) stem[i] = name_buf[i];
+        stem[name_sel] = 0;
+        int sw = kit_text_w(stem, 0);
+        draw_rect(tx - 1, ty, sw + 2, UI_FONT_H, TK_ACCENT);
+        kit_text(stem, tx, ty, TK_ON_ACCENT, fw - 16, 0);
+        kit_text(name_buf + name_sel, tx + sw, ty, TK_TEXT, fw - 16 - sw, 0);
+    } else {
+        kit_text(name_buf, tx, ty, TK_TEXT, fw - 16, 0);
+        char head[FS_NAME_LEN];
+        for (int i = 0; i < name_caret; i++) head[i] = name_buf[i];
+        head[name_caret] = 0;
+        int cx = tx + kit_text_w(head, 0);
+        if (cx > tx + fw - 16) cx = tx + fw - 16;
+        if (focused && ((frame_count / 35) & 1) == 0) kit_caret(cx, ty);
+    }
+    int existing = saveas_existing();
+    saveas_message(fx, namedlg_message_y(x, y, w), fw, existing);
+    if (pdf) {
+        static const char *const papers[] = {"Letter (US)", "A4"};
+        int px, py, pw, ph;
+        namedlg_paper(x, y, w, 0, &px, &py, &pw, &ph);
+        kit_text("Paper", x + pad, kit_ty(py, ph), TK_TEXT, fx - x - pad - 8, 0);
+        for (int i = 0; i < 2; i++) {
+            namedlg_paper(x, y, w, i, &px, &py, &pw, &ph);
+            int state = (name_pdf_paper == (unsigned)i ? KIT_ON : 0) | (name_focus == i + 1 ? KIT_FOCUS : 0);
+            kit_check_row(px, py + (ph - ui_theme.check) / 2 - 1, papers[i], state | hot(px, py, pw, ph), 1);
+        }
+    }
+    chooser_draw(&c);
+    dlg_footer(x, w, c.foot_y, c.foot_h);
+    int ttx, tty, ttw;
+    saveas_type_rect(&c, &ttx, &tty, &ttw);
+    kit_text("Type", x + pad, kit_ty(tty, BTN_H), TK_TEXT, ttx - x - pad - 8, 0);
+    int switchable = saveas_family_next(name_target) != name_target;
+    /* A single type is still the document's real type, so it reads as an
+     * enabled box; only the switchable families react to the pointer. */
+    kit_dropdown(ttx, tty, ttw, BTN_H, saveas_types[name_target_valid() ? name_target : 0],
+                 switchable ? hot(ttx, tty, ttw, BTN_H) : 0);
     int sx, cx, by, bw;
     namedlg_buttons(x, y, w, h, &sx, &cx, &by, &bw);
-    draw_button(cx, by, bw, BTN_H, "Cancel");
-    draw_default_button(sx, by, bw, BTN_H, pdf ? "Export" : "Save");
-    if (name_focus >= (pdf ? 3 : 1)) draw_frame((name_focus==(pdf?3:1)?cx:sx)-3,by-3,bw+6,BTN_H+6,ui_accent);
+    const char *action = name_target == 3 || name_target == 5 || pdf ? "Export" :
+                         existing >= 0 && pick_ids[existing] == saveas_own_file() ? "Replace" : "Save";
+    int stop = pdf ? 3 : 1;
+    kit_button(cx, by, bw, BTN_H, "Cancel", -1, KB_DEFAULT, hot(cx, by, bw, BTN_H) | (name_focus == stop ? KIT_FOCUS : 0));
+    /* Enter saves from the name field and from the button itself. */
+    kit_button(sx, by, bw, BTN_H, action, -1, KB_PRIMARY, hot(sx, by, bw, BTN_H) |
+               (name_focus == 0 ? KIT_DEFAULT : name_focus == stop + 1 ? KIT_FOCUS : 0));
 }
 
 static int namedlg_click(void) {
@@ -6368,18 +9158,40 @@ static int namedlg_click(void) {
     int sx, cx, by, bw;
     namedlg_buttons(x, y, w, h, &sx, &cx, &by, &bw);
     if (name_target == 6) {
-        for (int i = 0; i < 2; i++) if (hit(mouse_x, mouse_y, x + 88 + i * 156, y + 152, 148, BTN_H)) {
-            name_pdf_paper = (unsigned)i; name_focus = i + 1; name_failed = 0; dirty = 1; return 1;
+        for (int i = 0; i < 2; i++) {
+            int px, py, pw, ph;
+            namedlg_paper(x, y, w, i, &px, &py, &pw, &ph);
+            if (hit(mouse_x, mouse_y, px, py, pw, ph)) {
+                name_pdf_paper = (unsigned)i; name_focus = i + 1; name_failed = 0; dirty = 1; return 1;
+            }
         }
-        if (hit(mouse_x, mouse_y, x + 22, y + 108, w - 44, 34)) { name_focus = 0; dirty = 1; return 1; }
+    }
+    int fx, fy, fw, fh;
+    namedlg_field(x, y, w, &fx, &fy, &fw, &fh);
+    if (hit(mouse_x, mouse_y, fx, fy, fw, fh)) {
+        /* The caret goes to the clicked character (text starts where
+         * kit_field puts it). */
+        int px = fx + (MODERN ? 10 : 6) + 1, pos = 0;
+        while (pos < name_len) {
+            char ch[2] = {name_buf[pos], 0};
+            int cw = kit_text_w(ch, 0);
+            if (mouse_x < px + cw / 2) break;
+            px += cw; pos++;
+        }
+        name_focus = 0; name_sel = 0; name_caret = pos; dirty = 1; return 1;
     }
     if (hit(mouse_x, mouse_y, sx, by, bw, BTN_H))
         namedlg_commit();
     else if (hit(mouse_x, mouse_y, cx, by, bw, BTN_H))
         namedlg_close();
+    else if (saveas_click(x, y, w, h))
+        namedlg_close();
     return 1;
 }
 
+/* Typing replaces a selected name stem and keeps the extension; the caret
+ * then edits at its own position. Left/Right/Home/End move it, Backspace and
+ * Delete remove around it. */
 static void namedlg_key(void) {
     int pdf = name_target == 6, stops = pdf ? 5 : 3;
     if (key_sc == KEY_TAB) { name_focus=(name_focus+(shift_down?stops-1:1))%stops;dirty=1;return; }
@@ -6389,49 +9201,443 @@ static void namedlg_key(void) {
             name_pdf_paper = (unsigned)(name_focus - 1); name_failed = 0; dirty = 1; return;
         }
     }
-    if (key_sc == KEY_ENTER && name_focus==(pdf?3:1)) { namedlg_close();return; }
+    /* Enter or Space acts on the focused button. */
+    if ((key_sc == KEY_ENTER || key_sc == KEY_SPACE) && name_focus == (pdf ? 3 : 1)) { namedlg_close(); return; }
+    if (key_sc == KEY_SPACE && name_focus == (pdf ? 4 : 2)) { namedlg_commit(); return; }
     if (name_focus && key_sc!=KEY_ENTER && key_sc!=KEY_ESC) return;
+    if (name_caret < 0 || name_caret > name_len) name_caret = name_len;
+    if (name_sel > name_len) name_sel = 0;
     if (key_sc == KEY_ESC)
         namedlg_close();
     else if (key_sc == KEY_ENTER)
         namedlg_commit();
-    else if (key_sc == KEY_BACKSPACE) {
-        if (name_len > 0)
-            name_buf[--name_len] = 0;
+    else if (key_sc == KEY_LEFT || key_sc == KEY_RIGHT || key_sc == 0x47 || key_sc == 0x4f) {
+        if (name_sel > 0) name_caret = key_sc == KEY_LEFT ? 0 : name_sel;
+        else if (key_sc == KEY_LEFT) { if (name_caret > 0) name_caret--; }
+        else if (key_sc == KEY_RIGHT) { if (name_caret < name_len) name_caret++; }
+        if (key_sc == 0x47) name_caret = 0;
+        if (key_sc == 0x4f) name_caret = name_len;
+        name_sel = 0;
         dirty = 1;
-    } else if (key_char && key_char != '/' && name_len < FS_NAME_LEN - 1) {
-        name_buf[name_len++] = key_char;
-        name_buf[name_len] = 0;
+    } else if (key_sc == KEY_BACKSPACE || key_sc == 0x53) {
+        int from = name_caret, to = name_caret;
+        if (name_sel > 0) { from = 0; to = name_sel; }
+        else if (key_sc == KEY_BACKSPACE) from = name_caret > 0 ? name_caret - 1 : 0;
+        else to = name_caret < name_len ? name_caret + 1 : name_len;
+        for (int i = to; i <= name_len; i++) name_buf[i - (to - from)] = name_buf[i];
+        name_len -= to - from;
+        name_caret = from;
+        name_sel = 0;
+        dirty = 1;
+    } else if (key_char && key_char != '/') {
+        int from = name_caret, to = name_caret;
+        if (name_sel > 0) { from = 0; to = name_sel; }
+        if (name_len - (to - from) >= FS_NAME_LEN - 1) return;
+        /* Remove the selection, then insert at the caret. */
+        for (int i = to; i <= name_len; i++) name_buf[i - (to - from)] = name_buf[i];
+        name_len -= to - from;
+        for (int i = name_len; i >= from; i--) name_buf[i + 1] = name_buf[i];
+        name_buf[from] = key_char;
+        name_len++;
+        name_caret = from + 1;
+        name_sel = 0;
         dirty = 1;
     }
 }
 
+/* ---------- Window switcher ----------
+ * Alt+Tab shows every open window, most recent first, centered on screen.
+ * Windows keep their state until Alt is released; Esc cancels. */
+
+static int switcher_ids[MAX_WIN], switcher_n, switcher_sel;
+
+static void switcher_build(void) {
+    switcher_n = 0;
+    for (int i = 0; i < MAX_WIN; i++)
+        if (wins[i].open) switcher_ids[switcher_n++] = i;
+    /* Most recent first; minimized windows keep their recency. */
+    for (int a = 0; a < switcher_n; a++)
+        for (int b = a + 1; b < switcher_n; b++)
+            if (wins[switcher_ids[b]].z > wins[switcher_ids[a]].z) {
+                int t = switcher_ids[a];
+                switcher_ids[a] = switcher_ids[b];
+                switcher_ids[b] = t;
+            }
+}
+
+static int switcher_cell_w(void) { return MODERN ? 104 : 96; }
+static int switcher_cell_h(void) { return MODERN ? 96 : 88; }
+static int switcher_cols(void) {
+    int cw = switcher_cell_w(), cols = (fb_w - 64 + 8) / (cw + 8);
+    if (cols < 1) cols = 1;
+    return cols < switcher_n ? cols : switcher_n;
+}
+
+static void switcher_geom(int *x, int *y, int *w, int *h) {
+    int cols = switcher_cols(), rows = (switcher_n + cols - 1) / cols;
+    *w = 32 + cols * switcher_cell_w() + (cols - 1) * 8;
+    *h = 16 + rows * switcher_cell_h() + (rows - 1) * 8 + (MODERN ? 52 : 60);
+    *x = (fb_w - *w) / 2;
+    *y = (fb_h - *h) / 2;
+}
+
+static void switcher_cell(int k, int *cx, int *cy) {
+    int x, y, w, h, cols = switcher_cols();
+    switcher_geom(&x, &y, &w, &h);
+    *cx = x + 16 + (k % cols) * (switcher_cell_w() + 8);
+    *cy = y + 16 + (k / cols) * (switcher_cell_h() + 8);
+}
+
+static void switcher_open(int dir) {
+    switcher_build();
+    if (switcher_n == 0) return;
+    if (open_menu >= 0) menu_close();
+    switcher_on = 1;
+    /* The first step goes to the previous window, not the current one. */
+    int f = win_front();
+    switcher_sel = (f >= 0 && switcher_ids[0] == f) ? (dir > 0 ? 1 : switcher_n - 1) : 0;
+    if (switcher_sel >= switcher_n) switcher_sel = 0;
+    dirty = 1;
+}
+
+static void switcher_step(int dir) {
+    if (!switcher_n) return;
+    switcher_sel = (switcher_sel + dir + switcher_n) % switcher_n;
+    dirty = 1;
+}
+
+static void switcher_commit(void) {
+    if (!switcher_on) return;
+    switcher_on = 0;
+    if (switcher_sel >= 0 && switcher_sel < switcher_n) win_focus(switcher_ids[switcher_sel]);
+    dirty = 1;
+}
+
+static void switcher_cancel(void) {
+    switcher_on = 0;
+    dirty = 1;
+}
+
+static void switcher_click(void) {
+    for (int k = 0; k < switcher_n; k++) {
+        int cx, cy;
+        switcher_cell(k, &cx, &cy);
+        if (hit(mouse_x, mouse_y, cx, cy, switcher_cell_w(), switcher_cell_h())) {
+            switcher_sel = k;
+            switcher_commit();
+            return;
+        }
+    }
+    switcher_cancel();
+}
+
+/* The folder a window's document lives in (or a Files window shows), or
+ * -1 for a window with no saved document. */
+static int switcher_folder(int slot) {
+    int kind = wins[slot].kind, file = -1;
+    if (kind == WK_FILES) return fs_is_dir(window_state[slot].cwd) ? window_state[slot].cwd : -1;
+    if (kind == WK_EDIT) {
+        const Document *doc = &window_state[slot].doc;
+        if (fs_valid(doc->file) && fs_identity(doc->file) == doc->identity) file = doc->file;
+    } else if (kind == WK_WRITER) file = writer_file();
+    else if (kind == WK_SPREADSHEET) file = spreadsheet_file();
+    if (file < 0 || !fs_valid(file)) return -1;
+    int parent = fs_parent(file);
+    return fs_is_dir(parent) ? parent : -1;
+}
+
+/* Appends one part of the detail line, comma separated, the first one
+ * capitalized. */
+static void switcher_put(char *out, int *n, int cap, const char *s) {
+    if (*n && *n < cap - 2) { out[(*n)++] = ','; out[(*n)++] = ' '; }
+    int first = *n == 0;
+    while (*s && *n < cap - 1) {
+        char c = *s++;
+        if (first && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        first = 0;
+        out[(*n)++] = c;
+    }
+}
+
+/* "Editor, in Documents" beside the bold title: the app (when the title
+ * is not already its name), where the document or folder is, and whether
+ * it was never saved or is minimized. */
+static void switcher_detail(int slot, const char *label, char *out, int cap) {
+    const char *app = win_app_name(wins[slot].kind);
+    int n = 0, kind = wins[slot].kind;
+    if (kstrcmp(app, label) != 0) switcher_put(out, &n, cap, app);
+    int folder = switcher_folder(slot);
+    if (folder >= 0) {
+        char where[FS_NAME_LEN + 8];
+        kstrcpy(where, "in ");
+        kstrcpy(where + 3, folder == fs_root() ? "Home" : fs_name(folder));
+        switcher_put(out, &n, cap, where);
+    } else if (kind == WK_EDIT || kind == WK_WRITER || kind == WK_SPREADSHEET)
+        switcher_put(out, &n, cap, "not saved yet");
+    if (wins[slot].min) switcher_put(out, &n, cap, "minimized");
+    out[n] = 0;
+}
+
+static void draw_switcher(void) {
+    if (!switcher_on || !switcher_n) return;
+    int x, y, w, h, cw = switcher_cell_w(), ch = switcher_cell_h();
+    switcher_geom(&x, &y, &w, &h);
+    if (MODERN) {
+        kit_shadow(x, y, w, h, 12);
+        kit_box(x, y, w, h, 12, TK_46, TK_LINE_STRONG);
+    } else {
+        kit_shadow(x, y, w, h, 0);
+        kit_box(x, y, w, h, KIT_R_SQUARE, TK_RAISED, TK_LINE_STRONG);
+    }
+    char title[TERM_TASK_TITLE_LEN];
+    for (int k = 0; k < switcher_n; k++) {
+        int i = switcher_ids[k], cx, cy, on = k == switcher_sel;
+        switcher_cell(k, &cx, &cy);
+        if (on) {
+            if (MODERN) {
+                kit_fill(cx, cy, cw, ch, 8, TK_ACCENT_100, 1);
+                kit_frame(cx, cy, cw, ch, 8, TK_ACCENT);
+                kit_frame(cx + 1, cy + 1, cw - 2, ch - 2, 7, TK_ACCENT);
+            } else {
+                draw_rect(cx, cy, cw, ch, TK_ACCENT_100);
+                draw_frame(cx, cy, cw, ch, TK_ACCENT);
+                draw_frame(cx + 1, cy + 1, cw - 2, ch - 2, TK_ACCENT);
+            }
+        }
+        int top = MODERN ? 16 : 14;
+        app_icon_draw(app_icon_for(kind_icon(wins[i].kind)), cx + (cw - 32) / 2, cy + top, AI_BIG);
+        /* Cells name the window as the taskbar does: by its document. */
+        int unsaved;
+        const char *t = win_task_title(i, title, &unsaved);
+        uint8_t ink = on ? (MODERN ? TK_ACCENT_700 : TK_TEXT) : wins[i].min ? TK_TEXT2 : TK_TEXT;
+        int maxw = cw - 12, tw = kit_text_w(t, on) + (unsaved ? TASK_DOT_W : 0);
+        if (tw > maxw) tw = maxw;
+        task_label(t, unsaved, cx + (cw - tw) / 2, cy + top + 32 + (MODERN ? 10 : 8), tw, ink, on);
+    }
+    int sel = switcher_ids[switcher_sel], unsaved;
+    char detail[FS_NAME_LEN + 64];
+    const char *t = win_task_title(sel, title, &unsaved);
+    switcher_detail(sel, t, detail, sizeof detail);
+    int ty = y + h - (MODERN ? 36 : 40) + (MODERN ? 10 : 12);
+    int tx = x + (MODERN ? 18 : 16);
+    int used = kit_text(t, tx, ty, TK_TEXT, w / 2, 1);
+    kit_text(detail, tx + used + 10, ty, TK_TEXT2, x + w - 16 - (tx + used + 10), 0);
+}
+
+/* The top window under the pointer, or -1. */
+static int win_at(int px, int py) {
+    int order[MAX_WIN], n = 0;
+    wins_by_z(order, &n, 1);
+    for (int k = 0; k < n; k++) {
+        int i = order[k];
+        if (i >= 0 && i < MAX_WIN && hit(px, py, wins[i].x, wins[i].y, wins[i].w, wins[i].h)) return i;
+    }
+    return -1;
+}
+
+/* Caption buttons react to the pointer only when nothing modal is up and
+ * the window being drawn is the one under the pointer. */
+static int caption_pointer_ok(void) {
+    if (open_menu >= 0 || open_dlg || name_dlg || edit_close_dlg || launcher_on || switcher_on ||
+        display_pending || dragging_win >= 0 || resizing_win >= 0)
+        return 0;
+    return chrome_slot >= 0 && win_at(mouse_x, mouse_y) == chrome_slot;
+}
+
+static int desk_at(int px, int py) {
+    for (int i = 0; i < DESK_COUNT; i++)
+        if (icon_hit(i, px, py)) return i;
+    return -1;
+}
+
+static void desk_open(int i) {
+    if (i == DESK_SYSTEM) { properties_id = fs_root(); properties_reason = ""; win_open(WK_PROPERTIES); }
+    else if (i == DESK_HOME) open_files(fs_root());
+    else if (i == DESK_TRASH) open_files(trash_id >= 0 ? trash_id : fs_root());
+    dirty = 1;
+}
+
+static const MItem mi_desk_icon[] = {
+    {"&Open", "Enter", ACT_DESK_OPEN, 0}, MSEP, {"Propert&ies", "Alt+Enter", ACT_DESK_PROPERTIES, 0},
+};
+static const MItem mi_trash_icon[] = {
+    {"&Open", "Enter", ACT_DESK_OPEN, 0}, MSEP, {"&Empty Trash", "", ACT_EMPTY_TRASH, 0},
+};
+
 static void handle_rclick(void) {
-    if (display_pending || name_dlg || edit_close_dlg || launcher_on || open_dlg || open_menu >= 0)
+    if (display_pending || name_dlg || edit_close_dlg || open_dlg || switcher_on)
         return;
-    int i = win_front();
-    if (i < 0)
+    if (launcher_on) {
+        /* Light dismiss: outside the panel the click closes it and goes on
+         * to whatever is under the pointer. */
+        int lx, ly, lw, lh;
+        launcher_geom(&lx, &ly, &lw, &lh);
+        if (hit(mouse_x, mouse_y, lx, ly, lw, lh)) return;
+        launcher_close();
+    }
+    if (open_menu >= 0) menu_close();
+    volume_on = 0;
+    if (taskbar_rclick()) return;
+    int i = win_at(mouse_x, mouse_y);
+    if (i >= 0) {
+        Win *w = &wins[i];
+        win_focus(i);
+        context_set(i);
+        if (mouse_y < w->y + TITLE_BAR) {
+            menu_open_context(mi_window, (int)(sizeof mi_window / sizeof mi_window[0]), mouse_x, mouse_y);
+            return;
+        }
+        if (w->kind == WK_MINES) {
+            if (mines_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y, 1)) dirty = 1;
+            return;
+        }
+        if (w->kind == WK_FILES && mouse_y >= w->y + TITLE_H) {
+            int row = files_item_at(w->x, w->y, w->w, w->h);
+            if (row >= 0 && fm_row_id(row) >= 0) {
+                fm_rename_cancel();
+                fm_selected = row;
+                menu_open_context(mi_files_context, (int)(sizeof mi_files_context / sizeof mi_files_context[0]), mouse_x, mouse_y);
+            } else if (row == -1) {
+                /* The folder menu acts on the folder: nothing stays selected. */
+                fm_rename_cancel();
+                fm_selected = -1;
+                menu_open_context(mi_folder_context, (int)(sizeof mi_folder_context / sizeof mi_folder_context[0]), mouse_x, mouse_y);
+            }
+            return;
+        }
+        if (w->kind == WK_EDIT && mouse_y >= w->y + TITLE_H) {
+            menu_open_context(mi_editor_edit, (int)(sizeof mi_editor_edit / sizeof mi_editor_edit[0]), mouse_x, mouse_y);
+            return;
+        }
         return;
+    }
+    int d = desk_at(mouse_x, mouse_y);
+    if (d >= 0) {
+        icon_sel = d;
+        if (d == DESK_TRASH) menu_open_context(mi_trash_icon, (int)(sizeof mi_trash_icon / sizeof mi_trash_icon[0]), mouse_x, mouse_y);
+        else menu_open_context(mi_desk_icon, (int)(sizeof mi_desk_icon / sizeof mi_desk_icon[0]), mouse_x, mouse_y);
+        return;
+    }
+    icon_sel = -1;
+    menu_open_context(mi_desktop_context, (int)(sizeof mi_desktop_context / sizeof mi_desktop_context[0]), mouse_x, mouse_y);
+}
+
+/* Press on a window's title bar: drag, or double-click to maximize. A
+ * snapped window comes off its snap once the drag starts. */
+static void title_press(int i) {
     Win *w = &wins[i];
-    if (w->kind == WK_MINES && hit(mouse_x, mouse_y, w->x, w->y, w->w, w->h)) {
-        if (mines_click(w->x, w->y + TITLE_H + 1, mouse_x, mouse_y, 1))
+    if ((win_options & WINOPT_DOUBLE_CLICK) && title_click_window == i &&
+        input_gesture_ticks() - title_click_time < dbl_click_ticks()) {
+        title_click_window = -1;
+        win_arrange(i, w->maximized == SNAP_MAX ? 3 : 0);
+        return;
+    }
+    title_click_window = i;
+    title_click_time = input_gesture_ticks();
+    dragging_win = i;
+    drag_active = 0;
+    drag_from_x = mouse_x;
+    drag_from_y = mouse_y;
+    drag_orig_x = w->x;
+    drag_orig_y = w->y;
+    drag_outline_x = w->x;
+    drag_outline_y = w->y;
+    fm_dragging = 0;
+    fm_drag_active = 0;
+}
+
+static void window_body_click(int i) {
+    Win *w = &wins[i];
+    if (w->kind == WK_NATIVE) {
+        if (hit(mouse_x, mouse_y, w->x + 8, w->y + TITLE_H + 4, 100, NATIVE_TOOLBAR_H - 6)) native_output_toggle(i);
+    } else if (w->kind == WK_FILES)
+        handle_files_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_EDIT)
+        handle_edit_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_CALC)
+        handle_calc_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_SETTINGS)
+        handle_settings_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_ABOUT)
+        handle_about_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_PROPERTIES)
+        handle_properties_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_PAINT)
+        handle_paint_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_SNAKE)
+        handle_snake_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_WORDLE) {
+        if (wordle_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y, frame_count)) dirty = 1;
+    } else if (w->kind == WK_VIEW) {
+        int cx, cy, cw, ch;
+        app_client(w->x, w->y, w->w, w->h, 1, &cx, &cy, &cw, &ch);
+        if (image_viewer_click(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
+    } else if (w->kind == WK_BROWSER) {
+        int cx, cy, cw, ch;
+        app_client(w->x, w->y, w->w, w->h, 1, &cx, &cy, &cw, &ch);
+        if (browser_click(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
+    } else if (w->kind == WK_SPREADSHEET) {
+        int cx, cy, cw, ch;
+        doc_client(w, &cx, &cy, &cw, &ch);
+        spreadsheet_result(spreadsheet_click(cx, cy, cw, ch,
+            mouse_x, mouse_y, (ctrl_down ? SPREADSHEET_MOD_CTRL : 0) | (shift_down ? SPREADSHEET_MOD_SHIFT : 0)));
+    } else if (w->kind == WK_WRITER) {
+        int cx, cy, cw, ch;
+        doc_client(w, &cx, &cy, &cw, &ch);
+        writer_result(writer_click(cx, cy, cw, ch,
+            mouse_x, mouse_y, (ctrl_down ? WRITER_MOD_CTRL : 0) | (shift_down ? WRITER_MOD_SHIFT : 0)));
+    } else if (w->kind == WK_PLAYER) {
+        int cx, cy, cw, ch;
+        app_client(w->x, w->y, w->w, w->h, 0, &cx, &cy, &cw, &ch);
+        if (player_click(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
+    } else if (w->kind == WK_TODO)
+        handle_todo_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_CAL) {
+        if (cal_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y)) dirty = 1;
+    } else if (w->kind == WK_MINES) {
+        if (mines_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y, shift_down)) dirty = 1;
+    } else if (w->kind == WK_2048) {
+        if (g2048_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y)) dirty = 1;
+    } else if (w->kind == WK_BREAKOUT) {
+        if (bo_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y)) dirty = 1;
+    } else if (w->kind == WK_SYSMON) {
+        SysInfo si;
+        int cx, cy, cw, ch;
+        sysinfo_fill(&si);
+        app_client(w->x, w->y, w->w, w->h, 1, &cx, &cy, &cw, &ch);
+        SysmonAction action = sysmon_click(cx, cy, cw, ch, mouse_x, mouse_y, &si);
+        if (action.kind == SYSMON_ACTION_REDRAW) dirty = 1;
+        else if (action.kind == SYSMON_ACTION_CLOSE_WINDOW) {
+            int owner = action.owner;
+            if (owner >= 0 && owner < MAX_WIN && wins[owner].open &&
+                (unsigned)wins[owner].seq == action.task_instance) win_request_close(owner);
+        } else if (action.kind == SYSMON_ACTION_STOP_PROGRAM) {
+            /* Its Terminal reports the exit status on its next poll. */
+            uproc_kill(action.task_instance);
             dirty = 1;
+        } else if (action.kind == SYSMON_ACTION_SHOW_TERMINAL || action.kind == SYSMON_ACTION_STOP_TASK) {
+            int owner = action.owner;
+            TermTaskInfo live;
+            if (owner >= 0 && owner < MAX_WIN && wins[owner].open &&
+                (wins[owner].kind == WK_TERM || wins[owner].kind == WK_NATIVE) &&
+                app_view_info(owner, &live) && live.instance == action.task_instance) {
+                if (action.kind == SYSMON_ACTION_SHOW_TERMINAL) win_focus(owner);
+                else { app_view_stop(owner); dirty = 1; }
+            }
+        }
     }
 }
 
 static void handle_click(void) {
-    if (display_pending) {
-        int x = (fb_w - 420) / 2, y = (fb_h - 150) / 2;
-        if (hit(mouse_x, mouse_y, x + 34, y + 98, 164, 30)) display_keep();
-        else if (hit(mouse_x, mouse_y, x + 222, y + 98, 164, 30)) display_revert();
-        return;
-    }
+    alt_tap = 0;
+    if (display_pending) { display_click(); return; }
     if (edit_close_dlg) { edit_close_click(); return; }
-    if (name_dlg) {
-        namedlg_click();
-        return;
-    }
+    if (name_dlg) { namedlg_click(); return; }
+    if (switcher_on) { switcher_click(); return; }
+    if (volume_on && volume_click()) return;
     if (launcher_on) {
+        /* The Apps button toggles; anything else goes to the launcher. */
+        if (taskbar_hover_at() == HOT_APPS) { launcher_close(); return; }
         launcher_click();
         return;
     }
@@ -6439,175 +9645,61 @@ static void handle_click(void) {
      * decides. Clicking chrome/menus/desktop cancels (Return commits). */
     if (fm_renaming && !click_on_rename_field()) {
         int wx, wy, ww, wh;
-        int in_body = 0;
-        if (win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh) &&
-            hit(mouse_x, mouse_y, wx, wy + TITLE_H, ww, wh - TITLE_H))
-            in_body = 1;
-        if (!in_body)
+        if (!(win_geom_kind(WK_FILES, &wx, &wy, &ww, &wh) &&
+              hit(mouse_x, mouse_y, wx, wy + TITLE_H, ww, wh - TITLE_H)))
             fm_rename_cancel();
     }
+    if (win_kbd_mode) { win_kbd_mode = 0; win_kbd_slot = -1; dirty = 1; }
+    if (open_menu >= 0) { menu_click(); return; }
+    if (open_dlg) { handle_open_dlg_click(); return; }
+    if (taskbar_hit()) return;
+    volume_on = 0;
 
-    if (open_menu >= 0) {
-        int item = menu_item_at(open_menu, mouse_x, mouse_y);
-        if (item >= 0) {
-            menu_activate(open_menu, item);
-            return;
-        }
-        int bar = win_menu_at(mouse_x, mouse_y);
-        if (bar >= 0) {
-            if (bar == open_menu) {
-                open_menu = MENU_NONE;
-                menu_sel = -1;
-            } else {
-                open_menu = bar;
-                menu_sel = menu_item_at(bar, mouse_x, mouse_y);
-            }
-            dirty = 1;
-            return;
-        }
-        open_menu = MENU_NONE;
-        menu_sel = -1;
-        dirty = 1;
-        return;
-    }
-
-    if (open_dlg) {
-        handle_open_dlg_click();
-        return;
-    }
-
-    /* Taskbar, then windows front-to-back, then desktop icons. */
-    if (mouse_y >= TASKBAR_Y) {
-        taskbar_hit();
-        return;
-    }
-
-    int order[MAX_WIN];
-    int n = 0;
-    wins_by_z(order, &n, 1);
-    for (int k = 0; k < n; k++) {
-        int i = order[k];
-        if (i < 0 || i >= MAX_WIN)
-            continue;
+    int i = win_at(mouse_x, mouse_y);
+    if (i >= 0) {
         Win *w = &wins[i];
-        if (!hit(mouse_x, mouse_y, w->x, w->y, w->w, w->h))
-            continue;
         win_focus(i);
-        resize_edges = (mouse_x < w->x+4 ? 1 : 0) | (mouse_x >= w->x+w->w-5 ? 2 : 0) |
-                       (mouse_y < w->y+3 ? 4 : 0) | (mouse_y >= w->y+w->h-5 ? 8 : 0);
-        if (resize_edges) {
-            resizing_win=i; drag_from_x=mouse_x; drag_from_y=mouse_y;
-            drag_orig_x=w->x; drag_orig_y=w->y; resize_start_w=w->w; resize_start_h=w->h;
-            w->maximized=0; return;
-        }
-        if (max_hit(w->x, w->y, w->w)) { win_arrange(i,0); return; }
-        if (min_hit(w->x, w->y, w->w)) {
-            win_minimize(i);
-            return;
-        }
-        if (close_hit(w->x, w->y, w->w)) {
-            win_request_close(i);
-            return;
-        }
-        if (!open_dlg && hit(mouse_x, mouse_y, w->x, w->y + TITLE_BAR, w->w, WMENU_H)) {
-            int m = win_menu_at(mouse_x, mouse_y);
-            if (m >= 0) { open_menu = m; menu_sel = -1; fm_last_click_item = -1; dirty = 1; }
-            return;
-        }
-        if (hit(mouse_x, mouse_y, w->x, w->y, w->w, TITLE_BAR)) {
-            if (title_click_window == i && input_gesture_ticks()-title_click_time < 28) {
-                title_click_window=-1; win_arrange(i,0); return;
-            }
-            title_click_window=i; title_click_time=input_gesture_ticks();
-            dragging_win = i;
-            drag_active = 0;
+        context_set(i);
+        int edges = win_resize_edges(w, mouse_x, mouse_y);
+        if (edges) {
+            resizing_win = i;
+            resize_edges = edges;
             drag_from_x = mouse_x;
             drag_from_y = mouse_y;
             drag_orig_x = w->x;
             drag_orig_y = w->y;
-            fm_dragging = 0;
-            fm_drag_active = 0;
+            resize_start_w = w->w;
+            resize_start_h = w->h;
             return;
         }
-        if (w->kind == WK_NATIVE){
-            if(hit(mouse_x,mouse_y,w->x+8,w->y+TITLE_H+4,100,NATIVE_TOOLBAR_H-6))native_output_toggle(i);
-        }else if (w->kind == WK_FILES)
-            handle_files_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_EDIT)
-            handle_edit_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_CALC)
-            handle_calc_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_SETTINGS)
-            handle_settings_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_PAINT)
-            handle_paint_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_WORDLE) {
-            if (wordle_click(w->x, w->y + TITLE_H, mouse_x, mouse_y))
-                dirty = 1;
+        if (close_hit(w->x, w->y, w->w)) { win_request_close(i); return; }
+        if (!win_is_dialog(w->kind)) {
+            if (max_hit(w->x, w->y, w->w)) { win_arrange(i, w->maximized ? 3 : 0); return; }
+            if (min_hit(w->x, w->y, w->w)) { win_minimize(i); return; }
         }
-        else if(w->kind==WK_VIEW){
-            if(image_viewer_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
+        if (!MODERN && WMENU_H > 0 && win_has_menu(w->kind) &&
+            hit(mouse_x, mouse_y, w->x, w->y + TITLE_BAR, w->w, WMENU_H)) {
+            int m = win_menu_at(mouse_x, mouse_y);
+            if (m >= 0) { fm_last_click_item = -1; menu_open_bar(m); }
+            return;
         }
-        else if(w->kind==WK_BROWSER){
-            if(browser_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
-        }else if(w->kind==WK_SPREADSHEET){
-            spreadsheet_result(spreadsheet_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,
-                mouse_x,mouse_y,(ctrl_down?SPREADSHEET_MOD_CTRL:0)|(shift_down?SPREADSHEET_MOD_SHIFT:0)));
-        }else if(w->kind==WK_WRITER){
-            writer_result(writer_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,
-                mouse_x,mouse_y,(ctrl_down?WRITER_MOD_CTRL:0)|(shift_down?WRITER_MOD_SHIFT:0)));
-        }else if(w->kind==WK_PLAYER){
-            if(player_click(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y))dirty=1;
+        if (mouse_y < w->y + TITLE_BAR) {
+            /* The window icon opens the window menu. */
+            int ix = w->x + (MODERN ? 8 : 4);
+            if (hit(mouse_x, mouse_y, ix, w->y + 4, 24, TITLE_BAR - 8)) { menu_open_window(i); return; }
+            title_press(i);
+            return;
         }
-        else if (w->kind == WK_TODO)
-            handle_todo_click(w->x, w->y, w->w, w->h);
-        else if (w->kind == WK_CAL) {
-            if (cal_click(w->x, w->y + TITLE_H + 1, w->w, mouse_x, mouse_y))
-                dirty = 1;
-        } else if (w->kind == WK_MINES) {
-            if (mines_click(w->x, w->y + TITLE_H + 1, mouse_x, mouse_y, shift_down))
-                dirty = 1;
-        } else if (w->kind == WK_BREAKOUT) {
-            bo_click();
-            dirty = 1;
-        } else if (w->kind == WK_SYSMON) {
-            SysInfo si;
-            sysinfo_fill(&si);
-            SysmonAction action=sysmon_click(w->x,w->y+TITLE_H+1,w->w,w->h-TITLE_H-1,mouse_x,mouse_y,&si);
-            if(action.kind==SYSMON_ACTION_REDRAW)dirty=1;
-            else if(action.kind==SYSMON_ACTION_CLOSE_WINDOW){
-                int owner=action.owner;
-                if(owner>=0&&owner<MAX_WIN&&wins[owner].open&&
-                   (unsigned)wins[owner].seq==action.task_instance)win_request_close(owner);
-            }
-            else if(action.kind==SYSMON_ACTION_STOP_PROGRAM){
-                /* Its Terminal reports the exit status on its next poll. */
-                uproc_kill(action.task_instance);dirty=1;
-            }
-            else if(action.kind==SYSMON_ACTION_SHOW_TERMINAL||action.kind==SYSMON_ACTION_STOP_TASK){
-                int owner=action.owner;TermTaskInfo live;
-                if(owner>=0&&owner<MAX_WIN&&wins[owner].open&&
-                   (wins[owner].kind==WK_TERM||wins[owner].kind==WK_NATIVE)&&
-                   app_view_info(owner,&live)&&live.instance==action.task_instance){
-                    if(action.kind==SYSMON_ACTION_SHOW_TERMINAL)win_focus(owner);
-                    else {app_view_stop(owner);dirty=1;}
-                }
-            }
-        }
+        window_body_click(i);
         return;
     }
 
-    int hit_icon = -1;
-    for (int i = 0; i < ICON_DESK_COUNT; i++) {
-        if (icon_hit(i, mouse_x, mouse_y))
-            hit_icon = i;
-    }
-    if (hit_icon >= 0) {
-        int dbl = double_click(hit_icon, &icon_last, &icon_last_frame);
-        icon_sel = hit_icon;
+    int d = desk_at(mouse_x, mouse_y);
+    if (d >= 0) {
+        int dbl = double_click(d, &icon_last, &icon_last_frame);
+        icon_sel = d;
         dirty = 1;
-        if (dbl)
-            icon_open(hit_icon);
+        if (dbl) desk_open(d);
     } else if (icon_sel >= 0) {
         icon_sel = -1;
         dirty = 1;
@@ -6616,6 +9708,7 @@ static void handle_click(void) {
 
 static void handle_wheel(int amount) {
     if(amount&&launcher_on&&!name_dlg&&!open_dlg&&!display_pending){launcher_scroll(amount);return;}
+    if(amount&&(open_dlg||name_dlg)&&!edit_close_dlg&&!display_pending){pick_scroll(amount*3,1);return;}
     if(!amount||name_dlg||edit_close_dlg||open_dlg||launcher_on||open_menu>=0||display_pending)return;
     int target=-1;
     for(int i=0;i<MAX_WIN;i++)if(wins[i].open&&!wins[i].min&&
@@ -6629,12 +9722,13 @@ static void handle_wheel(int amount) {
     else if(w->kind==WK_VIEW)image_viewer_scroll(amount*3);
     else if(w->kind==WK_TERM)term_scroll(-amount*3);
     else if(w->kind==WK_NATIVE)native_output_scroll_by(target,-amount*3);
+    else if(w->kind==WK_SETTINGS)settings_scroll_by(amount*48);
     else if(w->kind==WK_EDIT){
         int ax,ay,aw,ah,row,col,old=edit_caret;edit_area(w->x,w->y,w->w,w->h,&ax,&ay,&aw,&ah);
         int cols=aw/EDIT_CHAR_W;if(cols<1)cols=1;edit_caret=edit_len;edit_caret_cell(cols,&row,&col);edit_caret=old;
         int max=row+1-ah/EDIT_LINE_H;if(max<0)max=0;
         edit_scroll+=amount*3;if(edit_scroll<0)edit_scroll=0;if(edit_scroll>max)edit_scroll=max;edit_manual_scroll=1;
-    }else if(w->kind==WK_FILES){fm_first+=amount*3;fm_manual_scroll=1;files_scroll(files_rows(w->y,w->h));}
+    }else if(w->kind==WK_FILES){int cols=files_cols(w->w);fm_first+=amount*(fm_details?3:cols);fm_manual_scroll=1;files_scroll(files_rows(w->y,w->h),cols);}
     context_set(original);dirty=1;
 }
 
@@ -6661,6 +9755,59 @@ static int native_task_key_dispatch(int slot,int owned){
     return 1;
 }
 
+/* Super combinations: window states, Show Desktop and Files. Super alone
+ * toggles the launcher on release. Returns 1 when used. */
+static int super_key(void) {
+    if (!super_down) return 0;
+    super_used = 1;
+    int f = win_front();
+    if (key_sc == KEY_UP && f >= 0 && !win_is_dialog(wins[f].kind)) win_arrange(f, 0);
+    else if (key_sc == KEY_DOWN && f >= 0) { if (wins[f].maximized) win_arrange(f, 3); else win_minimize(f); }
+    else if ((key_sc == KEY_LEFT || key_sc == KEY_RIGHT) && f >= 0 && !win_is_dialog(wins[f].kind))
+        win_arrange(f, key_sc == KEY_LEFT ? 1 : 2);
+    else if (key_sc == 0x20) show_desktop();
+    else if (key_sc == 0x12) open_files(fs_root());
+    else return 0;
+    dirty = 1;
+    return 1;
+}
+
+/* Alt+Space Move and Size: arrows step 8px (1px with Shift); Enter or a
+ * click ends, Esc puts the window back. Returns 1 when used. */
+static int win_kbd_orig_x, win_kbd_orig_y, win_kbd_orig_w, win_kbd_orig_h;
+static void win_kbd_begin(void) {
+    int s = win_kbd_slot;
+    if (s < 0) return;
+    win_kbd_orig_x = wins[s].x; win_kbd_orig_y = wins[s].y;
+    win_kbd_orig_w = wins[s].w; win_kbd_orig_h = wins[s].h;
+}
+static int win_kbd_key(void) {
+    if (!win_kbd_mode) return 0;
+    int s = win_kbd_slot;
+    if (s < 0 || s >= MAX_WIN || !wins[s].open) { win_kbd_mode = 0; return 0; }
+    Win *w = &wins[s];
+    int step = shift_down ? 1 : 8, dx = 0, dy = 0;
+    if (key_sc == KEY_LEFT) dx = -step;
+    else if (key_sc == KEY_RIGHT) dx = step;
+    else if (key_sc == KEY_UP) dy = -step;
+    else if (key_sc == KEY_DOWN) dy = step;
+    else if (key_sc == KEY_ESC) {
+        w->x = win_kbd_orig_x; w->y = win_kbd_orig_y; w->w = win_kbd_orig_w; w->h = win_kbd_orig_h;
+        win_kbd_mode = 0;
+    } else if (key_sc == KEY_ENTER) win_kbd_mode = 0;
+    if (win_kbd_mode == 1) { w->x += dx; w->y += dy; }
+    else if (win_kbd_mode == 2) {
+        int mw, mh;
+        w->w += dx; w->h += dy;
+        win_minimum(w, &mw, &mh);
+        if (w->w < mw) w->w = mw;
+        if (w->h < mh) w->h = mh;
+    }
+    win_clamp(w);
+    dirty = 1;
+    return 1;
+}
+
 static void handle_key(void) {
     if (display_pending) {
         if (key_sc == KEY_ENTER) display_keep();
@@ -6668,7 +9815,36 @@ static void handle_key(void) {
         return;
     }
     if (edit_close_dlg) { edit_close_key(); return; }
+    if (switcher_on) {
+        if (key_sc == KEY_TAB) switcher_step(shift_down ? -1 : 1);
+        else if (key_sc == KEY_LEFT || key_sc == KEY_RIGHT) switcher_step(key_sc == KEY_LEFT ? -1 : 1);
+        else if (key_sc == KEY_ESC) switcher_cancel();
+        else if (key_sc == KEY_ENTER) switcher_commit();
+        return;
+    }
+    if (!name_dlg && !open_dlg && !launcher_on && super_key()) return;
+    if (win_kbd_key()) return;
     context_set(win_front());
+    if (!name_dlg && !open_dlg && !launcher_on) {
+        int f = win_front();
+        if (alt_down && key_sc == KEY_TAB) { switcher_open(shift_down ? -1 : 1); return; }
+        if (alt_down && key_sc == 0x3e) { if (f >= 0) win_request_close(f); return; }
+        if (alt_down && key_sc == KEY_SPACE) { if (f >= 0) menu_open_window(f); return; }
+        if (open_menu >= 0 && menu_key()) return;
+        if (key_sc == 0x44) {
+            if (shift_down && f >= 0) {
+                Win *w = &wins[f];
+                int n, cx = w->x + 24, cy = w->y + TITLE_H + 24;
+                const MMenu *bar = menubar_for(w->kind, &n);
+                if (w->kind == WK_FILES)
+                    menu_open_context(mi_files_context, (int)(sizeof mi_files_context / sizeof mi_files_context[0]), cx, cy);
+                else if (n > 1)
+                    menu_open_context(bar[1].items, bar[1].n, cx, cy);
+            } else menu_focus_row();
+            return;
+        }
+        if (menu_mnemonic_open()) return;
+    }
     if(front_kind()==WK_EDIT)edit_manual_scroll=0;
     if(front_kind()==WK_FILES)fm_manual_scroll=0;
     if(front_kind()==WK_FILES&&!name_dlg&&!open_dlg&&!launcher_on&&open_menu<0){
@@ -6690,11 +9866,24 @@ static void handle_key(void) {
            (shift_down?BROWSER_MOD_SHIFT:0)|(alt_down?BROWSER_MOD_ALT:0)))dirty=1;
         return;
     }
-    if (!name_dlg && !open_dlg && alt_down && key_sc == KEY_TAB) { win_cycle(); return; }
-    if (!name_dlg && !open_dlg && alt_down && key_sc == KEY_ENTER) { win_arrange(win_front(),0); return; }
-    if (!name_dlg && !open_dlg && alt_down && (key_sc == KEY_LEFT || key_sc == KEY_RIGHT)) {
-        win_arrange(win_front(),key_sc==KEY_LEFT?1:2); return;
+    if (!name_dlg && !open_dlg && alt_down && key_sc == KEY_ENTER) {
+        int f = win_front();
+        if (front_kind() == WK_FILES) act_run(ACT_PROPERTIES);
+        else if (front_kind() == WK_EDIT && act_enabled(ACT_DOC_PROPERTIES)) act_run(ACT_DOC_PROPERTIES);
+        else if (f >= 0 && !win_is_dialog(wins[f].kind)) win_arrange(f, wins[f].maximized == SNAP_MAX ? 3 : 0);
+        return;
     }
+    if (!name_dlg && !open_dlg && alt_down && front_kind() == WK_FILES &&
+        (key_sc == KEY_LEFT || key_sc == KEY_RIGHT || key_sc == KEY_UP)) {
+        act_run(key_sc == KEY_LEFT ? ACT_GO_BACK : key_sc == KEY_RIGHT ? ACT_GO_FORWARD : ACT_GO_UP);
+        return;
+    }
+    if (!name_dlg && !open_dlg && alt_down && (key_sc == KEY_LEFT || key_sc == KEY_RIGHT)) {
+        int f = win_front();
+        if (f >= 0 && !win_is_dialog(wins[f].kind)) win_arrange(f, key_sc == KEY_LEFT ? 1 : 2);
+        return;
+    }
+    if (!name_dlg && !open_dlg && key_sc == 0x3b) { act_run(ACT_HELP); return; }
     if (name_dlg) {
         namedlg_key();
         return;
@@ -6722,6 +9911,11 @@ static void handle_key(void) {
             files_clipboard_action(key_sc==0x2d?0:key_sc==0x2e?1:2);return;
         }
         if(key_sc==0x17 && front_kind()==WK_FILES){menu_activate(MENU_FILE,6);return;}
+        if(key_sc==0x20 && front_kind()==WK_FILES){act_run(ACT_DUPLICATE);return;}
+        if(key_sc==KEY_N && shift_down && front_kind()==WK_FILES){act_run(ACT_NEW_FOLDER);return;}
+        if(key_sc==KEY_N && shift_down && front_kind()==WK_EDIT){act_run(ACT_NEW_WINDOW);return;}
+        if(key_sc==KEY_S && shift_down && act_enabled(ACT_SAVE_AS)){act_run(ACT_SAVE_AS);return;}
+        if(key_sc==KEY_Q){act_run(ACT_QUIT);return;}
         if (key_sc == 0x2c || key_sc == 0x15) {
             int redo = key_sc == 0x15 || shift_down;
             if (front_kind() == WK_EDIT) edit_undo(redo);
@@ -6761,47 +9955,17 @@ static void handle_key(void) {
             return;
         }
     }
-    if(key_sc==0x44){if(win_front()>=0&&win_has_menu(wins[win_front()].kind)){open_menu=MENU_FILE;menu_sel=0;dirty=1;}return;}
-    if (open_menu >= 0) {
-        if(key_sc==KEY_LEFT||key_sc==KEY_RIGHT){open_menu=(open_menu+(key_sc==KEY_LEFT?MENU_N-1:1))%MENU_N;menu_sel=0;}
-        else if(key_sc==KEY_UP||key_sc==KEY_DOWN){
-            int d=key_sc==KEY_UP?-1:1;
-            for(int n=0;n<menu_count[open_menu];n++){menu_sel=(menu_sel+d+menu_count[open_menu])%menu_count[open_menu];if(menu_item_enabled(open_menu,menu_sel)&&kstrcmp(menu_items[open_menu][menu_sel],"-"))break;}
-        }else if(key_sc==KEY_ENTER && menu_sel>=0 && menu_item_enabled(open_menu,menu_sel)) {int m=open_menu,i=menu_sel;open_menu=MENU_NONE;menu_activate(m,i);}
-        dirty=1;
-        if (key_sc == KEY_ESC) {
-            open_menu = MENU_NONE;
-            menu_sel = -1;
-            dirty = 1;
-        }
-        return;
-    }
-
     if (open_dlg) {
-        if(key_sc==KEY_TAB){pick_focus=(pick_focus+(shift_down?2:1))%3;dirty=1;return;}
-        if(key_sc==KEY_ENTER&&pick_focus==1){close_open_dialog();return;}
-        if (key_sc == KEY_UP) {
-            if (pick_count)
-                pick_selected = od_next_enabled(pick_selected, -1);
-            dirty = 1;
-        } else if (key_sc == KEY_DOWN) {
-            if (pick_count)
-                pick_selected = od_next_enabled(pick_selected, 1);
-            dirty = 1;
-        } else if (key_sc == KEY_ENTER) {
-            od_open_selected();
-        } else if (key_sc == KEY_ESC) {
-            close_open_dialog();
-        }
+        open_dlg_key();
         return;
     }
 
     int fk = front_kind();
     if (fk == WK_NONE) {
         if (key_sc==KEY_TAB || key_sc==KEY_RIGHT || key_sc==KEY_DOWN)
-            icon_sel=(icon_sel+1)%ICON_DESK_COUNT;
-        else if(key_sc==KEY_LEFT || key_sc==KEY_UP)icon_sel=(icon_sel+ICON_DESK_COUNT-1)%ICON_DESK_COUNT;
-        else if(key_sc==KEY_ENTER && icon_sel>=0)icon_open(icon_sel);
+            icon_sel=(icon_sel+1)%DESK_COUNT;
+        else if(key_sc==KEY_LEFT || key_sc==KEY_UP)icon_sel=(icon_sel+DESK_COUNT-1)%DESK_COUNT;
+        else if(key_sc==KEY_ENTER && icon_sel>=0)desk_open(icon_sel);
         dirty=1;return;
     }
 
@@ -6839,13 +10003,20 @@ static void handle_key(void) {
             return;
         }
         int vis = fm_vis_count();
-        if (key_sc == KEY_UP) {
-            if (vis)
-                fm_selected = fm_selected<0?vis-1:(fm_selected - 1 + vis) % vis;
-            dirty = 1;
-        } else if (key_sc == KEY_DOWN) {
-            if (vis)
-                fm_selected = fm_selected<0?0:(fm_selected + 1) % vis;
+        if (key_sc == 0x3c) { act_run(ACT_RENAME); return; }
+        if (key_sc == 0x53) { act_run(ACT_TRASH); return; }
+        if (key_sc == 0x3f) { act_run(ACT_REFRESH); return; }
+        /* Arrows move through rows, or across and down the icon grid. */
+        int step = key_sc == KEY_UP || key_sc == KEY_DOWN ? (fm_details ? 1 : files_cols(wins[context_slot].w)) :
+                   !fm_details && (key_sc == KEY_LEFT || key_sc == KEY_RIGHT) ? 1 : 0;
+        if (step) {
+            int dir = key_sc == KEY_UP || key_sc == KEY_LEFT ? -1 : 1;
+            if (vis) {
+                if (fm_selected < 0) fm_selected = dir < 0 ? vis - 1 : 0;
+                else if (fm_selected + dir * step >= 0 && fm_selected + dir * step < vis) fm_selected += dir * step;
+                else if (step == 1) fm_selected = (fm_selected + dir + vis) % vis;
+            }
+            fm_manual_scroll = 0;
             dirty = 1;
         } else if (key_sc == KEY_ENTER) {
             fm_open_selected();
@@ -6943,19 +10114,23 @@ static void handle_key(void) {
         return;
     }
 
-    if(fk==WK_SETTINGS){
-        if (key_char >= '1' && key_char <= '4') { display_request(key_char-'1'); return; }
-        if(key_sc==KEY_TAB||key_sc==KEY_RIGHT||key_sc==KEY_DOWN)theme_set((theme_id+(shift_down?THEME_N-1:1))%THEME_N);
-        else if(key_sc==KEY_LEFT||key_sc==KEY_UP)theme_set((theme_id+THEME_N-1)%THEME_N);
-        else if(key_sc==KEY_SPACE){saver_enabled=!saver_enabled;saver_save();dirty=1;}
-        else if(key_char=='r'||key_char=='R')preferences_retry();
-        else if(key_sc==KEY_ESC)close_front();
-        return;
-    }
+    if(fk==WK_SETTINGS){ settings_key(); return; }
+    if(fk==WK_PROPERTIES){ properties_key(); return; }
+    if (fk == WK_ABOUT && (key_sc == KEY_ENTER || key_sc == KEY_ESC)) { close_front(); return; }
     if (fk == WK_CALC) {
-        /* Mouse clicks only; ESC still dismisses the window. */
-        if (key_sc == KEY_ESC)
-            close_front();
+        /* Keys mirror the buttons; Esc still dismisses the window. */
+        if (key_sc == KEY_ESC) { close_front(); return; }
+        char ch = 0;
+        if (key_sc == KEY_ENTER) ch = '=';
+        else if (key_sc == KEY_BACKSPACE) ch = 'B';
+        else if (key_sc == 0x53) ch = 'E';
+        else if (!ctrl_down && !alt_down && key_char) {
+            char k = key_char;
+            if ((k >= '0' && k <= '9') || k == '.' || k == '+' || k == '-' || k == '*' || k == '/' || k == '=') ch = k;
+            else if (k == ',') ch = '.';
+            else if (k == 'c' || k == 'C') ch = 'C';
+        }
+        if (ch) { calc_press(ch); dirty = 1; }
         return;
     }
 
@@ -6973,6 +10148,11 @@ static void handle_key(void) {
     if (fk == WK_WORDLE) {
         if (key_sc == KEY_ESC) {
             close_front();
+            return;
+        }
+        if (key_sc == KEY_ENTER && wordle_over()) {
+            wordle_new_game(frame_count);
+            dirty = 1;
             return;
         }
         int act = WORDLE_ACT_NONE;
@@ -7059,24 +10239,34 @@ static void handle_key(void) {
 }
 
 
-/* ---------- Themes, Kilroy, Settings, splash ---------- */
+/* ---------- Preferences, Settings, logo, boot screen ---------- */
 
 /* Fixed system paths are resolved afresh: cached node IDs can be moved/reused.
  * Only recognized one-byte preferences are replaceable. No pending choice
- * borrows filesystem bytes or changes a leased snapshot. */
-enum { PREF_THEME, PREF_SAVER, PREF_DISPLAY, PREF_COUNT };
+ * borrows filesystem bytes or changes a leased snapshot. Each preference is
+ * one byte, '0' plus its value. */
+enum {
+    PREF_STYLE, PREF_ACCENT, PREF_DESKTOP, PREF_PATTERN, PREF_WINDOWS, PREF_SNAP,
+    PREF_SAVER, PREF_SAVER_DELAY, PREF_DISPLAY, PREF_CLOCK, PREF_MOUSE, PREF_COUNT
+};
 enum { PREF_IDLE, PREF_QUEUED, PREF_RAM, PREF_SAVED, PREF_WRITE_FAILED, PREF_SYNC_FAILED, PREF_PATH_FAILED, PREF_FULL_FAILED };
 enum { PREF_ERR_PATH = -4, PREF_ERR_FULL = -5 };
 typedef struct { char choice; int state, file; unsigned identity; } PendingPreference;
 static PendingPreference preferences[PREF_COUNT];
-static const char *const preference_names[PREF_COUNT] = { "theme", "saver", "display" };
+static const char *const preference_names[PREF_COUNT] = {
+    "style", "accent", "desktop", "pattern", "windows", "snap",
+    "saver", "saverdelay", "display", "clock", "mouse"
+};
+static const int preference_counts[PREF_COUNT] = {
+    UI_STYLE_COUNT, UI_ACCENT_N, UI_DESKTOP_N, UI_PATTERN_N, 16, SNAP_DISTANCE_MAX + 1,
+    2, SAVER_DELAY_N, DISPLAY_MODE_COUNT, 4, 3
+};
 static FsSyncTicket preference_sync_ticket;
 static int preference_sync_active, preference_retry_requested;
 static unsigned preference_retry_after;
 
 static int preference_valid(int which, char value) {
-    int count = which == PREF_THEME ? THEME_N : which == PREF_SAVER ? 2 : DISPLAY_MODE_COUNT;
-    return value >= '0' && value < '0' + count;
+    return value >= '0' && value < '0' + preference_counts[which];
 }
 static int preference_file(int which) {
     int dir = fs_find_child(fs_root(), "prefs");
@@ -7207,218 +10397,810 @@ static const char *preference_message(int which) {
     default: return "";
     }
 }
-static void theme_save(void) {
-    preference_queue(PREF_THEME, (char)('0' + theme_id));
+static void preference_save(int which, int value) {
+    preference_queue(which, (char)('0' + value));
 }
 static void saver_save(void) {
-    preference_queue(PREF_SAVER, saver_enabled ? '1' : '0');
+    preference_save(PREF_SAVER, saver_enabled ? 1 : 0);
 }
 static void saver_load(void) {
     int choice = preference_read(PREF_SAVER);
     if (choice >= 0) saver_enabled = choice;
+    choice = preference_read(PREF_SAVER_DELAY);
+    if (choice >= 0) saver_delay = choice;
 }
+static void windows_save(void) {
+    preference_save(PREF_WINDOWS, win_options & 15);
+}
+/* Appearance, window behavior, clock and mouse preferences. A missing or
+ * unrecognized file keeps the default. */
 static void theme_load(void) {
-    int choice = preference_read(PREF_THEME);
-    theme_id = choice >= 0 ? choice : 0;
+    int v;
+    if ((v = preference_read(PREF_STYLE)) >= 0) ui_style = v;
+    if ((v = preference_read(PREF_ACCENT)) >= 0) ui_accent_id = v;
+    if ((v = preference_read(PREF_DESKTOP)) >= 0) ui_desktop_id = v;
+    if ((v = preference_read(PREF_PATTERN)) >= 0) ui_pattern = v;
+    if ((v = preference_read(PREF_WINDOWS)) >= 0) win_options = v;
+    if ((v = preference_read(PREF_SNAP)) >= 0) win_snap_distance = v;
+    if ((v = preference_read(PREF_CLOCK)) >= 0) clock_flags = v;
+    if ((v = preference_read(PREF_MOUSE)) >= 0) dbl_click_speed = v;
 }
 
-static void theme_set(int id) {
-    if (id < 0 || id >= THEME_N)
-        return;
-    theme_id = id;
+/* Switching style changes metrics, so windows are clamped to the new work
+ * area and the menu row is rebuilt. */
+static void style_set(int style) {
+    if (style < 0 || style >= UI_STYLE_COUNT || style == ui_style) return;
+    ui_style = style;
     theme_apply();
-    theme_save();
+    for (int i = 0; i < MAX_WIN; i++) if (wins[i].open) win_clamp(&wins[i]);
+    icons_init();
+    preference_save(PREF_STYLE, style);
+    dirty = 1;
+}
+static void accent_set(int accent) {
+    if (accent < 0 || accent >= UI_ACCENT_N) return;
+    ui_accent_id = accent;
+    ui_theme_set_accent(accent);
+    preference_save(PREF_ACCENT, accent);
+    dirty = 1;
+}
+static void desktop_color_set(int desktop) {
+    if (desktop < 0 || desktop >= UI_DESKTOP_N) return;
+    ui_desktop_id = desktop;
+    ui_theme_set_desktop(desktop);
+    desk_cache_theme = -1;
+    preference_save(PREF_DESKTOP, desktop);
+    dirty = 1;
+}
+static void pattern_set(int pattern) {
+    if (pattern < 0 || pattern >= UI_PATTERN_N) return;
+    ui_pattern = pattern;
+    desk_cache_theme = -1;
+    preference_save(PREF_PATTERN, pattern);
     dirty = 1;
 }
 
+/* ---------- About ---------- */
+
+static void fmt_cat(char *out, const char *s) { kstrcpy(out + kstrlen(out), s); }
+static void fmt_cat_uint(char *out, unsigned v) { char n[12]; fmt_uint(n, v); fmt_cat(out, n); }
+
+static void about_lines(char lines[4][64]) {
+    SysInfo si;
+    sysinfo_fill(&si);
+    kstrcpy(lines[0], "Version 0.9, build " BASEOS_BUILD_LABEL);
+    lines[1][0] = 0; fmt_cat_uint(lines[1], (unsigned)fb_w); fmt_cat(lines[1], " x ");
+    /* Same wording as System Monitor: the mode's depth, then the desktop's
+     * 256-color palette drawn through it. */
+    fmt_cat_uint(lines[1], (unsigned)fb_h); fmt_cat(lines[1], ", ");
+    fmt_cat_uint(lines[1], (unsigned)fb_bpp); fmt_cat(lines[1], "-bit, 256 colors");
+    lines[2][0] = 0; fmt_cat_uint(lines[2], (unsigned)si.mem_mb); fmt_cat(lines[2], " MB memory");
+    lines[3][0] = 0; fmt_cat_uint(lines[3], (unsigned)(si.fs_bytes / 1024)); fmt_cat(lines[3], " KB used of ");
+    fmt_cat_uint(lines[3], (unsigned)(si.fs_cap / 1024)); fmt_cat(lines[3], " KB");
+}
+
+/* Modern puts OK on a footer band like the other dialogs; Classic keeps it
+ * on the content. */
+static int about_foot_h(void) { return MODERN ? 58 : 0; }
+static void about_ok_rect(int wx, int wy, int ww, int wh, int *bx, int *by, int *bw) {
+    *bw = 88;
+    if (MODERN) {
+        *bx = wx + ww - 16 - *bw;
+        *by = wy + wh - (about_foot_h() + BTN_H) / 2;
+    } else {
+        int pad = ui_theme.pad_dialog + 4;
+        *bx = wx + ww - pad - *bw;
+        *by = wy + wh - pad - BTN_H;
+    }
+}
+
 static void draw_about(int wx, int wy, int ww, int wh, int fl) {
-    gui_draw_window(wx, wy, ww, wh, "About BaseOS", 0, fl | WIN_NOMENU);
-    int ox = wx + (ww - KILROY_ABOUT_W) / 2;
-    int oy = wy + TITLE_BAR + 22;
-    blit_bits_color(ox, oy, KILROY_ABOUT_W, KILROY_ABOUT_H, kilroy_about_bits, ui_text);
-    int y = oy + KILROY_ABOUT_H + 12;
-    draw_string_bold("BaseOS", wx + (ww - uib_string_w("BaseOS")) / 2, y, ui_text);
-    y += CHAR_H + 10;
-    char geometry[80], number[16];
-    kstrcpy(geometry, "Version 0.9  |  "); fmt_uint(number, fb_w);
-    kstrcpy(geometry + kstrlen(geometry), number); kstrcpy(geometry + kstrlen(geometry), "x");
-    fmt_uint(number, fb_h); kstrcpy(geometry + kstrlen(geometry), number);
-    kstrcpy(geometry + kstrlen(geometry), "  |  256 colors");
-    draw_string_in_win(geometry, wx, ww, y, ui_text);
-    y += CHAR_H + 10;
-    draw_string_in_win("Build " BASEOS_BUILD_LABEL, wx, ww, y, ui_text_dim);
-    y += CHAR_H + 6;
-    draw_string_in_win("(C) 2026 CCG", wx, ww, y, ui_text_dim);
+    gui_draw_window(wx, wy, ww, wh, "About BaseOS", 0, fl | WIN_NOMENU | WIN_DIALOG);
+    int top = wy + TITLE_BAR, pad = ui_theme.pad_dialog + 4;
+    ui_icon_draw(UI_ICON_LOGO, wx + pad, top + pad, 48, TK_ACCENT, ui_theme.content);
+    int tx = wx + pad + 48 + 16, ty = top + pad + 2;
+    draw_string_bold("BaseOS", tx, ty, TK_TEXT);
+    char lines[4][64];
+    about_lines(lines);
+    for (int i = 0; i < 4; i++)
+        kit_text(lines[i], tx, ty + 24 + i * 20, TK_TEXT2, wx + ww - pad - tx, 0);
+    kit_text("(C) 2026 CCG", tx, ty + 24 + 4 * 20 + 8, TK_TEXT2, wx + ww - pad - tx, 0);
+    if (MODERN) dlg_footer(wx, ww, wy + wh - about_foot_h(), about_foot_h());
+    int bx, by, bw;
+    about_ok_rect(wx, wy, ww, wh, &bx, &by, &bw);
+    draw_default_button(bx, by, bw, BTN_H, "OK");
+}
+static void handle_about_click(int wx, int wy, int ww, int wh) {
+    int bx, by, bw;
+    about_ok_rect(wx, wy, ww, wh, &bx, &by, &bw);
+    if (hit(mouse_x, mouse_y, bx, by, bw, BTN_H)) close_front();
 }
 
-#define SW_W   96
-#define SW_H   60
-#define SW_GAP 16
+/* ---------- Settings ----------
+ * A sidebar of pages and a form on the right. Drawing records the hit
+ * zones, so clicks use exactly the geometry that was drawn. */
 
-/* Swatch thumbnails are decoded once, the first time Settings is drawn. */
-static uint8_t wall_thumb[WALLPAPER_N][SW_W * SW_H];
-static int wall_thumb_ready = 0;
-static void wallpaper_thumbs(void) {
-    if (wall_thumb_ready) return;
-    wall_thumb_ready = 1;
-    for (int i = 0; i < WALLPAPER_N; i++)
-        if (!wallpaper_paint(&wallpapers[i], wall_thumb[i], SW_W, SW_H))
-            kmemset(wall_thumb[i], INK(8), SW_W * SW_H);
+enum { SET_APPEARANCE, SET_DESKTOP, SET_DISPLAY, SET_INPUT, SET_TIME, SET_ABOUT, SET_PAGES };
+static const char *const settings_pages[SET_PAGES] = {
+    "Appearance", "Desktop", "Display", "Keyboard and Mouse", "Date and Time", "About"
+};
+static const int settings_page_icon[SET_PAGES] = {
+    UI_ICON_A_PAL, UI_ICON_DESK, UI_ICON_SCREEN, UI_ICON_KB, UI_ICON_CLOCK, UI_ICON_INFO
+};
+static int settings_page;
+
+enum {
+    SZ_PAGE = 1, SZ_STYLE, SZ_ACCENT, SZ_DESKTOP, SZ_PATTERN, SZ_WINOPT, SZ_SNAP,
+    SZ_SAVER, SZ_SAVER_DELAY, SZ_SAVER_PREVIEW, SZ_DISPLAY, SZ_CLOCK, SZ_MOUSE, SZ_RETRY, SZ_SCROLL
+};
+typedef struct { int x, y, w, h, kind, arg; } SetZone;
+static SetZone set_zones[64];
+static int set_zone_n, set_slider_drag;   /* 1 the snap slider, 2 the scroll thumb */
+static int set_snap_x, set_snap_w;
+
+/* The page scrolls inside the view [set_view_t, set_view_b). Zones drawn
+ * while the page is clipped are cut to the view, so a control scrolled out
+ * of sight takes no clicks. A key that changes a control asks for it to be
+ * revealed: the next draw scrolls until its zone is inside the view. */
+static int settings_scroll, settings_scroll_max, settings_view_h;
+static int set_view_on, set_view_t, set_view_b;
+static int set_reveal_kind, set_reveal_arg, set_reveal_y, set_reveal_h;
+static int set_sb_x, set_sb_y, set_sb_h, set_sb_total, set_scroll_grab;
+#define SET_NO_REVEAL (-0x40000000)
+/* Hover reads the zones of the previous draw, since a control asks for its
+ * hover state before it records its zone. */
+static SetZone set_prev_zones[64];
+static int set_prev_n;
+
+static void set_zone(int x, int y, int w, int h, int kind, int arg) {
+    if (set_view_on) {
+        if (kind == set_reveal_kind && arg == set_reveal_arg) { set_reveal_y = y; set_reveal_h = h; }
+        if (y < set_view_t) { h -= set_view_t - y; y = set_view_t; }
+        if (y + h > set_view_b) h = set_view_b - y;
+        if (h <= 0) return;
+    }
+    if (set_zone_n < (int)(sizeof set_zones / sizeof set_zones[0]))
+        set_zones[set_zone_n++] = (SetZone){x, y, w, h, kind, arg};
 }
-static void settings_swatch_pos(int wx, int wy, int i, int *sx, int *sy) {
-    int ox = wx + 24;
-    int oy = wy + TITLE_H + 48;
-    int col = i % 4;
-    int row = i / 4;
-    *sx = ox + col * (SW_W + SW_GAP);
-    *sy = oy + row * (SW_H + 44);
+static const SetZone *set_zone_at(int px, int py) {
+    for (int i = set_zone_n - 1; i >= 0; i--)
+        if (hit(px, py, set_zones[i].x, set_zones[i].y, set_zones[i].w, set_zones[i].h)) return &set_zones[i];
+    return 0;
+}
+static int set_hover(int kind, int arg) {
+    for (int i = set_prev_n - 1; i >= 0; i--) {
+        const SetZone *z = &set_prev_zones[i];
+        if (hit(mouse_x, mouse_y, z->x, z->y, z->w, z->h)) return z->kind == kind && z->arg == arg;
+    }
+    return 0;
 }
 
-/* Wallpaper rows, then Display resolution, then the screen saver option. */
-static int settings_display_y(int wy) {
-    int rows = (THEME_N + 3) / 4;
-    return wy + TITLE_H + 48 + rows * (SW_H + 44) + 16;
+static int settings_side_w(void) { return MODERN ? 200 : 192; }
+static int settings_window_h(void) { return MODERN ? 588 : 580; }
+
+/* Form layout: a label column and a control column. Classic rows sit on
+ * the content with a rule between sections; Modern groups rows in cards. */
+typedef struct { int x, y, w, card_y, rows; } SetForm;
+static int set_label_w(void) { return MODERN ? 150 : 152; }
+
+/* Word-wrapped help text. Draws when draw is set and returns the number of
+ * lines; a word wider than w is cut by kit_text. */
+#define SET_LINE_H 16
+static int set_wrap(const char *text, int x, int y, int w, uint8_t color, int draw) {
+    int lines = 0;
+    while (*text) {
+        char line[160];
+        int n = 0, fit = 0;
+        while (text[n] && n < (int)sizeof line - 1) {
+            line[n] = text[n];
+            line[n + 1] = 0;
+            if (n && ui_string_w(line) > w) break;
+            n++;
+            if (!text[n] || text[n] == ' ') fit = n;
+        }
+        if (!text[n]) fit = n;
+        if (!fit) fit = n;
+        kmemcpy(line, text, fit);
+        line[fit] = 0;
+        if (draw) kit_text(line, x, y + lines * SET_LINE_H, color, w, 0);
+        lines++;
+        text += fit;
+        while (*text == ' ') text++;
+    }
+    return lines;
 }
-static int settings_window_h(void) { return settings_display_y(0) + 150; }
-static void settings_saver_box(int wx, int wy, int wh, int *x, int *y) {
-    *x = wx + 24;
-    *y = wy + wh - 44;
+
+static void set_heading(SetForm *f, const char *title, const char *sub) {
+    draw_string_bold(title, f->x, f->y, TK_TEXT);
+    f->y += 20;
+    if (sub) { draw_string(sub, f->x, f->y, TK_TEXT2); f->y += 20; }
+    f->y += MODERN ? 8 : 10;
+}
+static void set_rule(SetForm *f) {
+    if (MODERN) { f->y += 16; return; }
+    draw_hline(f->x, f->y + 10, f->w, TK_LINE_SUBTLE);
+    f->y += 24;
+}
+static void set_card_begin(SetForm *f) {
+    f->card_y = f->y;
+    f->rows = 0;
+}
+/* Starts a row of height h (Classic) or at least 48 (Modern). Draws the
+ * label and returns the y of the row; *cx gets the control column x. */
+static int set_row(SetForm *f, const char *label, int h, int *cx) {
+    int y;
+    if (MODERN) {
+        int rh = h + 16 < 48 ? 48 : h + 16;
+        if (f->rows) draw_hline(f->x + 1, f->y, f->w - 2, TK_45);
+        y = f->y + (rh - h) / 2;
+        if (label) kit_text(label, f->x + 16, kit_ty(f->y, rh), TK_TEXT, set_label_w(), 0);
+        *cx = f->x + 16 + set_label_w() + 16;
+        f->y += rh;
+    } else {
+        y = f->y;
+        if (label) kit_text(label, f->x, kit_ty(y, h), TK_TEXT2, set_label_w(), 0);
+        *cx = f->x + set_label_w() + 16;
+        f->y += h + 14;
+    }
+    f->rows++;
+    return y;
+}
+static void set_card_end(SetForm *f) {
+    if (!MODERN) { f->y -= 14; return; }
+    kit_frame(f->x, f->card_y, f->w, f->y - f->card_y, 10, TK_LINE_SUBTLE);
+}
+
+static uint8_t pal_of(uint32_t rgb) { return gfx_rgb((int)(rgb >> 16) & 255, (int)(rgb >> 8) & 255, (int)rgb & 255); }
+
+static void set_swatches(int x, int y, int n, int sel, int kind, int accent) {
+    for (int i = 0; i < n; i++) {
+        uint8_t c = pal_of(accent ? ui_accent_rgb(ui_style, i) : ui_desktop_rgb(ui_style, i));
+        if (MODERN) {
+            int sx = x + i * 32, sy = y + 2;
+            if (i == sel) { kit_fill(sx - 4, sy - 4, 30, 30, 15, TK_ACCENT, 1); kit_fill(sx - 2, sy - 2, 26, 26, 13, ui_theme.content, 1); }
+            kit_fill(sx, sy, 22, 22, 11, c, 1);
+            set_zone(sx - 4, sy - 4, 30, 30, kind, i);
+        } else {
+            int sx = x + i * 36;
+            if (i == sel) { draw_frame(sx, y, 26, 26, TK_TEXT); draw_frame(sx + 1, y + 1, 24, 24, TK_TEXT); }
+            draw_rect(sx + 3, y + 3, 20, 20, c);
+            draw_frame(sx + 3, y + 3, 20, 20, TK_LINE_STRONG);
+            set_zone(sx, y, 26, 26, kind, i);
+        }
+    }
+}
+static void set_value_label(SetForm *f, int y, int h, const char *text, int pill, int after_x) {
+    if (MODERN) {
+        int right = f->x + f->w - 16;
+        if (pill) {
+            int pw = kit_text_w(text, 1) + 18;
+            kit_fill(right - pw, y + (h - 22) / 2, pw, 22, 11, TK_ACCENT_100, 1);
+            kit_text(text, right - pw + 9, kit_ty(y + (h - 22) / 2, 22), TK_ACCENT_700, pw, 1);
+        } else kit_text_right(text, right, kit_ty(y, h), TK_TEXT2, 0);
+    } else kit_text(text, after_x, kit_ty(y, h), TK_TEXT, 200, 0);
+}
+static void set_segmented(int x, int y, const char *const *labels, int n, int sel, int kind) {
+    int xs[8], ws[8], hover = -1;
+    for (int i = 0; i < n; i++) if (set_hover(kind, i)) hover = i;
+    kit_segmented(x, y, labels, n, sel, hover, xs, ws);
+    for (int i = 0; i < n; i++) set_zone(xs[i], y, ws[i], kit_segmented_h(), kind, i);
+}
+/* A check (Classic) or a toggle at the right of the row (Modern). */
+static void set_switch(SetForm *f, const char *label, const char *hint, int on, int kind, int arg) {
+    int hint_x = MODERN ? f->x + 16 : f->x + set_label_w() + 16 + ui_theme.check + 8;
+    int hint_w = MODERN ? f->w - 80 : f->x + f->w - hint_x;
+    int lines = hint ? set_wrap(hint, hint_x, 0, hint_w, TK_TEXT2, 0) : 0;
+    int cx, h = hint ? 22 + lines * SET_LINE_H + 2 : (MODERN ? 20 : 24);
+    int y = set_row(f, 0, h, &cx);
+    if (MODERN) {
+        int lx = f->x + 16;
+        kit_text(label, lx, hint ? y + 2 : kit_ty(y, h), TK_TEXT, f->w - 80, 0);
+        if (hint) set_wrap(hint, lx, y + 22, hint_w, TK_TEXT2, 1);
+        int tx = f->x + f->w - 16 - KIT_TOGGLE_W, ty = y + (h - KIT_TOGGLE_H) / 2;
+        kit_toggle(tx, ty, (on ? KIT_ON : 0) | (set_hover(kind, arg) ? KIT_HOVER : 0));
+        set_zone(f->x, y - 8, f->w, h + 16, kind, arg);
+    } else {
+        int w = kit_check_row(cx, y, label, (on ? KIT_ON : 0) | (set_hover(kind, arg) ? KIT_HOVER : 0), 0);
+        if (hint) set_wrap(hint, hint_x, y + 24, hint_w, TK_TEXT2, 1);
+        set_zone(cx, y, w, 24, kind, arg);
+    }
+}
+/* Classic draws the row label in the label column next to the check. */
+static void set_switch_labeled(SetForm *f, const char *row_label, const char *label, const char *hint,
+                               int on, int kind, int arg) {
+    if (!MODERN) {
+        int save = f->y;
+        kit_text(row_label, f->x, kit_ty(save, 24), TK_TEXT2, set_label_w(), 0);
+    }
+    set_switch(f, label, hint, on, kind, arg);
+}
+
+static const int snap_distance_max = SNAP_DISTANCE_MAX;
+static void set_slider_row(SetForm *f, const char *label, int value, int max, const char *unit, int kind) {
+    int cx, y = set_row(f, 0, 18, &cx);
+    int lx = MODERN ? f->x + 32 : cx;
+    kit_text(label, lx, kit_ty(y, 18), TK_TEXT2, 140, 0);
+    int sx = MODERN ? f->x + 16 + set_label_w() + 16 + 32 : cx + 100;
+    int right = f->x + f->w - (MODERN ? 16 : 0);
+    int sw = right - 60 - sx;
+    if (sw > 240) sw = 240;
+    kit_slider(sx, y, sw, value, max, set_slider_drag == 1 ? KIT_PRESSED : 0);
+    char v[16];
+    fmt_uint(v, (unsigned)value);
+    kstrcpy(v + kstrlen(v), unit);
+    if (MODERN) kit_text_right(v, right, kit_ty(y, 18), TK_TEXT, 0);
+    else kit_text(v, sx + sw + 12, kit_ty(y, 18), TK_TEXT, 60, 0);
+    set_snap_x = sx;
+    set_snap_w = sw;
+    set_zone(sx - 4, y - 4, sw + 8, 26, kind, 0);
+}
+
+static const char *const pattern_names[UI_PATTERN_N] = {"None", "Dots", "Grid"};
+static const char *const style_names[UI_STYLE_COUNT] = {"Classic", "Modern"};
+
+static void settings_appearance(SetForm *f) {
+    int cx, y;
+    set_heading(f, "Appearance", "Changes apply right away.");
+    if (!MODERN) set_rule(f), f->y -= 10;
+    set_card_begin(f);
+    y = set_row(f, "Style", kit_segmented_h(), &cx);
+    set_segmented(cx, y, style_names, UI_STYLE_COUNT, ui_style, SZ_STYLE);
+    y = set_row(f, "Accent color", MODERN ? 30 : 26, &cx);
+    set_swatches(cx, y, UI_ACCENT_N, ui_accent_id, SZ_ACCENT, 1);
+    set_value_label(f, y, MODERN ? 30 : 26, ui_accent_name(ui_style, ui_accent_id), 1, cx + UI_ACCENT_N * 36 + 2);
+    y = set_row(f, "Desktop color", MODERN ? 30 : 26, &cx);
+    set_swatches(cx, y, UI_DESKTOP_N, ui_desktop_id, SZ_DESKTOP, 0);
+    set_value_label(f, y, MODERN ? 30 : 26, ui_desktop_name(ui_style, ui_desktop_id), 0, cx + UI_DESKTOP_N * 36 + 2);
+    y = set_row(f, "Desktop pattern", kit_segmented_h(), &cx);
+    set_segmented(cx, y, pattern_names, UI_PATTERN_N, ui_pattern, SZ_PATTERN);
+    set_card_end(f);
+    set_rule(f);
+    draw_string_bold("Windows", f->x, f->y, TK_TEXT);
+    f->y += MODERN ? 24 : 32;
+    set_card_begin(f);
+    if (MODERN) {
+        set_switch(f, "Show window contents while dragging",
+                   "When off, BaseOS draws an outline instead. Faster on slow machines.",
+                   win_options & WINOPT_DRAG_CONTENTS, SZ_WINOPT, WINOPT_DRAG_CONTENTS);
+        set_switch(f, "Double-click a title bar to maximize", 0, win_options & WINOPT_DOUBLE_CLICK, SZ_WINOPT, WINOPT_DOUBLE_CLICK);
+        set_switch(f, "Snap windows to screen edges", 0, win_options & WINOPT_SNAP, SZ_WINOPT, WINOPT_SNAP);
+    } else {
+        set_switch_labeled(f, "While dragging", "Show window contents",
+                           "When off, BaseOS draws a 1px outline instead. Faster on slow machines.",
+                           win_options & WINOPT_DRAG_CONTENTS, SZ_WINOPT, WINOPT_DRAG_CONTENTS);
+        set_switch_labeled(f, "Title bars", "Double-click to maximize", 0, win_options & WINOPT_DOUBLE_CLICK, SZ_WINOPT, WINOPT_DOUBLE_CLICK);
+        set_switch_labeled(f, "Screen edges", "Snap windows to edges", 0, win_options & WINOPT_SNAP, SZ_WINOPT, WINOPT_SNAP);
+    }
+    set_slider_row(f, "Snap distance", win_snap_distance, snap_distance_max, " px", SZ_SNAP);
+    set_card_end(f);
+}
+
+static const char *const saver_delay_names[SAVER_DELAY_N] = {"90 s", "3 min", "5 min", "10 min", "30 min"};
+
+static void settings_desktop(SetForm *f) {
+    int cx, y;
+    set_heading(f, "Desktop", "The screen saver starts when the computer sits idle.");
+    if (!MODERN) set_rule(f), f->y -= 10;
+    set_card_begin(f);
+    if (MODERN) set_switch(f, "Screen saver", 0, saver_enabled, SZ_SAVER, 0);
+    else set_switch_labeled(f, "Screen saver", "Start the screen saver when idle", 0, saver_enabled, SZ_SAVER, 0);
+    y = set_row(f, "Start after", kit_segmented_h(), &cx);
+    set_segmented(cx, y, saver_delay_names, SAVER_DELAY_N, saver_delay, SZ_SAVER_DELAY);
+    y = set_row(f, "Preview", BTN_H, &cx);
+    {
+        int bw = kit_button_w("Preview", -1);
+        kit_button(cx, y, bw, BTN_H, "Preview", -1, KB_DEFAULT, set_hover(SZ_SAVER_PREVIEW, 0) ? KIT_HOVER : 0);
+        set_zone(cx, y, bw, BTN_H, SZ_SAVER_PREVIEW, 0);
+    }
+    set_card_end(f);
+    set_rule(f);
+    draw_string_bold("Desktop icons", f->x, f->y, TK_TEXT);
+    f->y += MODERN ? 24 : 28;
+    draw_string("System opens the volume's properties. Home and Trash open in Files.", f->x, f->y, TK_TEXT2);
+    f->y += 20;
+}
+
+static void settings_display(SetForm *f) {
+    int cx, y;
+    set_heading(f, "Display", "A new resolution waits 15 seconds for you to keep it.");
+    if (!MODERN) set_rule(f), f->y -= 10;
+    set_card_begin(f);
+    for (int i = 0; i < DISPLAY_MODE_COUNT; ++i) {
+        y = set_row(f, i == 0 ? "Resolution" : 0, ui_theme.row_h, &cx);
+        int on = display_current_mode() == i;
+        int w = kit_check_row(cx, y, display_mode(i)->name, (on ? KIT_ON : 0) | (set_hover(SZ_DISPLAY, i) ? KIT_HOVER : 0), 1);
+        set_zone(cx, y, w, ui_theme.row_h, SZ_DISPLAY, i);
+        if (!MODERN) f->y -= 8;
+    }
+    if (!MODERN) f->y += 8;
+    y = set_row(f, "Colors", 20, &cx);
+    char depth[32];
+    depth[0] = 0; fmt_cat_uint(depth, (unsigned)fb_bpp); fmt_cat(depth, "-bit, 256 colors");
+    kit_text(depth, cx, kit_ty(y, 20), TK_TEXT, 240, 0);
+    set_card_end(f);
+    f->y += 12;
+    kit_text(display_message[0] ? display_message :
+             preferences[PREF_DISPLAY].state ? preference_message(PREF_DISPLAY) :
+             "Keys 1-4 select a mode. Enter keeps it; Escape reverts.",
+             f->x, f->y, TK_TEXT2, f->w, 0);
+    f->y += 20;
+}
+
+static const char *const mouse_speed_names[3] = {"Slow", "Normal", "Fast"};
+/* Each row: the keys (a second key, when set, is an alternative) and what
+ * they do. */
+static const char *const shortcut_keys[][3] = {
+    {"Super", "Apps", "Ctrl+Space"}, {"Alt+Tab", "Switch windows"},
+    {"Alt+F4", "Close window"}, {"Super+Arrow", "Snap or maximize"}, {"Super+D", "Show desktop"},
+    {"Alt or F10", "Menu row"}, {"Alt+Space", "Window menu"},
+};
+
+static void settings_input(SetForm *f) {
+    int cx, y;
+    set_heading(f, "Keyboard and Mouse", "These shortcuts work in every app.");
+    if (!MODERN) set_rule(f), f->y -= 10;
+    set_card_begin(f);
+    y = set_row(f, "Double-click speed", kit_segmented_h(), &cx);
+    set_segmented(cx, y, mouse_speed_names, 3, dbl_click_speed, SZ_MOUSE);
+    set_card_end(f);
+    set_rule(f);
+    draw_string_bold("Shortcuts", f->x, f->y, TK_TEXT);
+    f->y += MODERN ? 24 : 28;
+    set_card_begin(f);
+    int n = (int)(sizeof shortcut_keys / sizeof shortcut_keys[0]);
+    for (int i = 0; i < n; i++) {
+        y = set_row(f, shortcut_keys[i][1], 22, &cx);
+        kit_kbd(cx, y, shortcut_keys[i][0]);
+        if (shortcut_keys[i][2]) {
+            int ox = cx + kit_kbd_w(shortcut_keys[i][0]) + 8;
+            kit_text("or", ox, kit_ty(y, MODERN ? 20 : 19), TK_TEXT2, 40, 0);
+            kit_kbd(ox + kit_text_w("or", 0) + 8, y, shortcut_keys[i][2]);
+        }
+        if (!MODERN) f->y -= 6;
+    }
+    if (!MODERN) f->y += 6;
+    set_card_end(f);
+}
+
+static void settings_time(SetForm *f) {
+    int cx, y;
+    set_heading(f, "Date and Time", "The clock reads the computer's real-time clock.");
+    if (!MODERN) set_rule(f), f->y -= 10;
+    char d[24], t[12];
+    date_time_text(d, t);
+    draw_logo_string(t, f->x, f->y, TK_TEXT);
+    f->y += LOGO_FONT_H + 4;
+    {
+        RtcTime now;
+        rtc_read(&now);
+        char longdate[48], n[8];
+        kstrcpy(longdate, rtc_day_name[now.wday]);
+        kstrcpy(longdate + kstrlen(longdate), ", ");
+        fmt_uint(n, (unsigned)now.day);
+        kstrcpy(longdate + kstrlen(longdate), n);
+        kstrcpy(longdate + kstrlen(longdate), " ");
+        kstrcpy(longdate + kstrlen(longdate), rtc_month_name[now.month - 1]);
+        kstrcpy(longdate + kstrlen(longdate), " ");
+        fmt_uint(n, (unsigned)now.year);
+        kstrcpy(longdate + kstrlen(longdate), n);
+        draw_string(longdate, f->x, f->y, TK_TEXT2);
+    }
+    f->y += 32;
+    set_card_begin(f);
+    if (MODERN) {
+        set_switch(f, "Use 24-hour time", 0, !(clock_flags & CLOCK_12H), SZ_CLOCK, CLOCK_12H);
+        set_switch(f, "Show the date in the taskbar", 0, !(clock_flags & CLOCK_NO_DATE), SZ_CLOCK, CLOCK_NO_DATE);
+    } else {
+        set_switch_labeled(f, "Time format", "Use 24-hour time", 0, !(clock_flags & CLOCK_12H), SZ_CLOCK, CLOCK_12H);
+        set_switch_labeled(f, "Taskbar", "Show the date", 0, !(clock_flags & CLOCK_NO_DATE), SZ_CLOCK, CLOCK_NO_DATE);
+    }
+    set_card_end(f);
+    (void)y; (void)cx;
+}
+
+static void settings_about(SetForm *f) {
+    ui_icon_draw(UI_ICON_LOGO, f->x, f->y, 48, TK_ACCENT, ui_theme.content);
+    draw_logo_string("BaseOS", f->x + 64, f->y + 6, TK_TEXT);
+    f->y += 64;
+    char lines[4][64];
+    about_lines(lines);
+    for (int i = 0; i < 4; i++) { kit_text(lines[i], f->x, f->y, TK_TEXT, f->w, 0); f->y += 20; }
+    f->y += 8;
+    kit_text("(C) 2026 CCG", f->x, f->y, TK_TEXT2, f->w, 0);
+    f->y += 20;
+}
+
+/* The worst preference state of the page's preferences, for the footer. */
+static int settings_failed_pref(void) {
+    for (int i = 0; i < PREF_COUNT; ++i) {
+        int s = preferences[i].state;
+        if (s == PREF_WRITE_FAILED || s == PREF_SYNC_FAILED || s == PREF_PATH_FAILED || s == PREF_FULL_FAILED) return i;
+    }
+    return -1;
 }
 
 static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
-    gui_draw_window(wx, wy, ww, wh, "Settings", 0, fl);
-    {
-        int bx, by;
-        settings_saver_box(wx, wy, wh, &bx, &by);
-        draw_hline(wx + 24, by - 14, ww - 48, ui_chrome_dk);
-        draw_round_rect(bx, by, 18, 18, 4, saver_enabled ? ui_accent : INK(12));
-        if (saver_enabled) {
-            draw_line(bx + 4, by + 9, bx + 8, by + 13, ui_on_accent);
-            draw_line(bx + 5, by + 9, bx + 9, by + 13, ui_on_accent);
-            draw_line(bx + 8, by + 13, bx + 14, by + 5, ui_on_accent);
-            draw_line(bx + 9, by + 13, bx + 15, by + 5, ui_on_accent);
-        } else {
-            draw_round_rect(bx + 1, by + 1, 16, 16, 3, ui_field);
-        }
-        draw_string("Start the screen saver after 90 seconds idle", bx + 28, by, ui_text);
-        draw_string_clip(preference_message(PREF_SAVER), bx + 28, by + 21, ui_text_dim, wx + ww - 20);
+    gui_draw_window(wx, wy, ww, wh, settings_pages[settings_page], 0, fl);
+    kmemcpy(set_prev_zones, set_zones, sizeof set_zones);
+    set_prev_n = set_zone_n;
+    set_zone_n = 0;
+    int top = wy + TITLE_H, side = settings_side_w(), bottom = wy + wh - 1;
+    /* Sidebar */
+    draw_rect(wx + 1, top, side, bottom - top, MODERN ? ui_theme.sidebar : TK_BASE);
+    draw_vline(wx + 1 + side, top, bottom - top, MODERN ? TK_LINE_SUBTLE : TK_LINE_SUBTLE);
+    int iy = top + (MODERN ? 10 : 8), ih = MODERN ? 32 : 24, im = MODERN ? 8 : 4;
+    for (int i = 0; i < SET_PAGES; i++) {
+        int x = wx + 1 + im, w = side - 2 * im, on = i == settings_page;
+        int hov = !on && set_hover(SZ_PAGE, i);
+        if (on) kit_fill(x, iy, w, ih, MODERN ? 6 : KIT_R_SQUARE, TK_ACCENT, 1);
+        else if (hov) kit_fill(x, iy, w, ih, MODERN ? 6 : KIT_R_SQUARE, TK_HOVER, 1);
+        uint8_t ink = on ? TK_ON_ACCENT : TK_TEXT, bg = on ? TK_ACCENT : hov ? TK_HOVER : (MODERN ? ui_theme.sidebar : TK_BASE);
+        int pad = MODERN ? 10 : 8;
+        ui_icon_draw(settings_page_icon[i], x + pad, iy + (ih - 16) / 2, 16, ink, bg);
+        kit_text(settings_pages[i], x + pad + 16 + (MODERN ? 10 : 8), kit_ty(iy, ih), ink, w - 40, on);
+        set_zone(x, iy, w, ih, SZ_PAGE, i);
+        iy += ih + (MODERN ? 2 : 0);
     }
-    int ry = settings_display_y(wy);
-    draw_string_bold("Display resolution", wx + 24, ry, ui_text);
-    for (int i = 0; i < DISPLAY_MODE_COUNT; ++i)
-        draw_button_styled(wx + 24 + i * 127, ry + 26, 119, 30,
-                           display_mode(i)->name, display_current_mode() == i);
-    draw_string_clip(display_message[0] ? display_message :
-                     preferences[PREF_DISPLAY].state ? preference_message(PREF_DISPLAY) :
-                     "Keys 1-4 select a mode. Enter keeps it; Escape reverts.",
-                     wx + 24, ry + 66, ui_text_dim, wx + ww - 20);
-    draw_string_bold("Appearance", wx + 24, wy + TITLE_H + 16, ui_text);
-    tool_button(wx + ww - 156, wy + TITLE_H + 8, 132, 28, ICON_REFRESH, "Retry saving", TB_NORMAL);
-    draw_string_clip(preference_message(PREF_THEME), wx + 24, settings_display_y(wy) - 30, ui_text_dim, wx + ww - 20);
-    draw_hline(wx + 24, wy + TITLE_H + 38, ww - 48, ui_chrome_dk);
-    wallpaper_thumbs();
-    for (int i = 0; i < THEME_N; i++) {
-        int sx, sy;
-        settings_swatch_pos(wx, wy, i, &sx, &sy);
-        const Theme *t = &themes[i];
-        int cur = (i == theme_id);
-        if (cur)
-            draw_round_rect(sx - 3, sy - 3, SW_W + 6, SW_H + 6, 9, ui_accent);
-        draw_round_rect(sx - 1, sy - 1, SW_W + 2, SW_H + 2, 7, cur ? INK(0) : INK(12));
-        /* Miniature of the wallpaper, with the theme's accent. */
-        for (int row = 0; row < SW_H; row++) {
-            int inset = row < 4 ? 4 - row : row > SW_H - 5 ? row - (SW_H - 5) : 0;
-            for (int col = inset; col < SW_W - inset; col++)
-                put_pixel(sx + col, sy + row, wall_thumb[t->wallpaper][row * SW_W + col]);
+    /* Page: drawn clipped to the view at the scroll offset. The page's
+     * height is known only after drawing it, so a scroll that lands out of
+     * range, or a reveal request, draws the page a second time. */
+    int cx = wx + 1 + side + 1, pad = MODERN ? 20 : 24, top_pad = MODERN ? 20 : 28;
+    int page_r = wx + ww - 1, failed = settings_failed_pref();
+    int view_b = failed >= 0 ? bottom - 16 - BTN_H - 12 : bottom;
+    int view_h = view_b - top, zones = set_zone_n, total = 0;
+    SetForm f = {0};
+    if (view_h < 1) view_h = 1;
+    settings_view_h = view_h;
+    for (int pass = 0; pass < 2; pass++) {
+        set_zone_n = zones;
+        draw_rect(cx, top, page_r - cx, view_h, ui_theme.content);
+        f = (SetForm){cx + pad, top + top_pad - settings_scroll, page_r - (MODERN ? 0 : SB) - cx - 2 * pad, 0, 0};
+        set_view_on = 1;
+        set_view_t = top;
+        set_view_b = view_b;
+        set_reveal_y = SET_NO_REVEAL;
+        gfx_clip(cx, top, page_r - (MODERN ? 0 : SB) - cx, view_h);
+        switch (settings_page) {
+        case SET_APPEARANCE: settings_appearance(&f); break;
+        case SET_DESKTOP: settings_desktop(&f); break;
+        case SET_DISPLAY: settings_display(&f); break;
+        case SET_INPUT: settings_input(&f); break;
+        case SET_TIME: settings_time(&f); break;
+        default: settings_about(&f); break;
         }
-        draw_round_rect(sx + SW_W - 24, sy + SW_H - 22, 10, 10, 5, idx24(t->accent));
-        int nw = ui_string_w(t->name);
-        int nx = sx + (SW_W - nw) / 2;
-        draw_string(t->name, nx, sy + SW_H + 12, cur ? ui_accent_dk : ui_text);
+        gfx_unclip();
+        set_view_on = 0;
+        total = f.y + settings_scroll - top + (MODERN ? 20 : 24);
+        settings_scroll_max = total > view_h ? total - view_h : 0;
+        int want = settings_scroll;
+        if (set_reveal_kind && set_reveal_y != SET_NO_REVEAL) {
+            int ry = set_reveal_y + settings_scroll - top, margin = 12;
+            if (ry - margin < want) want = ry - margin;
+            if (ry + set_reveal_h + margin > want + view_h) want = ry + set_reveal_h + margin - view_h;
+        }
+        set_reveal_kind = 0;
+        if (want > settings_scroll_max) want = settings_scroll_max;
+        if (want < 0) want = 0;
+        if (want == settings_scroll) break;
+        settings_scroll = want;
+    }
+    /* The scrollbar: Classic keeps its track in the reserved column; Modern
+     * overlays a thin thumb at the page's right edge while the page overflows. */
+    set_sb_x = page_r - SB;
+    set_sb_y = top;
+    set_sb_h = view_h;
+    set_sb_total = total;
+    {
+        int sb_state = set_slider_drag == 2 ? KIT_PRESSED : set_hover(SZ_SCROLL, 0) ? KIT_HOVER : 0;
+        if (!MODERN) draw_rect(set_sb_x, top, SB, bottom - top, TK_BASE);
+        kit_vscroll(set_sb_x, top, view_h, settings_scroll, view_h, total, sb_state);
+        if (!MODERN) draw_vline(set_sb_x, top, bottom - top, TK_LINE_SUBTLE);
+        if (total > view_h) set_zone(set_sb_x, top, SB, view_h, SZ_SCROLL, 0);
+    }
+    if (failed >= 0) {
+        int by = bottom - 16 - BTN_H, bw = kit_button_w("Retry saving", -1);
+        draw_rect(cx, view_b, page_r - (MODERN ? 0 : SB) - cx, bottom - view_b, ui_theme.content);
+        draw_hline(cx, view_b, page_r - (MODERN ? 0 : SB) - cx, TK_LINE_SUBTLE);
+        kit_text(preference_message(failed), f.x, kit_ty(by, BTN_H), TK_RED_700, f.w - bw - 12, 0);
+        kit_button(f.x + f.w - bw, by, bw, BTN_H, "Retry saving", -1, KB_DEFAULT, set_hover(SZ_RETRY, 0) ? KIT_HOVER : 0);
+        set_zone(f.x + f.w - bw, by, bw, BTN_H, SZ_RETRY, 0);
     }
 }
+
+/* Scrolls the page by dy pixels, kept inside the range of the last draw. */
+static void settings_scroll_by(int dy) {
+    int v = settings_scroll + dy;
+    if (v > settings_scroll_max) v = settings_scroll_max;
+    if (v < 0) v = 0;
+    if (v != settings_scroll) { settings_scroll = v; dirty = 1; }
+}
+static void settings_page_set(int page) {
+    if (page != settings_page) settings_scroll = 0;
+    settings_page = page;
+}
+/* Scroll thumb geometry, as kit_vscroll draws it. */
+static void settings_thumb(int *at, int *size) {
+    kit_scroll_thumb(set_sb_h - 4, settings_scroll, set_sb_h, set_sb_total, at, size);
+    *at += set_sb_y + 2;
+}
+static void settings_scroll_drag(void) {
+    int at, size, range = set_sb_h - 4;
+    settings_thumb(&at, &size);
+    if (range <= size) return;
+    int y = mouse_y - set_scroll_grab - (set_sb_y + 2);
+    settings_scroll_by(y * settings_scroll_max / (range - size) - settings_scroll);
+}
+
+static void settings_slider_set(void) {
+    if (set_snap_w <= 0) return;
+    int v = (mouse_x - set_snap_x) * snap_distance_max / set_snap_w;
+    if (v < 0) v = 0;
+    if (v > snap_distance_max) v = snap_distance_max;
+    if (v != win_snap_distance) { win_snap_distance = v; dirty = 1; }
+}
+static void settings_drag(void) {
+    if (!set_slider_drag) return;
+    if (set_slider_drag == 2) {
+        if (mouse_left) settings_scroll_drag();
+        else set_slider_drag = 0;
+        dirty = 1;
+        return;
+    }
+    if (!mouse_left) {
+        set_slider_drag = 0;
+        preference_save(PREF_SNAP, win_snap_distance);
+        dirty = 1;
+        return;
+    }
+    settings_slider_set();
+}
+
 static void handle_settings_click(int wx, int wy, int ww, int wh) {
-    if (hit(mouse_x, mouse_y, wx + ww - 156, wy + TITLE_H + 8, 132, 26)) {
-        preferences_retry(); return;
+    (void)wx; (void)wy; (void)ww; (void)wh;
+    const SetZone *z = set_zone_at(mouse_x, mouse_y);
+    if (!z) return;
+    switch (z->kind) {
+    case SZ_PAGE: settings_page_set(z->arg); break;
+    case SZ_SCROLL: {
+        int at, size;
+        settings_thumb(&at, &size);
+        if (mouse_y < at) settings_scroll_by(-settings_view_h * 7 / 8);
+        else if (mouse_y >= at + size) settings_scroll_by(settings_view_h * 7 / 8);
+        else { set_slider_drag = 2; set_scroll_grab = mouse_y - at; }
+        break;
     }
-    for (int i = 0; i < DISPLAY_MODE_COUNT; ++i) {
-        if (hit(mouse_x, mouse_y, wx + 24 + i * 127, settings_display_y(wy) + 26, 119, 30)) {
-            display_request(i); return;
-        }
+    case SZ_STYLE: style_set(z->arg); break;
+    case SZ_ACCENT: accent_set(z->arg); break;
+    case SZ_DESKTOP: desktop_color_set(z->arg); break;
+    case SZ_PATTERN: pattern_set(z->arg); break;
+    case SZ_WINOPT: win_options ^= z->arg; windows_save(); break;
+    case SZ_SNAP: set_slider_drag = 1; settings_slider_set(); break;
+    case SZ_SAVER: saver_enabled = !saver_enabled; saver_save(); break;
+    case SZ_SAVER_DELAY: saver_delay = z->arg; preference_save(PREF_SAVER_DELAY, saver_delay); break;
+    case SZ_SAVER_PREVIEW: saver_start(); break;
+    case SZ_DISPLAY: display_request(z->arg); break;
+    case SZ_CLOCK: clock_flags ^= z->arg; preference_save(PREF_CLOCK, clock_flags); break;
+    case SZ_MOUSE: dbl_click_speed = z->arg; preference_save(PREF_MOUSE, dbl_click_speed); break;
+    case SZ_RETRY: preferences_retry(); break;
+    default: break;
     }
-    {
-        int bx, by;
-        settings_saver_box(wx, wy, wh, &bx, &by);
-        if (hit(mouse_x, mouse_y, bx, by, 300, 20)) {
-            saver_enabled = !saver_enabled;
-            saver_save();
-            dirty = 1;
-            return;
-        }
-    }
-    for (int i = 0; i < THEME_N; i++) {
-        int sx, sy;
-        settings_swatch_pos(wx, wy, i, &sx, &sy);
-        if (hit(mouse_x, mouse_y, sx, sy, SW_W, SW_H)) {
-            theme_set(i);
-            return;
-        }
-    }
+    dirty = 1;
 }
 
+/* Settings keys: Tab and the arrows move between pages, Page Up, Page Down,
+ * Home and End scroll the page, 1-4 pick a display mode on the Display
+ * page, R retries saving. A control changed from the keyboard is scrolled
+ * into view. */
+static void settings_key(void) {
+    if (key_sc == KEY_ESC) { close_front(); return; }
+    if (key_sc == KEY_TAB || key_sc == KEY_DOWN) settings_page_set((settings_page + (shift_down ? SET_PAGES - 1 : 1)) % SET_PAGES);
+    else if (key_sc == KEY_UP) settings_page_set((settings_page + SET_PAGES - 1) % SET_PAGES);
+    else if (key_sc == 0x49 || key_sc == 0x51) settings_scroll_by((key_sc == 0x49 ? -1 : 1) * settings_view_h * 7 / 8);
+    else if (key_sc == 0x47 || key_sc == 0x4f) settings_scroll_by(key_sc == 0x47 ? -settings_scroll : settings_scroll_max);
+    else if (key_char >= '1' && key_char <= '0' + DISPLAY_MODE_COUNT) {
+        if (settings_page == SET_DISPLAY) { set_reveal_kind = SZ_DISPLAY; set_reveal_arg = key_char - '1'; }
+        display_request(key_char - '1');
+        dirty = 1;
+        return;
+    }
+    else if (key_char == 'r' || key_char == 'R') preferences_retry();
+    else if (key_sc == KEY_SPACE && settings_page == SET_DESKTOP) {
+        saver_enabled = !saver_enabled;
+        saver_save();
+        set_reveal_kind = SZ_SAVER;
+        set_reveal_arg = 0;
+    }
+    dirty = 1;
+}
 
-/* The BaseOS mark: a glossy accent tile with the "B" cut as two bowls. */
+/* ---------- Logo and boot screen ---------- */
+
 static void draw_logo(int x, int y, int size) {
-    int r = size / 4;
-    draw_round_rect(x - 1, y - 1, size + 2, size + 2, r + 1, ui_accent_dk);
-    draw_ramp_round(x, y, size, size, r, 1, PAL_ACCENT, PAL_ACCENT_N, 1 * 16, 11 * 16);
-    draw_hline(x + r, y + 1, size - 2 * r, PAL_ACCENT);
+    ui_icon_draw(UI_ICON_LOGO, x, y, size, TK_ACCENT, get_pixel(x, y));
+}
 
-    int m = size * 22 / 100;
-    int sw = size * 13 / 100;
-    if (sw < 2) sw = 2;
-    int gh = size - 2 * m;
-    int bx = x + m;
-    int by = y + m;
-    int bowl_w = size * 52 / 100;
-    int bowl_h = gh * 55 / 100;
-    int cut = sw;
-    uint8_t ink = COLOR_WHITE;
-    uint8_t hole = PAL_ACCENT + 7;
-    draw_round_rect(bx, by, bowl_w, bowl_h, bowl_h / 2, ink);
-    draw_round_rect(bx + sw, by + cut, bowl_w - sw - cut, bowl_h - 2 * cut, (bowl_h - 2 * cut) / 2, hole);
-    int by2 = by + gh - bowl_h - sw / 2;
-    int bowl_w2 = bowl_w + sw;
-    draw_round_rect(bx, by2, bowl_w2, bowl_h + sw / 2, (bowl_h + sw / 2) / 2, ink);
-    draw_round_rect(bx + sw, by2 + cut, bowl_w2 - sw - cut, bowl_h + sw / 2 - 2 * cut,
-                    (bowl_h + sw / 2 - 2 * cut) / 2, hole);
-    draw_rect(bx, by, sw, gh, ink);
+/* Esc in the input queue during the boot screen. Earlier typeahead is
+ * dropped with it. */
+static int boot_esc_pressed(void) {
+    drain_8042();
+    for (unsigned i = 0; i < device_input.count; i++) {
+        const InputSample *s = &device_input.queue[(device_input.head + i) % INPUT_CAPACITY];
+        if (s->kind == INPUT_KEY && s->scancode == 1 && (s->flags & INPUT_MAKE)) {
+            input_wake_serial = s->serial;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The boot screen borrows tokens for its dark colors; theme_apply puts the
+ * desktop palette back when it ends. Esc shows the kernel log. */
+static void boot_colors(void) {
+    int m = ui_style == UI_STYLE_MODERN;
+    gfx_set_color(TK_DESKTOP, m ? 0x1E2330 : 0x14213A);
+    gfx_set_color(TK_LINE, m ? 0x2E3546 : 0x2A3A57);
+    gfx_set_color(TK_TEXT2, m ? 0xA9B3C4 : 0x9DB0CC);
+    gfx_set_color(TK_LINE_STRONG, m ? 0x8E99AA : 0x6F86A8);
+    gfx_set_color(TK_47, 0x4A5568);
+    gfx_set_color(TK_46, 0xD8DDE6);
+    gfx_pal_commit();
+}
+
+static const char *boot_stage(int prog, int bw) {
+    if (prog < bw / 3) return "Loading drivers";
+    if (prog < bw * 2 / 3) return "Mounting volumes";
+    return "Starting window manager";
+}
+
+static void boot_messages(void) {
+    static char text[8192];
+    platform_log_copy(text, sizeof text);
+    draw_rect(0, 0, fb_w, fb_h, TK_DESKTOP);
+    /* Show the last lines that fit, newest at the bottom. */
+    int line_h = CHAR_H + 2, rows = (fb_h - 48) / line_h, n = kstrlen(text), lines = 0, at = n;
+    while (at > 0 && lines < rows) { at--; if (text[at] == '\n' && at != n - 1) lines++; }
+    if (at > 0) at++;
+    int y = 24;
+    char line[160];
+    while (at < n && y < fb_h - 24) {
+        int k = 0;
+        while (at < n && text[at] != '\n' && k < (int)sizeof line - 1) line[k++] = text[at++];
+        line[k] = 0;
+        if (at < n && text[at] == '\n') at++;
+        draw_string_clip(line, 24, y, TK_TEXT2, fb_w - 24);
+        y += line_h;
+    }
+    flip_vga();
 }
 
 static void boot_splash(void) {
-    draw_desktop();
+    boot_colors();
+    draw_rect(0, 0, fb_w, fb_h, TK_DESKTOP);
     int size = 128;
     int lx = (fb_w - size) / 2;
-    int ly = fb_h / 2 - size + 10;
+    int group = size + 20 + LOGO_FONT_H + 36 + 6 + 12 + CHAR_H;
+    int ly = (fb_h - group) / 2 - 40;
     draw_logo(lx, ly, size);
-    int ty = ly + size + 30;
+    int ty = ly + size + 20;
     int lw = logo_string_w("BaseOS");
-    draw_logo_string("BaseOS", (fb_w - lw) / 2 + 1, ty + 1, INK(31));
     draw_logo_string("BaseOS", (fb_w - lw) / 2, ty, COLOR_WHITE);
-    int sy = ty + LOGO_FONT_H + 8;
-    const char *sub = "a tiny operating system";
-    draw_string(sub, (fb_w - ui_string_w(sub)) / 2 + 1, sy + 1, INK(31));
-    draw_string(sub, (fb_w - ui_string_w(sub)) / 2, sy, INK(0));
-    int bw = 200;
-    int bx = (fb_w - bw) / 2;
-    int by = sy + CHAR_H + 36;
-    uint8_t track = INK(5);
-    draw_round_rect(bx, by, bw, 6, 3, track);
+    int bw = 240, bx = (fb_w - bw) / 2, by = ty + LOGO_FONT_H + 36;
+    int sy = by + 6 + 12;
+    int r = MODERN ? 3 : KIT_R_SQUARE;
+    kit_fill(bx, by, bw, 6, r, TK_LINE, 1);
+    int hy = fb_h - 32 - CHAR_H;
+    if (MODERN) {
+        int kw = kit_text_w("Esc", 0) + 12, tw = ui_string_w("show boot messages"), x0 = (fb_w - kw - 8 - tw) / 2;
+        kit_box(x0, hy - 2, kw, 20, 4, TK_DESKTOP, TK_47);
+        draw_string("Esc", x0 + 6, hy, TK_46);
+        draw_string("show boot messages", x0 + kw + 8, hy, TK_LINE_STRONG);
+    } else draw_string_centered("Press Esc to show boot messages", hy, TK_LINE_STRONG);
     flip_vga();
     kprint_debug("SPLASH\n");
 
     uint32_t start = frame_count;
-    int shown = 0;
+    int shown = -1, messages = 0;
+    const char *stage = 0;
     while (1) {
         poll_time();
         kernel_services_poll();
@@ -7434,19 +11216,27 @@ static void boot_splash(void) {
         if(update.flags)dirty=1;
         if (display_pending && (int32_t)(timer_ticks() - display_deadline) >= 0) display_revert();
         context_set(win_front());
-        drain_8042();
+        if (boot_esc_pressed() && !messages) { messages = 1; boot_messages(); }
         int prog = (int)((frame_count - start) * bw / 150);
         if (prog > bw)
             prog = bw;
-        if (prog - shown >= 8) {
+        if (!messages && prog - shown >= 8) {
             shown = prog;
-            draw_round_rect(bx, by, bw, 6, 3, track);
-            draw_round_rect(bx, by, prog, 6, 3, ui_accent);
+            kit_fill(bx, by, bw, 6, r, TK_LINE, 1);
+            if (prog > 0) kit_fill(bx, by, prog, 6, r, TK_ACCENT, 1);
             flip_rect(bx, by, bw, 6);
+            const char *s = boot_stage(prog, bw);
+            if (s != stage) {
+                stage = s;
+                draw_rect(0, sy, fb_w, CHAR_H + 2, TK_DESKTOP);
+                draw_string_centered(s, sy, TK_TEXT2);
+                flip_rect(0, sy, fb_w, CHAR_H + 2);
+            }
         }
-        if ((frame_count - start) >= 150)
+        if ((frame_count - start) >= (messages ? 450u : 150u))
             break;
     }
+    theme_apply();
     kprint_debug("DESKTOP\n");
     dirty = 1;
 }
@@ -7688,38 +11478,57 @@ static void session_restore(void){
 int program_key(void){ return desktop_program_key(); }
 void program_present(void){cursor_restore();draw_ui();flip_vga();cursor_on=0;dirty=1;}
 static void render_scene(void) {
+                hot_n = 0;
                 int isel = icon_sel;
-                if (fm_drag_active && icon_hit(ICON_DESK_TRASH, mouse_x, mouse_y))
-                    isel = ICON_DESK_TRASH;
+                if (fm_drag_active && icon_hit(DESK_TRASH, mouse_x, mouse_y))
+                    isel = DESK_TRASH;
                 draw_desktop();
                 draw_desktop_icons(isel);
                 draw_ui();
                 if (open_dlg)
                     draw_open_dialog();
                 draw_taskbar();
+                if (MODERN)
+                    draw_topbar();
+                draw_volume_popup();
                 draw_pulldown(open_menu, menu_sel);
                 draw_drag_ghost();
                 draw_rename_overlay();
                 draw_launcher();
+                draw_switcher();
                 draw_namedlg();
                 draw_edit_close();
 }
+/* The outline drawn instead of the window while it is dragged with
+ * "Show window contents" off. */
+static void draw_drag_outline(void) {
+    if (dragging_win < 0 || !drag_active) return;
+    Win *w = &wins[dragging_win];
+    draw_frame(drag_outline_x, drag_outline_y, w->w, w->h, TK_TEXT);
+}
+/* Keep or revert a new resolution, as an alert with a countdown. */
+static void display_confirm_buttons(int x, int y, int *kx, int *rx, int *by, int *kw, int *rw) {
+    *kw = kit_button_w("Keep changes", -1);
+    *rw = kit_button_w("Revert", -1);
+    *kx = x + alert_w() - 16 - *kw;
+    *rx = *kx - 8 - *rw;
+    alert_buttons_y(y, by);
+}
 static void draw_display_confirmation(void) {
     if (!display_pending) return;
-    int x = (fb_w - 420) / 2, y = (fb_h - 150) / 2;
-    shade_rect(0, 0, fb_w, fb_h, 1);
-    draw_round_rect(x, y, 420, 150, 10, INK(1));
-    draw_round_frame(x, y, 420, 150, 10, ui_border);
-    draw_string_bold("Keep this display resolution?", x + 24, y + 20, ui_text);
+    int x = (fb_w - alert_w()) / 2, y = (fb_h - alert_h()) / 2;
     char seconds[16], message[80];
     unsigned ticks_left = display_deadline - timer_ticks();
     fmt_uint(seconds, (ticks_left + TIMER_HZ - 1) / TIMER_HZ);
-    kstrcpy(message, "Reverting automatically in ");
+    kstrcpy(message, "The previous resolution returns in ");
     kstrcpy(message + kstrlen(message), seconds);
     kstrcpy(message + kstrlen(message), " seconds.");
-    draw_string(message, x + 24, y + 54, ui_text_dim);
-    draw_default_button(x + 34, y + 98, 164, 30, "Keep (Enter)");
-    draw_button(x + 222, y + 98, 164, 30, "Revert (Esc)");
+    draw_alert(x, y, alert_w(), alert_h(), "Display", app_icon_for(ICON_APP_SETTINGS), UI_ICON_A_WARN,
+               "Keep this display resolution?", message);
+    int kx, rx, by, kw, rw;
+    display_confirm_buttons(x, y, &kx, &rx, &by, &kw, &rw);
+    kit_button(rx, by, rw, BTN_H, "Revert", -1, KB_DEFAULT, hot(rx, by, rw, BTN_H));
+    kit_button(kx, by, kw, BTN_H, "Keep changes", -1, KB_PRIMARY, hot(kx, by, kw, BTN_H) | KIT_FOCUS);
 }
 
 static void display_refresh_layout(void) {
@@ -7754,6 +11563,15 @@ static int display_request(int mode) {
     display_refresh_layout();
     return 1;
 }
+static void display_revert(void);
+static void display_keep(void);
+static void display_click(void) {
+    int x = (fb_w - alert_w()) / 2, y = (fb_h - alert_h()) / 2, kx, rx, by, kw, rw;
+    display_confirm_buttons(x, y, &kx, &rx, &by, &kw, &rw);
+    if (hit(mouse_x, mouse_y, kx, by, kw, BTN_H)) display_keep();
+    else if (hit(mouse_x, mouse_y, rx, by, rw, BTN_H) ||
+             hit(mouse_x, mouse_y, close_box_x(x, alert_w()), cap_y(y), CAP_CLOSE_W, CAP_H)) display_revert();
+}
 static void display_revert(void) {
     if (!display_pending) return;
     cursor_on = 0;
@@ -7781,12 +11599,14 @@ static void display_load(void) {
 
 static void render_desktop_frame(void) {
     int moving=dragging_win>=0 && dragging_win==win_front() && drag_active && !open_dlg && !name_dlg && !edit_close_dlg && !launcher_on && open_menu<0;
+    int outline=!(win_options&WINOPT_DRAG_CONTENTS);
     if(moving){
         if(drag_cached!=dragging_win){
-            render_skip=dragging_win;render_scene();render_skip=-1;
+            render_skip=outline?-1:dragging_win;render_scene();render_skip=-1;
             kmemcpy((void *)DRAG_CACHE,fb,fb_w*fb_h);drag_cached=dragging_win;
         }else kmemcpy(fb,(void *)DRAG_CACHE,fb_w*fb_h);
-        draw_one_window(&wins[dragging_win],0);context_set(win_front());
+        if(outline)draw_drag_outline();
+        else {draw_one_window(&wins[dragging_win],0);context_set(win_front());}
     }else {drag_cached=-1;render_scene();}
 }
 
@@ -7973,14 +11793,35 @@ static void desktop_pointer_motion(void) {
             int ady = dy < 0 ? -dy : dy;
             if (!drag_active && (adx > 3 || ady > 3))
                 drag_active = 1;
+            if (drag_active && dw->maximized) {
+                /* Pull a snapped window off its snap: restore it with the
+                 * pointer at the same relative spot of the title bar. */
+                int rel = dw->w > 0 ? (drag_from_x - dw->x) * dw->old_w / dw->w : 0;
+                win_arrange(dragging_win, 3);
+                drag_orig_x = drag_from_x - rel;
+                drag_orig_y = drag_from_y - TITLE_BAR / 2;
+            }
             if (drag_active) {
                 int nx = drag_orig_x + dx;
                 int ny = drag_orig_y + dy;
-                if (nx != dw->x || ny != dw->y) {
-                    dw->x = nx;
-                    dw->y = ny;
-                    win_clamp(dw);
-                    dirty = 1;
+                win_snap_edges(&nx, &ny, dw->w, dw->h);
+                if (win_options & WINOPT_DRAG_CONTENTS) {
+                    if (nx != dw->x || ny != dw->y) {
+                        dw->x = nx;
+                        dw->y = ny;
+                        win_clamp(dw);
+                        dirty = 1;
+                    }
+                } else {
+                    Win probe = *dw;
+                    probe.x = nx;
+                    probe.y = ny;
+                    win_clamp(&probe);
+                    if (probe.x != drag_outline_x || probe.y != drag_outline_y) {
+                        drag_outline_x = probe.x;
+                        drag_outline_y = probe.y;
+                        dirty = 1;
+                    }
                 }
             }
         }
@@ -8014,21 +11855,35 @@ static void desktop_pointer_motion(void) {
         if (front_kind() == WK_WRITER && mouse_left && mouse_moved && !open_dlg &&
             !name_dlg && !edit_close_dlg && !launcher_on && open_menu < 0 && dragging_win < 0) {
             Win *w = &wins[win_front()];
-            if (writer_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
+            int cx, cy, cw, ch;
+            doc_client(w, &cx, &cy, &cw, &ch);
+            if (writer_drag(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
         }
         if (front_kind() == WK_SPREADSHEET && mouse_left && mouse_moved && !open_dlg &&
             !name_dlg && !edit_close_dlg && !launcher_on && open_menu < 0 && dragging_win < 0) {
             Win *w = &wins[win_front()];
-            if (spreadsheet_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
+            int cx, cy, cw, ch;
+            doc_client(w, &cx, &cy, &cw, &ch);
+            if (spreadsheet_drag(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
         }
         if (paint_dragging || paint_shape_drag) paint_drag_tick();
+        if (set_slider_drag) settings_drag();
 }
 static void desktop_pointer_release(void) {
             resizing_win=-1;
             if (dragging_win >= 0 && drag_active) {
-                if (mouse_x < 12) win_arrange(dragging_win,1);
-                else if (mouse_x > fb_w-12) win_arrange(dragging_win,2);
-                else if (mouse_y < MENUBAR_H+12) win_arrange(dragging_win,0);
+                Win *dw = &wins[dragging_win];
+                if (!(win_options & WINOPT_DRAG_CONTENTS)) {
+                    dw->x = drag_outline_x;
+                    dw->y = drag_outline_y;
+                    win_clamp(dw);
+                    dirty = 1;
+                }
+                if (win_options & WINOPT_SNAP) {
+                    if (mouse_x < 2) win_arrange(dragging_win,1);
+                    else if (mouse_x >= fb_w-2) win_arrange(dragging_win,2);
+                    else if (mouse_y <= (MODERN ? MENUBAR_H : 1)) win_arrange(dragging_win,0);
+                }
             }
             if (dragging_win >= 0 && !drag_active && !open_dlg &&
                 wins[dragging_win].kind == WK_FILES && fm_cwd != fs_root())
@@ -8038,6 +11893,7 @@ static void desktop_pointer_release(void) {
             if (fm_dragging)
                 files_drop();
             edit_dragging = 0;
+            if (set_slider_drag) settings_drag();
             writer_release();
             spreadsheet_release();
             paint_mouse_up();
@@ -8061,10 +11917,9 @@ static void desktop_pointer_sample(const InputSample *sample) {
     /* Final release coordinates belong to the gesture being released. */
     if(mouse_moved && (prior&INPUT_LEFT)) desktop_pointer_motion();
     mouse_left=!!(buttons&INPUT_LEFT); mouse_right=!!(buttons&INPUT_RIGHT);
-    if(open_menu>=0 && mouse_moved) {
-        int selected=menu_item_at(open_menu,mouse_x,mouse_y);
-        if(selected!=menu_sel){menu_sel=selected;dirty=1;}
-    }
+    if(open_menu>=0 && open_menu!=MENU_BAR && mouse_moved) menu_hover();
+    if(mouse_moved) paint_hover_tick();
+    if(volume_on && mouse_left && mouse_moved) volume_drag();
     if((buttons&INPUT_RIGHT) && !(prior&INPUT_RIGHT))handle_rclick();
     if((buttons&INPUT_LEFT) && !(prior&INPUT_LEFT))handle_click();
     if(sample->epoch!=device_input.epoch)return;
@@ -8079,6 +11934,7 @@ static void desktop_pointer_sample(const InputSample *sample) {
     if(desktop_input_blocked())desktop_input_cancel(sample->buttons);
     native_ui_refresh(sample->ticks,sample->buttons);
     if(mouse_moved && dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
+    if(mouse_moved && dragging_win<0 && resizing_win<0){int h=hot_index();if(h!=hot_last){hot_last=h;dirty=1;}}
 }
 static void desktop_keyboard_loss(void) {
     /* Lost focus shortcuts make the intended Terminal owner unknowable. Keep
@@ -8095,6 +11951,38 @@ static void desktop_input_reset(const InputSample *sample) {
     input_cursor_moved |= mouse_x!=sample->x || mouse_y!=sample->y;
     mouse_x=sample->x;mouse_y=sample->y;
     desktop_input_modifiers(sample->modifiers);
+}
+/* Alt tapped alone focuses the menu row; releasing Alt commits the
+ * window switcher. */
+static void desktop_modifier_sample(const InputSample *sample, int was_alt) {
+    if (sample->kind != INPUT_MODIFIER) return;
+    int alt_key = sample->scancode == 0x38;
+    if (alt_key && (sample->flags & INPUT_MAKE)) { if (!was_alt) alt_tap = 1; return; }
+    if (!alt_key) { alt_tap = 0; return; }
+    if (alt_down) return;
+    if (switcher_on) { switcher_commit(); alt_tap = 0; return; }
+    if (alt_tap && !mouse_left && !mouse_right && !name_dlg && !open_dlg && !launcher_on &&
+        !edit_close_dlg && !display_pending) {
+        if (open_menu >= 0) menu_close();
+        else menu_focus_row();
+    }
+    alt_tap = 0;
+}
+/* Super (E0 5B/5C): held for shortcuts, tapped alone for the launcher.
+ * Returns 1 when the sample was the Super key itself. */
+static int desktop_super_sample(const InputSample *sample) {
+    if (!(sample->flags & INPUT_EXTENDED) || (sample->scancode != 0x5b && sample->scancode != 0x5c)) return 0;
+    if (sample->flags & INPUT_MAKE) {
+        if (!super_down) super_used = 0;
+        super_down = 1;
+        return 1;
+    }
+    if (super_down && !super_used && !name_dlg && !open_dlg && !edit_close_dlg && !display_pending) {
+        if (launcher_on) launcher_close();
+        else { if (open_menu >= 0) menu_close(); launcher_open(); }
+    }
+    super_down = 0;
+    return 1;
 }
 static unsigned desktop_input_turn(void) {
     if(input_tail_pending) {
@@ -8151,12 +12039,16 @@ static unsigned desktop_input_turn(void) {
                 desktop_pointer_sample(&sample);
             }
         } else {
+            int was_alt=alt_down;
             desktop_input_modifiers(sample.modifiers);
-            if(sample.kind==INPUT_KEY && (sample.flags&INPUT_MAKE)) {
+            desktop_modifier_sample(&sample,was_alt);
+            if(sample.kind==INPUT_KEY && (sample.flags&INPUT_MAKE) && !desktop_super_sample(&sample)) {
                 key_sc=(uint8_t)sample.scancode;key_char=(char)sample.character;
+                key_ext=!!(sample.flags&INPUT_EXTENDED);
+                alt_tap=0;
                 handle_key();
                 if(desktop_input_scene_changed())desktop_input_cancel(sample.buttons);
-            }
+            } else if(sample.kind==INPUT_KEY) desktop_super_sample(&sample);
         }
         native_ui_refresh(sample.ticks,sample.buttons);
         input_routing=0;
@@ -8216,7 +12108,6 @@ static uint32_t last_blink, last_clock, last_session;
 /* Storage is mounted and input is not live yet. display_load may change the
  * video mode, so the kernel sizes the pointer after this returns. */
 static void desktop_prepare(void) {
-    icon_palette_install();
     kmemset(window_state, 0, sizeof(WindowState) * MAX_WIN);
     poll_time();
     trash_id = fs_find_child(fs_root(), "trash");
@@ -8285,7 +12176,7 @@ static int desktop_turn(void) {
     }
     if (!input_count && saver_enabled && !display_pending &&
         video_status()->state!=VIDEO_PLAYING && video_status()->state!=VIDEO_LOADING &&
-        frame_count-last_input_frame>SAVER_DELAY && !open_dlg && !name_dlg && !edit_close_dlg) {
+        frame_count-last_input_frame>70u*saver_delay_secs[saver_delay] && !open_dlg && !name_dlg && !edit_close_dlg) {
         saver_start();
     }
 
@@ -8357,10 +12248,12 @@ static int desktop_turn(void) {
                 draw_term_canvas(w->x,w->y,w->w,w->h);
             }else{
                 Win *w=&wins[player_slot];
+                int cx,cy,cw,ch;
                 context_set(player_slot);
+                app_client(w->x,w->y,w->w,w->h,0,&cx,&cy,&cw,&ch);
                 if(player_update==PLAYER_AUDIO_PROGRESS)
-                    player_draw_audio_progress(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
-                else player_draw_playback(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
+                    player_draw_audio_progress(cx,cy,cw,ch);
+                else player_draw_playback(cx,cy,cw,ch);
             }
             redraw_count++;
             dirty = 0;

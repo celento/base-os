@@ -18,8 +18,8 @@ from qemu_session import DesktopSession
 from update_image import install_kernel
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-STATUS_H, HEADER_H, TILE = 30, 46, 112
-APPS = ['Clock', 'Todo', '2048', 'Mines', 'Wordle', 'Breakout', 'About']
+STATUS_H, HEADER_H = 30, 48
+APPS = ['Files', 'Editor', 'Settings', 'Clock', 'Todo', '2048', 'Mines', 'Wordle', 'Breakout', 'About']
 
 
 class PocketSession(DesktopSession):
@@ -70,13 +70,13 @@ class PocketSession(DesktopSession):
             time.sleep(.12)
 
     def home_tile(self, index):
-        x, y, w = self.int('phone_x'), self.int('phone_y') + STATUS_H, self.int('phone_w')
-        columns = min(4, w // TILE)
-        left = x + (w - columns * TILE) // 2
-        return left + index % columns * TILE + TILE // 2, y + 92 + index // columns * (TILE + 8) + TILE // 2
+        # The shell publishes its grid geometry after the first frame.
+        x, y = self.int('pocket_grid_x'), self.int('pocket_grid_y')
+        w, h, columns = self.int('pocket_cell_w'), self.int('pocket_cell_h'), self.int('pocket_columns')
+        return x + index % columns * w + w // 2, y + index // columns * h + h // 2 - 8
 
     def back_button(self):
-        return self.int('phone_x') + 40, self.int('phone_y') + STATUS_H + HEADER_H // 2
+        return self.int('phone_x') + 22, self.int('phone_y') + STATUS_H + HEADER_H // 2
 
 
 def run(pocket, desktop, shots):
@@ -88,12 +88,13 @@ def run(pocket, desktop, shots):
 
         # Keyboard: arrows select a tile, Enter opens it, Esc returns home.
         opened = session.marker('POCKET-OPEN 2048\n')
-        session.key('right'); session.key('right'); session.key('ret'); opened()
+        for _ in range(APPS.index('2048')): session.key('right')
+        session.key('ret'); opened()
         session.key('left'); session.key('up')
         home = session.marker('POCKET-HOME\n')
         session.key('esc'); home()
 
-        # Pointer: tap the Clock tile, then the header's Home button.
+        # Pointer: tap the Clock tile, then the header's back button.
         opened = session.marker('POCKET-OPEN Clock\n')
         session.click(*session.home_tile(APPS.index('Clock'))); opened()
         if shots: shutil.copy(session.screenshot('clock.png'), shots / 'pocket-clock.png')

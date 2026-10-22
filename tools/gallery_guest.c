@@ -57,7 +57,7 @@ void feature_test(void) {
         if(y>hill)c=idx24(0x102830);
         paint_pix[y*PAINT_W+x]=c;
     }
-    paint_write_named("Mountain.bos");gallery_show(1);
+    paint_write_in(fs_find_child(fs_root(),"Pictures"),"Mountain.bos");gallery_show(1);
 
     gallery_clear();
     const char *program="10 REM Colored columns\n20 LET A=0\n30 RECT A,0,10,100,A+112\n40 LET A=A+10\n50 IF A < 160 THEN 30\n60 PRINT \"Hello from Tiny BASIC\"\n70 PRINT \"Canvas: 160 x 100\"\n80 END\n";
@@ -77,11 +77,12 @@ void feature_test(void) {
     for(int j=0;j<3;j++){for(int i=0;i<5;i++)wordle_key(WORDLE_ACT_NONE,guesses[j][i]);wordle_key(WORDLE_ACT_ENTER,0);}
     gallery_show(3);
 
-    gallery_clear();theme_id=1;theme_apply();
-    win_open(WK_CLOCK);gallery_place(890,150,0,0);
-    win_open(WK_SETTINGS);gallery_place(300,110,0,0);gallery_show(4);
+    /* The Modern style, without touching the saved preference. */
+    gallery_clear();ui_style=UI_STYLE_MODERN;theme_apply();icons_init();
+    win_open(WK_CLOCK);gallery_place(880,120,0,0);
+    win_open(WK_SETTINGS);gallery_place(40,60,0,0);gallery_show(4);
 
-    gallery_clear();theme_id=0;theme_apply();launcher_open();gallery_show(5);
+    gallery_clear();ui_style=UI_STYLE_CLASSIC;theme_apply();icons_init();launcher_open();gallery_show(5);
 
     int docs=fs_find_child(fs_root(),"Documents");
     gallery_clear();open_writer(-1);gallery_place(300,70,860,560);

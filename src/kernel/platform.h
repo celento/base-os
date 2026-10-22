@@ -54,4 +54,6 @@ void platform_poll(void);
 int video_info_valid(const BootInfo *bi);
 void panic(const char *message) __attribute__((noreturn));
 void platform_log(const char *message);
+/* Copies the most recent log text, NUL-terminated; returns its length. */
+unsigned platform_log_copy(char *out, unsigned cap);
 #endif
