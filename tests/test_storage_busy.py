@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class StorageBusyTests(unittest.TestCase):
     def test_files_and_paint_preserve_actions_for_retry(self):
         source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
-        names = ('files_storage_busy', 'fm_new_file', 'fm_rename_commit', 'do_new_folder', 'paint_write_named')
+        names = ('files_storage_busy', 'fm_new_file', 'fm_rename_commit', 'do_new_folder', 'paint_write_in')
         compiler = shutil.which('clang') or shutil.which('cc')
         with tempfile.TemporaryDirectory(prefix='baseos-desktop-storage-') as temporary:
             directory = Path(temporary)

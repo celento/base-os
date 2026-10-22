@@ -208,6 +208,7 @@ static void utoa(unsigned v, char *out) {
 /* App icon (AI_*) shown in the title bar of the window being drawn, or -1,
  * and the kind whose menu model the window row shows. */
 static int chrome_icon = -1;
+static int chrome_dirty;     /* draw an unsaved-changes dot after the title */
 static int chrome_kind = -1;
 static int chrome_slot = -1;
 static int chrome_flags;  /* WIN_MAXED and WIN_DIALOG for the window being drawn */
@@ -335,7 +336,13 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
     else tx = icon_x;
     if (title) {
         int xmax = noclose ? x + w - 12 : ((flags & WIN_DIALOG) ? close_box_x(x, w) : min_box_x(x, w)) - 8;
+        if (chrome_dirty) xmax -= 14;
         kit_text(title, tx, ty, title_ink, xmax - tx, 1);
+        if (chrome_dirty) {
+            int dx = tx + kit_text_w(title, 1) + 8;
+            if (dx > xmax + 6) dx = xmax + 6;
+            kit_fill(dx, ty + UI_FONT_H / 2 - 3, 7, 7, 3, MODERN ? TK_TEXT2 : title_ink, 0);
+        }
     }
 
     if ((flags & WIN_INFO) && info) {
@@ -1116,7 +1123,7 @@ typedef struct {
 typedef struct { unsigned size,hash_a,hash_b; } EditorBinding;
 typedef struct { unsigned valid; EditorBinding source; } EditorSource;
 typedef struct {
-    int open,replace_mode,focus,field,exact,position[2],selected[2];
+    int open,replace_mode,focus,field,exact,whole,position[2],selected[2];
     char text[2][64],message[64];
 } EditorSearch;
 typedef struct {
@@ -2100,7 +2107,7 @@ static void edit_backspace(void) {
     edit_saved_ok = 0;
 }
 
-static int edit_search_height(void){return !edit_search.open?0:edit_search.replace_mode?100:68;}
+static int edit_search_flags(void){return (edit_search.exact?TEXT_MATCH_CASE:0)|(edit_search.whole?TEXT_WHOLE_WORD:0);}
 static void edit_search_open(int replacing){
     EditorSearch *q=&edit_search;q->open=1;q->replace_mode=replacing;q->focus=1;q->field=0;
     int lo=edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b,hi=edit_sel_a>edit_sel_b?edit_sel_a:edit_sel_b;
@@ -2112,7 +2119,7 @@ static int edit_find_next(int direction){
     EditorSearch *q=&edit_search;int size=kstrlen(q->text[0]);
     if(!size){kstrcpy(q->message,"Enter text to find.");dirty=1;return 0;}
     int start=direction<0?(edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b)-1:edit_caret;
-    int found=text_find(edit_buf,edit_len,q->text[0],start,direction,q->exact);
+    int found=text_find(edit_buf,edit_len,q->text[0],start,direction,edit_search_flags());
     if(found<0){kstrcpy(q->message,"Text not found.");dirty=1;return 0;}
     edit_sel_a=found;edit_sel_b=found+size;edit_caret=edit_sel_b;
     kstrcpy(q->message,"Match selected.");dirty=1;return 1;
@@ -2121,7 +2128,7 @@ static void edit_replace_one(void){
     EditorSearch *q=&edit_search;int lo=edit_sel_a<edit_sel_b?edit_sel_a:edit_sel_b;
     int hi=edit_sel_a>edit_sel_b?edit_sel_a:edit_sel_b;
     int n=kstrlen(q->text[0]),r=kstrlen(q->text[1]);
-    if(!n||hi-lo!=n||!text_match(edit_buf,edit_len,lo,q->text[0],q->exact)){
+    if(!n||hi-lo!=n||!text_match(edit_buf,edit_len,lo,q->text[0],edit_search_flags())){
         if(!edit_find_next(1))return;
         lo=edit_sel_a;hi=edit_sel_b;
     }
@@ -2133,7 +2140,7 @@ static void edit_replace_one(void){
 }
 static void edit_replace_everywhere(void){
     EditorSearch *q=&edit_search;int count=0;
-    int length=text_replace_all(edit_scratch,EDIT_BUF_SIZE,edit_buf,edit_len,q->text[0],q->text[1],q->exact,&count);
+    int length=text_replace_all(edit_scratch,EDIT_BUF_SIZE,edit_buf,edit_len,q->text[0],q->text[1],edit_search_flags(),&count);
     if(length<0){kstrcpy(q->message,"Empty search or replacement exceeds limit.");dirty=1;return;}
     if(count){edit_record();kmemcpy(edit_buf,edit_scratch,length+1);edit_len=length;edit_caret=0;edit_sel_collapse();edit_saved_ok=0;}
     fmt_uint(q->message,count);kstrcpy(q->message+kstrlen(q->message)," replacements.");dirty=1;
@@ -2168,57 +2175,158 @@ static void edit_search_key(void){
     }
     q->position[f]=pos;q->message[0]=0;dirty=1;
 }
-/* Find bar buttons: next, previous, [replace, replace all], match case, close. */
-static int edit_search_buttons(int wx,int ww,int replace,int *xs,int *ws){
-    int n=0,x=wx+12;
-    xs[n]=x;ws[n++]=32;x+=36;
-    xs[n]=x;ws[n++]=32;x+=44;
-    if(replace){xs[n]=x;ws[n]=tool_button_w("Replace");x+=ws[n++]+4;xs[n]=x;ws[n]=tool_button_w("All");x+=ws[n++]+8;}
-    xs[n]=x;ws[n++]=40;
-    xs[n]=wx+ww-44;ws[n++]=32;
-    return n;
+static int nav_size(void);
+/* Find bar. Classic docks it above the status bar; Modern floats it at the
+ * top right of the text. Drawing and clicks share edit_find_layout. */
+typedef struct { Rect panel, field[2], prev, next, exact, whole, close, replace, all; int count_x, rows; } FindLayout;
+static int edit_status_h(void) { return MODERN ? 28 : 24; }
+static int edit_search_height(void) {
+    if (!edit_search.open || MODERN) return 0;
+    return edit_search.replace_mode ? 2 * BTN_H + 20 : BTN_H + 12;
 }
-static void draw_edit_search(int wx,int wy,int ww,int wh){
-    if(!edit_search.open)return;
-    EditorSearch *q=&edit_search;
-    int y=wy+wh-SB-edit_search_height();draw_rect(wx+1,y,ww-2,edit_search_height(),ui_chrome);
-    draw_hline(wx+1,y,ww-2,ui_chrome_dk);
-    for(int f=0;f<(q->replace_mode?2:1);f++){
-        int fy=y+6+f*32;draw_string(f?"With":"Find",wx+12,fy+5,ui_text);
-        draw_round_rect(wx+66,fy,ww-82,26,4,q->focus&&q->field==f?ui_accent:ui_border);
-        draw_round_rect(wx+67,fy+1,ww-84,24,3,ui_field);
-        int selected=q->focus&&q->field==f&&q->selected[f];
-        if(selected)draw_rect(wx+72,fy+4,ww-96,18,ui_accent);
-        draw_string_clip(q->text[f],wx+72,fy+5,selected?ui_on_accent:ui_text,wx+ww-22);
-        if(q->focus&&q->field==f&&!selected){char prefix[64];kmemcpy(prefix,q->text[f],q->position[f]);prefix[q->position[f]]=0;
-            int x=wx+72+ui_string_w(prefix);if(x<wx+ww-22)draw_rect(x,fy+4,1,18,ui_text);}
-    }
-    int by=y+(q->replace_mode?70:38);
-    int xs[6],ws[6],n=edit_search_buttons(wx,ww,q->replace_mode,xs,ws);
-    static const int icon[6]={ICON_CHEVRON_DOWN,ICON_CHEVRON_UP,ICON_REPLACE,ICON_REPLACE,-1,ICON_STOP};
-    static const char *label[6]={0,0,"Replace","All","Aa",0};
-    for(int i=0;i<n;i++){
-        int b=q->replace_mode||i<2?i:i+2;
-        tool_button(xs[i],by,ws[i],26,icon[b],label[b],b==4?(q->exact?TB_ACTIVE:TB_NORMAL):b==5?TB_FLAT:TB_NORMAL);
+static int edit_text_top(int wy) { return wy + TITLE_H; }
+static int edit_text_bottom(int wy, int wh) { return wy + wh - 1 - edit_status_h() - edit_search_height(); }
+
+static void edit_find_layout(int wx, int wy, int ww, int wh, FindLayout *L) {
+    int rows = edit_search.replace_mode ? 2 : 1, s = nav_size(), fw;
+    L->rows = rows;
+    if (MODERN) {
+        int w = ww - 2 * 24 - SB < 500 ? ww - 2 * 24 - SB : 500;
+        L->panel = (Rect){wx + ww - 1 - SB - 12 - w, edit_text_top(wy) + 10, w, rows * (BTN_H + 8) + 8};
+    } else
+        L->panel = (Rect){wx + 1, edit_text_bottom(wy, wh), ww - 2, edit_search_height()};
+    int x = L->panel.x + 8, y = L->panel.y + (MODERN ? 8 : 6);
+    int right = L->panel.x + L->panel.w - 8;
+    L->close = (Rect){right - s, y + (BTN_H - s) / 2, s, s};
+    fw = MODERN ? 210 : 240;
+    if (x + fw + 260 > right) fw = right - x - 260 > 120 ? right - x - 260 : 120;
+    L->field[0] = (Rect){x, y, fw, BTN_H};
+    L->count_x = x + fw + 10;
+    int nx = L->count_x + kit_text_w("999 of 999", 0) - 8;
+    L->prev = (Rect){nx, y + (BTN_H - s) / 2, s, s};
+    L->next = (Rect){nx + s + 2, y + (BTN_H - s) / 2, s, s};
+    int ex = L->next.x + s + 12;
+    L->exact = (Rect){ex, y + (BTN_H - s) / 2, MODERN ? s + 4 : kit_text_w("Match case", 0) + 24, s};
+    L->whole = (Rect){L->exact.x + L->exact.w + (MODERN ? 4 : 12), L->exact.y, MODERN ? s + 4 : kit_text_w("Whole word", 0) + 24, s};
+    /* Drop the whole-word toggle when the bar is too narrow for it. */
+    if (L->whole.x + L->whole.w > L->close.x - 8) L->whole.w = 0;
+    int y2 = y + BTN_H + 8;
+    L->field[1] = (Rect){x, y2, fw, BTN_H};
+    int rw = kit_button_w("Replace", -1);
+    L->replace = (Rect){L->count_x, y2, rw, BTN_H};
+    L->all = (Rect){L->count_x + rw + 8, y2, kit_button_w("Replace All", -1), BTN_H};
+}
+
+/* Matches in the document and which one the selection is. */
+static void edit_find_count(int *count, int *current) {
+    EditorSearch *q = &edit_search;
+    int n = kstrlen(q->text[0]), lo = edit_sel_a < edit_sel_b ? edit_sel_a : edit_sel_b;
+    *count = *current = 0;
+    if (!n) return;
+    for (int at = text_find(edit_buf, edit_len, q->text[0], 0, 1, edit_search_flags()); at >= 0 && *count < 9999;) {
+        (*count)++;
+        if (at == lo && edit_sel_a != edit_sel_b) *current = *count;
+        if (at + 1 > edit_len - n) break;
+        int next = text_find(edit_buf, edit_len, q->text[0], at + 1, 1, edit_search_flags());
+        if (next <= at) break;
+        at = next;
     }
 }
-static int edit_search_click(int wx,int wy,int ww,int wh){
-    if(!edit_search.open)return 0;
-    EditorSearch *q=&edit_search;int y=wy+wh-SB-edit_search_height();
-    if(!hit(mouse_x,mouse_y,wx,y,ww,edit_search_height()))return 0;
-    q->focus=1;
-    for(int f=0;f<(q->replace_mode?2:1);f++)if(hit(mouse_x,mouse_y,wx+66,y+6+f*32,ww-82,26)){
-        q->field=f;q->position[f]=kstrlen(q->text[f]);q->selected[f]=1;dirty=1;return 1;}
-    int by=y+(q->replace_mode?70:38);
-    int xs[6],ws[6],n=edit_search_buttons(wx,ww,q->replace_mode,xs,ws),pressed=-1;
-    for(int i=0;i<n;i++)if(hit(mouse_x,mouse_y,xs[i],by,ws[i],26)){pressed=q->replace_mode||i<2?i:i+2;break;}
-    if(pressed==0)edit_find_next(1);
-    else if(pressed==1)edit_find_next(-1);
-    else if(pressed==2)edit_replace_one();
-    else if(pressed==3)edit_replace_everywhere();
-    else if(pressed==4)q->exact=!q->exact;
-    else if(pressed==5)q->open=q->focus=0;
-    dirty=1;return 1;
+
+static void edit_find_field(Rect r, int f, int placeholder_search) {
+    EditorSearch *q = &edit_search;
+    int focus = q->focus && q->field == f, tx, ty = kit_ty(r.y, r.h);
+    if (placeholder_search) tx = kit_search(r.x, r.y, r.w, r.h, "", q->text[f][0] ? "" : "Find", focus ? KIT_FOCUS : 0);
+    else {
+        tx = kit_field(r.x, r.y, r.w, r.h, focus ? KIT_FOCUS : 0);
+        if (!q->text[f][0] && !focus) kit_text("Replace with", tx, ty, TK_TEXT2, r.w - (tx - r.x) - 8, 0);
+    }
+    int lim = r.x + r.w - 8 - tx;
+    if (focus && q->selected[f] && q->text[f][0]) {
+        int w = kit_text_w(q->text[f], 0);
+        draw_rect(tx - 1, ty, (w < lim ? w : lim) + 2, UI_FONT_H, TK_ACCENT);
+        kit_text(q->text[f], tx, ty, TK_ON_ACCENT, lim, 0);
+    } else kit_text(q->text[f], tx, ty, TK_TEXT, lim, 0);
+    if (focus && !q->selected[f] && ((frame_count / 35) & 1) == 0) {
+        char prefix[64];
+        kmemcpy(prefix, q->text[f], q->position[f]);
+        prefix[q->position[f]] = 0;
+        int cx = tx + kit_text_w(prefix, 0);
+        if (cx < r.x + r.w - 4) kit_caret(cx, ty);
+    }
+}
+
+static void draw_edit_search(int wx, int wy, int ww, int wh) {
+    if (!edit_search.open) return;
+    EditorSearch *q = &edit_search;
+    FindLayout L;
+    edit_find_layout(wx, wy, ww, wh, &L);
+    Rect p = L.panel;
+    if (MODERN) { kit_shadow(p.x, p.y, p.w, p.h, 10); kit_box(p.x, p.y, p.w, p.h, 10, ui_theme.overlay, TK_LINE_STRONG); }
+    else { draw_hline(p.x, p.y, p.w, TK_LINE_SUBTLE); draw_rect(p.x, p.y + 1, p.w, p.h - 1, TK_BASE); }
+    uint8_t paper = MODERN ? ui_theme.overlay : TK_BASE;
+    edit_find_field(L.field[0], 0, 1);
+    int count, current;
+    edit_find_count(&count, &current);
+    char text[32];
+    if (!q->text[0][0]) text[0] = 0;
+    else if (!count) kstrcpy(text, "No results");
+    else if (!current) {
+        fmt_uint(text, (unsigned)count);
+        kstrcpy(text + kstrlen(text), count == 1 ? " match" : " matches");
+    } else {
+        fmt_uint(text, (unsigned)current);
+        kstrcpy(text + kstrlen(text), " of ");
+        fmt_uint(text + kstrlen(text), (unsigned)count);
+    }
+    kit_text(text, L.count_x, kit_ty(L.field[0].y, BTN_H), TK_TEXT2, L.prev.x - L.count_x - 4, 0);
+    kit_icon_button(L.prev.x, L.prev.y, L.prev.w, UI_ICON_UP, hot(L.prev.x, L.prev.y, L.prev.w, L.prev.h));
+    kit_icon_button(L.next.x, L.next.y, L.next.w, UI_ICON_DOWN, hot(L.next.x, L.next.y, L.next.w, L.next.h));
+    kit_vseparator(L.exact.x - 6, L.field[0].y + 4, BTN_H - 8);
+    for (int k = 0; k < 2; k++) {
+        Rect b = k ? L.whole : L.exact;
+        int set = k ? q->whole : q->exact;
+        if (!b.w) continue;
+        if (MODERN) {
+            int on = set ? KIT_ON : hot(b.x, b.y, b.w, b.h);
+            if (on) kit_fill(b.x, b.y, b.w, b.h, 6, set ? TK_ACCENT_100 : TK_HOVER, 1);
+            uint8_t ink = set ? TK_ACCENT_700 : TK_TEXT;
+            int ty = kit_ty(b.y, b.h);
+            kit_text_center(k ? "ab" : "Aa", b.x, ty, b.w, ink, 0);
+            if (k) draw_hline(b.x + b.w / 2 - kit_text_w("ab", 0) / 2, ty + UI_FONT_H, kit_text_w("ab", 0), ink);
+        } else kit_check_row(b.x, b.y + (b.h - ui_theme.check) / 2 - 1, k ? "Whole word" : "Match case",
+                             (set ? KIT_ON : 0) | hot(b.x, b.y, b.w, b.h), 0);
+    }
+    if (MODERN) kit_vseparator(L.close.x - 6, L.field[0].y + 4, BTN_H - 8);
+    kit_icon_button(L.close.x, L.close.y, L.close.w, UI_ICON_X, hot(L.close.x, L.close.y, L.close.w, L.close.h));
+    if (L.rows > 1) {
+        edit_find_field(L.field[1], 1, 0);
+        kit_button(L.replace.x, L.replace.y, L.replace.w, BTN_H, "Replace", -1, KB_DEFAULT,
+                   hot(L.replace.x, L.replace.y, L.replace.w, BTN_H));
+        kit_button(L.all.x, L.all.y, L.all.w, BTN_H, "Replace All", -1, KB_DEFAULT, hot(L.all.x, L.all.y, L.all.w, BTN_H));
+    }
+    (void)paper;
+}
+
+static int rect_has(Rect r) { return hit(mouse_x, mouse_y, r.x, r.y, r.w, r.h); }
+static int edit_search_click(int wx, int wy, int ww, int wh) {
+    if (!edit_search.open) return 0;
+    EditorSearch *q = &edit_search;
+    FindLayout L;
+    edit_find_layout(wx, wy, ww, wh, &L);
+    if (!rect_has(L.panel)) return 0;
+    q->focus = 1;
+    for (int f = 0; f < L.rows; f++)
+        if (rect_has(L.field[f])) { q->field = f; q->position[f] = kstrlen(q->text[f]); q->selected[f] = 1; dirty = 1; return 1; }
+    if (rect_has(L.next)) edit_find_next(1);
+    else if (rect_has(L.prev)) edit_find_next(-1);
+    else if (rect_has(L.exact)) q->exact = !q->exact;
+    else if (L.whole.w && rect_has(L.whole)) q->whole = !q->whole;
+    else if (rect_has(L.close)) q->open = q->focus = 0;
+    else if (L.rows > 1 && rect_has(L.replace)) edit_replace_one();
+    else if (L.rows > 1 && rect_has(L.all)) edit_replace_everywhere();
+    dirty = 1;
+    return 1;
 }
 
 static void namedlg_open(int target, const char *initial);
@@ -4360,14 +4468,24 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *y = MENUBAR_H;
 }
 
+/* Line number gutter: wide enough for the last line's number. */
+static int edit_gutter_w(void) {
+    if (!(win_options & WINOPT_LINE_NUMBERS)) return 0;
+    int lines = 1, digits = 1;
+    for (int i = 0; i < edit_len; i++) if (edit_buf[i] == '\n') lines++;
+    for (int n = lines; n >= 10; n /= 10) digits++;
+    if (digits < 2) digits = 2;
+    return digits * EDIT_CHAR_W + 20;
+}
+
 static void edit_area(int wx, int wy, int ww, int wh,
                       int *ax, int *ay, int *aw, int *ah) {
-    int top = TITLE_H + INFO_H;
-    *ax = wx + 18;
-    *ay = wy + top + 14;
-    *aw = ww - 36 - SB;
-    *ah = wh - top - 24 - SB - edit_search_height();
-    if(*ah<EDIT_LINE_H)*ah=EDIT_LINE_H;
+    *ax = wx + 1 + edit_gutter_w() + (MODERN ? 12 : 8);
+    *ay = edit_text_top(wy) + (MODERN ? 10 : 6);
+    *aw = wx + ww - 1 - SB - 4 - *ax;
+    *ah = edit_text_bottom(wy, wh) - 4 - *ay;
+    if (*aw < EDIT_CHAR_W) *aw = EDIT_CHAR_W;
+    if (*ah < EDIT_LINE_H) *ah = EDIT_LINE_H;
 }
 
 static void edit_caret_cell(int cols, int *row, int *col) {
@@ -5661,53 +5779,19 @@ static void od_open_selected(void) {
 }
 
 
+#define EDIT_MARKS 128
+static void fmt_grouped(char *out, unsigned v);
+static const char *kind_text(int id);
 static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
-    char title[40];
-    char info[112];
-    if (edit_file >= 0 && fs_identity(edit_file) == edit_identity) {
-        const char *nm = fs_name(edit_file);
-        int t = 0;
-        while (nm[t] && t < 28) {
-            title[t] = nm[t];
-            t++;
-        }
-        title[t] = 0;
-    } else {
-        kstrcpy(title, "untitled");
-    }
-    if (!edit_saved_ok) {
-        int t = kstrlen(title);
-        if (t < 36) {
-            title[t++] = ' ';
-            title[t++] = '*';
-            title[t] = 0;
-        }
-    }
-
-    char nbuf[8];
-    utoa((unsigned)edit_len, nbuf);
-    int i = 0, p = 0;
-    while (nbuf[p] && i < 20)
-        info[i++] = nbuf[p++];
-    const char *s = edit_len == 1 ? " byte" : " bytes";
-    p = 0;
-    while (s[p] && i < 30)
-        info[i++] = s[p++];
-    if (!edit_saved_ok && i < 28) {
-        info[i++] = ' ';
-        info[i++] = '*';
-    }
-    info[i] = 0;
-    if(edit_save_busy)kstrcpy(info+i," | Save not started; retry");
-    else if(edit_search.open&&edit_search.message[0]){kstrcpy(info+i," | ");kstrcpy(info+i+3,edit_search.message);}
-
-    gui_draw_window(wx, wy, ww, wh, title, info,
-                    WIN_INFO | WIN_SCROLL | (inactive ? WIN_INACTIVE : 0));
+    char title[FS_NAME_LEN];
+    kstrcpy(title, edit_binding_valid() ? fs_name(edit_file) : "untitled");
+    chrome_dirty = !edit_saved_ok;
+    gui_draw_window(wx, wy, ww, wh, title, 0, inactive ? WIN_INACTIVE : 0);
+    chrome_dirty = 0;
 
     int ax, ay, aw, ah;
     edit_area(wx, wy, ww, wh, &ax, &ay, &aw, &ah);
-    /* The text sits directly on the page, without an inset black rule. */
-
+    int top = edit_text_top(wy), bottom = edit_text_bottom(wy, wh), g = edit_gutter_w();
     int cols = aw / EDIT_CHAR_W;
     int rows = ah / EDIT_LINE_H;
     if (cols < 1)
@@ -5716,44 +5800,108 @@ static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
         rows = 1;
     if(!edit_manual_scroll)edit_ensure_caret_visible(rows, cols);
 
-    int r = 0, c = 0;
     int sel_lo = edit_sel_a < edit_sel_b ? edit_sel_a : edit_sel_b;
     int sel_hi = edit_sel_a > edit_sel_b ? edit_sel_a : edit_sel_b;
     int has_sel = sel_lo != sel_hi;
+    int caret_row, caret_col;
+    edit_caret_cell(cols, &caret_row, &caret_col);
+    if (g && !MODERN) draw_vline(wx + g, top, bottom - top, TK_LINE_SUBTLE);
+    /* The current line, while nothing is selected. */
+    int cur = caret_row - edit_scroll;
+    if (!has_sel && !inactive && cur >= 0 && cur < rows) {
+        int hx = MODERN ? wx + 1 : wx + 1 + g + (g ? 1 : 0);
+        draw_rect(hx, ay + cur * EDIT_LINE_H, wx + ww - 1 - SB - hx, EDIT_LINE_H, TK_ACCENT_50);
+    }
+    const char *needle = edit_search.open ? edit_search.text[0] : "";
+    int needle_n = kstrlen(needle), match_end = -1;
 
+    int r = 0, c = 0, line = 1, caret_line = 1, marks = 0, mark_row[EDIT_MARKS];
     for (int ei = 0; ei <= edit_len; ei++) {
         int vis_row = r - edit_scroll;
-        int selected = has_sel && ei >= sel_lo && ei < sel_hi;
-        if (selected && vis_row >= 0 && vis_row < rows) {
-            int cw = (ei < edit_len && edit_buf[ei] == '\n') ? 4 : EDIT_CHAR_W;
-            draw_rect(ax + c * EDIT_CHAR_W, ay + vis_row * EDIT_LINE_H, cw,
-                      EDIT_LINE_H, ui_accent);
+        if (ei == edit_caret) caret_line = line;
+        /* A row that starts a line gets its number. */
+        if (g && c == 0 && (ei == 0 || edit_buf[ei - 1] == '\n') && vis_row >= 0 && vis_row < rows) {
+            char num[12];
+            fmt_uint(num, (unsigned)line);
+            int on = r == caret_row, nw = kstrlen(num) * EDIT_CHAR_W;
+            int nx = wx + 1 + g - 10 - nw;
+            for (int k = 0; num[k]; k++)
+                draw_edit_char(num[k], nx + k * EDIT_CHAR_W, ay + vis_row * EDIT_LINE_H, on ? TK_TEXT : TK_LINE_STRONG);
         }
-        if (!has_sel && ei == edit_caret && vis_row >= 0 && vis_row < rows) {
+        int selected = has_sel && ei >= sel_lo && ei < sel_hi;
+        if (needle_n && ei >= match_end && text_match(edit_buf, edit_len, ei, needle, edit_search_flags())) {
+            match_end = ei + needle_n;
+            if (marks < EDIT_MARKS && (!marks || mark_row[marks - 1] != r)) mark_row[marks++] = r;
+        }
+        if (vis_row >= 0 && vis_row < rows && ei < edit_len) {
+            int cw = edit_buf[ei] == '\n' ? 4 : EDIT_CHAR_W;
+            if (selected)
+                draw_rect(ax + c * EDIT_CHAR_W, ay + vis_row * EDIT_LINE_H, cw, EDIT_LINE_H, inactive ? TK_ACCENT_100 : TK_ACCENT);
+            else if (ei < match_end && edit_buf[ei] != '\n')
+                draw_rect(ax + c * EDIT_CHAR_W, ay + vis_row * EDIT_LINE_H, cw, EDIT_LINE_H, TK_FIND);
+        }
+        if (!has_sel && !inactive && ei == edit_caret && vis_row >= 0 && vis_row < rows) {
             int cx = ax + c * EDIT_CHAR_W;
             int cy = ay + vis_row * EDIT_LINE_H;
             if ((frame_count / 35) % 2 == 0)
-                draw_rect(cx, cy, 2, EDIT_FONT_H, ui_accent);
+                draw_rect(cx, cy, 2, EDIT_FONT_H, TK_TEXT);
         }
         if (ei == edit_len)
             break;
         if (edit_buf[ei] == '\n') {
             r++;
             c = 0;
+            line++;
             continue;
         }
-        vis_row = r - edit_scroll;
         if (vis_row >= 0 && vis_row < rows)
             draw_edit_char(edit_buf[ei], ax + c * EDIT_CHAR_W,
                            ay + vis_row * EDIT_LINE_H,
-                           selected ? ui_on_accent : ui_text);
+                           selected && !inactive ? TK_ON_ACCENT : TK_TEXT);
         c++;
         if (c >= cols) {
             r++;
             c = 0;
         }
     }
-    draw_edit_search(wx,wy,ww,wh);
+    kit_vscroll(wx + ww - 1 - SB, top, bottom - top, edit_scroll, rows, r + 1, 0);
+    /* Overview marks on the scrollbar: matches in amber, the caret in accent. */
+    if (r + 1 > rows) {
+        int mx = wx + ww - 1 - 5, track = bottom - top - 8;
+        for (int i = 0; i < marks; i++) draw_rect(mx, top + 4 + mark_row[i] * track / (r + 1), 4, 2, TK_AMBER);
+        draw_rect(mx, top + 4 + caret_row * track / (r + 1), 4, 2, TK_ACCENT);
+    }
+    draw_edit_search(wx, wy, ww, wh);
+
+    /* Status bar: position, kind, size, line endings, tab, then the state. */
+    int sy = wy + wh - 1 - edit_status_h(), pad = MODERN ? 12 : 8;
+    if (MODERN) {
+        draw_hline(wx + 1, sy, ww - 2, TK_LINE_SUBTLE);
+        kit_fill_bottom(wx + 1, sy + 1, ww - 2, edit_status_h(), ui_theme.r_window - 1, ui_theme.statusbar);
+    } else kit_statusbar(wx + 1, sy, ww - 2, edit_status_h());
+    int col = 1;
+    for (int i = edit_caret - 1; i >= 0 && edit_buf[i] != '\n'; i--) col++;
+    char pos[32], size[24];
+    kstrcpy(pos, "Ln ");
+    fmt_uint(pos + 3, (unsigned)caret_line);
+    kstrcpy(pos + kstrlen(pos), ", Col ");
+    fmt_uint(pos + kstrlen(pos), (unsigned)col);
+    fmt_grouped(size, (unsigned)edit_len);
+    kstrcpy(size + kstrlen(size), edit_len == 1 ? " byte" : " bytes");
+    const char *kind = edit_binding_valid() ? kind_text(edit_file) : "Plain text";
+    const char *items[5] = {pos, kind, size, "LF", "Tab: 2 spaces"};
+    const char *state = edit_save_busy ? "Save not started; retry" :
+                        edit_search.open && edit_search.message[0] ? edit_search.message :
+                        edit_saved_ok ? (edit_binding_valid() ? "Saved" : "") : "Modified";
+    int ty = kit_ty(sy + 1, edit_status_h() - 1), x = wx + pad;
+    int right = wx + ww - pad - kit_text_w(state, 0) - 16;
+    for (int i = 0; i < 5; i++) {
+        int w = kit_text_w(items[i], 0);
+        if (x + w > right) break;
+        kit_text(items[i], x, ty, TK_TEXT2, w, 0);
+        x += w + 18;
+    }
+    kit_text_right(state, wx + ww - pad, ty, edit_save_busy ? TK_RED_700 : TK_TEXT2, 0);
 }
 
 static void draw_string_in_win(const char *str, int wx, int ww, int y, uint8_t color) {

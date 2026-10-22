@@ -6,10 +6,12 @@
 #define MAX_WIN 8
 #define MENUBAR_H 0
 #define BTN_H 30
+#define TITLE_BAR 29
+#define MODERN 0
 #define SPREADSHEET_SAVE_OK 1
 static struct { int open, seq; } wins[MAX_WIN];
 static int context_slot, name_dlg, name_target, name_focus, name_owner, name_owner_seq;
-static int name_len, name_failed, dirty, mouse_x, mouse_y, key_sc, shift_down;
+static int name_len, name_sel, name_failed, dirty, mouse_x, mouse_y, key_sc, shift_down;
 static unsigned name_pdf_paper;
 static char name_buf[FS_NAME_LEN], key_char;
 static const char *name_failure_message;
@@ -23,7 +25,12 @@ static void context_set(int owner) { context_slot = owner; }
 static void edit_close_cancel(void) { edit_close_owner = -1; }
 static int edit_close_valid(void) { return edit_close_owner >= 0; }
 static int edit_write_named(const char *name) { (void)name; other_writes++; return 1; }
-static int paint_write_named(const char *name) { return edit_write_named(name); }
+static int paint_write_in(int parent, const char *name) { (void)parent; return edit_write_named(name); }
+static void fm_set_cwd(int id) { (void)id; }
+/* The folder browser needs the drawing kit; these dialogs save to folder 0. */
+static void saveas_reset(void) {}
+static int saveas_dir(void) { return -1; }
+static int saveas_click(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; return 0; }
 static int spreadsheet_export_retry_name(char *out, unsigned capacity) { (void)out; (void)capacity; return 0; }
 static int spreadsheet_save_as(int parent, const char *name) { (void)parent; return edit_write_named(name); }
 static int spreadsheet_export_csv(int parent, const char *name) { (void)parent; return edit_write_named(name); }
@@ -44,7 +51,7 @@ int main(void) {
     gfx_init(back, linear, 800, 600, 32, 3200); writer_init(); type("Native dirty text");
     namedlg_open(6, "document.pdf");
     assert(name_dlg && !name_focus && name_pdf_paper == WRITER_PDF_LETTER);
-    int x, y, w, h; namedlg_geom(&x, &y, &w, &h); assert(w == 420 && h == 260);
+    int x, y, w, h; namedlg_geom(&x, &y, &w, &h); assert(w == 640 && h == 534);
     int sx, cx, by, bw; namedlg_buttons(x, y, w, h, &sx, &cx, &by, &bw);
     for (int i = 0; i < 5; i++) { press(KEY_TAB, 0, 0); assert(name_focus == (i + 1) % 5); }
     for (int i = 0; i < 5; i++) { press(KEY_TAB, 1, 0); assert(name_focus == (4 - i + 5) % 5); }
@@ -64,9 +71,11 @@ int main(void) {
     assert(create_count == busy_creates && write_count == busy_writes);
     storage_busy = 0;
     press(KEY_ENTER, 0, 0); assert(!name_dlg && fs_find_child(0, "letter.pdf") >= 0 && writer_dirty());
-    namedlg_open(6, "a4.pdf"); click(x + 250, y + 160);
+    int px, py, pw, ph, fx, fy, fw, fh; namedlg_paper(x, y, w, 1, &px, &py, &pw, &ph);
+    namedlg_field(x, y, w, &fx, &fy, &fw, &fh);
+    namedlg_open(6, "a4.pdf"); click(px + 4, py + 4);
     assert(name_focus == 2 && name_pdf_paper == WRITER_PDF_A4);
-    click(x + 30, y + 120); assert(!name_focus);
+    click(fx + 4, fy + 4); assert(!name_focus);
     sync_failure = 1; click(sx + 4, by + 4);
     assert(name_dlg && name_failed && strstr(writer_status(), "RAM") && writer_dirty());
     int id = fs_find_child(0, "a4.pdf"), writes = write_count; assert(id >= 0);
@@ -87,7 +96,7 @@ int main(void) {
     namedlg_open(6, "orphan.pdf"); wins[0].seq++;
     press(KEY_ENTER, 0, 0); assert(!name_dlg && fs_find_child(0, "orphan.pdf") < 0);
     /* Legacy targets retain their three focus stops and old dispatch. */
-    namedlg_open(3, "legacy.rtf"); namedlg_geom(&x, &y, &w, &h); assert(h == 168);
+    namedlg_open(3, "legacy.rtf"); namedlg_geom(&x, &y, &w, &h); assert(h == 500);
     for (int i = 0; i < 3; i++) { press(KEY_TAB, 0, 0); assert(name_focus == (i + 1) % 3); }
     press(KEY_ENTER, 0, 0); assert(!name_dlg && fs_find_child(0, "legacy.rtf") >= 0 && writer_dirty());
     namedlg_open(2, "saved.bwr"); edit_close_owner = 0; document_action = 7; document_target = 3; document_target_identity = 123;

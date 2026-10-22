@@ -10,7 +10,7 @@ static struct { int open, kind, seq; } wins[MAX_WIN];
 typedef struct { int saved_ok, file; unsigned identity; } Document;
 static struct { Document doc; } window_state[MAX_WIN];
 static int context_slot, name_dlg, name_target, name_focus, name_owner, name_owner_seq;
-static int name_len, name_failed, dirty;
+static int name_len, name_sel, name_failed, dirty;
 static unsigned name_pdf_paper;
 static char name_buf[FS_NAME_LEN];
 static const char *name_failure_message;
@@ -35,7 +35,9 @@ static void win_close(int owner) {
 }
 static int edit_save(void) { return 1; }
 static int edit_write_named(const char *name) { (void)name; return 1; }
-static int paint_write_named(const char *name) { return edit_write_named(name); }
+static int paint_write_in(int parent, const char *name) { (void)parent; return edit_write_named(name); }
+static void saveas_reset(void) {}
+static int saveas_dir(void) { return -1; }
 static void namedlg_open(int target, const char *initial);
 #include "document_save_ui_ops.inc"
 static void writer_window(void) {

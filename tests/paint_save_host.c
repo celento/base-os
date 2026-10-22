@@ -142,7 +142,7 @@ static int make_file(int parent, const char *name, const char *data) {
     assert(fs_write(id, data, (int)strlen(data)) == (int)strlen(data)); return id;
 }
 static void expect_failure(const char *name, const char *message) {
-    assert(!paint_write_named(name));
+    assert(!paint_write_in(-1,name));
     assert(name_failure_message && !strcmp(name_failure_message, message));
     assert(!dirty); expect_unchanged();
 }
@@ -195,12 +195,12 @@ static void success_and_write_retry(int backend, int existing_pictures) {
     assert(pics < 0 || fs_find_child(pics, "retry.pbm") < 0);
     assert(!strcmp(fs_data(fs_find_child(0, "guard")), "Existing root bytes and identity."));
     return_write_error = 0; files_open = 1; capture();
-    assert(paint_write_named("retry.pbm") && !name_failure_message && dirty && refreshes == 1);
+    assert(paint_write_in(-1,"retry.pbm") && !name_failure_message && dirty && refreshes == 1);
     check_bos("retry.pbm", saved_pixels); expect_canvas();
     capture(); expect_failure("retry.pbm", "Name exists. Choose another name."); assert(!mutations);
     assert(!fs_sync() && !fs_init() && !fs_load_disk()); check_bos("retry.pbm", saved_pixels);
     capture(); paint_save(); assert(!name_failed); expect_unchanged(); dirty = 0;
-    assert(paint_write_named("second.pbm")); check_bos("second.pbm", saved_pixels);
+    assert(paint_write_in(-1,"second.pbm")); check_bos("second.pbm", saved_pixels);
     printf("Paint returned-write rollback, explicit retry and exact BOS1 remount passed (%s, Pictures %s)\n",
            fs_storage_name(), existing_pictures ? "existing" : "new");
 }
@@ -230,7 +230,7 @@ static void node_capacity(int backend) {
         expect_failure("full.pbm", "Not enough free file slots."); assert(!mutations);
         assert((fs_find_child(0, "Pictures") >= 0) == existing);
         int last = fs_node_limit() - (existing ? 1 : 2); assert(!fs_delete(last));
-        capture(); assert(paint_write_named("full.pbm")); check_bos("full.pbm", saved_pixels);
+        capture(); assert(paint_write_in(-1,"full.pbm")); check_bos("full.pbm", saved_pixels);
     }
     printf("Paint full node table and two-node admission/retry passed (%s)\n", fs_storage_name());
 }
@@ -253,7 +253,7 @@ static void byte_capacity(void) {
         int full = fs_find_child(0, existing ? "fill-2" : "fill-1"); assert(full >= 0);
         int length = fs_size(full); assert(length > PICTURE_BYTES);
         assert(fs_write(full, fs_data(full), length - PICTURE_BYTES) == length - PICTURE_BYTES);
-        capture(); assert(paint_write_named("full.pbm")); check_bos("full.pbm", saved_pixels);
+        capture(); assert(paint_write_in(-1,"full.pbm")); check_bos("full.pbm", saved_pixels);
         assert(fs_used_bytes() == fs_capacity()); assert(!fs_sync() && !fs_init() && !fs_load_disk());
         check_bos("full.pbm", saved_pixels);
     }
@@ -265,7 +265,7 @@ static void byte_capacity(void) {
         int full = fs_find_child(0, existing ? "fill-2" : "fill-1"), length = fs_size(full);
         int overhead = existing ? 40 : 80;
         assert(fs_write(full, fs_data(full), length - overhead) == length - overhead);
-        capture(); assert(paint_write_named("metadata.pbm")); check_bos("metadata.pbm", saved_pixels);
+        capture(); assert(paint_write_in(-1,"metadata.pbm")); check_bos("metadata.pbm", saved_pixels);
         assert(fs_used_bytes() == fs_capacity()); assert(!fs_sync() && !fs_init() && !fs_load_disk());
         check_bos("metadata.pbm", saved_pixels);
     }
@@ -287,7 +287,7 @@ static void busy_retry(int existing_pictures) {
     unsigned steps = 0;
     while (fs_sync_busy()) { assert(fs_sync_step() != FS_SYNC_IDLE); assert(++steps < 100000); }
     assert(!fs_sync_result(ticket) && !fs_sync_release(ticket));
-    assert(paint_write_named(dialog_name)); check_bos(dialog_name, saved_pixels); expect_canvas();
+    assert(paint_write_in(-1,dialog_name)); check_bos(dialog_name, saved_pixels); expect_canvas();
     assert(!fs_sync() && !fs_init() && !fs_load_disk()); check_bos(dialog_name, saved_pixels);
     printf("Paint real async lease rejects without mutation and retries retained name (%s Pictures)\n",
            existing_pictures ? "existing" : "new");

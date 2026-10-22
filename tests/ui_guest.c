@@ -58,8 +58,8 @@ void feature_test(void){
     open_paint();paint_init();history_record(&paint_history,paint_pix);paint_pix[0]=17;paint_undo(0);check_ui(paint_pix[0]!=17,"paint undo");paint_undo(1);check_ui(paint_pix[0]==17,"paint redo");
     int pictures=fs_find_child(fs_root(),"Pictures");
     int collision=fs_mkdir(pictures,"paint-collision");check_ui(collision>=0,"paint collision folder");
-    check_ui(!paint_write_named("paint-collision")&&fs_is_dir(collision),"paint rejects directory destination");
-    check_ui(paint_write_named("regression.pbm"),"paint saves real file");
+    check_ui(!paint_write_in(-1,"paint-collision")&&fs_is_dir(collision),"paint rejects directory destination");
+    check_ui(paint_write_in(-1,"regression.pbm"),"paint saves real file");
     int extra=win_open(WK_CLOCK);taskbar_layout();check_ui(tb_n==MAX_WIN,"all taskbar slots");
     for(int t=0;t<tb_n;t++){
         check_ui(tb_x[t]>=8+start_btn_w()+8&&tb_x[t]+tb_w[t]<=fb_w-8,"taskbar remains inside screen");
