@@ -8227,12 +8227,15 @@ static int launcher_visible_rows(void) {
     return rows < 1 ? 1 : rows;
 }
 /* Rows on screen: with no matching files listed under the grid, a last row
- * that only partly fits is drawn cut at the grid's bottom. */
+ * that only partly fits is drawn cut at the grid's bottom, when at least a
+ * third of it shows (a thinner sliver reads as stray lines). */
 static int launcher_shown_rows(void) {
     if (launch_n > launch_apps) return launcher_visible_rows();
     int x, y, w, h;
     launcher_geom(&x, &y, &w, &h);
-    int rows = (lp_grid_bottom(y, h) - lp_grid_y(y) + lp_tile_h() + 3) / (lp_tile_h() + 4);
+    int avail = lp_grid_bottom(y, h) - lp_grid_y(y), step = lp_tile_h() + 4;
+    int rows = avail / step;
+    if (avail - rows * step >= lp_tile_h() / 3) rows++;
     return rows < 1 ? 1 : rows;
 }
 static int launcher_total_rows(void) { int c = lp_cols(); return (launch_apps + c - 1) / c; }
@@ -8348,21 +8351,39 @@ static void tile_line(const char *s, int x, int y, int w, uint8_t ink, int bold,
 }
 
 /* A tile label on up to two centered lines, split at the last space that
- * fits the first line. */
+ * fits the first line. A long name with no such space still wraps: before
+ * its extension dot, after a dash or underscore, or else at the last
+ * character that fits, so only the second line is ever cut. */
 static void tile_label_ex(const char *s, int x, int y, int w, uint8_t ink, int bold, int selected) {
     int n = kstrlen(s);
     char first[FS_NAME_LEN];
-    int cut = -1;
-    if (kit_text_w(s, bold) > w)
+    int cut = -1, skip = 1;
+    if (kit_text_w(s, bold) > w) {
         for (int i = 0; i < n && i < FS_NAME_LEN - 1; i++) {
             if (s[i] != ' ') continue;
             kmemcpy(first, s, i); first[i] = 0;
             if (kit_text_w(first, bold) <= w) cut = i;
         }
-    if (cut < 0) { tile_line(s, x, y, w, ink, bold, selected); return; }
+        if (cut < 0) {
+            int fit = 0;
+            while (fit < n && fit < FS_NAME_LEN - 1) {
+                kmemcpy(first, s, fit + 1); first[fit + 1] = 0;
+                if (kit_text_w(first, bold) > w) break;
+                fit++;
+            }
+            int mark = -1;
+            for (int i = 1; i <= fit && i < n; i++) {
+                if (s[i] == '.') mark = i;
+                else if ((s[i - 1] == '-' || s[i - 1] == '_') && i > 1) mark = i;
+            }
+            cut = mark > 0 ? mark : fit;
+            skip = 0;
+        }
+    }
+    if (cut <= 0 || cut >= n) { tile_line(s, x, y, w, ink, bold, selected); return; }
     kmemcpy(first, s, cut); first[cut] = 0;
     tile_line(first, x, y, w, ink, bold, selected);
-    tile_line(s + cut + 1, x, y + CHAR_H + 1, w, ink, bold, selected);
+    tile_line(s + cut + skip, x, y + CHAR_H + 1, w, ink, bold, selected);
 }
 static void tile_label(const char *s, int x, int y, int w, uint8_t ink, int bold) {
     tile_label_ex(s, x, y, w, ink, bold, 0);
@@ -10449,7 +10470,10 @@ static void about_lines(char lines[4][64]) {
     sysinfo_fill(&si);
     kstrcpy(lines[0], "Version 0.9, build " BASEOS_BUILD_LABEL);
     lines[1][0] = 0; fmt_cat_uint(lines[1], (unsigned)fb_w); fmt_cat(lines[1], " x ");
-    fmt_cat_uint(lines[1], (unsigned)fb_h); fmt_cat(lines[1], ", 256 colors");
+    /* Same wording as System Monitor: the mode's depth, then the desktop's
+     * 256-color palette drawn through it. */
+    fmt_cat_uint(lines[1], (unsigned)fb_h); fmt_cat(lines[1], ", ");
+    fmt_cat_uint(lines[1], (unsigned)fb_bpp); fmt_cat(lines[1], "-bit, 256 colors");
     lines[2][0] = 0; fmt_cat_uint(lines[2], (unsigned)si.mem_mb); fmt_cat(lines[2], " MB memory");
     lines[3][0] = 0; fmt_cat_uint(lines[3], (unsigned)(si.fs_bytes / 1024)); fmt_cat(lines[3], " KB used of ");
     fmt_cat_uint(lines[3], (unsigned)(si.fs_cap / 1024)); fmt_cat(lines[3], " KB");
@@ -10790,7 +10814,9 @@ static void settings_display(SetForm *f) {
     }
     if (!MODERN) f->y += 8;
     y = set_row(f, "Colors", 20, &cx);
-    kit_text("256 colors", cx, kit_ty(y, 20), TK_TEXT, 200, 0);
+    char depth[32];
+    depth[0] = 0; fmt_cat_uint(depth, (unsigned)fb_bpp); fmt_cat(depth, "-bit, 256 colors");
+    kit_text(depth, cx, kit_ty(y, 20), TK_TEXT, 240, 0);
     set_card_end(f);
     f->y += 12;
     kit_text(display_message[0] ? display_message :

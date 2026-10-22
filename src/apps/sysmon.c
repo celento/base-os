@@ -212,7 +212,7 @@ static void system_draw(const MonitorLayout *l,const SysInfo *si){
     fmt_time(buf,si->uptime_sec);card_row(&c,"Uptime",buf,0,0,0);
     fmt_uint(buf,(unsigned)si->mem_mb);append(buf," MB");card_row(&c,"Memory",buf,0,0,0);
     fmt_uint(buf,(unsigned)si->fb_w);append(buf," x ");fmt_uint(t,(unsigned)si->fb_h);
-    append(buf,t);append(buf," @ ");fmt_uint(t,(unsigned)si->fb_bpp);append(buf,t);append(buf," bpp");
+    append(buf,t);append(buf,", ");fmt_uint(t,(unsigned)si->fb_bpp);append(buf,t);append(buf,"-bit, 256 colors");
     card_row(&c,"Display",buf,0,0,0);
     fmt_uint(buf,si->frames);card_row(&c,"Frames rendered",buf,0,0,0);
     card_end(&c);
