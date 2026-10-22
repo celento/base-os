@@ -266,6 +266,17 @@ static int (*hover_fn)(int x, int y, int w, int h);
 void player_set_hover(int (*fn)(int x, int y, int w, int h)) { hover_fn = fn; }
 static int hover(PlayerRect r) { return hover_fn && r.w > 0 ? hover_fn(r.x, r.y, r.w, r.h) : 0; }
 
+/* A one-color eighth note in a 16 px box, for rows on the accent fill where
+ * the colored music icon would not read. */
+static void note_glyph(int x, int y, uint8_t ink) {
+    kit_fill(x + 3, y + 10, 6, 5, 2, ink, 1);
+    draw_rect(x + 8, y + 2, 1, 10, ink);
+    draw_rect(x + 9, y + 2, 1, 10, ink);
+    draw_rect(x + 10, y + 3, 2, 1, ink);
+    draw_rect(x + 11, y + 4, 2, 1, ink);
+    draw_rect(x + 12, y + 5, 1, 3, ink);
+}
+
 /* A bordered tool with a toolbar glyph and an optional label. */
 static void tool(PlayerRect r, int glyph, const char *label, int state) {
     int dis = state & KIT_DISABLED;
@@ -385,6 +396,7 @@ static void draw_library(const PlayerLayout *L) {
         uint8_t paper = (state & KIT_ON) ? TK_ACCENT : (state & KIT_HOVER) ? (MODERN ? TK_SUNKEN : TK_ACCENT_50) : TK_RAISED;
         int current = id == source_id && fs_identity(id) == source_identity, ix = r.x + (MODERN ? 14 : 8);
         if (current) icon_draw(ICON_PLAY, ix, r.y + (r.h - ICON_SIZE) / 2, (state & KIT_ON) ? TK_ON_ACCENT : TK_ACCENT);
+        else if ((state & KIT_ON) && !is_video(id)) note_glyph(ix, r.y + (r.h - 16) / 2, TK_ON_ACCENT);
         else ui_icon_draw(is_video(id) ? UI_ICON_SCREEN : UI_ICON_A_MUSIC, ix, r.y + (r.h - 16) / 2, 16,
                           (state & KIT_ON) ? TK_ON_ACCENT : TK_ICON, paper);
         const char *format = format_name(id);

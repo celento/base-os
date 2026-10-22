@@ -436,7 +436,7 @@ void spreadsheet_new(void) {
     s->revision = revision; state.saved_revision = s->revision;
     state.file = -1; state.identity = state.incarnation = 0; state.failed_save = state.has_binding = state.binding_conflict = 0;
     reset_view(); text_copy(state.title, sizeof state.title, "Untitled sheet");
-    status("A1:Z128 | 95 bytes/cell | numbers -2147483.648 to 2147483.647 | 3 decimal places.");
+    status("Type to fill the selected cell. Start with = for a formula.");
 }
 void spreadsheet_init(void) {
     if (state.initialized) return;
@@ -1040,6 +1040,16 @@ static void frame_layout(int w, int h) {
     fr.enter = (Clip){fr.cancel.x + s + 2, y, s, s};
     int source_x = fr.enter.x + s + 34;
     fr.source = (Clip){source_x, y, w - m - source_x, s};
+}
+
+/* The tallest client height up to h whose grid shows only whole rows, for
+ * the default window size. */
+int spreadsheet_fit_height(int w, int h) {
+    Frame saved = fr;
+    frame_layout(w, h);
+    int spare = (fr.bottom - fr.grid_y) % ROW_H;
+    fr = saved;
+    return h - (spare > 0 ? spare : 0);
 }
 
 static int editor_offset(int width) {

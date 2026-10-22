@@ -26,6 +26,7 @@ void spreadsheet_init(void);
 void spreadsheet_new(void);
 int spreadsheet_open_file(int id);
 void spreadsheet_draw(int x, int y, int w, int h);
+int spreadsheet_fit_height(int w, int h);
 /* Ctrl+1..4 applies General/Fixed2/Currency/Percent to the selection.
  * Ctrl+- / Ctrl+= adjusts selected columns by 16px within 48..320; Ctrl+0
  * restores 104px. Metadata controls commit pending source first and are undoable. */

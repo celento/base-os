@@ -34,6 +34,7 @@
 #define STYLE_BOLD 1
 #define STYLE_PRE 2
 #define STYLE_HEADING 4
+#define STYLE_BULLET 8   /* a list marker, drawn as a dot */
 
 typedef struct { unsigned short start, length; } BrowserLine;
 typedef struct { char name[64]; unsigned short position; } BrowserAnchor;
@@ -311,7 +312,7 @@ static void parse_document(const char *s,unsigned n,int html) {
             else if(equal(tag,"hr")){newline(1);emit_string("--------------------",0,0);newline(1);pending_space=0;}
             else if(equal(tag,"p")||equal(tag,"div")||equal(tag,"section")||equal(tag,"article")||equal(tag,"header")||equal(tag,"footer")||equal(tag,"blockquote")){newline(equal(tag,"p")||equal(tag,"blockquote"));pending_space=0;}
             else if(equal(tag,"ul")||equal(tag,"ol")){newline(0);if(close){if(list)list--;}else if(list<8)list++;pending_space=0;}
-            else if(equal(tag,"li")){newline(0);if(!close){for(int k=1;k<list;k++)emit_string("  ",0,0);emit_string("* ",0,0);}pending_space=0;}
+            else if(equal(tag,"li")){newline(0);if(!close){for(int k=1;k<list;k++)emit_string("  ",0,0);emit('*',STYLE_BULLET,0);emit(' ',0,0);}pending_space=0;}
             else if(equal(tag,"tr")){newline(0);pending_space=0;}
             else if(equal(tag,"td")||equal(tag,"th")){if(close)emit_string("  ",0,0);}
             else if(!close&&equal(tag,"img")){char alt[160];attribute(s+start,end-start,"alt",alt,sizeof alt);if(alt[0]){emit_string(" [",0,active_link);emit_string(alt,0,active_link);emit_string("] ",0,active_link);}}
@@ -852,7 +853,14 @@ static void status_draw(int x,int y,int w,int h) {
     }else if(B.error_page){
         ui_icon_draw(UI_ICON_ERR,lx,sy+1+(status_h()-1-16)/2,16,TK_ICON,ui_theme.statusbar);lx+=22;
     }
-    kit_text(B.status,lx,ty,TK_TEXT2,right-lx,0);
+    /* Status items are stored joined by " | " and drawn apart, spaced. */
+    const char *at=B.status;
+    while(*at&&lx<right){
+        char item[sizeof B.status];unsigned n=0;
+        while(at[n]&&!(at[n]==' '&&at[n+1]=='|'&&at[n+2]==' ')&&n<sizeof item-1){item[n]=at[n];n++;}
+        item[n]=0;at+=n;if(*at==' ')at+=3;
+        kit_text(item,lx,ty,TK_TEXT2,right-lx,0);lx+=kit_text_w(item,0)+20;
+    }
 }
 void browser_draw(int x,int y,int w,int h) {
     browser_init();if(w<BROWSER_MIN_W||h<BROWSER_MIN_H)return;geometry(w,h);
@@ -880,7 +888,8 @@ void browser_draw(int x,int y,int w,int h) {
             int step=advance(p);if(px+step>content_right)break;
             unsigned char style=B.style[p],link=B.link[p];uint8_t color=link?link_color:ink;
             if(link&&link==B.focused_link)draw_rect(px,py-1,step,UI_FONT_H+2,TK_ACCENT_100);
-            if(style&STYLE_PRE)draw_edit_char(B.text[p],px,py,color);
+            if(style&STYLE_BULLET)kit_fill(px+1,py+UI_FONT_H/2-2,5,5,2,color,1);
+            else if(style&STYLE_PRE)draw_edit_char(B.text[p],px,py,color);
             else if(style&STYLE_BOLD){char c[2]={B.text[p],0};draw_string_bold(c,px,py,color);}
             else draw_char(B.text[p],px,py,color);
             if(link)draw_hline(px,py+UI_FONT_H,step,color);
