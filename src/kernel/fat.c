@@ -1074,7 +1074,13 @@ int fat_rename(FatVolume *v, FatNode *node, const FatNode *directory, const char
     uint32_t slot, lfn_slots;
     /* The new entry first: a crash in between leaves two names, not none. */
     if ((result = write_entries(v, first, u, n, long_name, old, &slot, &lfn_slots))) return result;
-    if ((result = erase_entries(v, node->parent, node->slot, node->lfn_slots))) return result;
+    if ((result = erase_entries(v, node->parent, node->slot, node->lfn_slots))) {
+        /* The old short entry is erased last, so it still stands: take the
+         * new name back, or the two names would share one chain. If that
+         * fails too, stop changing the volume until it is checked. */
+        if (erase_entries(v, first, slot, lfn_slots)) v->read_only = 1;
+        return result;
+    }
     if (is_directory && first != node->parent) {
         if ((result = slot_entry(v, node->cluster, 1, &e, 0))) return result < 0 ? result : FAT_ERR_CORRUPT;
         if (e[0] == '.' && e[1] == '.') {

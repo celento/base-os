@@ -46,6 +46,9 @@ a disk checker can repair without losing data that a finished call wrote:
 - A rename writes the new entry before erasing the old one. A crash in between
   leaves the file under both names (sharing its clusters) rather than under
   none; a checker resolves it.
+- If the old name of a rename cannot be erased, the new name is taken back.
+  If that fails too, the volume stops accepting changes until it is mounted
+  again, so two names never stay live over one chain.
 - Overwriting existing bytes in place is not atomic: a crash can leave a mix of
   old and new bytes in the range being written.
 
