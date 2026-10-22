@@ -1082,10 +1082,17 @@ int fat_rename(FatVolume *v, FatNode *node, const FatNode *directory, const char
         return result;
     }
     if (is_directory && first != node->parent) {
-        if ((result = slot_entry(v, node->cluster, 1, &e, 0))) return result < 0 ? result : FAT_ERR_CORRUPT;
-        if (e[0] == '.' && e[1] == '.') {
+        /* Moves trust "..", so a stale one could let a later move put a
+         * folder inside itself. If it cannot be fixed, stop changing the
+         * volume until it is checked. */
+        result = slot_entry(v, node->cluster, 1, &e, 0);
+        if (!result && e[0] == '.' && e[1] == '.') {
             set_entry_cluster(v, e, is_root_first(v, first) ? 0 : first);
-            if ((result = dir_store(v))) return result;
+            result = dir_store(v);
+        }
+        if (result) {
+            v->read_only = 1;
+            return result < 0 ? result : FAT_ERR_CORRUPT;
         }
     }
     node->parent = first;
