@@ -47,6 +47,13 @@ int ufile_dup2(struct Uproc *process, int fd, int target);
 int ufile_pipe(struct Uproc *process, uint32_t fds);
 int ufile_chdir(struct Uproc *process, uint32_t path);
 int ufile_getcwd(struct Uproc *process, uint32_t buffer, uint32_t length);
+/* The absolute path of a directory descriptor, for the *at calls. */
+int ufile_fd_path(struct Uproc *process, int fd, uint32_t buffer, uint32_t length);
 int ufile_fsync(struct Uproc *process, int fd);
 int ufile_truncate(struct Uproc *process, int fd, uint32_t length);
+
+/* Kernel use (thread 0): the whole file at an absolute path on the native
+ * volume or a FAT disk, in a new kmalloc buffer the caller frees. For
+ * starting programs of any size. 0 or a negated BOS_E*. */
+int ufile_load(const char *path, void **data, uint32_t *size);
 #endif

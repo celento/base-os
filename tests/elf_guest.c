@@ -63,14 +63,16 @@ static void spawn(void) {
         const char *argv[] = {"/Scripts/elf-check", steps[step].check, "last-argument"};
         output_length = 0;
         const void *image = steps[step].image;
+        void *loaded = 0;
         unsigned size = steps[step].size;
         if (!image) {
-            int file = fs_resolve(fs_root(), steps[step].path);
-            if (!fs_valid(file) || fs_is_dir(file)) fail("program file");
-            image = fs_data(file);
-            size = (unsigned)fs_size(file);
+            uint32_t length;
+            if (ufile_load(steps[step].path, &loaded, &length)) fail("program file");
+            image = loaded;
+            size = length;
         }
         int result = uproc_spawn(image, size, argv, 3, 1, &pid);
+        kfree(loaded);
         if (steps[step].status < 0) {
             if (result != steps[step].status) fail(steps[step].check);
             say_number("ELF refused ", (unsigned)-result);

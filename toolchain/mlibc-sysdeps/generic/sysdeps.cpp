@@ -13,6 +13,10 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include <stdarg.h>
+#include <signal.h>
+#include <sys/statvfs.h>
+#include <sys/utsname.h>
 
 #include "baseos_sys.h"
 
@@ -148,15 +152,37 @@ void Sysdeps<Yield>::operator()() {
 	call(BOS_SYS_YIELD);
 }
 
-// Paths relative to a directory descriptor other than the working directory
-// are not supported yet.
-static int at_cwd(int dirfd, const char *path) {
-	return dirfd == AT_FDCWD || (path && path[0] == '/') ? 0 : ENOSYS;
+// A path relative to a directory descriptor becomes an absolute path built
+// from the directory's own path; plain and absolute paths pass through.
+namespace {
+struct AtPath {
+	char buffer[2048];
+	const char *path = nullptr;
+};
+} // namespace
+
+static int at_path(int dirfd, const char *path, AtPath &out) {
+	if (!path) return EFAULT;
+	if (dirfd == AT_FDCWD || path[0] == '/') {
+		out.path = path;
+		return 0;
+	}
+	long length = call(BOS_SYS_FD_PATH, dirfd, long(out.buffer), long(sizeof out.buffer));
+	if (int e = error_of(length)) return e;
+	size_t used = size_t(length) - 1, extra = strlen(path);
+	if (used + 1 + extra + 1 > sizeof out.buffer) return ENAMETOOLONG;
+	if (extra) {
+		if (used && out.buffer[used - 1] != '/') out.buffer[used++] = '/';
+		memcpy(out.buffer + used, path, extra + 1);
+	}
+	out.path = out.buffer;
+	return 0;
 }
 
 int Sysdeps<Openat>::operator()(int dirfd, const char *path, int flags, mode_t mode, int *fd) {
-	if (int e = at_cwd(dirfd, path)) return e;
-	return sysdep<Open>(path, flags, mode, fd);
+	AtPath at;
+	if (int e = at_path(dirfd, path, at)) return e;
+	return sysdep<Open>(at.path, flags, mode, fd);
 }
 
 int Sysdeps<Stat>::operator()(fsfd_target target, int fd, const char *path, int flags,
@@ -167,8 +193,11 @@ int Sysdeps<Stat>::operator()(fsfd_target target, int fd, const char *path, int 
 	if (target == fsfd_target::fd || (target == fsfd_target::fd_path && path && !path[0])) {
 		result = call(BOS_SYS_FSTAT, fd, long(&info));
 	} else {
-		if (target == fsfd_target::fd_path)
-			if (int e = at_cwd(fd, path)) return e;
+		AtPath at;
+		if (target == fsfd_target::fd_path) {
+			if (int e = at_path(fd, path, at)) return e;
+			path = at.path;
+		}
 		result = call(BOS_SYS_STAT, long(path), long(&info));
 	}
 	if (int e = error_of(result)) return e;
@@ -223,8 +252,22 @@ int Sysdeps<Rmdir>::operator()(const char *path) {
 }
 
 int Sysdeps<Unlinkat>::operator()(int dirfd, const char *path, int flags) {
-	if (int e = at_cwd(dirfd, path)) return e;
-	return error_of(call(BOS_SYS_UNLINK, long(path), flags & AT_REMOVEDIR ? BOS_AT_REMOVEDIR : 0));
+	AtPath at;
+	if (int e = at_path(dirfd, path, at)) return e;
+	return error_of(call(BOS_SYS_UNLINK, long(at.path), flags & AT_REMOVEDIR ? BOS_AT_REMOVEDIR : 0));
+}
+
+int Sysdeps<Mkdirat>::operator()(int dirfd, const char *path, mode_t mode) {
+	AtPath at;
+	if (int e = at_path(dirfd, path, at)) return e;
+	return sysdep<Mkdir>(at.path, mode);
+}
+
+int Sysdeps<Renameat>::operator()(int olddirfd, const char *old_path, int newdirfd, const char *new_path) {
+	AtPath from, to;
+	if (int e = at_path(olddirfd, old_path, from)) return e;
+	if (int e = at_path(newdirfd, new_path, to)) return e;
+	return sysdep<Rename>(from.path, to.path);
 }
 
 int Sysdeps<Rename>::operator()(const char *path, const char *new_path) {
@@ -239,8 +282,9 @@ int Sysdeps<Access>::operator()(const char *path, int mode) {
 
 int Sysdeps<Faccessat>::operator()(int dirfd, const char *path, int mode, int flags) {
 	(void)flags;
-	if (int e = at_cwd(dirfd, path)) return e;
-	return sysdep<Access>(path, mode);
+	AtPath at;
+	if (int e = at_path(dirfd, path, at)) return e;
+	return sysdep<Access>(at.path, mode);
 }
 
 int Sysdeps<Dup>::operator()(int fd, int flags, int *newfd) {
@@ -275,6 +319,182 @@ int Sysdeps<Fsync>::operator()(int fd) {
 
 int Sysdeps<Ftruncate>::operator()(int fd, size_t size) {
 	return error_of(call(BOS_SYS_FTRUNCATE, fd, long(size)));
+}
+
+// Descriptor flags: there is no exec, so close-on-exec is accepted and kept
+// nowhere; status flags read back as set at open.
+int Sysdeps<Fcntl>::operator()(int fd, int request, va_list args, int *result) {
+	switch (request) {
+	case F_DUPFD:
+	case F_DUPFD_CLOEXEC: {
+		int lowest = va_arg(args, int);
+		(void)lowest;
+		return sysdep<Dup>(fd, 0, result);
+	}
+	case F_GETFD:
+	case F_SETFD:
+	case F_SETFL:
+		*result = 0;
+		return error_of(call(BOS_SYS_ISATTY, fd)) == EBADF ? EBADF : 0;
+	case F_GETFL:
+		*result = O_RDWR;
+		return 0;
+	default:
+		return EINVAL;
+	}
+}
+
+// One user, no signals delivered from outside: handlers and masks are
+// accepted, and a signal sent to this process ends it the way the default
+// action would.
+int Sysdeps<Sigaction>::operator()(int, const struct sigaction *__restrict, struct sigaction *__restrict old) {
+	if (old) memset(old, 0, sizeof *old);
+	return 0;
+}
+
+int Sysdeps<Sigprocmask>::operator()(int, const sigset_t *__restrict, sigset_t *__restrict old) {
+	if (old) memset(old, 0, sizeof *old);
+	return 0;
+}
+
+int Sysdeps<ThreadSigmask>::operator()(int, const sigset_t *__restrict, sigset_t *__restrict old) {
+	if (old) memset(old, 0, sizeof *old);
+	return 0;
+}
+
+int Sysdeps<Kill>::operator()(pid_t pid, int signal) {
+	if (pid != pid_t(call(BOS_SYS_GETPID)) && pid != 0) return ESRCH;
+	if (signal) call(BOS_SYS_EXIT, 128 + signal);
+	return 0;
+}
+
+int Sysdeps<Tgkill>::operator()(int, int, int signal) {
+	if (signal) call(BOS_SYS_EXIT, 128 + signal);
+	return 0;
+}
+
+int Sysdeps<Uname>::operator()(struct utsname *out) {
+	memset(out, 0, sizeof *out);
+	strcpy(out->sysname, "BaseOS");
+	strcpy(out->nodename, "baseos");
+	strcpy(out->release, "2");
+	strcpy(out->version, "2");
+	strcpy(out->machine, "i686");
+	return 0;
+}
+
+int Sysdeps<GetHostname>::operator()(char *buffer, size_t size) {
+	if (size < 7) return ENAMETOOLONG;
+	strcpy(buffer, "baseos");
+	return 0;
+}
+
+uid_t Sysdeps<GetUid>::operator()() { return 0; }
+uid_t Sysdeps<GetEuid>::operator()() { return 0; }
+gid_t Sysdeps<GetGid>::operator()() { return 0; }
+gid_t Sysdeps<GetEgid>::operator()() { return 0; }
+pid_t Sysdeps<GetPpid>::operator()() { return 0; }
+
+int Sysdeps<Umask>::operator()(mode_t, mode_t *old) {
+	*old = 022;
+	return 0;
+}
+
+// Files have no permission bits or access times to change.
+int Sysdeps<Chmod>::operator()(const char *path, mode_t) {
+	return sysdep<Access>(path, 0);
+}
+
+int Sysdeps<Fchmod>::operator()(int fd, mode_t) {
+	return error_of(call(BOS_SYS_ISATTY, fd)) == EBADF ? EBADF : 0;
+}
+
+int Sysdeps<Fchmodat>::operator()(int dirfd, const char *path, mode_t mode, int) {
+	AtPath at;
+	if (int e = at_path(dirfd, path, at)) return e;
+	return sysdep<Chmod>(at.path, mode);
+}
+
+int Sysdeps<Utimensat>::operator()(int dirfd, const char *path, const struct timespec *, int) {
+	if (!path) return 0;
+	AtPath at;
+	if (int e = at_path(dirfd, path, at)) return e;
+	return sysdep<Access>(at.path, 0);
+}
+
+int Sysdeps<Readlink>::operator()(const char *path, void *, size_t, ssize_t *) {
+	int e = sysdep<Access>(path, 0);
+	return e ? e : EINVAL;
+}
+
+int Sysdeps<Ioctl>::operator()(int, unsigned long, void *, int *) {
+	return ENOTTY;
+}
+
+int Sysdeps<Fdatasync>::operator()(int fd) {
+	return sysdep<Fsync>(fd);
+}
+
+int Sysdeps<ClockGetres>::operator()(int, time_t *seconds, long *nanoseconds) {
+	*seconds = 0;
+	*nanoseconds = 1000000;
+	return 0;
+}
+
+// Positioned I/O moves the shared offset and puts it back.
+int Sysdeps<Pread>::operator()(int fd, void *buffer, size_t count, off_t offset, ssize_t *read) {
+	off_t old;
+	if (int e = sysdep<Seek>(fd, 0, SEEK_CUR, &old)) return e;
+	if (int e = sysdep<Seek>(fd, offset, SEEK_SET, &offset)) return e;
+	int e = sysdep<Read>(fd, buffer, count, read);
+	sysdep<Seek>(fd, old, SEEK_SET, &old);
+	return e;
+}
+
+int Sysdeps<Pwrite>::operator()(int fd, const void *buffer, size_t count, off_t offset, ssize_t *written) {
+	off_t old;
+	if (int e = sysdep<Seek>(fd, 0, SEEK_CUR, &old)) return e;
+	if (int e = sysdep<Seek>(fd, offset, SEEK_SET, &offset)) return e;
+	int e = sysdep<Write>(fd, buffer, count, written);
+	sysdep<Seek>(fd, old, SEEK_SET, &old);
+	return e;
+}
+
+static void fill_statvfs(struct statvfs *out) {
+	memset(out, 0, sizeof *out);
+	BosMemInfo info;
+	memset(&info, 0, sizeof info);
+	call(BOS_SYS_MEMINFO, long(&info));
+	out->f_bsize = out->f_frsize = 4096;
+	out->f_blocks = info.total_pages ? info.total_pages : 65536;
+	out->f_bfree = out->f_bavail = info.free_pages;
+	out->f_namemax = 255;
+}
+
+int Sysdeps<Statvfs>::operator()(const char *path, struct statvfs *out) {
+	if (int e = sysdep<Access>(path, 0)) return e;
+	fill_statvfs(out);
+	return 0;
+}
+
+int Sysdeps<Fstatvfs>::operator()(int fd, struct statvfs *out) {
+	if (error_of(call(BOS_SYS_ISATTY, fd)) == EBADF) return EBADF;
+	fill_statvfs(out);
+	return 0;
+}
+
+int Sysdeps<Sysconf>::operator()(int number, long *value) {
+	switch (number) {
+	case _SC_NPROCESSORS_CONF:
+	case _SC_NPROCESSORS_ONLN:
+		*value = 1;
+		return 0;
+	case _SC_PAGESIZE:
+		*value = 4096;
+		return 0;
+	default:
+		return EINVAL;
+	}
 }
 
 pid_t Sysdeps<GetPid>::operator()() {
