@@ -6462,34 +6462,37 @@ enum { HOT_NONE = -2, HOT_APPS = -1, HOT_VOL = -3, HOT_CLOCK = -4, HOT_DESK = -5
        HOT_SYS = -6, HOT_APPNAME = -7, HOT_MENU = -100 /* - index */ };
 static int taskbar_hover = HOT_NONE;
 
+/* Taskbar date and time, following the clock settings: no date when it is
+ * turned off, and 12- or 24-hour time. */
 static void date_time_text(char *date, char *time) {
     RtcTime now;
     rtc_read(&now);
     static const char *dshort[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
     char t[4];
-    kstrcpy(date, dshort[now.wday]);
-    kstrcpy(date + kstrlen(date), " ");
-    fmt_uint(t, (unsigned)now.day);
-    kstrcpy(date + kstrlen(date), t);
-    kstrcpy(date + kstrlen(date), " ");
-    int n = kstrlen(date);
-    const char *mn = rtc_month_name[now.month - 1];
-    for (int i = 0; i < 3 && mn[i]; i++) date[n++] = mn[i];
-    date[n] = 0;
-    fmt_pad2(time, now.hour);
-    time[2] = ':';
-    fmt_pad2(time + 3, now.min);
+    date[0] = 0;
+    if (!(clock_flags & CLOCK_NO_DATE)) {
+        kstrcpy(date, dshort[now.wday]);
+        kstrcpy(date + kstrlen(date), " ");
+        fmt_uint(t, (unsigned)now.day);
+        kstrcpy(date + kstrlen(date), t);
+        kstrcpy(date + kstrlen(date), " ");
+        int n = kstrlen(date);
+        const char *mn = rtc_month_name[now.month - 1];
+        for (int i = 0; i < 3 && mn[i]; i++) date[n++] = mn[i];
+        date[n] = 0;
+    }
+    clock_text(now.hour, now.min, time);
 }
 static int clock_w(void) {
-    char d[24], t[8];
+    char d[24], t[12];
     date_time_text(d, t);
-    return ui_string_w(d) + 8 + uib_string_w(t);
+    return (d[0] ? ui_string_w(d) + 8 : 0) + uib_string_w(t);
 }
 static void draw_clock(int x, int y, uint8_t ink) {
-    char d[24], t[8];
+    char d[24], t[12];
     date_time_text(d, t);
-    draw_string(d, x, y, ink);
-    draw_string_bold(t, x + ui_string_w(d) + 8, y, ink);
+    if (d[0]) draw_string(d, x, y, ink);
+    draw_string_bold(t, x + (d[0] ? ui_string_w(d) + 8 : 0), y, ink);
 }
 
 static void taskbar_order(int *order, int *n) {
@@ -10262,7 +10265,21 @@ static void settings_time(SetForm *f) {
     date_time_text(d, t);
     draw_logo_string(t, f->x, f->y, TK_TEXT);
     f->y += LOGO_FONT_H + 4;
-    draw_string(d, f->x, f->y, TK_TEXT2);
+    {
+        RtcTime now;
+        rtc_read(&now);
+        char longdate[48], n[8];
+        kstrcpy(longdate, rtc_day_name[now.wday]);
+        kstrcpy(longdate + kstrlen(longdate), ", ");
+        fmt_uint(n, (unsigned)now.day);
+        kstrcpy(longdate + kstrlen(longdate), n);
+        kstrcpy(longdate + kstrlen(longdate), " ");
+        kstrcpy(longdate + kstrlen(longdate), rtc_month_name[now.month - 1]);
+        kstrcpy(longdate + kstrlen(longdate), " ");
+        fmt_uint(n, (unsigned)now.year);
+        kstrcpy(longdate + kstrlen(longdate), n);
+        draw_string(longdate, f->x, f->y, TK_TEXT2);
+    }
     f->y += 32;
     set_card_begin(f);
     if (MODERN) {
@@ -10788,22 +10805,29 @@ static void draw_drag_outline(void) {
     Win *w = &wins[dragging_win];
     draw_frame(drag_outline_x, drag_outline_y, w->w, w->h, TK_TEXT);
 }
+/* Keep or revert a new resolution, as an alert with a countdown. */
+static void display_confirm_buttons(int x, int y, int *kx, int *rx, int *by, int *kw, int *rw) {
+    *kw = kit_button_w("Keep changes", -1);
+    *rw = kit_button_w("Revert", -1);
+    *kx = x + alert_w() - 16 - *kw;
+    *rx = *kx - 8 - *rw;
+    alert_buttons_y(y, by);
+}
 static void draw_display_confirmation(void) {
     if (!display_pending) return;
-    int x = (fb_w - 420) / 2, y = (fb_h - 150) / 2;
-    shade_rect(0, 0, fb_w, fb_h, 1);
-    draw_round_rect(x, y, 420, 150, 10, INK(1));
-    draw_round_frame(x, y, 420, 150, 10, ui_border);
-    draw_string_bold("Keep this display resolution?", x + 24, y + 20, ui_text);
+    int x = (fb_w - alert_w()) / 2, y = (fb_h - alert_h()) / 2;
     char seconds[16], message[80];
     unsigned ticks_left = display_deadline - timer_ticks();
     fmt_uint(seconds, (ticks_left + TIMER_HZ - 1) / TIMER_HZ);
-    kstrcpy(message, "Reverting automatically in ");
+    kstrcpy(message, "The previous resolution returns in ");
     kstrcpy(message + kstrlen(message), seconds);
     kstrcpy(message + kstrlen(message), " seconds.");
-    draw_string(message, x + 24, y + 54, ui_text_dim);
-    draw_default_button(x + 34, y + 98, 164, 30, "Keep (Enter)");
-    draw_button(x + 222, y + 98, 164, 30, "Revert (Esc)");
+    draw_alert(x, y, alert_w(), alert_h(), "Display", app_icon_for(ICON_APP_SETTINGS), UI_ICON_A_WARN,
+               "Keep this display resolution?", message);
+    int kx, rx, by, kw, rw;
+    display_confirm_buttons(x, y, &kx, &rx, &by, &kw, &rw);
+    kit_button(rx, by, rw, BTN_H, "Revert", -1, KB_DEFAULT, hot(rx, by, rw, BTN_H));
+    kit_button(kx, by, kw, BTN_H, "Keep changes", -1, KB_PRIMARY, hot(kx, by, kw, BTN_H) | KIT_FOCUS);
 }
 
 static void display_refresh_layout(void) {
@@ -10841,9 +10865,11 @@ static int display_request(int mode) {
 static void display_revert(void);
 static void display_keep(void);
 static void display_click(void) {
-    int x = (fb_w - 420) / 2, y = (fb_h - 150) / 2;
-    if (hit(mouse_x, mouse_y, x + 34, y + 98, 164, 30)) display_keep();
-    else if (hit(mouse_x, mouse_y, x + 222, y + 98, 164, 30)) display_revert();
+    int x = (fb_w - alert_w()) / 2, y = (fb_h - alert_h()) / 2, kx, rx, by, kw, rw;
+    display_confirm_buttons(x, y, &kx, &rx, &by, &kw, &rw);
+    if (hit(mouse_x, mouse_y, kx, by, kw, BTN_H)) display_keep();
+    else if (hit(mouse_x, mouse_y, rx, by, rw, BTN_H) ||
+             hit(mouse_x, mouse_y, close_box_x(x, alert_w()), cap_y(y), CAP_CLOSE_W, CAP_H)) display_revert();
 }
 static void display_revert(void) {
     if (!display_pending) return;
