@@ -568,10 +568,11 @@ static void wall_picture_name_load(void) {
 static void wall_picture_name_save(void) {
     int dir = fs_find_child(fs_root(), "prefs");
     if (dir < 0) dir = fs_mkdir(fs_root(), "prefs");
-    int id = fs_is_dir(dir) ? fs_find_child(dir, "picture") : -1;
+    int id = fs_is_dir(dir) ? fs_find_child(dir, "picture") : dir == FS_ERR_BUSY ? FS_ERR_BUSY : -1;
     if (id < 0 && fs_is_dir(dir)) id = fs_create(dir, "picture");
     int n = kstrlen(wall_picture_path);
-    int result = id >= 0 && !fs_is_dir(id) && !fs_is_app(id) ? fs_write(id, wall_picture_path, n) : -1;
+    int result = id == FS_ERR_BUSY ? FS_ERR_BUSY :
+                 id >= 0 && !fs_is_dir(id) && !fs_is_app(id) ? fs_write(id, wall_picture_path, n) : -1;
     wall_picture_unsaved = result == FS_ERR_BUSY;
     if (result != n && !wall_picture_unsaved) wall_picture_status = "The picture choice could not be saved.";
 }
@@ -597,11 +598,14 @@ static void wall_picture_tick(void) {
  * only rewrites palette entries, so the cached frame is rebuilt when the
  * style, pattern, kind, shape or picture changes. */
 static void desktop_render(void) {
+    /* Any other background replaces the cached picture, so returning to
+     * Picture decodes the file again. */
+    wall_cached_w = 0;
+    if (ui_wall_kind != UI_WALL_PICTURE) wall_tried_w = 0;
     if (ui_wall_kind == UI_WALL_GRADIENT) {
         ui_gradient_fill(0, 0, fb_w, fb_h, ui_gradient_shape);
         return;
     }
-    wall_cached_w = 0;
     if (ui_wall_kind == UI_WALL_PICTURE && wall_picture_restore()) return;
     draw_rect(0, 0, fb_w, fb_h, TK_DESKTOP);
     if (ui_pattern == UI_PATTERN_NONE) return;
@@ -10596,6 +10600,9 @@ static void gradient_set(int gradient) {
     if (gradient < 0 || gradient >= UI_GRADIENT_N) return;
     ui_gradient = gradient;
     wall_palette();
+    /* Which end a radial gradient puts in the middle is drawn into the
+     * cache, and presets differ. */
+    if (ui_gradient_shape == UI_SHAPE_RADIAL) desk_cache_theme = -1;
     preference_save(PREF_GRADIENT, gradient);
     dirty = 1;
 }
