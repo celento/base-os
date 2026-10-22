@@ -4436,8 +4436,8 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *h = CAL_H + TITLE_H + 1;
         break;
     case WK_MINES:
-        *w = MINES_W;
-        *h = MINES_H + TITLE_H;
+        *w = MINES_W + 2;
+        *h = TITLE_H + mines_client_h() + 1;
         break;
     case WK_2048:
         *w = G2048_W;
@@ -6295,7 +6295,7 @@ static void draw_window_contents(Win *w, int inactive) {
         cal_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_MINES) {
         gui_draw_window(wx, wy, ww, wh, "Minesweeper", 0, fl);
-        mines_draw(wx, wy + TITLE_H + 1);
+        mines_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_2048) {
         gui_draw_window(wx, wy, ww, wh, "2048", 0, fl);
         g2048_draw(wx, wy + TITLE_H + 1);
@@ -8879,7 +8879,7 @@ static void handle_rclick(void) {
             return;
         }
         if (w->kind == WK_MINES) {
-            if (mines_click(w->x, w->y + TITLE_H + 1, mouse_x, mouse_y, 1)) dirty = 1;
+            if (mines_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y, 1)) dirty = 1;
             return;
         }
         if (w->kind == WK_FILES && mouse_y >= w->y + TITLE_H) {
@@ -8973,7 +8973,7 @@ static void window_body_click(int i) {
     else if (w->kind == WK_CAL) {
         if (cal_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_MINES) {
-        if (mines_click(w->x, w->y + TITLE_H + 1, mouse_x, mouse_y, shift_down)) dirty = 1;
+        if (mines_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y, shift_down)) dirty = 1;
     } else if (w->kind == WK_BREAKOUT) {
         bo_click();
         dirty = 1;
