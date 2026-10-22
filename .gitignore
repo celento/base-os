@@ -6,6 +6,9 @@ build/
 *.img
 *.tmp
 
+# DOS programs for make run-dos
+dos-apps/
+
 # Logs and Debugging
 serial.out
 qemu.log
