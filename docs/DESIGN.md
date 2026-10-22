@@ -13,7 +13,7 @@ and the metrics struct, so nothing else needs to know which style is active.
 
 | | Classic | Modern |
 |---|---|---|
-| Window frame | 1px border, 28px accent title bar, 24px menu row inside the window | 38px light header with rounded corners, menus in a 28px top bar |
+| Window frame | 1px border, 28px accent title bar, 24px menu row inside the window | 38px accent header with rounded corners (muted when inactive), menus in a 28px top bar |
 | Window content | `TK_46` | `TK_BASE` |
 | Sidebars, status bars | `TK_BASE`, separated by 1px rules | `TK_SUNKEN` |
 | Menus, dialogs, launcher | `TK_RAISED` overlay with a hard 2px shadow | `TK_46` overlay with a two-band soft shadow |

@@ -270,11 +270,12 @@ static int caption_pointer_ok(void);
 static void draw_caption(int bx, int by, int icon, int active, int close, int hot) {
     int hover = hot && caption_pointer_ok() && hit(mouse_x, mouse_y, bx, by, CAP_W, CAP_H);
     int pressed = hover && mouse_left;
-    uint8_t ink = MODERN ? (active ? TK_ICON : TK_LINE_STRONG) : (active ? TK_ON_ACCENT : TK_TEXT2);
-    uint8_t bg = MODERN ? (active ? ui_theme.chrome : TK_46) : (active ? TK_ACCENT_600 : TK_45);
+    /* Both styles put active captions on the accent title bar. */
+    uint8_t ink = active ? TK_ON_ACCENT : MODERN ? TK_LINE_STRONG : TK_TEXT2;
+    uint8_t bg = active ? TK_ACCENT_600 : MODERN ? TK_46 : TK_45;
     if (hover) {
         if (close) bg = pressed ? TK_RED_700 : TK_RED;
-        else bg = MODERN ? TK_HOVER : active ? (pressed ? TK_ACCENT_700 : TK_ACCENT) : TK_HOVER;
+        else bg = active ? (pressed ? TK_ACCENT_700 : TK_ACCENT) : TK_HOVER;
         if (close) ink = TK_ON_ACCENT;
         kit_fill(bx, by, CAP_W, CAP_H, MODERN ? 6 : KIT_R_SQUARE, bg, 1);
     }
@@ -314,10 +315,10 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
         int r = maxed ? KIT_R_SQUARE : ui_theme.r_window;
         if (!maxed) kit_shadow(x, y, w, h, r);
         kit_fill(x, y, w, h, r, ui_theme.content, 0);
-        kit_fill_top(x, y, w, TITLE_BAR - 1, r, active ? ui_theme.chrome : TK_46);
-        draw_hline(x + 1, y + TITLE_BAR - 1, w - 2, TK_LINE);
+        kit_fill_top(x, y, w, TITLE_BAR - 1, r, active ? TK_ACCENT_600 : TK_46);
+        draw_hline(x + 1, y + TITLE_BAR - 1, w - 2, active ? TK_ACCENT_700 : TK_LINE);
         kit_frame(x, y, w, h, r, active ? TK_LINE_STRONG : TK_47);
-        title_ink = active ? TK_TEXT : TK_TEXT2;
+        title_ink = active ? TK_ON_ACCENT : TK_TEXT2;
         icon_x = x + 12; icon_y = y + 12; tx = x + 36; ty = y + 11;
     } else {
         if (!maxed) kit_shadow(x, y, w, h, 0);
@@ -343,11 +344,11 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
         if (chrome_dirty) {
             int dx = tx + kit_text_w(title, 1) + ui_advance(' ') + 1;
             if (dx > xmax + 4) dx = xmax + 4;
-            kit_fill(dx, ty + UI_FONT_H / 2 - 2, 5, 5, 2, MODERN ? TK_TEXT2 : title_ink, 0);
+            kit_fill(dx, ty + UI_FONT_H / 2 - 2, 5, 5, 2, title_ink, 0);
         }
         if (chrome_subtitle) {
             int sx = tx + kit_text_w(title, 1) + 6;
-            if (sx < xmax - 24) kit_text(chrome_subtitle, sx, ty, MODERN ? TK_TEXT2 : active ? TK_ACCENT_100 : TK_LINE_STRONG, xmax - sx, 0);
+            if (sx < xmax - 24) kit_text(chrome_subtitle, sx, ty, active ? TK_ACCENT_100 : MODERN ? TK_TEXT2 : TK_LINE_STRONG, xmax - sx, 0);
         }
     }
 
