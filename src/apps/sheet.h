@@ -34,6 +34,12 @@ int spreadsheet_click(int x, int y, int w, int h, int mx, int my, int modifiers)
 int spreadsheet_drag(int x, int y, int w, int h, int mx, int my);
 void spreadsheet_release(void);
 int spreadsheet_scroll(int lines);
+/* The desktop reports window focus before drawing (an inactive window shows
+ * an unfocused selection and no hover). spreadsheet_hover returns kit
+ * hover/press state bits for an absolute control rectangle; the desktop
+ * overrides the weak no-hover default and repaints when the target changes. */
+void spreadsheet_set_active(int active);
+int spreadsheet_hover(int x, int y, int w, int h);
 int spreadsheet_tick(void);
 void spreadsheet_close(void);
 /* IDE durability is asynchronous. Pending is never SAVE_OK; edits can continue.

@@ -17,12 +17,6 @@ static unsigned char presented[FB_CAPACITY];
 #include "../src/ui/theme.c"
 #include "../src/ui/kit.c"
 #include "ui/app.h"
-/* Theme tokens normally owned by kernel.c's theme_apply. The fixture keeps the
- * classic light mapping so pixel assertions stay literal and distinct. */
-uint8_t app_accent = COLOR_BLUE, app_accent_dk = COLOR_BLACK, app_on_accent = COLOR_WHITE;
-uint8_t app_text = COLOR_DKGRAY, app_text_dim = COLOR_GRAY;
-uint8_t app_chrome = COLOR_LTGRAY, app_chrome_dk = COLOR_LTGRAY, app_border = COLOR_GRAY;
-uint8_t app_body = COLOR_LTGRAY, app_field = COLOR_WHITE, app_paper = COLOR_WHITE;
 
 #define FILE_COUNT 40
 static unsigned polls, ticks, clipboard_generation, clipboard_length;
@@ -512,12 +506,16 @@ static void test_drawing(const char *directory) {
     enter("C1", "long text to clip inside one cell"); enter("D2", "=1/0");
     const int boxes[][4] = {{30,20,720,520}, {30,20,360,260}, {-12,-10,360,260},
         {730,540,360,260}, {30,20,160,120}, {30,20,1,1}, {30,20,0,0}, {-900,-800,360,260}};
-    for (unsigned i = 0; i < sizeof boxes / sizeof boxes[0]; i++) {
-        int x = boxes[i][0], y = boxes[i][1], w = boxes[i][2], h = boxes[i][3];
+    const unsigned count = sizeof boxes / sizeof boxes[0];
+    for (unsigned i = 0; i < 2 * count; i++) {
+        /* Every box in Classic, then again in Modern. */
+        ui_theme_install(i < count ? UI_STYLE_CLASSIC : UI_STYLE_MODERN, 0, 0);
+        int x = boxes[i % count][0], y = boxes[i % count][1], w = boxes[i % count][2], h = boxes[i % count][3];
         select_2x2("A1"); check_clip(x,y,w,h);
         jump("A2"); key(0x3c,0); type("editing"); check_clip(x,y,w,h); key(0x01,0);
         key(0x22, SPREADSHEET_MOD_CTRL); check_clip(x,y,w,h); key(0x01,0);
     }
+    ui_theme_install(UI_STYLE_CLASSIC, 0, 0);
     jump("A1"); spreadsheet_draw(30,20,720,520);
     int x, y, w, h, x2, y2, w2, h2;
     assert(spreadsheet_cell_position(0,0,&x,&y,&w,&h)); assert(w > 0 && h > 0);
@@ -576,12 +574,12 @@ static void test_format_controls(const char *directory) {
     key(0x0b, SPREADSHEET_MOD_CTRL); width(0,104); width(1,104);
     /* Every pointer control remains available at the minimum client width. */
     jump("A1"); spreadsheet_draw(30,20,360,260);
-    toolbar(93,50); format(0,0,SHEET_FORMAT_FIXED2,"12.50");
-    toolbar(125,50); format(0,0,SHEET_FORMAT_CURRENCY,"$12.50");
-    toolbar(157,50); format(0,0,SHEET_FORMAT_PERCENT,"1250.00%");
-    toolbar(41,50); format(0,0,SHEET_FORMAT_GENERAL,"12.5");
-    toolbar(310,50); width(0,120); toolbar(246,50); width(0,104);
-    toolbar(276,18); assert(strstr(spreadsheet_status(),"Go to")); key(0x01,0);
+    toolbar(94,46); format(0,0,SHEET_FORMAT_FIXED2,"12.50");
+    toolbar(124,46); format(0,0,SHEET_FORMAT_CURRENCY,"$12.50");
+    toolbar(154,46); format(0,0,SHEET_FORMAT_PERCENT,"1250.00%");
+    toolbar(40,46); format(0,0,SHEET_FORMAT_GENERAL,"12.5");
+    toolbar(299,46); width(0,120); toolbar(237,46); width(0,104);
+    toolbar(263,16); assert(strstr(spreadsheet_status(),"Go to")); key(0x01,0);
     /* Applying a format commits pending source as its own undo step. */
     key(0x04,SPREADSHEET_MOD_CTRL); type("9.876"); key(0x03,SPREADSHEET_MOD_CTRL);
     assert(!spreadsheet_editing()); cell(0,0,SHEET_NUMBER,"9.876",9876,SHEET_OK);
@@ -624,10 +622,10 @@ static void test_variable_width_geometry(void) {
     assert(!sheet_set(&fixture,0,0,SHEET_TEXT,"Wide cell source",16));
     assert(!sheet_recalculate(&fixture)); load_fixture(); spreadsheet_draw(30,20,360,260);
     int x,y,w,h; assert(spreadsheet_cell_position(0,0,&x,&y,&w,&h));
-    assert(x==42 && y==126 && w==304 && h==24); assert(!spreadsheet_cell_position(0,1,NULL,NULL,NULL,NULL));
+    assert(x==42 && y==122 && w==306 && h==24); assert(!spreadsheet_cell_position(0,1,NULL,NULL,NULL,NULL));
     jump("B1"); assert(spreadsheet_first_col()==0);
-    assert(spreadsheet_cell_position(0,0,&x,&y,&w,&h)); assert(x==42 && w==256);
-    assert(spreadsheet_cell_position(0,1,&x,&y,&w,&h)); assert(x==298 && w==48);
+    assert(spreadsheet_cell_position(0,0,&x,&y,&w,&h)); assert(x==42 && w==258);
+    assert(spreadsheet_cell_position(0,1,&x,&y,&w,&h)); assert(x==300 && w==48);
     assert(spreadsheet_click(30,20,360,260,30+x+w/2,20+y+h/2,0) & SPREADSHEET_CHANGED);
     assert(spreadsheet_caret()==1); spreadsheet_release();
     assert(spreadsheet_click(30,20,360,260,30+x+w/2,20+114,0) & SPREADSHEET_CHANGED);
@@ -638,16 +636,27 @@ static void test_variable_width_geometry(void) {
     assert(spreadsheet_cell_position(0,1,&x,&y,&w,&h)); assert(x==42 && w==48);
     assert(spreadsheet_click(30,20,360,260,30+48,20+225,0) & SPREADSHEET_CHANGED);
     assert(spreadsheet_first_col()==0); spreadsheet_release();
+    /* The vertical thumb drags rows; a track click below it pages by the
+     * visible rows (four at this size); a held track click does not repeat. */
+    jump("A1"); spreadsheet_draw(30,20,360,260); assert(spreadsheet_first_row()==0);
+    assert(spreadsheet_click(30,20,360,260,30+354,20+125,0) & SPREADSHEET_CHANGED);
+    assert(spreadsheet_drag(30,20,360,260,30+354,20+200) & SPREADSHEET_CHANGED);
+    unsigned dragged = spreadsheet_first_row(); assert(dragged > 0); spreadsheet_release();
+    spreadsheet_scroll(-1000); assert(spreadsheet_first_row()==0);
+    assert(spreadsheet_click(30,20,360,260,30+354,20+215,0) & SPREADSHEET_CHANGED);
+    assert(spreadsheet_first_row()==4);
+    assert(spreadsheet_drag(30,20,360,260,30+354,20+216) & SPREADSHEET_CHANGED);
+    assert(spreadsheet_first_row()==4); spreadsheet_release(); spreadsheet_scroll(-1000);
     /* Partial leading columns never paint over row labels; mixed widths clip everywhere. */
     jump("C1");
     const int boxes[][4] = {{30,20,360,260},{30,20,720,520},{-12,-10,360,260},{730,540,360,260},{30,20,160,120}};
     for (unsigned i=0;i<sizeof boxes/sizeof boxes[0];i++) check_clip(boxes[i][0],boxes[i][1],boxes[i][2],boxes[i][3]);
     spreadsheet_draw(30,20,360,260); jump("Z128");
-    assert(spreadsheet_cell_position(127,25,&x,&y,&w,&h)); assert(x>=42 && x+w<=346 && w==304);
+    assert(spreadsheet_cell_position(127,25,&x,&y,&w,&h)); assert(x>=42 && x+w<=348 && w==306);
     key(0x0c,SPREADSHEET_MOD_CTRL); width(25,304);
     assert(spreadsheet_cell_position(127,25,&x,&y,&w,&h)); assert(w==304);
     key(0x2c,SPREADSHEET_MOD_CTRL); width(25,320);
-    assert(spreadsheet_cell_position(127,25,&x,&y,&w,&h)); assert(w==304);
+    assert(spreadsheet_cell_position(127,25,&x,&y,&w,&h)); assert(w==306);
     /* An overwide positive/negative number and a formula render identical ###,
      * while the complete original source is still available to the editor. */
     static unsigned char overflow[48*24];
@@ -658,7 +667,7 @@ static void test_variable_width_geometry(void) {
     unsigned ink=0;
     for (int yy=0;yy<h;yy++) for (int xx=0;xx<w;xx++) {
         unsigned char pixel=back[(20+y+yy)*800+30+x+xx]; overflow[yy*w+xx]=pixel;
-        if (xx>=4 && xx<w-4 && yy>=3 && yy<h-3 && pixel==COLOR_DKGRAY) ink++;
+        if (xx>=4 && xx<w-4 && yy>=3 && yy<h-3 && pixel==TK_TEXT) ink++;
     }
     assert(ink>0);
     assert(!sheet_set(&fixture,0,0,SHEET_NUMBER,"1234567.89",10));
@@ -672,7 +681,7 @@ static void test_variable_width_geometry(void) {
     cell(0,0,SHEET_FORMULA,"=-1234567.89",-1234567890,SHEET_OK);
     key(0x3c,0); key(0x1e,SPREADSHEET_MOD_CTRL); key(0x2e,SPREADSHEET_MOD_CTRL);
     assert(!strcmp((const char *)clipboard,"=-1234567.89")); key(0x01,0);
-    puts("Spreadsheet geometry: variable-width hits, partial columns, headers, scroll arrows, end reveal and clipping passed");
+    puts("Spreadsheet geometry: variable-width hits, partial columns, headers, scroll track and thumb, end reveal and clipping passed");
 }
 static void test_storage_busy(void) {
     basic_fixture(); int id = load_fixture();
@@ -735,6 +744,9 @@ static void test_storage_busy(void) {
 int main(int argc, char **argv) {
     files[0].valid = files[0].folder = 1; files[0].identity = 1;
     gfx_init(back, linear, 800, 600, 32, 3200);
+    /* Geometry and pixel assertions use the Classic style; the clipping
+     * checks also run in Modern. */
+    ui_theme_install(UI_STYLE_CLASSIC, 0, 0);
     test_storage_busy(); spreadsheet_close();
     test_editing(); test_navigation(); test_history(); test_clipboard(); test_clipboard_edges();
     test_files(argc > 1 ? argv[1] : NULL); test_bindings(); test_recovery();

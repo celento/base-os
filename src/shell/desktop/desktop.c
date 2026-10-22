@@ -2448,6 +2448,18 @@ static void spreadsheet_result(int result) {
     if (result & SPREADSHEET_REQUEST_SAVE_AS) namedlg_open(4, "untitled.bsh");
     if (result & SPREADSHEET_REQUEST_EXPORT) namedlg_open(5, "spreadsheet.csv");
 }
+/* Writer and Spreadsheet client area: under the menu row in Classic; in
+ * Modern the app toolbar starts on the header's bottom rule and continues
+ * the header. Drawing, clicks and drags share it. */
+static void doc_client(const Win *w, int *x, int *y, int *cw, int *ch) {
+    *x = w->x + 1;
+    *y = MODERN ? w->y + TITLE_BAR - 1 : w->y + TITLE_H;
+    *cw = w->w - 2;
+    *ch = w->y + w->h - 1 - *y;
+}
+/* Their toolbar and find-bar controls hover through the shell's targets. */
+int writer_hover(int x, int y, int w, int h) { return hot(x, y, w, h); }
+int spreadsheet_hover(int x, int y, int w, int h) { return hot(x, y, w, h); }
 /* These metadata hooks run only at desktop boundaries, not from storage
  * polling. One exact request can finish one guarded navigation action. */
 static void document_save_info(int kind, DocumentSave *out) {
@@ -6424,12 +6436,14 @@ static void draw_window_contents(Win *w, int inactive) {
     } else if (w->kind == WK_BREAKOUT) {
         gui_draw_window(wx, wy, ww, wh, "Breakout", 0, fl);
         bo_draw(wx, wy + TITLE_H + 1);
-    } else if (w->kind == WK_SPREADSHEET) {
-        gui_draw_window(wx,wy,ww,wh,spreadsheet_title(),0,fl);
-        spreadsheet_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
-    } else if (w->kind == WK_WRITER) {
-        gui_draw_window(wx,wy,ww,wh,writer_title(),0,fl);
-        writer_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
+    } else if (w->kind == WK_SPREADSHEET || w->kind == WK_WRITER) {
+        int sheet = w->kind == WK_SPREADSHEET, cx, cy, cw, ch;
+        chrome_dirty = sheet ? spreadsheet_dirty() : writer_dirty();
+        gui_draw_window(wx, wy, ww, wh, sheet ? spreadsheet_title() : writer_title(), 0, fl);
+        chrome_dirty = 0;
+        doc_client(w, &cx, &cy, &cw, &ch);
+        if (sheet) { spreadsheet_set_active(!inactive); spreadsheet_draw(cx, cy, cw, ch); }
+        else { writer_set_active(!inactive); writer_draw(cx, cy, cw, ch); }
     } else if (w->kind == WK_BROWSER) {
         int cx, cy, cw, ch;
         gui_draw_window(wx,wy,ww,wh,"Browser",0,fl);
@@ -9097,10 +9111,14 @@ static void window_body_click(int i) {
         app_client(w->x, w->y, w->w, w->h, 1, &cx, &cy, &cw, &ch);
         if (browser_click(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_SPREADSHEET) {
-        spreadsheet_result(spreadsheet_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2,
+        int cx, cy, cw, ch;
+        doc_client(w, &cx, &cy, &cw, &ch);
+        spreadsheet_result(spreadsheet_click(cx, cy, cw, ch,
             mouse_x, mouse_y, (ctrl_down ? SPREADSHEET_MOD_CTRL : 0) | (shift_down ? SPREADSHEET_MOD_SHIFT : 0)));
     } else if (w->kind == WK_WRITER) {
-        writer_result(writer_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2,
+        int cx, cy, cw, ch;
+        doc_client(w, &cx, &cy, &cw, &ch);
+        writer_result(writer_click(cx, cy, cw, ch,
             mouse_x, mouse_y, (ctrl_down ? WRITER_MOD_CTRL : 0) | (shift_down ? WRITER_MOD_SHIFT : 0)));
     } else if (w->kind == WK_PLAYER) {
         int cx, cy, cw, ch;
@@ -11183,12 +11201,16 @@ static void desktop_pointer_motion(void) {
         if (front_kind() == WK_WRITER && mouse_left && mouse_moved && !open_dlg &&
             !name_dlg && !edit_close_dlg && !launcher_on && open_menu < 0 && dragging_win < 0) {
             Win *w = &wins[win_front()];
-            if (writer_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
+            int cx, cy, cw, ch;
+            doc_client(w, &cx, &cy, &cw, &ch);
+            if (writer_drag(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
         }
         if (front_kind() == WK_SPREADSHEET && mouse_left && mouse_moved && !open_dlg &&
             !name_dlg && !edit_close_dlg && !launcher_on && open_menu < 0 && dragging_win < 0) {
             Win *w = &wins[win_front()];
-            if (spreadsheet_drag(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2,mouse_x,mouse_y)) dirty=1;
+            int cx, cy, cw, ch;
+            doc_client(w, &cx, &cy, &cw, &ch);
+            if (spreadsheet_drag(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
         }
         if (paint_dragging || paint_shape_drag) paint_drag_tick();
         if (set_slider_drag) settings_drag();
