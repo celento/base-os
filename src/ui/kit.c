@@ -189,6 +189,42 @@ static void kit_shadow_px(int x, int y, uint8_t band) {
     else if (r != ur || g != ug || bl != ub) put_pixel(x, y, gfx_rgb(r, g, bl));
 }
 
+/* Modern's soft shadow: the box shifted 2px down, its outline fading over
+ * SHADOW_S pixels on the sides and bottom. Each step darkens what is
+ * already there through a palette table, so it never lightens dark
+ * content. The tables follow the palette (it changes with the theme). */
+#define SHADOW_S 5
+static const uint8_t shadow_pct[SHADOW_S] = {84, 89, 93, 96, 98};
+static uint8_t shadow_tab[SHADOW_S][256];
+static uint32_t shadow_tab_key;
+static int shadow_tab_ok;
+
+static void shadow_tables(void) {
+    uint32_t key = 2166136261u;
+    for (int i = 0; i < 256; i++) key = (key ^ pal32[i]) * 16777619u;
+    if (shadow_tab_ok && key == shadow_tab_key) return;
+    for (int k = 0; k < SHADOW_S; k++)
+        for (int i = 0; i < 256; i++) shadow_tab[k][i] = gfx_darker((uint8_t)i, shadow_pct[k]);
+    shadow_tab_key = key;
+    shadow_tab_ok = 1;
+}
+
+/* Step (0 darkest) of pixel px,py outside the shifted rounded box, or -1. */
+static int shadow_step(int px, int py, int x, int sy, int w, int h, int r) {
+    int cx = px < x + r ? x + r : px > x + w - 1 - r ? x + w - 1 - r : px;
+    int cy = py < sy + r ? sy + r : py > sy + h - 1 - r ? sy + h - 1 - r : py;
+    int dx = px - cx, dy = py - cy, d2 = dx * dx + dy * dy;
+    if (d2 <= r * r) return 0;
+    for (int k = 0; k < SHADOW_S; k++)
+        if (d2 <= (r + k + 1) * (r + k + 1)) return k;
+    return -1;
+}
+
+static void shadow_px(int px, int py, int k) {
+    if (k < 0 || px < 0 || py < 0 || px >= fb_w || py >= fb_h) return;
+    put_pixel(px, py, shadow_tab[k][get_pixel(px, py)]);
+}
+
 void kit_shadow(int x, int y, int w, int h, int r) {
     if (!MODERN) {
         for (int j = 0; j < h; j++)
@@ -197,24 +233,67 @@ void kit_shadow(int x, int y, int w, int h, int r) {
             for (int i = 0; i < w - 2; i++) kit_shadow_px(x + 2 + i, y + h + j, TK_SHADOW);
         return;
     }
-    int rows = 12;
-    for (int row = h - rows; row < h + 4; row++) {
-        if (row < 0) continue;
-        for (int col = 0; col < w; col++) {
-            if (inside(r, w, h, col, row)) continue;
-            uint8_t c = 0;
-            if (inside(r, w, h, col, row - 2)) c = TK_SHADOW;
-            else if (inside(r, w, h, col, row - 4)) c = ui_theme.shadow2;
-            if (c) kit_shadow_px(x + col, y + row, c);
+    if (w <= 0 || h <= 0) return;
+    if (r < 0) r = 0;
+    if (2 * r > w) r = w / 2;
+    if (2 * r > h) r = h / 2;
+    shadow_tables();
+    /* Only the margin is visited: the side strips beside the box, the
+     * bottom corner squares (outside the rounded shape) and the rows under
+     * it. Nothing is drawn above the top edge. */
+    int sy = y + 2, S = SHADOW_S;
+    for (int py = y; py < sy + h + S; py++) {
+        int j = py - y;
+        if (j < h) {
+            for (int px = x - S; px < x; px++) shadow_px(px, py, shadow_step(px, py, x, sy, w, h, r));
+            for (int px = x + w; px < x + w + S; px++) shadow_px(px, py, shadow_step(px, py, x, sy, w, h, r));
+            if (j < h - r) continue;
+            for (int i = 0; i < r; i++) {
+                if (!inside(r, w, h, i, j)) shadow_px(x + i, py, shadow_step(x + i, py, x, sy, w, h, r));
+                if (!inside(r, w, h, w - 1 - i, j))
+                    shadow_px(x + w - 1 - i, py, shadow_step(x + w - 1 - i, py, x, sy, w, h, r));
+            }
+        } else {
+            for (int px = x - S; px < x + w + S; px++) shadow_px(px, py, shadow_step(px, py, x, sy, w, h, r));
         }
+    }
+}
+/* Coverage (0-16) of pixel i,j of a w x h rectangle with corner radius r. */
+static int rrect_cov(int i, int j, int w, int h, int r) {
+    if (i < 0 || j < 0 || i >= w || j >= h) return 0;
+    int cx = i < r ? i : (i >= w - r ? w - 1 - i : -1);
+    int cy = j < r ? j : (j >= h - r ? h - 1 - j : -1);
+    return cx >= 0 && cy >= 0 ? kit_arc_cov(cx, cy, r) : 16;
+}
+
+/* A t pixel ring along the inside of a rounded rectangle, its corners
+ * blended by coverage on both edges. Only the corner squares are sampled;
+ * the straight runs are plain lines. */
+static void kit_ring(int x, int y, int w, int h, int r, int t, uint8_t color) {
+    if (w <= 2 * t || h <= 2 * t) return;
+    if (2 * r > w) r = w / 2;
+    if (2 * r > h) r = h / 2;
+    int ir = r > t ? r - t : 0, R = r > t ? r : t;
+    for (int j = 0; j < h; j++) {
+        int band = j < R || j >= h - R;
+        if (!band) {
+            draw_hline(x, y + j, t, color);
+            draw_hline(x + w - t, y + j, t, color);
+            continue;
+        }
+        if (j < t || j >= h - t) draw_hline(x + R, y + j, w - 2 * R, color);
+        for (int k = 0; k < R; k++)
+            for (int side = 0; side < 2; side++) {
+                int i = side ? w - 1 - k : k;
+                int cov = rrect_cov(i, j, w, h, r) - rrect_cov(i - t, j - t, w - 2 * t, h - 2 * t, ir);
+                kit_cov_px(x + i, y + j, color, cov);
+            }
     }
 }
 
 void kit_focus(int x, int y, int w, int h, int r) {
     if (MODERN) {
-        int rr = r > KIT_R_NOTCH ? r + 2 : KIT_R_SQUARE;
-        kit_frame(x - 2, y - 2, w + 4, h + 4, rr, TK_ACCENT_300);
-        kit_frame(x - 1, y - 1, w + 2, h + 2, r > KIT_R_NOTCH ? r + 1 : KIT_R_SQUARE, TK_ACCENT_300);
+        kit_ring(x - 2, y - 2, w + 4, h + 4, r > KIT_R_NOTCH ? r + 2 : KIT_R_SQUARE, 2, TK_ACCENT_300);
     } else {
         kit_frame(x - 2, y - 2, w + 4, h + 4, KIT_R_SQUARE, TK_ACCENT);
     }

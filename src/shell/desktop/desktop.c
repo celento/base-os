@@ -1381,7 +1381,7 @@ static int name_dlg = 0;
 static int name_failed;
 static int name_target = 0;
 static char name_buf[FS_NAME_LEN];
-static int name_len = 0, name_sel;
+static int name_len = 0, name_sel, name_caret; /* name_sel: selected stem length from 0 */
 static int name_focus, name_owner, name_owner_seq;
 static unsigned name_pdf_paper;
 static const char *name_failure_message;
@@ -5253,7 +5253,7 @@ static void size_text(unsigned bytes, char *out) {
     kstrcpy(out + n, " MB");
 }
 
-/* "4 KB", "3 items" or "App". */
+/* "4 KB", "3 items" or "App" (lists leave an app's size blank). */
 static void node_size_text(int id, char *out) {
     if (fs_is_dir(id)) {
         int n = fs_child_count(id);
@@ -5324,7 +5324,8 @@ static const char *kind_name(int id, int brief);
 static int flist_head_h(void) { return MODERN ? 32 : 24; }
 static void flist_layout(int x, int w, int cols, int *name_x, int *size_x, int *kind_x, int *date_x) {
     int dw = (cols & FL_DATE) && w >= 360 ? (MODERN ? 128 : 124) : 0;
-    int kw = (cols & FL_KIND) && w >= 520 ? 104 : 0;
+    /* Kind narrows before it goes, so the Open dialog's list keeps it. */
+    int kw = !(cols & FL_KIND) ? 0 : w >= 520 ? 104 : w >= 460 ? 88 : 0;
     int sw = (cols & FL_SIZE) && w >= 420 ? 72 : 0;
     *name_x = x + (MODERN ? 16 : 8);
     *date_x = dw ? x + w - dw : 0;
@@ -5383,7 +5384,7 @@ static void flist_row(int x, int y, int w, int cols, int id, int state, int warn
     char text[32];
     node_icon_draw(id, nx, y + (h - 16) / 2, 16, paper);
     kit_text(fs_name(id), tx, ty, ink, flist_name_end(x, w, cols) - tx, 0);
-    if (sx && !(kx && fs_is_app(id))) {  /* the Kind column already says App */
+    if (sx && !fs_is_app(id)) {  /* an app has no file size to show */
         node_size_text(id, text);
         kit_text_right(text, (kx ? kx : dx ? dx : x + w) - 16, ty, dim, 0);
     }
@@ -6043,7 +6044,9 @@ static void draw_open_dialog(void) {
     int used = kit_text(shown, tx, kit_ty(r1, BTN_H), TK_TEXT, fw - (tx - fx) - 8, 0);
     if (pick_focus == 0 && pick_typed_len && ((frame_count / 35) & 1) == 0) kit_caret(tx + used, kit_ty(r1, BTN_H));
     const char *filter = open_has_filter() && pick_show_all ? "All files" : open_filter_name();
-    kit_dropdown(dx, r1, dw, BTN_H, filter, open_has_filter() ? hot(dx, r1, dw, BTN_H) : KIT_DISABLED);
+    /* "All files" with no other choice is still the real filter: an enabled,
+     * passive box, as Save As draws a single type. */
+    kit_dropdown(dx, r1, dw, BTN_H, filter, open_has_filter() ? hot(dx, r1, dw, BTN_H) : 0);
     int ox, oy, ow, cx, cy, cw;
     od_buttons(c.x, c.y, c.w, c.h, &ox, &oy, &ow, &cx, &cy, &cw);
     int can = id >= 0;
@@ -6100,7 +6103,7 @@ static void fmt_grouped(char *out, unsigned v);
 static const char *kind_text(int id);
 static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
     char title[FS_NAME_LEN];
-    kstrcpy(title, edit_binding_valid() ? fs_name(edit_file) : "untitled");
+    kstrcpy(title, edit_binding_valid() ? fs_name(edit_file) : "Untitled");
     chrome_dirty = !edit_saved_ok;
     gui_draw_window(wx, wy, ww, wh, title, 0, inactive ? WIN_INACTIVE : 0);
     chrome_dirty = 0;
@@ -6271,7 +6274,7 @@ static const char *win_task_title(int slot, char *buffer, int *unsaved) {
         int bound = fs_valid(doc->file) && !fs_is_dir(doc->file) && !fs_is_app(doc->file) &&
                     fs_identity(doc->file) == doc->identity;
         *unsaved = !doc->saved_ok;
-        return bound ? fs_name(doc->file) : "untitled";
+        return bound ? fs_name(doc->file) : "Untitled";
     }
     if (kind == WK_WRITER) { *unsaved = writer_dirty(); return writer_title(); }
     if (kind == WK_SPREADSHEET) { *unsaved = spreadsheet_dirty(); return spreadsheet_title(); }
@@ -6517,6 +6520,8 @@ static void draw_properties(int wx, int wy, int ww, int wh, int fl) {
         else kstrcpy(value, "/");
         prop_row(lx, vx, &y, right, "Location", value);
         if (fs_is_dir(id)) node_size_text(id, value);
+        /* Programs are built in and take no file space of their own. */
+        else if (fs_is_app(id) && !fs_size(id)) kstrcpy(value, "Built into the system");
         else {
             size_text((unsigned)fs_size(id), value);
             kstrcpy(value + kstrlen(value), " (");
@@ -8222,12 +8227,15 @@ static int launcher_visible_rows(void) {
     return rows < 1 ? 1 : rows;
 }
 /* Rows on screen: with no matching files listed under the grid, a last row
- * that only partly fits is drawn cut at the grid's bottom. */
+ * that only partly fits is drawn cut at the grid's bottom, when at least a
+ * third of it shows (a thinner sliver reads as stray lines). */
 static int launcher_shown_rows(void) {
     if (launch_n > launch_apps) return launcher_visible_rows();
     int x, y, w, h;
     launcher_geom(&x, &y, &w, &h);
-    int rows = (lp_grid_bottom(y, h) - lp_grid_y(y) + lp_tile_h() + 3) / (lp_tile_h() + 4);
+    int avail = lp_grid_bottom(y, h) - lp_grid_y(y), step = lp_tile_h() + 4;
+    int rows = avail / step;
+    if (avail - rows * step >= lp_tile_h() / 3) rows++;
     return rows < 1 ? 1 : rows;
 }
 static int launcher_total_rows(void) { int c = lp_cols(); return (launch_apps + c - 1) / c; }
@@ -8343,21 +8351,39 @@ static void tile_line(const char *s, int x, int y, int w, uint8_t ink, int bold,
 }
 
 /* A tile label on up to two centered lines, split at the last space that
- * fits the first line. */
+ * fits the first line. A long name with no such space still wraps: before
+ * its extension dot, after a dash or underscore, or else at the last
+ * character that fits, so only the second line is ever cut. */
 static void tile_label_ex(const char *s, int x, int y, int w, uint8_t ink, int bold, int selected) {
     int n = kstrlen(s);
     char first[FS_NAME_LEN];
-    int cut = -1;
-    if (kit_text_w(s, bold) > w)
+    int cut = -1, skip = 1;
+    if (kit_text_w(s, bold) > w) {
         for (int i = 0; i < n && i < FS_NAME_LEN - 1; i++) {
             if (s[i] != ' ') continue;
             kmemcpy(first, s, i); first[i] = 0;
             if (kit_text_w(first, bold) <= w) cut = i;
         }
-    if (cut < 0) { tile_line(s, x, y, w, ink, bold, selected); return; }
+        if (cut < 0) {
+            int fit = 0;
+            while (fit < n && fit < FS_NAME_LEN - 1) {
+                kmemcpy(first, s, fit + 1); first[fit + 1] = 0;
+                if (kit_text_w(first, bold) > w) break;
+                fit++;
+            }
+            int mark = -1;
+            for (int i = 1; i <= fit && i < n; i++) {
+                if (s[i] == '.') mark = i;
+                else if ((s[i - 1] == '-' || s[i - 1] == '_') && i > 1) mark = i;
+            }
+            cut = mark > 0 ? mark : fit;
+            skip = 0;
+        }
+    }
+    if (cut <= 0 || cut >= n) { tile_line(s, x, y, w, ink, bold, selected); return; }
     kmemcpy(first, s, cut); first[cut] = 0;
     tile_line(first, x, y, w, ink, bold, selected);
-    tile_line(s + cut + 1, x, y + CHAR_H + 1, w, ink, bold, selected);
+    tile_line(s + cut + skip, x, y + CHAR_H + 1, w, ink, bold, selected);
 }
 static void tile_label(const char *s, int x, int y, int w, uint8_t ink, int bold) {
     tile_label_ex(s, x, y, w, ink, bold, 0);
@@ -8693,6 +8719,9 @@ static void namedlg_open(int target, const char *initial) {
                                      name_buf, sizeof name_buf, &name_pdf_paper)) name_len = kstrlen(name_buf);
     } else if (target == 5 && spreadsheet_export_retry_name(name_buf, sizeof name_buf)) name_len = kstrlen(name_buf);
     saveas_reset();
+    /* The name without its extension starts selected, the caret after it. */
+    for (int i = 0; i < name_len; i++) if (name_buf[i] == '.') name_sel = i;
+    name_caret = name_sel ? name_sel : name_len;
     dirty = 1;
 }
 
@@ -8830,7 +8859,7 @@ static const char *edit_close_doc_name(void) {
     const Document *doc = &window_state[edit_close_owner].doc;
     return wins[edit_close_owner].kind == WK_SPREADSHEET ? spreadsheet_title() :
         wins[edit_close_owner].kind == WK_WRITER ? writer_title() :
-        doc->file >= 0 && fs_identity(doc->file) == doc->identity ? fs_name(doc->file) : "untitled";
+        doc->file >= 0 && fs_identity(doc->file) == doc->identity ? fs_name(doc->file) : "Untitled";
 }
 
 static void draw_edit_close(void) {
@@ -8907,9 +8936,6 @@ static void saveas_reset(void) {
         if (fs_is_dir(pics)) dir = pics;
     }
     pick_reset(dir, 1);
-    /* The name without its extension starts selected. */
-    name_sel = 0;
-    for (int i = 0; i < name_len; i++) if (name_buf[i] == '.') name_sel = i;
 }
 
 static Chooser saveas_layout_of(int x, int y, int w, int h) {
@@ -8950,6 +8976,7 @@ static void saveas_set_target(int target) {
     if (dot < 0) dot = name_len;
     int elen = kstrlen(ext);
     if (dot + elen < FS_NAME_LEN) { kstrcpy(name_buf + dot, ext); name_len = dot + elen; }
+    if (name_caret > dot) name_caret = dot < name_len ? dot : name_len;
     name_target = target;
     name_sel = 0;
     name_failed = 0;
@@ -8969,6 +8996,7 @@ static int saveas_click_row(int i, int dbl) {
     while (nm[name_len] && name_len < FS_NAME_LEN - 1) { name_buf[name_len] = nm[name_len]; name_len++; }
     name_buf[name_len] = 0;
     name_sel = 0;
+    name_caret = name_len;
     name_failed = 0;
     name_focus = 0;
     if (dbl) namedlg_commit();
@@ -9063,10 +9091,12 @@ static void draw_namedlg(void) {
     int fx, fy, fw, fh;
     namedlg_field(x, y, w, &fx, &fy, &fw, &fh);
     kit_text("Name", x + pad, kit_ty(fy, fh), TK_TEXT, fx - x - pad - 8, 0);
-    int focused = !pdf || !name_focus;
+    /* Only the control that has focus shows it: the field, a paper choice
+     * or a button. */
+    int focused = !name_focus;
     int tx = kit_field(fx, fy, fw, fh, focused ? KIT_FOCUS : 0), ty = kit_ty(fy, fh);
     name_buf[name_len] = 0;
-    int caret = tx;
+    if (name_caret < 0 || name_caret > name_len) name_caret = name_len;
     if (name_sel > 0 && name_sel <= name_len && focused) {
         char stem[FS_NAME_LEN];
         for (int i = 0; i < name_sel; i++) stem[i] = name_buf[i];
@@ -9074,9 +9104,16 @@ static void draw_namedlg(void) {
         int sw = kit_text_w(stem, 0);
         draw_rect(tx - 1, ty, sw + 2, UI_FONT_H, TK_ACCENT);
         kit_text(stem, tx, ty, TK_ON_ACCENT, fw - 16, 0);
-        caret = tx + sw + kit_text(name_buf + name_sel, tx + sw, ty, TK_TEXT, fw - 16 - sw, 0);
-    } else caret = tx + kit_text(name_buf, tx, ty, TK_TEXT, fw - 16, 0);
-    if (focused && name_sel == 0 && ((frame_count / 35) & 1) == 0) kit_caret(caret, ty);
+        kit_text(name_buf + name_sel, tx + sw, ty, TK_TEXT, fw - 16 - sw, 0);
+    } else {
+        kit_text(name_buf, tx, ty, TK_TEXT, fw - 16, 0);
+        char head[FS_NAME_LEN];
+        for (int i = 0; i < name_caret; i++) head[i] = name_buf[i];
+        head[name_caret] = 0;
+        int cx = tx + kit_text_w(head, 0);
+        if (cx > tx + fw - 16) cx = tx + fw - 16;
+        if (focused && ((frame_count / 35) & 1) == 0) kit_caret(cx, ty);
+    }
     int existing = saveas_existing();
     saveas_message(fx, namedlg_message_y(x, y, w), fw, existing);
     if (pdf) {
@@ -9107,8 +9144,8 @@ static void draw_namedlg(void) {
     int stop = pdf ? 3 : 1;
     kit_button(cx, by, bw, BTN_H, "Cancel", -1, KB_DEFAULT, hot(cx, by, bw, BTN_H) | (name_focus == stop ? KIT_FOCUS : 0));
     /* Enter saves from the name field and from the button itself. */
-    kit_button(sx, by, bw, BTN_H, action, -1, KB_PRIMARY,
-               hot(sx, by, bw, BTN_H) | (name_focus == 0 || name_focus == stop + 1 ? KIT_DEFAULT : 0));
+    kit_button(sx, by, bw, BTN_H, action, -1, KB_PRIMARY, hot(sx, by, bw, BTN_H) |
+               (name_focus == 0 ? KIT_DEFAULT : name_focus == stop + 1 ? KIT_FOCUS : 0));
 }
 
 static int namedlg_click(void) {
@@ -9131,7 +9168,18 @@ static int namedlg_click(void) {
     }
     int fx, fy, fw, fh;
     namedlg_field(x, y, w, &fx, &fy, &fw, &fh);
-    if (hit(mouse_x, mouse_y, fx, fy, fw, fh)) { name_focus = 0; name_sel = 0; dirty = 1; return 1; }
+    if (hit(mouse_x, mouse_y, fx, fy, fw, fh)) {
+        /* The caret goes to the clicked character (text starts where
+         * kit_field puts it). */
+        int px = fx + (MODERN ? 10 : 6) + 1, pos = 0;
+        while (pos < name_len) {
+            char ch[2] = {name_buf[pos], 0};
+            int cw = kit_text_w(ch, 0);
+            if (mouse_x < px + cw / 2) break;
+            px += cw; pos++;
+        }
+        name_focus = 0; name_sel = 0; name_caret = pos; dirty = 1; return 1;
+    }
     if (hit(mouse_x, mouse_y, sx, by, bw, BTN_H))
         namedlg_commit();
     else if (hit(mouse_x, mouse_y, cx, by, bw, BTN_H))
@@ -9141,7 +9189,9 @@ static int namedlg_click(void) {
     return 1;
 }
 
-/* Typing replaces a selected name stem; Backspace removes it. */
+/* Typing replaces a selected name stem and keeps the extension; the caret
+ * then edits at its own position. Left/Right/Home/End move it, Backspace and
+ * Delete remove around it. */
 static void namedlg_key(void) {
     int pdf = name_target == 6, stops = pdf ? 5 : 3;
     if (key_sc == KEY_TAB) { name_focus=(name_focus+(shift_down?stops-1:1))%stops;dirty=1;return; }
@@ -9151,33 +9201,46 @@ static void namedlg_key(void) {
             name_pdf_paper = (unsigned)(name_focus - 1); name_failed = 0; dirty = 1; return;
         }
     }
-    if (key_sc == KEY_ENTER && name_focus==(pdf?3:1)) { namedlg_close();return; }
+    /* Enter or Space acts on the focused button. */
+    if ((key_sc == KEY_ENTER || key_sc == KEY_SPACE) && name_focus == (pdf ? 3 : 1)) { namedlg_close(); return; }
+    if (key_sc == KEY_SPACE && name_focus == (pdf ? 4 : 2)) { namedlg_commit(); return; }
     if (name_focus && key_sc!=KEY_ENTER && key_sc!=KEY_ESC) return;
+    if (name_caret < 0 || name_caret > name_len) name_caret = name_len;
+    if (name_sel > name_len) name_sel = 0;
     if (key_sc == KEY_ESC)
         namedlg_close();
     else if (key_sc == KEY_ENTER)
         namedlg_commit();
-    else if (key_sc == KEY_LEFT || key_sc == KEY_RIGHT) {
+    else if (key_sc == KEY_LEFT || key_sc == KEY_RIGHT || key_sc == 0x47 || key_sc == 0x4f) {
+        if (name_sel > 0) name_caret = key_sc == KEY_LEFT ? 0 : name_sel;
+        else if (key_sc == KEY_LEFT) { if (name_caret > 0) name_caret--; }
+        else if (key_sc == KEY_RIGHT) { if (name_caret < name_len) name_caret++; }
+        if (key_sc == 0x47) name_caret = 0;
+        if (key_sc == 0x4f) name_caret = name_len;
         name_sel = 0;
         dirty = 1;
-    } else if (key_sc == KEY_BACKSPACE) {
-        if (name_sel > 0) {
-            for (int i = name_sel; i <= name_len; i++) name_buf[i - name_sel] = name_buf[i];
-            name_len -= name_sel;
-            name_sel = 0;
-        } else if (name_len > 0)
-            name_buf[--name_len] = 0;
+    } else if (key_sc == KEY_BACKSPACE || key_sc == 0x53) {
+        int from = name_caret, to = name_caret;
+        if (name_sel > 0) { from = 0; to = name_sel; }
+        else if (key_sc == KEY_BACKSPACE) from = name_caret > 0 ? name_caret - 1 : 0;
+        else to = name_caret < name_len ? name_caret + 1 : name_len;
+        for (int i = to; i <= name_len; i++) name_buf[i - (to - from)] = name_buf[i];
+        name_len -= to - from;
+        name_caret = from;
+        name_sel = 0;
         dirty = 1;
-    } else if (key_char && key_char != '/' && name_len < FS_NAME_LEN - 1) {
-        if (name_sel > 0) {
-            for (int i = name_sel; i <= name_len; i++) name_buf[i - name_sel + 1] = name_buf[i];
-            name_buf[0] = key_char;
-            name_len -= name_sel - 1;
-            name_sel = 0;
-        } else {
-            name_buf[name_len++] = key_char;
-            name_buf[name_len] = 0;
-        }
+    } else if (key_char && key_char != '/') {
+        int from = name_caret, to = name_caret;
+        if (name_sel > 0) { from = 0; to = name_sel; }
+        if (name_len - (to - from) >= FS_NAME_LEN - 1) return;
+        /* Remove the selection, then insert at the caret. */
+        for (int i = to; i <= name_len; i++) name_buf[i - (to - from)] = name_buf[i];
+        name_len -= to - from;
+        for (int i = name_len; i >= from; i--) name_buf[i + 1] = name_buf[i];
+        name_buf[from] = key_char;
+        name_len++;
+        name_caret = from + 1;
+        name_sel = 0;
         dirty = 1;
     }
 }
@@ -9268,27 +9331,50 @@ static void switcher_click(void) {
     switcher_cancel();
 }
 
-/* "Editor, in Documents" under the cells: the app and, for a file view,
- * the folder it shows. */
-static void switcher_detail(int slot, char *out, int cap) {
+/* The folder a window's document lives in (or a Files window shows), or
+ * -1 for a window with no saved document. */
+static int switcher_folder(int slot) {
+    int kind = wins[slot].kind, file = -1;
+    if (kind == WK_FILES) return fs_is_dir(window_state[slot].cwd) ? window_state[slot].cwd : -1;
+    if (kind == WK_EDIT) {
+        const Document *doc = &window_state[slot].doc;
+        if (fs_valid(doc->file) && fs_identity(doc->file) == doc->identity) file = doc->file;
+    } else if (kind == WK_WRITER) file = writer_file();
+    else if (kind == WK_SPREADSHEET) file = spreadsheet_file();
+    if (file < 0 || !fs_valid(file)) return -1;
+    int parent = fs_parent(file);
+    return fs_is_dir(parent) ? parent : -1;
+}
+
+/* Appends one part of the detail line, comma separated, the first one
+ * capitalized. */
+static void switcher_put(char *out, int *n, int cap, const char *s) {
+    if (*n && *n < cap - 2) { out[(*n)++] = ','; out[(*n)++] = ' '; }
+    int first = *n == 0;
+    while (*s && *n < cap - 1) {
+        char c = *s++;
+        if (first && c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        first = 0;
+        out[(*n)++] = c;
+    }
+}
+
+/* "Editor, in Documents" beside the bold title: the app (when the title
+ * is not already its name), where the document or folder is, and whether
+ * it was never saved or is minimized. */
+static void switcher_detail(int slot, const char *label, char *out, int cap) {
     const char *app = win_app_name(wins[slot].kind);
-    int n = 0;
-    while (*app && n < cap - 1) out[n++] = *app++;
-    const char *where = 0;
-    if (wins[slot].kind == WK_FILES) {
-        int cwd = window_state[slot].cwd;
-        where = fs_is_dir(cwd) ? (cwd == fs_root() ? "Home" : fs_name(cwd)) : 0;
-    }
-    if (wins[slot].min) where = 0;
-    if (where) {
-        const char *sep = ", in ";
-        while (*sep && n < cap - 1) out[n++] = *sep++;
-        while (*where && n < cap - 1) out[n++] = *where++;
-    }
-    if (wins[slot].min) {
-        const char *m = ", minimized";
-        while (*m && n < cap - 1) out[n++] = *m++;
-    }
+    int n = 0, kind = wins[slot].kind;
+    if (kstrcmp(app, label) != 0) switcher_put(out, &n, cap, app);
+    int folder = switcher_folder(slot);
+    if (folder >= 0) {
+        char where[FS_NAME_LEN + 8];
+        kstrcpy(where, "in ");
+        kstrcpy(where + 3, folder == fs_root() ? "Home" : fs_name(folder));
+        switcher_put(out, &n, cap, where);
+    } else if (kind == WK_EDIT || kind == WK_WRITER || kind == WK_SPREADSHEET)
+        switcher_put(out, &n, cap, "not saved yet");
+    if (wins[slot].min) switcher_put(out, &n, cap, "minimized");
     out[n] = 0;
 }
 
@@ -9320,20 +9406,22 @@ static void draw_switcher(void) {
         }
         int top = MODERN ? 16 : 14;
         app_icon_draw(app_icon_for(kind_icon(wins[i].kind)), cx + (cw - 32) / 2, cy + top, AI_BIG);
-        const char *t = win_display_title(i, title);
+        /* Cells name the window as the taskbar does: by its document. */
+        int unsaved;
+        const char *t = win_task_title(i, title, &unsaved);
         uint8_t ink = on ? (MODERN ? TK_ACCENT_700 : TK_TEXT) : wins[i].min ? TK_TEXT2 : TK_TEXT;
-        int tw = kit_text_w(t, on), maxw = cw - 12;
+        int maxw = cw - 12, tw = kit_text_w(t, on) + (unsaved ? TASK_DOT_W : 0);
         if (tw > maxw) tw = maxw;
-        kit_text(t, cx + (cw - tw) / 2, cy + top + 32 + (MODERN ? 10 : 8), ink, maxw, on);
+        task_label(t, unsaved, cx + (cw - tw) / 2, cy + top + 32 + (MODERN ? 10 : 8), tw, ink, on);
     }
-    int sel = switcher_ids[switcher_sel];
-    char detail[64];
-    switcher_detail(sel, detail, sizeof detail);
-    const char *t = win_display_title(sel, title);
+    int sel = switcher_ids[switcher_sel], unsaved;
+    char detail[FS_NAME_LEN + 64];
+    const char *t = win_task_title(sel, title, &unsaved);
+    switcher_detail(sel, t, detail, sizeof detail);
     int ty = y + h - (MODERN ? 36 : 40) + (MODERN ? 10 : 12);
     int tx = x + (MODERN ? 18 : 16);
     int used = kit_text(t, tx, ty, TK_TEXT, w / 2, 1);
-    kit_text(detail, tx + used + 6, ty, TK_TEXT2, x + w - 16 - (tx + used + 6), 0);
+    kit_text(detail, tx + used + 10, ty, TK_TEXT2, x + w - 16 - (tx + used + 10), 0);
 }
 
 /* The top window under the pointer, or -1. */
@@ -10382,7 +10470,10 @@ static void about_lines(char lines[4][64]) {
     sysinfo_fill(&si);
     kstrcpy(lines[0], "Version 0.9, build " BASEOS_BUILD_LABEL);
     lines[1][0] = 0; fmt_cat_uint(lines[1], (unsigned)fb_w); fmt_cat(lines[1], " x ");
-    fmt_cat_uint(lines[1], (unsigned)fb_h); fmt_cat(lines[1], ", 256 colors");
+    /* Same wording as System Monitor: the mode's depth, then the desktop's
+     * 256-color palette drawn through it. */
+    fmt_cat_uint(lines[1], (unsigned)fb_h); fmt_cat(lines[1], ", ");
+    fmt_cat_uint(lines[1], (unsigned)fb_bpp); fmt_cat(lines[1], "-bit, 256 colors");
     lines[2][0] = 0; fmt_cat_uint(lines[2], (unsigned)si.mem_mb); fmt_cat(lines[2], " MB memory");
     lines[3][0] = 0; fmt_cat_uint(lines[3], (unsigned)(si.fs_bytes / 1024)); fmt_cat(lines[3], " KB used of ");
     fmt_cat_uint(lines[3], (unsigned)(si.fs_cap / 1024)); fmt_cat(lines[3], " KB");
@@ -10723,7 +10814,9 @@ static void settings_display(SetForm *f) {
     }
     if (!MODERN) f->y += 8;
     y = set_row(f, "Colors", 20, &cx);
-    kit_text("256 colors", cx, kit_ty(y, 20), TK_TEXT, 200, 0);
+    char depth[32];
+    depth[0] = 0; fmt_cat_uint(depth, (unsigned)fb_bpp); fmt_cat(depth, "-bit, 256 colors");
+    kit_text(depth, cx, kit_ty(y, 20), TK_TEXT, 240, 0);
     set_card_end(f);
     f->y += 12;
     kit_text(display_message[0] ? display_message :
