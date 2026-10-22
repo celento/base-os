@@ -316,7 +316,7 @@ static int ed_text_like(const char *data, int n) {
     return 1;
 }
 static int ed_valid(void) { return ed_file >= 0 && fs_valid(ed_file) && fs_identity(ed_file) == ed_identity; }
-static const char *ed_title(void) { return ed_valid() ? fs_name(ed_file) : "untitled"; }
+static const char *ed_title(void) { return ed_valid() ? fs_name(ed_file) : "Untitled"; }
 static int ed_load(int id) {
     int n = fs_size(id);
     if (n > ED_CAP || fs_streamed(id) || (n && !fs_data(id))) { notify("Too large for Editor."); return 0; }

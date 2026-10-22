@@ -10,7 +10,7 @@ static struct { int open, kind, seq; } wins[MAX_WIN];
 typedef struct { int saved_ok, file; unsigned identity; } Document;
 static struct { Document doc; } window_state[MAX_WIN];
 static int context_slot, name_dlg, name_target, name_focus, name_owner, name_owner_seq;
-static int name_len, name_sel, name_failed, dirty;
+static int name_len, name_sel, name_caret, name_failed, dirty;
 static unsigned name_pdf_paper;
 static char name_buf[FS_NAME_LEN];
 static const char *name_failure_message;

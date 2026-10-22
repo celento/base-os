@@ -12,7 +12,7 @@
 #define SPREADSHEET_SAVE_OK 1
 static struct { int open, seq; } wins[MAX_WIN];
 static int context_slot, name_dlg, name_target, name_focus, name_owner, name_owner_seq;
-static int name_len, name_sel, name_failed, dirty, mouse_x, mouse_y, key_sc, shift_down;
+static int name_len, name_sel, name_caret, name_failed, dirty, mouse_x, mouse_y, key_sc, shift_down;
 static unsigned name_pdf_paper;
 static char name_buf[FS_NAME_LEN], key_char;
 static const char *name_failure_message;
@@ -42,6 +42,7 @@ static void document_finish(int owner, int action, int target, unsigned identity
 static void press(int sc, int shift, char ch) { key_sc = sc; shift_down = shift; key_char = ch; namedlg_key(); }
 static void name(const char *text) {
     assert(!name_focus);
+    press(0x4f, 0, 0); /* End: Backspace then clears the whole name. */
     while (name_len) press(KEY_BACKSPACE, 0, 0);
     while (*text) press(0, 0, *text++);
 }
@@ -50,6 +51,29 @@ int main(void) {
     files[0].valid = files[0].folder = 1; files[0].identity = 1;
     wins[0].open = 1; wins[0].seq = 12;
     gfx_init(back, linear, 800, 600, 32, 3200); writer_init(); type("Native dirty text");
+    /* Typing over the selected stem replaces it and keeps the extension,
+     * with the caret after the typed text. */
+    namedlg_open(0, "untitled.txt"); assert(name_sel == 8 && name_caret == 8);
+    for (const char *t = "notes"; *t; t++) press(0, 0, *t);
+    assert(!strcmp(name_buf, "notes.txt") && name_len == 9 && name_caret == 5 && !name_sel);
+    press(KEY_LEFT, 0, 0); press(0, 0, 'x'); assert(!strcmp(name_buf, "notexs.txt") && name_caret == 5);
+    press(KEY_BACKSPACE, 0, 0); press(0x53, 0, 0); assert(!strcmp(name_buf, "note.txt") && name_caret == 4);
+    press(0x47, 0, 0); press(0, 0, 'm'); assert(!strcmp(name_buf, "mnote.txt") && name_caret == 1);
+    press(0x4f, 0, 0); press(KEY_BACKSPACE, 0, 0); assert(!strcmp(name_buf, "mnote.tx") && name_caret == 8);
+    press(KEY_ESC, 0, 0); assert(!name_dlg);
+    namedlg_open(2, "untitled.bwr");
+    for (const char *t = "report"; *t; t++) press(0, 0, *t);
+    assert(!strcmp(name_buf, "report.bwr") && name_caret == 6);
+    /* Right keeps the stem and puts the caret after it; Backspace on a
+     * selection removes only the stem. */
+    namedlg_open(2, "untitled.bwr"); press(KEY_RIGHT, 0, 0); assert(!name_sel && name_caret == 8);
+    press(0, 0, '2'); assert(!strcmp(name_buf, "untitled2.bwr"));
+    namedlg_open(2, "untitled.bwr"); press(KEY_BACKSPACE, 0, 0); assert(!strcmp(name_buf, ".bwr") && !name_caret);
+    press(0, 0, 'a'); assert(!strcmp(name_buf, "a.bwr") && name_caret == 1);
+    /* Typing reaches the name only while the name field has focus. */
+    press(KEY_TAB, 0, 0); assert(name_focus == 1); press(0, 0, 'z'); assert(!strcmp(name_buf, "a.bwr"));
+    press(KEY_TAB, 1, 0); assert(!name_focus); press(0, 0, 'z'); assert(!strcmp(name_buf, "az.bwr"));
+    press(KEY_TAB, 0, 0); press(KEY_SPACE, 0, ' '); assert(!name_dlg && fs_find_child(0, "az.bwr") < 0);
     namedlg_open(6, "document.pdf");
     assert(name_dlg && !name_focus && name_pdf_paper == WRITER_PDF_LETTER);
     int x, y, w, h; namedlg_geom(&x, &y, &w, &h); assert(w == 640 && h == 534);
