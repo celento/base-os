@@ -152,7 +152,10 @@ it, and it is read and written in pieces with `fs_read_at`, `fs_write_at` and
 `fs_truncate` (`fs_streamed` tells which files these are). Programs reach it
 through file descriptors: a descriptor opened for writing keeps a small file
 in a buffer as before, and switches to writing through to the volume once the
-file passes the limit. Desktop apps that load whole files refuse it.
+file passes the limit. Desktop apps that load whole files refuse it. Since nothing needs a whole
+file in memory, a BaseFS 2 volume with files past 2 MiB also mounts on a
+machine without the large arenas (64 MiB); only large snapshot-format (v5)
+disks still need them.
 
 A write replaces only the extents it touches. It reads an extent, changes
 it, and writes the result to free blocks at once; the old extent stays owned
