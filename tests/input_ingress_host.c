@@ -4,7 +4,10 @@
 #include "kernel/input_ingress.h"
 static InputIngress in;
 static InputSample sample;
-static void fresh(unsigned type) { input_init(&in, 800, 600, 400, 300); input_mouse_type(&in, type); }
+/* Exact positions below assume the 1:1 level; speed has its own checks. */
+static void fresh(unsigned type) {
+    input_init(&in, 800, 600, 400, 300); input_mouse_type(&in, type); input_set_speed(&in, INPUT_SPEED_UNITY);
+}
 static void key(unsigned byte, unsigned ticks) { input_keyboard_byte(&in, (uint8_t)byte, ticks); }
 static void pointer(int dx, int dy, unsigned buttons, int wheel, unsigned ticks) {
     input_mouse_byte(&in, (uint8_t)(8 | buttons | (dx < 0 ? 16 : 0) | (dy < 0 ? 32 : 0)), ticks);
@@ -75,6 +78,21 @@ int main(void) {
     assert(pop(INPUT_POINTER).epoch != in.epoch); assert(pop(INPUT_KEY).character == 'a');
     assert(pop(INPUT_POINTER).epoch == in.epoch);
     puts("Ingress fences: pointer epochs preserve keyboard ordering passed.");
+    input_init(&in, 800, 600, 400, 300); assert(in.speed == INPUT_SPEED_DEFAULT);
+    input_set_speed(&in, INPUT_SPEED_LEVELS); assert(in.speed == INPUT_SPEED_DEFAULT);
+    for (unsigned level = 0; level < INPUT_SPEED_LEVELS; ++level)
+        for (int n = -INPUT_PRECISION; n <= INPUT_PRECISION; ++n) assert(input_pointer_scale(level, n) == n);
+    for (int n = -255; n <= 255; ++n) {
+        assert(input_pointer_scale(INPUT_SPEED_UNITY, n) == n);
+        assert(input_pointer_scale(INPUT_SPEED_DEFAULT, n) == -input_pointer_scale(INPUT_SPEED_DEFAULT, -n));
+        for (unsigned level = 1; level < INPUT_SPEED_LEVELS; ++level)
+            assert(input_pointer_scale(level, n < 0 ? -n : n) >= input_pointer_scale(level - 1, n < 0 ? -n : n));
+    }
+    assert(input_pointer_scale(INPUT_SPEED_DEFAULT, 10) == 18 && input_pointer_scale(0, 10) == 6);
+    input_set_speed(&in, INPUT_SPEED_DEFAULT);
+    pointer(10, -3, 0, 0, 1); s = pop(INPUT_POINTER); assert(s.x == 418 && s.y == 304);
+    pointer(-1, 2, 0, 0, 2); s = pop(INPUT_POINTER); assert(s.x == 417 && s.y == 302);
+    puts("Ingress pointer speed: exact slow motion, scaled fast motion passed.");
     puts("All ordered ingress checks passed.");
     return 0;
 }

@@ -15,6 +15,7 @@ from init_data import initialize
 from paint_save_input_test import PaintSession
 from files_view_input_test import FilesSession
 from volume import load, resolve, DATA_LAYOUT, encode_snapshot
+import pointer_motion
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,8 +32,10 @@ class OrderedSession(PaintSession):
         self.move(x, y); self.button(True); self.button(False)
 
     def release_motion(self, dx, dy):
-        events = [{'type': 'rel', 'data': {'axis': axis, 'value': delta}}
-                  for axis, delta in (('x', dx), ('y', dy)) if delta]
+        lead, events = pointer_motion.release_split(dx, dy)
+        for batch in lead:
+            self.command('input-send-event', {'events': batch})
+            time.sleep(.04)
         events.append({'type': 'btn', 'data': {'button': 'left', 'down': False}})
         self.command('input-send-event', {'events': events})
         self.pointer = self.pointer[0] + dx, self.pointer[1] + dy

@@ -1497,6 +1497,8 @@ static void pocket_prepare(void) {
     int v;
     if ((v = pref_read("style", UI_STYLE_COUNT)) >= 0) ui_style = v;
     if ((v = pref_read("accent", UI_ACCENT_N)) >= 0) ui_accent = v;
+    /* Pointer speed is set in the desktop's Settings. */
+    if ((v = pref_read("pointer", INPUT_SPEED_LEVELS)) >= 0) input_set_speed(&device_input, (unsigned)v);
     pocket_theme();
     todo_load();
     pocket_layout();

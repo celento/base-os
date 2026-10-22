@@ -103,6 +103,8 @@ static int ui_accent_id, ui_desktop_id, ui_pattern;
 /* Desktop background: a color (with an optional pattern), a gradient preset
  * in one of three shapes, or a picture file named in /prefs/picture. */
 static int ui_wall_kind, ui_gradient, ui_gradient_shape;
+/* Pointer speed level, applied to the kernel's PS/2 ingress. */
+static int pointer_speed = INPUT_SPEED_DEFAULT;
 /* Window behavior: outline drag unless contents are shown, double-click on a
  * title bar maximizes, windows snap to screen edges within snap distance. */
 #define WINOPT_DRAG_CONTENTS 1
@@ -10366,7 +10368,7 @@ static void handle_key(void) {
 enum {
     PREF_STYLE, PREF_ACCENT, PREF_DESKTOP, PREF_PATTERN, PREF_WINDOWS, PREF_SNAP,
     PREF_SAVER, PREF_SAVER_DELAY, PREF_DISPLAY, PREF_CLOCK, PREF_MOUSE,
-    PREF_WALL, PREF_GRADIENT, PREF_SHAPE, PREF_COUNT
+    PREF_WALL, PREF_GRADIENT, PREF_SHAPE, PREF_POINTER, PREF_COUNT
 };
 enum { PREF_IDLE, PREF_QUEUED, PREF_RAM, PREF_SAVED, PREF_WRITE_FAILED, PREF_SYNC_FAILED, PREF_PATH_FAILED, PREF_FULL_FAILED };
 enum { PREF_ERR_PATH = -4, PREF_ERR_FULL = -5 };
@@ -10375,12 +10377,12 @@ static PendingPreference preferences[PREF_COUNT];
 static const char *const preference_names[PREF_COUNT] = {
     "style", "accent", "desktop", "pattern", "windows", "snap",
     "saver", "saverdelay", "display", "clock", "mouse",
-    "wallpaper", "gradient", "shape"
+    "wallpaper", "gradient", "shape", "pointer"
 };
 static const int preference_counts[PREF_COUNT] = {
     UI_STYLE_COUNT, UI_ACCENT_N, UI_DESKTOP_N, UI_PATTERN_N, 16, SNAP_DISTANCE_MAX + 1,
     2, SAVER_DELAY_N, DISPLAY_MODE_COUNT, 4, 3,
-    UI_WALL_KIND_N, UI_GRADIENT_N, UI_SHAPE_N
+    UI_WALL_KIND_N, UI_GRADIENT_N, UI_SHAPE_N, INPUT_SPEED_LEVELS
 };
 static FsSyncTicket preference_sync_ticket;
 static int preference_sync_active, preference_retry_requested;
@@ -10548,6 +10550,8 @@ static void theme_load(void) {
     if ((v = preference_read(PREF_WALL)) >= 0) ui_wall_kind = v;
     if ((v = preference_read(PREF_GRADIENT)) >= 0) ui_gradient = v;
     if ((v = preference_read(PREF_SHAPE)) >= 0) ui_gradient_shape = v;
+    if ((v = preference_read(PREF_POINTER)) >= 0) pointer_speed = v;
+    input_set_speed(&device_input, (unsigned)pointer_speed);
 }
 
 /* Switching style changes metrics, so windows are clamped to the new work
@@ -10686,12 +10690,15 @@ static int settings_page;
 enum {
     SZ_PAGE = 1, SZ_STYLE, SZ_ACCENT, SZ_DESKTOP, SZ_PATTERN, SZ_WINOPT, SZ_SNAP,
     SZ_SAVER, SZ_SAVER_DELAY, SZ_SAVER_PREVIEW, SZ_DISPLAY, SZ_CLOCK, SZ_MOUSE, SZ_RETRY, SZ_SCROLL,
-    SZ_WALL, SZ_GRADIENT, SZ_SHAPE, SZ_PICTURE
+    SZ_WALL, SZ_GRADIENT, SZ_SHAPE, SZ_PICTURE, SZ_POINTER
 };
 typedef struct { int x, y, w, h, kind, arg; } SetZone;
 static SetZone set_zones[64];
-static int set_zone_n, set_slider_drag;   /* 1 the snap slider, 2 the scroll thumb */
-static int set_snap_x, set_snap_w;
+/* set_slider_drag: 1 the snap slider, 2 the scroll thumb, 3 the pointer
+ * speed slider. set_slider_x/w hold each slider's track, by drag kind. */
+enum { SET_DRAG_SNAP = 1, SET_DRAG_SCROLL, SET_DRAG_POINTER };
+static int set_zone_n, set_slider_drag;
+static int set_slider_x[4], set_slider_w[4];
 
 /* The page scrolls inside the view [set_view_t, set_view_b). Zones drawn
  * while the page is clipped are cut to the view, so a control scrolled out
@@ -10890,23 +10897,26 @@ static void set_switch_labeled(SetForm *f, const char *row_label, const char *la
 }
 
 static const int snap_distance_max = SNAP_DISTANCE_MAX;
+/* A slider from sx to the value label at the row's right edge. */
+static void set_slider(SetForm *f, int sx, int y, int value, int max, const char *text, int kind, int drag) {
+    int right = f->x + f->w - (MODERN ? 16 : 0);
+    int sw = right - 60 - sx;
+    if (sw > 240) sw = 240;
+    kit_slider(sx, y, sw, value, max, set_slider_drag == drag ? KIT_PRESSED : 0);
+    if (MODERN) kit_text_right(text, right, kit_ty(y, 18), TK_TEXT, 0);
+    else kit_text(text, sx + sw + 12, kit_ty(y, 18), TK_TEXT, 60, 0);
+    set_slider_x[drag] = sx;
+    set_slider_w[drag] = sw;
+    set_zone(sx - 4, y - 4, sw + 8, 26, kind, 0);
+}
 static void set_slider_row(SetForm *f, const char *label, int value, int max, const char *unit, int kind) {
     int cx, y = set_row(f, 0, 18, &cx);
     int lx = MODERN ? f->x + 32 : cx;
     kit_text(label, lx, kit_ty(y, 18), TK_TEXT2, 140, 0);
-    int sx = MODERN ? f->x + 16 + set_label_w() + 16 + 32 : cx + 100;
-    int right = f->x + f->w - (MODERN ? 16 : 0);
-    int sw = right - 60 - sx;
-    if (sw > 240) sw = 240;
-    kit_slider(sx, y, sw, value, max, set_slider_drag == 1 ? KIT_PRESSED : 0);
     char v[16];
     fmt_uint(v, (unsigned)value);
     kstrcpy(v + kstrlen(v), unit);
-    if (MODERN) kit_text_right(v, right, kit_ty(y, 18), TK_TEXT, 0);
-    else kit_text(v, sx + sw + 12, kit_ty(y, 18), TK_TEXT, 60, 0);
-    set_snap_x = sx;
-    set_snap_w = sw;
-    set_zone(sx - 4, y - 4, sw + 8, 26, kind, 0);
+    set_slider(f, MODERN ? f->x + 16 + set_label_w() + 16 + 32 : cx + 100, y, value, max, v, kind, SET_DRAG_SNAP);
 }
 
 /* Decodes before switching, so a file that fails leaves the background as
@@ -11060,6 +11070,9 @@ static void settings_display(SetForm *f) {
 }
 
 static const char *const mouse_speed_names[3] = {"Slow", "Normal", "Fast"};
+static const char *const pointer_speed_names[INPUT_SPEED_LEVELS] = {
+    "0.5x", "0.75x", "1x", "1.25x", "1.5x", "1.75x", "2x", "2.5x", "3x", "4x"
+};
 /* Each row: the keys (a second key, when set, is an alternative) and what
  * they do. */
 static const char *const shortcut_keys[][3] = {
@@ -11075,6 +11088,9 @@ static void settings_input(SetForm *f) {
     set_card_begin(f);
     y = set_row(f, "Double-click speed", kit_segmented_h(), &cx);
     set_segmented(cx, y, mouse_speed_names, 3, dbl_click_speed, SZ_MOUSE);
+    y = set_row(f, "Pointer speed", 18, &cx);
+    set_slider(f, cx, y, pointer_speed, INPUT_SPEED_LEVELS - 1, pointer_speed_names[pointer_speed],
+               SZ_POINTER, SET_DRAG_POINTER);
     set_card_end(f);
     set_rule(f);
     draw_string_bold("Shortcuts", f->x, f->y, TK_TEXT);
@@ -11224,7 +11240,7 @@ static void draw_settings(int wx, int wy, int ww, int wh, int fl) {
     set_sb_h = view_h;
     set_sb_total = total;
     {
-        int sb_state = set_slider_drag == 2 ? KIT_PRESSED : set_hover(SZ_SCROLL, 0) ? KIT_HOVER : 0;
+        int sb_state = set_slider_drag == SET_DRAG_SCROLL ? KIT_PRESSED : set_hover(SZ_SCROLL, 0) ? KIT_HOVER : 0;
         if (!MODERN) draw_rect(set_sb_x, top, SB, bottom - top, TK_BASE);
         kit_vscroll(set_sb_x, top, view_h, settings_scroll, view_h, total, sb_state);
         if (!MODERN) draw_vline(set_sb_x, top, bottom - top, TK_LINE_SUBTLE);
@@ -11264,24 +11280,46 @@ static void settings_scroll_drag(void) {
     settings_scroll_by(y * settings_scroll_max / (range - size) - settings_scroll);
 }
 
+/* The value under the pointer on a slider track. A coarse slider picks the
+ * step whose knob centre is nearest (kit_slider's knob is 16 px Modern, 12
+ * Classic); the fine snap slider truncates over the whole track. */
+static int settings_slider_value(int drag, int max, int nearest) {
+    int w = set_slider_w[drag];
+    if (w <= 0) return -1;
+    int v;
+    if (nearest) {
+        int knob = MODERN ? 16 : 12, travel = w - knob, at = mouse_x - set_slider_x[drag] - knob / 2;
+        if (travel <= 0) return -1;
+        v = at < 0 ? 0 : (at * max * 2 + travel) / (travel * 2);
+    } else v = (mouse_x - set_slider_x[drag]) * max / w;
+    return v < 0 ? 0 : v > max ? max : v;
+}
+/* Pointer speed applies while dragging, so the new speed can be felt. */
 static void settings_slider_set(void) {
-    if (set_snap_w <= 0) return;
-    int v = (mouse_x - set_snap_x) * snap_distance_max / set_snap_w;
-    if (v < 0) v = 0;
-    if (v > snap_distance_max) v = snap_distance_max;
-    if (v != win_snap_distance) { win_snap_distance = v; dirty = 1; }
+    if (set_slider_drag == SET_DRAG_SNAP) {
+        int v = settings_slider_value(SET_DRAG_SNAP, snap_distance_max, 0);
+        if (v >= 0 && v != win_snap_distance) { win_snap_distance = v; dirty = 1; }
+    } else if (set_slider_drag == SET_DRAG_POINTER) {
+        int v = settings_slider_value(SET_DRAG_POINTER, INPUT_SPEED_LEVELS - 1, 1);
+        if (v >= 0 && v != pointer_speed) {
+            pointer_speed = v;
+            input_set_speed(&device_input, (unsigned)v);
+            dirty = 1;
+        }
+    }
 }
 static void settings_drag(void) {
     if (!set_slider_drag) return;
-    if (set_slider_drag == 2) {
+    if (set_slider_drag == SET_DRAG_SCROLL) {
         if (mouse_left) settings_scroll_drag();
         else set_slider_drag = 0;
         dirty = 1;
         return;
     }
     if (!mouse_left) {
+        if (set_slider_drag == SET_DRAG_SNAP) preference_save(PREF_SNAP, win_snap_distance);
+        else preference_save(PREF_POINTER, pointer_speed);
         set_slider_drag = 0;
-        preference_save(PREF_SNAP, win_snap_distance);
         dirty = 1;
         return;
     }
@@ -11299,7 +11337,7 @@ static void handle_settings_click(int wx, int wy, int ww, int wh) {
         settings_thumb(&at, &size);
         if (mouse_y < at) settings_scroll_by(-settings_view_h * 7 / 8);
         else if (mouse_y >= at + size) settings_scroll_by(settings_view_h * 7 / 8);
-        else { set_slider_drag = 2; set_scroll_grab = mouse_y - at; }
+        else { set_slider_drag = SET_DRAG_SCROLL; set_scroll_grab = mouse_y - at; }
         break;
     }
     case SZ_STYLE: style_set(z->arg); break;
@@ -11316,7 +11354,8 @@ static void handle_settings_click(int wx, int wy, int ww, int wh) {
     case SZ_SHAPE: gradient_shape_set(z->arg); break;
     case SZ_PICTURE: wall_picture_choose(); break;
     case SZ_WINOPT: win_options ^= z->arg; windows_save(); break;
-    case SZ_SNAP: set_slider_drag = 1; settings_slider_set(); break;
+    case SZ_SNAP: set_slider_drag = SET_DRAG_SNAP; settings_slider_set(); break;
+    case SZ_POINTER: set_slider_drag = SET_DRAG_POINTER; settings_slider_set(); break;
     case SZ_SAVER: saver_enabled = !saver_enabled; saver_save(); break;
     case SZ_SAVER_DELAY: saver_delay = z->arg; preference_save(PREF_SAVER_DELAY, saver_delay); break;
     case SZ_SAVER_PREVIEW: saver_start(); break;

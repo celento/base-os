@@ -18,6 +18,7 @@ from build_app import build as build_app
 from init_data import initialize
 from platform_evidence import (ROOT, MAGIC, PlatformSession, fnv, provenance, sha, snapshot_jobs)
 from volume import data_layout, encode_snapshot, load, resolve
+import pointer_motion
 
 NOTE = b'This note was saved by a protected C application.\n'
 STATS = b'alpha beta\ngamma delta\n'
@@ -349,8 +350,8 @@ def run_profile(build,work,profile,app,seed,timeout,staged_default=False):
         assert before_mouse['sync_result']==1
         sent_mouse=time.monotonic()
         session.command('input-send-event',{'events':[
-            {'type':'rel','data':{'axis':'x','value':80}},
-            {'type':'rel','data':{'axis':'y','value':80}}]})
+            {'type':'rel','data':{'axis':'x','value':pointer_motion.counts_for(80)}},
+            {'type':'rel','data':{'axis':'y','value':pointer_motion.counts_for(80)}}]})
         deadline=time.monotonic()+12
         while time.monotonic()<deadline:
             after_mouse,after_pixels,wall=session.observe()

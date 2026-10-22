@@ -21,6 +21,7 @@ from PIL import Image
 from init_data import initialize
 from video_input_test import ProductionSession
 from volume import DATA_LAYOUT, MAGIC, load
+import pointer_motion
 
 COUNT = 180
 NAMES = [f'document-{i:03}.txt' for i in range(COUNT)]
@@ -186,7 +187,7 @@ class Checks:
             events = []
             for axis, current, target in (('x', self.integer('mouse_x'), x), ('y', self.integer('mouse_y'), y)):
                 if target != current:
-                    events.append({'type': 'rel', 'data': {'axis': axis, 'value': max(-80, min(80, target - current))}})
+                    events.append({'type': 'rel', 'data': {'axis': axis, 'value': pointer_motion.step(target - current)}})
             self.s.command('input-send-event', {'events': events})
             time.sleep(.025)
 

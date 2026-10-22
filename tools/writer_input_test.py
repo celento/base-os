@@ -15,6 +15,7 @@ from elf_debug import DebugInfo
 from init_data import initialize
 from video_input_test import Observations, ProductionSession
 from volume import DATA_LAYOUT, MAGIC, data_layout, load, resolve
+import pointer_motion
 
 WRITER = 22
 
@@ -118,7 +119,7 @@ class WriterCheck:
             mx, my = self.o.integer('mouse_x'), self.o.integer('mouse_y')
             if (mx, my) == (x, y):
                 return
-            events = [{'type': 'rel', 'data': {'axis': axis, 'value': max(-80, min(80, delta))}}
+            events = [{'type': 'rel', 'data': {'axis': axis, 'value': pointer_motion.step(delta)}}
                       for axis, delta in (('x', x - mx), ('y', y - my)) if delta]
             self.s.command('input-send-event', {'events': events})
             time.sleep(.025)

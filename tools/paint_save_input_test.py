@@ -16,6 +16,7 @@ import struct
 from init_data import initialize
 from qemu_session import DesktopSession
 from volume import DATA_LAYOUT, encode_snapshot, load, resolve
+import pointer_motion
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,10 +66,8 @@ class PaintSession(DesktopSession):
                 {'type': 'rel', 'data': {'axis': 'x', 'value': -100}},
                 {'type': 'rel', 'data': {'axis': 'y', 'value': -100}}]})
             time.sleep(.04)
-        for _ in range(4):
-            self.command('input-send-event', {'events': [
-                {'type': 'rel', 'data': {'axis': 'x', 'value': 100}},
-                {'type': 'rel', 'data': {'axis': 'y', 'value': 75}}]})
+        for events in pointer_motion.rel_events(400, 300):
+            self.command('input-send-event', {'events': events})
             time.sleep(.04)
         for down in (True, False):
             self.command('input-send-event', {'events': [

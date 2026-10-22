@@ -23,6 +23,16 @@ static const char keymap_shift[0x40] = {
 static int clamp(int value, int limit) {
     return value < 0 ? 0 : value >= limit ? limit - 1 : value;
 }
+static const uint8_t speed_eighths[INPUT_SPEED_LEVELS] = INPUT_SPEED_EIGHTHS;
+int input_pointer_scale(unsigned level, int counts) {
+    if (level >= INPUT_SPEED_LEVELS) level = INPUT_SPEED_DEFAULT;
+    int n = counts < 0 ? -counts : counts;
+    if (n > INPUT_PRECISION) n = INPUT_PRECISION + (n - INPUT_PRECISION) * speed_eighths[level] / 8;
+    return counts < 0 ? -n : n;
+}
+void input_set_speed(InputIngress *in, unsigned level) {
+    in->speed = (uint8_t)(level < INPUT_SPEED_LEVELS ? level : INPUT_SPEED_DEFAULT);
+}
 static void add_dropped(InputIngress *in, uint32_t n) {
     if (UINT32_MAX - in->dropped < n) in->dropped = UINT32_MAX;
     else in->dropped += n;
@@ -55,6 +65,7 @@ void input_init(InputIngress *in, int width, int height, int x, int y) {
     in->dropped = in->loss = 0;
     in->packet_n = in->extended = in->pause_left = 0;
     input_mouse_type(in, 0);
+    input_set_speed(in, INPUT_SPEED_DEFAULT);
     in->x = x; in->y = y; input_resize(in, width, height);
 }
 void input_resize(InputIngress *in, int width, int height) {
@@ -113,8 +124,8 @@ void input_mouse_byte(InputIngress *in, uint8_t byte, uint32_t ticks) {
         /* Valid button snapshot, but movement was lost. Never infer an edge. */
         lose(in, INPUT_LOSS_DEVICE); add_dropped(in, 1); return;
     }
-    int dx = in->packet[1] - ((flags & 0x10) ? 256 : 0);
-    int dy = in->packet[2] - ((flags & 0x20) ? 256 : 0);
+    int dx = input_pointer_scale(in->speed, in->packet[1] - ((flags & 0x10) ? 256 : 0));
+    int dy = input_pointer_scale(in->speed, in->packet[2] - ((flags & 0x20) ? 256 : 0));
     in->x = clamp(in->x + dx, in->width); in->y = clamp(in->y - dy, in->height);
     InputSample s = snapshot(in); s.kind = INPUT_POINTER;
     if (in->packet_bytes == 4) {

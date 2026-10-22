@@ -13,6 +13,7 @@ import time
 from init_data import initialize
 from qemu_session import DesktopSession
 from volume import DATA_LAYOUT, encode_snapshot, load, resolve
+import pointer_motion
 
 
 class FilesSession(DesktopSession):
@@ -32,12 +33,8 @@ class FilesSession(DesktopSession):
 
     def move(self, x, y):
         px, py = self.pointer
-        while (px, py) != (x, y):
-            dx, dy = max(-80, min(80, x-px)), max(-80, min(80, y-py))
-            events = [{'type': 'rel', 'data': {'axis': axis, 'value': delta}}
-                      for axis, delta in [('x', dx), ('y', dy)] if delta]
+        for events in pointer_motion.rel_events(x-px, y-py):
             self.command('input-send-event', {'events': events})
-            px, py = px+dx, py+dy
             time.sleep(.04)
         self.pointer = (x, y)
 

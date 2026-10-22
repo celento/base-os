@@ -122,7 +122,7 @@ static void fresh(void){
     memset(wins,0,sizeof wins);memset(window_state,0,sizeof window_state);memset(&input_scene,0,sizeof input_scene);
     wins[0]=(Win){.open=1,.seq=1,.kind=WK_PAINT,.x=100,.y=100,.w=300,.h=250,.z=1};
     mouse_x=400;mouse_y=300;mouse_left=mouse_right=mouse_moved=0;
-    input_init(&device_input,800,600,400,300);input_mouse_type(&device_input,3);
+    input_init(&device_input,800,600,400,300);input_mouse_type(&device_input,3);input_set_speed(&device_input,INPUT_SPEED_UNITY);
     open_menu=-1;open_dlg=name_dlg=edit_close_dlg=launcher_on=saver_on=display_pending=0;
     input_suppressed=input_saver_buttons=input_unknown_buttons=input_sync_loss=0;input_wake_serial=0;input_cursor_moved=input_routing=input_tail_pending=0;acquire_tail=0;
     dragging_win=resizing_win=-1;drag_active=fm_dragging=fm_drag_active=0;paint_shape_drag=paint_dragging=0;

@@ -24,6 +24,7 @@ from large_audio_input_test import verify_complete_capture
 from mp3_test import host_decode
 from qemu_session import DesktopSession
 import basefs
+import pointer_motion
 from volume import data_layout, decode, encode_snapshot, load, resolve
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -372,8 +373,8 @@ def run_profile(build, work, profile, song, reference, app, audio_seconds, seed=
                 old, old_pixels, _ = session.observe('mouse-before')
                 sent_mouse = time.monotonic()
                 session.command('input-send-event', {'events': [
-                    {'type': 'rel', 'data': {'axis': 'x', 'value': 80}},
-                    {'type': 'rel', 'data': {'axis': 'y', 'value': 80}}]})
+                    {'type': 'rel', 'data': {'axis': 'x', 'value': pointer_motion.counts_for(80)}},
+                    {'type': 'rel', 'data': {'axis': 'y', 'value': pointer_motion.counts_for(80)}}]})
                 moved_at = None
                 for _ in range(100):
                     new, new_pixels, wall = session.observe()
