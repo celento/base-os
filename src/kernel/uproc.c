@@ -7,6 +7,7 @@
 #include "kernel/rtc.h"
 #include "kernel/fs.h"
 #include "kernel/uwin.h"
+#include "kernel/uaudio.h"
 
 #define AT_NULL 0
 #define AT_PHDR 3
@@ -77,6 +78,7 @@ static void process_exit(Uproc *process, int status) {
         platform_log("\n");
     }
     uwin_release_owner(process->pid);
+    uaudio_release_owner(process->pid);
     thread_kill_process(process);
     thread_wake_channel((uintptr_t)process->output, ~0u);
     Thread *self = thread_current();
@@ -308,6 +310,14 @@ static int syscall(Uproc *process, UserFrame *f) {
         return uwin_event(process, a, b);
     case BOS_SYS_DISPLAY_INFO:
         return uwin_display_info(process, a);
+    case BOS_SYS_AUDIO_OPEN:
+        return uaudio_open(process, a, b);
+    case BOS_SYS_AUDIO_WRITE:
+        return uaudio_write(process, a, b, c);
+    case BOS_SYS_AUDIO_QUEUED:
+        return uaudio_queued(process, a);
+    case BOS_SYS_AUDIO_CLOSE:
+        return uaudio_close(process, a);
     case BOS_SYS_FD_PATH:
         return ufile_fd_path(process, (int)a, b, c);
     case BOS_SYS_VM_MAP: {

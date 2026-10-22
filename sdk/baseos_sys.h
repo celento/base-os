@@ -67,6 +67,10 @@ enum {
     BOS_SYS_WINDOW_CONFIGURE = 41, /* (window, BosWindowSpec*): new title, surface size or flags */
     BOS_SYS_WINDOW_EVENT = 42,     /* (BosWindowEvent*, timeout ms, 0: poll, ~0: forever) -> 1 or 0 */
     BOS_SYS_DISPLAY_INFO = 43,     /* (BosDisplayInfo*) */
+    BOS_SYS_AUDIO_OPEN = 44,       /* (rate, channels) -> stream handle: signed 16-bit PCM */
+    BOS_SYS_AUDIO_WRITE = 45,      /* (stream, frames*, count) -> frames queued; waits for room */
+    BOS_SYS_AUDIO_QUEUED = 46,     /* (stream) -> frames written but not yet played */
+    BOS_SYS_AUDIO_CLOSE = 47,      /* (stream) */
     BOS_SYS_LIMIT
 };
 
@@ -214,6 +218,15 @@ typedef struct {
     unsigned int modifiers;       /* BOS_MOD_* */
     unsigned int time_ms;
 } BosWindowEvent;
+
+/* Audio streams. One stream plays at a time: a new stream takes the sound
+ * device from anything else, and a stream left without it gets it back once
+ * the device is idle. Rates are 5000 to 48000 Hz,
+ * one or two channels; frames are interleaved signed 16-bit samples. When
+ * the program writes too slowly, silence fills the gap. A stream without the
+ * device is paced as if played. */
+#define BOS_AUDIO_RATE_MIN 5000
+#define BOS_AUDIO_RATE_MAX 48000
 
 typedef struct {
     unsigned int width, height;   /* the screen in pixels */
