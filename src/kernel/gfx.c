@@ -140,8 +140,7 @@ int gfx_luma(uint8_t c) {
     return (int)((r * 299u + g * 587u + b * 114u) / 1000u);
 }
 
-/* The ink ramp may run light-to-dark or dark-to-light; pick the step whose
- * committed value is closest to the requested gray. */
+/* The gray ramp step closest to the requested level. */
 uint8_t gfx_gray(int v) {
     v = clamp255(v);
     int best = 0, bd = 0x7FFFFFFF;
@@ -153,32 +152,41 @@ uint8_t gfx_gray(int v) {
     return (uint8_t)(PAL_GRAY + best);
 }
 
+/* The UI layer owns the theme bands; their colors survive mode changes. */
+static uint32_t pal_theme[256];
+static uint8_t pal_theme_set[256];
+
+static int theme_band(int index) {
+    return (index >= PAL_TOKEN && index < PAL_GRAY) || (index >= PAL_ICON_X && index < PAL_CUBE);
+}
+
 void gfx_set_color(int index, uint32_t rgb) {
     if (index < 0 || index > 255) return;
     palette_changed();
     pal32[index] = rgb & 0xFFFFFF;
-}
-
-/* The UI layer owns the colors of the PAL_ICON band; they survive mode changes. */
-static uint32_t pal_icon_band[PAL_ICON_N];
-
-void gfx_set_icon_palette(const uint32_t *rgb) {
-    for (int i = 0; i < PAL_ICON_N; i++)
-        pal_icon_band[i] = pal32[PAL_ICON + i] = rgb[i] & 0xFFFFFF;
-    gfx_pal_commit();
+    if (theme_band(index)) {
+        pal_theme[index] = rgb & 0xFFFFFF;
+        pal_theme_set[index] = 1;
+    }
 }
 
 static void pal_build(void) {
     for (int i = 0; i < 16; i++)
         pal32[i] = pal_base[i];
+    /* Until a theme is installed the bands hold a light-to-dark ramp. */
+    for (int i = PAL_TOKEN; i < PAL_GRAY; i++) {
+        unsigned v = (unsigned)(255 - (i - PAL_TOKEN) * 255 / (PAL_GRAY - PAL_TOKEN - 1));
+        pal32[i] = (v << 16) | (v << 8) | v;
+    }
     for (int i = 0; i < PAL_GRAY_N; i++) {
         unsigned v = (unsigned)(i * 255 / (PAL_GRAY_N - 1));
         pal32[PAL_GRAY + i] = (v << 16) | (v << 8) | v;
     }
-    gfx_set_ramp(PAL_DESK, PAL_DESK_N, 0x4C8FD6, 0x0E2A52);
-    for (int i = 0; i < PAL_ICON_N; i++)
-        pal32[PAL_ICON + i] = pal_icon_band[i];
-    gfx_set_ramp(PAL_ACCENT, PAL_ACCENT_N, 0x8AB4F0, 0x143C80);
+    for (int i = PAL_ICON_X; i < PAL_CUBE; i++)
+        pal32[i] = 0x808080;
+    for (int i = 0; i < 256; i++)
+        if (pal_theme_set[i])
+            pal32[i] = pal_theme[i];
     for (int i = 0; i < 125; i++) {
         pal32[PAL_CUBE + i] = ((uint32_t)cube_lv[i / 25] << 16) |
                               ((uint32_t)cube_lv[(i / 5) % 5] << 8) |
@@ -549,7 +557,7 @@ void draw_shadow(int x,int y,int w,int h) {
     static const uint8_t fade[7] = {64, 44, 30, 20, 12, 7, 3};
     const int S = 7, R = 10;
     int sy = y + 3;
-    uint8_t ink = (uint8_t)(PAL_GRAY + PAL_GRAY_N - 1);
+    uint8_t ink = (uint8_t)PAL_GRAY;
     if (w < 2 * R || h < 2 * R) return;
     for (int py = sy - S; py < sy + h + S; py++) {
         if (py < 0 || py >= fb_h) continue;
