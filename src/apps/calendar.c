@@ -260,9 +260,9 @@ static void long_date(char *s, int y, int m, int d) {
     char num[12];
     pane_join(s, 40, rtc_day_name[rtc_weekday(y, m, d)], ", ", rtc_month_name[m - 1]);
     fmt_uint(num, (unsigned)d);
-    pane_join(s + length(s), 40 - length(s), " ", num, ", ");
+    pane_append(s, 40, " "); pane_append(s, 40, num); pane_append(s, 40, ", ");
     fmt_uint(num, (unsigned)y);
-    pane_join(s + length(s), 40 - length(s), num, 0, 0);
+    pane_append(s, 40, num);
 }
 static void draw_month(const CalLayout *L, int bx, const RtcTime *t) {
     int modern = PANE_MODERN, cw = L->cw, ch = L->ch;

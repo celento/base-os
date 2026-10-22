@@ -4088,7 +4088,7 @@ static void draw_todo(int wx, int wy, int ww, int wh, int inactive) {
     pane_num(a, (unsigned)n);
     pane_num(b, (unsigned)done);
     pane_join(left, sizeof left, a, n == 1 ? " task, " : " tasks, ", b);
-    pane_join(left + kstrlen(left), (int)sizeof left - kstrlen(left), " done", full ? " (list full)" : "", 0);
+    pane_append(left, sizeof left, full ? " done (list full)" : " done");
     pane_statusbar(L.cx, cy, L.cw, ch, left, TK_TEXT2, todo_status(), TK_TEXT2);
 }
 
@@ -4391,8 +4391,8 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *h = todo_window_h();
         break;
     case WK_CLOCK:
-        *w = CLOCK_W;
-        *h = CLOCK_H + TITLE_H;
+        *w = CLOCK_W + 2;
+        *h = CLOCK_H + TITLE_H + 1;
         break;
     case WK_CAL:
         *w = CAL_W + 2;
@@ -6252,7 +6252,7 @@ static void draw_window_contents(Win *w, int inactive) {
         draw_todo(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_CLOCK) {
         gui_draw_window(wx, wy, ww, wh, "Clock", 0, fl);
-        clock_draw(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1);
+        clock_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1);
     } else if (w->kind == WK_CAL) {
         gui_draw_window(wx, wy, ww, wh, "Calendar", 0, fl);
         cal_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);

@@ -153,5 +153,11 @@ static inline void pane_join(char *out, int cap, const char *a, const char *b, c
         for (const char *p = parts[i]; p && *p && n < cap - 1; p++) out[n++] = *p;
     out[n] = 0;
 }
+static inline int pane_len(const char *s) { int n = 0; while (s[n]) n++; return n; }
+/* Append text to out (cap bytes in all). */
+static inline void pane_append(char *out, int cap, const char *s) {
+    int n = pane_len(out);
+    pane_join(out + n, cap - n, s, 0, 0);
+}
 
 #endif
