@@ -58,8 +58,8 @@ static const PocketApp apps[APP_COUNT] = {
     {"Todo", AI_TODO, 0, 0},
     {"2048", AI_G2048, G2048_W, G2048_H},
     {"Mines", AI_MINES, MINES_W, MINES_H},
-    {"Wordle", AI_WORDLE, WORDLE_W, WORDLE_WIN_H - 54},
-    {"Breakout", AI_BREAKOUT, BO_W, BO_H},
+    {"Wordle", AI_WORDLE, WORDLE_W, WORDLE_CLIENT_H},
+    {"Breakout", AI_BREAKOUT, BO_CLIENT_W, BO_CLIENT_H},
     {"About", AI_ABOUT, 0, 0},
 };
 
@@ -999,10 +999,10 @@ static void draw_app(int app) {
     switch (app) {
     case APP_CLOCK: clock_draw(x, y, w, h); break;
     case APP_TODO: draw_todo_screen(x, y, w, h); break;
-    case APP_2048: g2048_draw(x, y); break;
-    case APP_MINES: mines_draw(x, y); break;
-    case APP_WORDLE: wordle_draw(x, y); break;
-    case APP_BREAKOUT: bo_draw(x, y); break;
+    case APP_2048: g2048_draw(x, y, w, h, 0); break;
+    case APP_MINES: mines_draw(x, y, w, h, 0); break;
+    case APP_WORDLE: wordle_draw(x, y, w, h, 0); break;
+    case APP_BREAKOUT: bo_draw(x, y, w, h, 0); break;
     case APP_ABOUT: draw_about_screen(x, y, w, h); break;
     }
 }
@@ -1288,9 +1288,10 @@ static void tap(int mx, int my) {
     }
     case APP_EDITOR: editor_tap(mx, my); break;
     case APP_SETTINGS: settings_tap(mx, my); break;
-    case APP_MINES: if (mines_click(x, y, mx, my, 0)) dirty = 1; break;
-    case APP_WORDLE: if (wordle_click(x, y, mx, my)) dirty = 1; break;
-    case APP_BREAKOUT: bo_click(); dirty = 1; break;
+    case APP_2048: if (g2048_click(x, y, w, h, mx, my)) dirty = 1; break;
+    case APP_MINES: if (mines_click(x, y, w, h, mx, my, 0)) dirty = 1; break;
+    case APP_WORDLE: if (wordle_click(x, y, w, h, mx, my, timer_ticks())) dirty = 1; break;
+    case APP_BREAKOUT: if (bo_click(x, y, w, h, mx, my)) dirty = 1; break;
     case APP_ABOUT: if (about_button(x, y, w, mx, my)) shut_down(); break;
     case APP_TODO: {
         int row = y + 12, cx = MODERN ? x + 10 : x + 1, cw = MODERN ? w - 20 : w - 2;
@@ -1450,7 +1451,7 @@ static int pocket_input(void) {
             if (current == APP_BREAKOUT) {
                 int x, y, w, h;
                 app_origin(APP_BREAKOUT, &x, &y, &w, &h);
-                bo_mouse(x, pocket_mouse_x);
+                bo_mouse(x, y, w, h, pocket_mouse_x);
             }
             if (sample.wheel) wheel(sample.wheel > 0 ? 1 : -1);
             int down = !!(sample.buttons & INPUT_LEFT);
