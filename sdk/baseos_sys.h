@@ -71,6 +71,7 @@ enum {
     BOS_SYS_AUDIO_WRITE = 45,      /* (stream, frames*, count) -> frames queued; waits for room */
     BOS_SYS_AUDIO_QUEUED = 46,     /* (stream) -> frames written but not yet played */
     BOS_SYS_AUDIO_CLOSE = 47,      /* (stream) */
+    BOS_SYS_RANDOM = 48,           /* (buffer, length <= 256) -> length: unpredictable bytes */
     BOS_SYS_LIMIT
 };
 

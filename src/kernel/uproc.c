@@ -8,6 +8,7 @@
 #include "kernel/fs.h"
 #include "kernel/uwin.h"
 #include "kernel/uaudio.h"
+#include "kernel/entropy.h"
 
 #define AT_NULL 0
 #define AT_PHDR 3
@@ -16,6 +17,7 @@
 #define AT_PAGESZ 6
 #define AT_ENTRY 9
 #define AT_RANDOM 25
+#define AT_EXECFN 31
 #define LOG_MAX 256u
 /* Sleeps and timeouts are capped at about 3 days so millisecond deadlines
  * stay well inside the wrap-safe 32-bit range. */
@@ -318,6 +320,14 @@ static int syscall(Uproc *process, UserFrame *f) {
         return uaudio_queued(process, a);
     case BOS_SYS_AUDIO_CLOSE:
         return uaudio_close(process, a);
+    case BOS_SYS_RANDOM: {
+        uint8_t bytes[256];
+        if (b > sizeof bytes) return -BOS_EINVAL;
+        entropy_fill(bytes, b);
+        int result = uproc_copy_out(process, a, bytes, b);
+        kmemset(bytes, 0, sizeof bytes);
+        return result ? result : (int)b;
+    }
     case BOS_SYS_FD_PATH:
         return ufile_fd_path(process, (int)a, b, c);
     case BOS_SYS_VM_MAP: {
@@ -451,7 +461,7 @@ static int build_stack(Uproc *process, const ElfImage *image, const char *const 
     /* Argument strings, 16 random bytes, then the aligned vector block. */
     unsigned string_bytes = 0;
     for (unsigned i = 0; i < argc; ++i) string_bytes += (unsigned)kstrlen(argv[i]) + 1;
-    unsigned words = 1 + argc + 1 + 1 + 2 * 7;
+    unsigned words = 1 + argc + 1 + 1 + 2 * 8;
     uint32_t lowest = ((top - string_bytes - 16) & ~15u) - words * 4;
     lowest &= ~15u;
     result = vm_prepare(&process->space, lowest, top - lowest, 1);
@@ -464,11 +474,7 @@ static int build_stack(Uproc *process, const ElfImage *image, const char *const 
     }
     sp -= 16;
     uint32_t random = sp;
-    for (unsigned i = 0; i < 4; ++i) {
-        uint32_t low, high;
-        __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
-        ((uint32_t *)(uintptr_t)random)[i] = low * 2654435761u ^ high ^ timer_ticks() ^ (i << 24);
-    }
+    entropy_fill((void *)(uintptr_t)random, 16);
     uint32_t *vector = (uint32_t *)(uintptr_t)lowest;
     *out_sp = lowest;
     *vector++ = argc;
@@ -477,7 +483,8 @@ static int build_stack(Uproc *process, const ElfImage *image, const char *const 
     *vector++ = 0;   /* empty environment */
     uint32_t aux[] = {AT_PHDR, image->phdr, AT_PHENT, image->phent, AT_PHNUM, image->phnum,
                       AT_PAGESZ, VM_PAGE, AT_ENTRY, image->entry, AT_RANDOM, random,
-                      AT_NULL, 0};
+                      /* Launchers pass the program's path as argv[0]. */
+                      AT_EXECFN, argc ? strings[0] : 0, AT_NULL, 0};
     for (unsigned i = 0; i < sizeof aux / sizeof aux[0]; ++i) *vector++ = aux[i];
     return 0;
 }

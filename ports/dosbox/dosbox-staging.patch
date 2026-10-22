@@ -1,0 +1,81 @@
+diff --git a/src/libs/decoders/dr_mp3.h b/src/libs/decoders/dr_mp3.h
+index 660dd71..e1feaf5 100644
+--- a/src/libs/decoders/dr_mp3.h
++++ b/src/libs/decoders/dr_mp3.h
+@@ -3377,7 +3377,7 @@ static drmp3_result drmp3_fopen(FILE** ppFile, const char* pFilePath, const char
+ #if defined(_WIN32) || defined(__APPLE__)
+     *ppFile = fopen(pFilePath, pOpenMode);
+ #else
+-    #if defined(_FILE_OFFSET_BITS) && _FILE_OFFSET_BITS == 64 && defined(_LARGEFILE64_SOURCE)
++    #if defined(_FILE_OFFSET_BITS) && _FILE_OFFSET_BITS == 64 && defined(_LARGEFILE64_SOURCE) && !defined(__baseos__)
+         *ppFile = fopen64(pFilePath, pOpenMode);
+     #else
+         *ppFile = fopen(pFilePath, pOpenMode);
+diff --git a/src/libs/loguru/loguru.cpp b/src/libs/loguru/loguru.cpp
+index b83a11d..77cc881 100644
+--- a/src/libs/loguru/loguru.cpp
++++ b/src/libs/loguru/loguru.cpp
+@@ -1156,7 +1156,7 @@ namespace loguru
+ 				const auto pthread_self_is_pointer = std::is_pointer<decltype(native_id)>::value;
+ 				const auto thread_id = pthread_self_is_pointer
+ 				                           ? reinterpret_cast<uintptr_t>((void*)native_id)
+-				#if defined(__OpenBSD__)
++				#if defined(__OpenBSD__) || defined(__baseos__)
+ 				                           : reinterpret_cast<uintptr_t>(native_id);
+ 				#else
+ 				                           : static_cast<uintptr_t>(native_id);
+diff --git a/src/libs/whereami/whereami.c b/src/libs/whereami/whereami.c
+index 97f7f85..4b73cca 100644
+--- a/src/libs/whereami/whereami.c
++++ b/src/libs/whereami/whereami.c
+@@ -793,6 +793,50 @@ int WAI_PREFIX(getModulePath)(char* out, int capacity, int* dirname_length)
+   return length;
+ }
+ 
++#elif defined(__baseos__)
++
++#include <string.h>
++#include <sys/auxv.h>
++
++/* BaseOS starts programs with their path as argv[0] and AT_EXECFN. */
++static int WAI_PREFIX(getPath)(char* out, int capacity, int* dirname_length)
++{
++  const char* path = (const char*)getauxval(AT_EXECFN);
++  int length, i;
++
++  if (!path || path[0] != '/')
++    return -1;
++  length = (int)strlen(path);
++  if (out && length <= capacity)
++  {
++    memcpy(out, path, length);
++    if (dirname_length)
++    {
++      for (i = length - 1; i >= 0; --i)
++      {
++        if (out[i] == '/')
++        {
++          *dirname_length = i;
++          break;
++        }
++      }
++    }
++  }
++  return length;
++}
++
++WAI_FUNCSPEC
++int WAI_PREFIX(getExecutablePath)(char* out, int capacity, int* dirname_length)
++{
++  return WAI_PREFIX(getPath)(out, capacity, dirname_length);
++}
++
++WAI_FUNCSPEC
++int WAI_PREFIX(getModulePath)(char* out, int capacity, int* dirname_length)
++{
++  return WAI_PREFIX(getPath)(out, capacity, dirname_length);
++}
++
+ #else
+ 
+ #error unsupported platform

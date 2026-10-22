@@ -11,12 +11,13 @@
  	     | interix* | uwin* | mks* | rhapsody* | darwin* \
 --- a/gcc/config.gcc
 +++ b/gcc/config.gcc
-@@ -1932,6 +1932,12 @@
+@@ -1932,6 +1932,13 @@
  i[34567]86-*-elf*)
  	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h newlib-stdint.h i386/i386elf.h"
  	;;
 +i[34567]86-*-baseos*)
 +	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h glibc-stdint.h i386/i386elf.h baseos.h"
++	extra_options="${extra_options} gnu-user.opt"
 +	thread_file='posix'
 +	use_gcc_stdint=wrap
 +	native_system_header_dir=/usr/include
@@ -71,7 +72,7 @@
    # The CXXFLAGS thing is suspicious, but based on similar bits previously
 --- a/gcc/config/baseos.h
 +++ b/gcc/config/baseos.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,52 @@
 +/* Target definitions for BaseOS on i686: static ELF32 programs over mlibc.
 +   Programs load in the per-process user window that starts at 1 GiB. */
 +
@@ -101,9 +102,10 @@
 +#undef LIB_SPEC
 +#define LIB_SPEC "%{pthread:} -lc"
 +
-+/* Static executables only; the text segment starts inside the user window. */
++/* Static executables only (-rdynamic has nothing to export); the text segment
++   starts inside the user window. */
 +#undef LINK_SPEC
-+#define LINK_SPEC "-static %{!Ttext-segment*:-Ttext-segment=0x40100000} -z max-page-size=4096"
++#define LINK_SPEC "-static %{rdynamic:} %{!Ttext-segment*:-Ttext-segment=0x40100000} -z max-page-size=4096"
 +
 +#undef LINK_GCC_C_SEQUENCE_SPEC
 +#define LINK_GCC_C_SEQUENCE_SPEC "--start-group %G %L --end-group"
