@@ -194,6 +194,13 @@ static void two_digits(char *out, int value) {
     out[1] = (char)('0' + value % 10);
 }
 static void append(char *out, const char *s) { kstrcpy(out + kstrlen(out), s); }
+/* Appends as much of s as fits in an out of cap bytes; file names can be
+ * longer than any label buffer. */
+static void append_in(char *out, int cap, const char *s) {
+    int n = kstrlen(out);
+    while (*s && n < cap - 1) out[n++] = *s++;
+    out[n] = 0;
+}
 static void append_uint(char *out, unsigned v) { fmt_uint(out + kstrlen(out), v); }
 static int has_text(const char *s, const char *q) {
     for (int i = 0; s[i]; i++) {
@@ -430,7 +437,8 @@ static void sheet_add(int action, int icon, const char *label) {
     if (sheet_n >= 8) return;
     sheet[sheet_n].action = action;
     sheet[sheet_n].icon = icon;
-    kstrcpy(sheet[sheet_n].label, label);
+    sheet[sheet_n].label[0] = 0;
+    append_in(sheet[sheet_n].label, sizeof sheet[sheet_n].label, label);
     sheet_n++;
 }
 static int sheet_first_action(void) {
@@ -440,11 +448,12 @@ static int sheet_first_action(void) {
 static void sheet_for(int app) {
     sheet_n = 0;
     sheet_closing = -1;
-    kstrcpy(sheet_title, app == APP_EDITOR ? ed_title() : apps[app].name);
-    if (app == APP_EDITOR) { append(sheet_title, " - Editor"); }
+    sheet_title[0] = 0;
+    append_in(sheet_title, sizeof sheet_title, app == APP_EDITOR ? ed_title() : apps[app].name);
+    if (app == APP_EDITOR) append_in(sheet_title, sizeof sheet_title, " - Editor");
     char close[64];
     kstrcpy(close, "Close ");
-    append(close, app == APP_EDITOR ? ed_title() : apps[app].name);
+    append_in(close, sizeof close, app == APP_EDITOR ? ed_title() : apps[app].name);
     switch (app) {
     case APP_EDITOR:
         sheet_add(ACT_SAVE, UI_ICON_SAVE, "Save");
@@ -474,7 +483,7 @@ static void sheet_ask_save(int app) {
     sheet_n = 0;
     sheet_closing = app;
     kstrcpy(sheet_title, "Save changes to ");
-    append(sheet_title, ed_title());
+    append_in(sheet_title, sizeof sheet_title - 1, ed_title());
     append(sheet_title, "?");
     sheet_add(ACT_CLOSE_SAVE, UI_ICON_SAVE, "Save");
     sheet_add(ACT_CLOSE_DISCARD, UI_ICON_TRASH, "Don't save");
@@ -747,7 +756,8 @@ static void files_open(int index) {
     int id = files_ids[index];
     if (fs_is_dir(id)) { files_cwd = id; files_first = 0; files_sel = -1; dirty = 1; return; }
     if (ed_open && ed_changed && ed_file != id) { notify("Save or close the open document first."); return; }
-    if (!ed_load(id)) return;
+    /* The open document comes back as it is, unsaved edits included. */
+    if (!(ed_open && ed_valid() && ed_file == id) && !ed_load(id)) return;
     back_to[APP_EDITOR] = APP_FILES;
     open_push(APP_EDITOR);
     current = APP_EDITOR;
@@ -955,7 +965,7 @@ static void draw_switcher(void) {
         char title[FS_NAME_LEN], sub[FS_NAME_LEN];
         app_card_title(app, title);
         app_subtitle(app, sub);
-        if (on) append(sub, " - current");
+        if (on) append_in(sub, sizeof sub, " - current");
         int tw = kit_text(title, cx + 60, cy + 12, TK_TEXT, cw - 60 - 50, 1);
         if (app == APP_EDITOR && ed_changed) kit_fill(cx + 60 + tw + 6, cy + 12 + CHAR_H / 2 - 3, 6, 6, 3, TK_TEXT2, 0);
         kit_text(sub, cx + 60, cy + 31, TK_TEXT2, cw - 60 - 50, 0);
@@ -1245,7 +1255,7 @@ static void tap(int mx, int my) {
                 files_cwd = fs_parent(id);
                 files_refresh();
                 if (ed_open && ed_changed && ed_file != id) { notify("Save or close the open document first."); return; }
-                if (ed_load(id)) { back_to[APP_EDITOR] = HOME; current = HOME; open_app(APP_EDITOR); back_to[APP_EDITOR] = HOME; }
+                if ((ed_open && ed_valid() && ed_file == id) || ed_load(id)) { back_to[APP_EDITOR] = HOME; current = HOME; open_app(APP_EDITOR); back_to[APP_EDITOR] = HOME; }
                 return;
             }
         return;

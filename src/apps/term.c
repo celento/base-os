@@ -445,7 +445,7 @@ void term_enter(void){
     if(result==FS_ERR_BUSY)push("Disk is saving; retry shortly.");
     else if(result&&result!=TERM_COMMAND_REPORTED){
         /* Name the command that failed, so the line reads on its own. */
-        char message[TERM_COLS+1],word[24];int n=0,at=0;
+        char word[24],message[sizeof "Error: "+sizeof word+sizeof " failed; "+sizeof "check command, path, syntax, or available space."];int n=0,at=0;
         while(line[at]==' ')at++;
         while(line[at]&&line[at]!=' '&&n<(int)sizeof word-1)word[n++]=line[at++];
         word[n]=0;

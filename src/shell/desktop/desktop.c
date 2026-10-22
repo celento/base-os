@@ -7857,7 +7857,7 @@ static void act_run(int act) {
     case ACT_VIEW_ICONS: case ACT_VIEW_DETAILS:
         fm_rename_cancel(); fm_details = act == ACT_VIEW_DETAILS; fm_first = fm_manual_scroll = 0; break;
     case ACT_LINE_NUMBERS: win_options ^= WINOPT_LINE_NUMBERS; windows_save(); break;
-    case ACT_RESTORE: win_arrange(f, 0); break;
+    case ACT_RESTORE: win_arrange(f, 3); break;
     case ACT_MOVE: case ACT_SIZE:
         win_kbd_mode = act == ACT_MOVE ? 1 : 2;
         win_kbd_slot = f;
