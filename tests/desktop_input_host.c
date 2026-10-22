@@ -54,6 +54,7 @@ static void writer_release(void){writer_active=0;++writer_releases;}
 static void spreadsheet_release(void){}
 static void paint_mouse_up(void){++releases;if(paint_shape_drag)++paint_commits;paint_shape_drag=paint_dragging=0;}
 static void paint_drag_tick(void){paint_last_x=mouse_x;}
+static void paint_hover_tick(void){}
 static int writer_drag(int x,int y,int w,int h,int mx,int my){(void)x;(void)y;(void)w;(void)h;(void)mx;(void)my;if(writer_active)++writer_moves;return writer_active;}
 static int spreadsheet_drag(int x,int y,int w,int h,int mx,int my){return writer_drag(x,y,w,h,mx,my);}
 static int menu_item_at(int menu,int x,int y){(void)menu;(void)x;return y/30;}
