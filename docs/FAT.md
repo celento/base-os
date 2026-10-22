@@ -40,6 +40,12 @@ a disk checker can repair without losing data that a finished call wrote:
 
 - New clusters are marked in the FAT before the directory entry points at
   them. The FAT is written back to every copy before any directory entry.
+- A file's new clusters are chained among themselves and written before the
+  old last cluster links to them, so a torn FAT write leaves lost clusters,
+  never a chain that runs into a free cluster.
+- Every FAT or directory write starts with a device cache flush when anything
+  was written since the last one, so a disk with a write-back cache keeps
+  the same order.
 - Data is written before the entry's size grows to cover it.
 - When a file shrinks or is deleted, its entry changes first and the clusters
   are freed after. A crash in between leaves lost clusters, never an entry

@@ -400,6 +400,14 @@ class FatTests(unittest.TestCase):
         listing = subprocess.run(['mdir', '-i', str(path), '::'], check=True, env=ENV, capture_output=True,
                                  text=True).stdout
         self.assertNotIn('GHOST', listing)
+        # A failed write partway through a long name must not expose them either.
+        stale = bytes(raw)
+        for k in range(1, 6):
+            with self.subTest(failing_write=k):
+                path.write_bytes(stale)
+                self.tool('script', path, stdin=f'failwrite\t{k}\nput\tlong filename here.txt\t3\t10\t0\n'.encode(),
+                          check=False)
+                self.assertNotIn('GHOST.TXT', self.listing(path, '/'))
 
     def test_failed_write_is_not_published_later(self):
         # One sector write fails, then the disk works again: the failed
@@ -506,9 +514,12 @@ class FatTests(unittest.TestCase):
                 trial = self.work / 'cut.img'
                 trial.write_bytes(pristine)
                 writes = int(self.tool('script', trial, stdin=script).stderr.decode().split('writes ')[1])
-                for budget in sorted(set(range(0, writes, max(1, writes // 40))) | {writes - 1}):
+                budgets = sorted(set(range(0, writes, max(1, writes // 40))) | {writes - 1})
+                # Without a seed writes reach the disk in order; with one, a
+                # write-back cache keeps any subset of the unflushed writes.
+                for budget, seed in [(b, None) for b in budgets] + [(b, b + 1) for b in budgets]:
                     trial.write_bytes(pristine)
-                    self.tool('script', trial, budget, stdin=script)
+                    self.tool('script', trial, budget, *([seed] if seed else []), stdin=script)
                     files = check_structure(self, trial.read_bytes(), twins=('OLDNAM~1TXT', 'MOVEDH~1TXT'))
                     self.assertIn('/KEEP    BIN', files, budget)
                     # The file the script never touched in place reads back whole.

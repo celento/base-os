@@ -76,6 +76,7 @@ typedef struct {
     int marked_dirty;               /* FAT[1] says the volume is in use */
     int was_dirty;                  /* it said so at mount: another system did not finish */
     int changed;                    /* written since the last fat_sync */
+    int unflushed;                  /* written since the last device flush */
     int read_only;
     uint32_t (*now)(void);          /* seconds since 2000-01-01 UTC, 0 unknown */
     char label[12];

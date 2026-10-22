@@ -35,7 +35,18 @@ static int dev_read(FatVolume *v, uint32_t lba, void *buffer, uint32_t sectors) 
 }
 static int dev_write(FatVolume *v, uint32_t lba, const void *buffer, uint32_t sectors) {
     if (lba > v->sectors || sectors > v->sectors - lba) return FAT_ERR_CORRUPT;
+    v->unflushed = 1;
     return v->device.write(v->device.context, v->start + lba, buffer, sectors) ? FAT_ERR_IO : FAT_OK;
+}
+/* Makes every earlier write durable. Each FAT or directory write starts
+ * with one, so a disk with a write-back cache cannot save a structure
+ * before what it depends on (an allocation before the entry that uses it,
+ * data before the size that covers it, an entry before the freed chain). */
+static int barrier(FatVolume *v) {
+    if (!v->unflushed) return FAT_OK;
+    if (v->device.flush(v->device.context)) return FAT_ERR_IO;
+    v->unflushed = 0;
+    return FAT_OK;
 }
 
 /* ---------- boot sector ---------- */
@@ -120,6 +131,8 @@ static uint32_t cluster_lba(const FatVolume *v, uint32_t cluster) {
 
 static int window_flush(FatVolume *v) {
     if (!v->window_dirty) return FAT_OK;
+    int ordered = barrier(v);
+    if (ordered) return ordered;
     for (uint32_t copy = 0; copy < v->fat_count; ++copy) {
         if (v->fat_active != NONE && copy != v->fat_active) continue;
         int result = dev_write(v, v->fat_start + copy * v->fat_sectors + v->window_sector, v->window, v->window_count);
@@ -340,13 +353,13 @@ int fat_sync(FatVolume *v) {
             if ((result = dev_write(v, v->fsinfo, b, 1))) return result;
         }
     }
-    if (v->device.flush(v->device.context)) return FAT_ERR_IO;
+    if ((result = barrier(v))) return result;
     if (clean_bit(v)) {
         uint32_t value;
         if ((result = entry_get(v, 1, &value))) return result;
         if ((result = entry_set(v, 1, value | clean_bit(v)))) return result;
         if ((result = window_flush(v))) return result;
-        if (v->device.flush(v->device.context)) return FAT_ERR_IO;
+        if ((result = barrier(v))) return result;
     }
     v->changed = v->marked_dirty = v->was_dirty = 0;
     return FAT_OK;
@@ -618,7 +631,9 @@ static int slot_lba(FatVolume *v, uint32_t first, uint32_t slot, uint32_t *lba, 
             if (!grow) return 1;
             if ((result = take_cluster(v, &next))) return result;
             int linked = 0;
-            if (!(result = zero_cluster(v, next)) && !(result = entry_set(v, v->walk_cluster, next))) {
+            /* The new cluster's end mark is written before the link to it. */
+            if (!(result = zero_cluster(v, next)) && !(result = window_flush(v)) &&
+                !(result = entry_set(v, v->walk_cluster, next))) {
                 linked = 1;
                 result = window_flush(v);
             }
@@ -654,7 +669,8 @@ static int slot_entry(FatVolume *v, uint32_t first, uint32_t slot, uint8_t **e, 
 /* Writes back the cached directory sector. On failure the cache is dropped,
  * so a later write of the same sector cannot publish the failed change. */
 static int dir_store(FatVolume *v) {
-    int result = dev_write(v, v->dir_lba, v->dir, 1);
+    int result = barrier(v);
+    if (!result) result = dev_write(v, v->dir_lba, v->dir, 1);
     if (result) v->dir_lba = NONE;
     return result;
 }
@@ -891,7 +907,10 @@ static int write_entries(FatVolume *v, uint32_t first, const uint16_t *u, unsign
         }
     }
     uint8_t checksum = lfn_checksum(short_entry);
-    for (uint32_t i = 0; i <= parts; ++i) {
+    /* Past the end, the old marker at start goes last, so until the whole
+     * run is written it hides the run and anything stale inside it. */
+    for (uint32_t k = 0; k <= parts; ++k) {
+        uint32_t i = past_end ? parts - k : k;
         uint8_t *e;
         if ((result = slot_entry(v, first, start + i, &e, 1))) return result < 0 ? result : FAT_ERR_CORRUPT;
         if (i == parts) {
@@ -1159,7 +1178,7 @@ static int cut_chain(FatVolume *v, FatNode *f, uint32_t keep) {
 /* Makes a file's chain at least count clusters long. */
 static int ensure_clusters(FatVolume *v, FatNode *f, uint32_t count) {
     if (!count) return FAT_OK;
-    int result;
+    int result = FAT_OK;
     if (!f->cluster) {
         if ((result = take_cluster(v, &f->cluster))) return result;
         f->at_index = 0;
@@ -1168,15 +1187,27 @@ static int ensure_clusters(FatVolume *v, FatNode *f, uint32_t count) {
     uint32_t at = 0, cluster = f->cluster;
     if (f->at_cluster && f->at_index < count) { at = f->at_index; cluster = f->at_cluster; }
     if (!valid_cluster(v, cluster)) return FAT_ERR_CORRUPT;
+    /* New clusters form their own chain, written before the old tail links
+     * to it: a torn FAT write then leaves lost clusters, never a chain that
+     * runs into a free one. */
+    uint32_t tail = 0, head = 0;
     while (at + 1 < count) {
         uint32_t next;
-        if ((result = chain_next(v, cluster, &next))) return result;
+        if ((result = chain_next(v, cluster, &next))) break;
         if (!next) {
-            if ((result = take_cluster(v, &next))) return result;
-            if ((result = entry_set(v, cluster, next))) return result;
+            if ((result = take_cluster(v, &next))) break;
+            if (!head) { tail = cluster; head = next; }
+            else if ((result = entry_set(v, cluster, next))) break;
         }
         cluster = next;
         ++at;
+    }
+    if (head && !result) result = window_flush(v);
+    if (head && !result) result = entry_set(v, tail, head);
+    if (result) {
+        if (head) free_chain(v, head);
+        f->at_cluster = 0;
+        return result;
     }
     f->at_index = at;
     f->at_cluster = cluster;
