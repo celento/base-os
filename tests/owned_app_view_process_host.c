@@ -21,6 +21,7 @@ int fs_valid(int id){return id==42;}
 int fs_is_dir(int id){(void)id;return 0;}
 int fs_size(int id){assert(id==42);return (int)view_image_bytes;}
 const char *fs_data(int id){assert(id==42);return (const char *)view_image;}
+int fs_streamed(int id){(void)id;return 0;}
 const char *fs_name(int id){assert(id==42);return "owned-view.bex";}
 unsigned fs_identity(int id){return id==42?21:0;}
 void kstrcpy(char *to,const char *from){strcpy(to,from);}

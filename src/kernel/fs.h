@@ -8,6 +8,10 @@
 #define FS_MAX_SIZE  16384 /* Legacy floppy, command scripts and Tiny BASIC buffer limit. */
 #define FS_FILE_MAX  2097152 /* Default data-volume file limit, inclusive. */
 #define FS_LARGE_FILE_MAX 16777216 /* Explicit large-profile volume only. */
+/* BaseFS 2 files may grow past fs_file_limit() up to this size. Such a file
+ * never loads whole: fs_data returns 0 for it, and it is read and written in
+ * pieces with fs_read_at and fs_write_at. */
+#define FS_STREAM_MAX 0x7FFFFFFF
 
 int kstrlen(const char *s);
 int kstrcmp(const char *a, const char *b);
@@ -79,6 +83,20 @@ int fs_create_app(int parent, const char *name);
 /* Atomic: writes all bytes, or returns a negative error without changing it. */
 int fs_write(int id, const char *data, int len);
 int fs_read(int id, char *out, int max);
+/* Nonzero for a file past fs_file_limit(), which only these calls reach. */
+int fs_streamed(int id);
+/* Nonzero when files may grow past fs_file_limit() (BaseFS 2). */
+int fs_streams(void);
+/* Up to len bytes at offset; returns the count (0 at or past the end) or -1. */
+int fs_read_at(int id, unsigned offset, void *out, unsigned len);
+/* Writes len bytes at offset, zero filling any gap past the end, and returns
+ * len or -1 (FS_ERR_BUSY while a save owns the volume). A file within
+ * fs_file_limit() changes atomically; past it, on BaseFS 2, the bytes go to
+ * disk now and become durable with the next save, and a failure part way can
+ * leave the earlier pieces written. */
+int fs_write_at(int id, unsigned offset, const void *data, unsigned len);
+/* Sets the size, zero filling growth; 0 or -1 as fs_write_at. */
+int fs_truncate(int id, unsigned size);
 int fs_list(int parent, int *ids, int max);
 int fs_list_files(int *ids, int max);
 void fs_path(int id, char *out, int max);

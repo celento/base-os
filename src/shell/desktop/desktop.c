@@ -3092,12 +3092,12 @@ static void open_paint(void) {
 }
 
 static int is_image_file(int id) {
-    return fs_valid(id)&&!fs_is_dir(id)&&!fs_is_app(id)&&
+    return fs_valid(id)&&!fs_is_dir(id)&&!fs_is_app(id)&&!fs_streamed(id)&&
            image_probe(fs_data(id),(unsigned)fs_size(id))!=IMAGE_FORMAT_NONE;
 }
 
 static void open_view(int file_id) {
-    if(!fs_valid(file_id)||fs_is_dir(file_id)||fs_is_app(file_id))return;
+    if(!fs_valid(file_id)||fs_is_dir(file_id)||fs_is_app(file_id)||fs_streamed(file_id))return;
     if(win_open(WK_VIEW)<0)return;
     image_viewer_open(fs_data(file_id),(unsigned)fs_size(file_id),fs_name(file_id));
     open_dlg=0;dirty=1;
@@ -3841,7 +3841,7 @@ static int native_window_start(int id,unsigned identity,const char *argument,uns
     win_focus(slot);return 0;
 }
 static int native_file_mode(int id,unsigned identity,unsigned *mode){
-    if(!identity||!fs_valid(id)||fs_is_dir(id)||fs_is_app(id)||fs_identity(id)!=identity)
+    if(!identity||!fs_valid(id)||fs_is_dir(id)||fs_is_app(id)||fs_streamed(id)||fs_identity(id)!=identity)
         return APP_VIEW_START_INVALID;
     return process_probe_launch(fs_data(id),fs_size(id),mode);
 }
@@ -7622,7 +7622,7 @@ static void session_restore(void){
             if(v->kind==WK_SPREADSHEET){
                 if(fs_valid(target)&&!fs_is_dir(target)&&!fs_is_app(target))spreadsheet_open_file(target);
                 int draft=fs_find_child(dir,"sheet-draft.bsh");
-                if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)){
+                if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)&&!fs_streamed(draft)){
                     unsigned caret=v->caret>=0?(unsigned)v->caret:0,anchor=caret;
                     int source=-1,metadata=fs_find_child(dir,"sheet-binding");
                     SavedSheetBinding binding;
@@ -7645,7 +7645,7 @@ static void session_restore(void){
             if(v->kind==WK_WRITER){
                 if(fs_valid(target)&&!fs_is_dir(target)&&!fs_is_app(target))writer_open_file(target);
                 int draft=fs_find_child(dir,"writer-draft.bwr");
-                if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)){
+                if(draft>=0&&!fs_is_dir(draft)&&!fs_is_app(draft)&&!fs_streamed(draft)){
                     unsigned caret=v->caret>=0?(unsigned)v->caret:0;
                     int source=-1,metadata=fs_find_child(dir,"writer-binding");
                     SavedWriterBinding binding;

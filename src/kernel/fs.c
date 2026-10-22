@@ -119,10 +119,20 @@ static void bfs_forget(int id) {
 }
 /* Blocks of files deleted since the last commit, freed once it lands. */
 static uint64_t bfs_released;
-static uint64_t extent_blocks(int id) {
-    uint64_t blocks = 0;
-    for (uint32_t k = 0; k < nodes[id].extent_count; ++k) blocks += nodes[id].extents[k].blocks;
-    return blocks;
+/* A save failed after its superblock write was issued, so that checkpoint
+ * may be current: blocks it names stay taken until a later commit or mount
+ * settles it, even when no file uses them any more. */
+static int bfs_unsettled;
+/* Extents a file stops using. Blocks of the current commit, and while
+ * unsettled every block, become free when the next commit lands; the rest
+ * are free now. */
+static void bfs_let_go(const BfsExtent *extents, uint32_t count) {
+    if (!count) return;
+    if (bfs_unsettled) {
+        for (uint32_t k = 0; k < count; ++k) bfs_released += extents[k].blocks;
+        return;
+    }
+    bfs_released += bfs_drop(&bfs, extents, count);
 }
 /* Whether the next commit frees blocks: a deleted file, or the old copy of
  * a changed one. */
@@ -134,6 +144,7 @@ static int bfs_save_frees(void) {
 }
 static void bfs_release(void) {
     bfs_released = 0;
+    bfs_unsettled = 0;
     for (int i = 0; nodes && i < node_slots; ++i) bfs_forget(i);
     if (bfs.used) bfs_unmount(&bfs);
 }
@@ -266,13 +277,14 @@ static int bfs_commit_fits(unsigned count, int except, uint64_t extra) {
 /* Files load on demand, so the disk bounds capacity, not the arena. Very
  * large volumes report at most 2 GiB, which stays positive as an int. */
 #define BFS_CAPACITY_REPORT_MAX 0x7FFFFFFFu
-/* The largest file, in blocks. */
+/* The largest file, in blocks. Files past the file limit are written in
+ * pieces, never whole, so they count at the limit. */
 static uint64_t bfs_largest_blocks(void) {
-    uint64_t largest = 0;
+    uint64_t largest = 0, limit = bfs_blocks_for(fs_file_limit());
     for (int i = 0; i < node_slots; ++i)
         if (nodes[i].used && !nodes[i].is_dir && bfs_blocks_for((uint64_t)nodes[i].size) > largest)
             largest = bfs_blocks_for((uint64_t)nodes[i].size);
-    return largest;
+    return largest < limit ? largest : limit;
 }
 /* Bytes a new file could still take: its blocks plus the checkpoint growing
  * by one extent per block, as bfs_commit_fits counts it. Reserve blocks are
@@ -572,8 +584,12 @@ static const char *absent_bytes(int id) {
     kmemset((void *)image_base, 0, (int)bytes);
     return (const char *)image_base;
 }
+static int streamed(int id) { return data_backend == 3 && (unsigned)nodes[id].size > fs_file_limit(); }
+int fs_streamed(int id) { return fs_valid(id) && streamed(id); }
+int fs_streams(void) { return data_backend == 3; }
 const char *fs_data(int id) {
     if (!fs_valid(id) || !nodes[id].size) return "";
+    if (streamed(id)) return 0;
     if (nodes[id].absent && load_data(id) < 0 && nodes[id].absent) return absent_bytes(id);
     nodes[id].touch = ++touch_clock;
     return (const char *)pool_base + nodes[id].offset;
@@ -784,13 +800,218 @@ int fs_read(int id, char *out, int max) {
     if (!out || max <= 0) return 0;
     if (!fs_valid(id) || nodes[id].is_dir || nodes[id].is_app)
         return -1;
-    int n = nodes[id].size;
-    if (n > max - 1)
-        n = max - 1;
-    copy_bytes(out, fs_data(id), n);
+    int n = fs_read_at(id, 0, out, (unsigned)max - 1);
+    if (n < 0) return -1;
     out[n] = 0;
     return n;
 }
+
+/* ---------- files past the file limit (BaseFS 2) ----------
+ * Such a file never loads whole. Its extents follow the usual layout (every
+ * extent full but the last) and a write replaces just the extents it
+ * touches: the new bytes go to free blocks now, the old extent stays owned
+ * until the next commit, and that commit records the new list. A crash
+ * before it keeps the previous contents. Nodes past the limit are never
+ * dirty or resident. */
+#define STREAM_CHUNK (BFS_EXTENT_BLOCKS * BFS_BLOCK)
+static BfsRecord stream_record(int id) {
+    BfsRecord record = {0};
+    record.size = (uint64_t)nodes[id].size;
+    record.extent_count = nodes[id].extent_count;
+    record.extents = nodes[id].extents;
+    return record;
+}
+/* The next commit, with blocks more data and as many more extents, still
+ * fits while the volume keeps its reserve. */
+static int stream_fits(uint64_t blocks) {
+    uint64_t reserve = bfs_largest_blocks();
+    uint64_t checkpoint = bfs_checkpoint_blocks((unsigned)fs_node_count(), -1, 0, 0) +
+                          bfs_blocks_for(12u * (blocks + reserve));
+    return checkpoint * BFS_BLOCK <= image_capacity &&
+           bfs_pending_blocks(-1) + reserve + blocks + checkpoint <= bfs.free_blocks;
+}
+/* Room for blocks, saving first when that frees old copies. */
+static int stream_room(uint64_t blocks) {
+    if (stream_fits(blocks)) return 0;
+    if (!bfs_save_frees() || fs_sync() < 0) return -1;
+    return stream_fits(blocks) ? 0 : -1;
+}
+/* Puts bytes [p, p + length) of the file, held in chunk, in place of the
+ * extents first..last-1 (all of them when first == extent_count). */
+static int stream_replace(int id, uint32_t first, uint32_t last, const unsigned char *chunk, uint32_t length) {
+    if (stream_room(bfs_blocks_for(length)) < 0) return -1;
+    BfsExtent *fresh;
+    uint32_t added;
+    if (bfs_write_data(&bfs, chunk, length, &fresh, &added) != BFS_OK) return -1;
+    uint32_t count = nodes[id].extent_count, total = count - (last - first) + added;
+    BfsExtent *list = total ? kmalloc(total * sizeof *list) : 0;
+    if (total && !list) {
+        bfs_discard(&bfs, fresh, added);
+        kfree(fresh);
+        return -1;
+    }
+    for (uint32_t k = 0; k < first; ++k) list[k] = nodes[id].extents[k];
+    for (uint32_t k = 0; k < added; ++k) list[first + k] = fresh[k];
+    for (uint32_t k = last; k < count; ++k) list[first + added + k - last] = nodes[id].extents[k];
+    if (last > first) bfs_let_go(nodes[id].extents + first, last - first);
+    kfree(nodes[id].extents);
+    kfree(fresh);
+    nodes[id].extents = list;
+    nodes[id].extent_count = total;
+    /* A later piece may need a save for room, and it must include this. */
+    fs_touched = 1;
+    return 0;
+}
+/* Writes len bytes at offset <= size, through the extent that holds offset
+ * (or a new one at the end), at most one extent's worth. Returns the bytes
+ * consumed or -1. */
+static int stream_put(int id, unsigned offset, const unsigned char *data, unsigned len, unsigned char *chunk) {
+    uint64_t size = (uint64_t)nodes[id].size, p = 0;
+    uint32_t k = 0, count = nodes[id].extent_count;
+    while (k < count && offset >= p + (uint64_t)nodes[id].extents[k].blocks * BFS_BLOCK)
+        p += (uint64_t)nodes[id].extents[k++].blocks * BFS_BLOCK;
+    uint32_t valid = 0, span = STREAM_CHUNK;
+    if (k < count) {
+        uint64_t whole = (uint64_t)nodes[id].extents[k].blocks * BFS_BLOCK;
+        valid = size - p < whole ? (uint32_t)(size - p) : (uint32_t)whole;
+        /* Only the last extent may grow; the others stay full. */
+        if (k + 1 < count) span = (uint32_t)whole;
+    }
+    uint32_t from = (uint32_t)(offset - p), take = span - from;
+    if (take > len) take = len;
+    uint32_t length = from + take > valid ? from + take : valid;
+    if (valid && (from || from + take < valid)) {
+        BfsRecord record = stream_record(id);
+        if (bfs_read(&bfs, &record, p, chunk, valid) != BFS_OK) return -1;
+    }
+    kmemcpy(chunk + from, data, (int)take);
+    if (stream_replace(id, k, k < count ? k + 1 : k, chunk, length) < 0) return -1;
+    if (p + length > size) nodes[id].size = (int)(p + length);
+    return (int)take;
+}
+static void stream_changed(int id) {
+    nodes[id].modified = fs_clock();
+    nodes[id].revision = new_content_revision();
+    fs_touched = 1;
+}
+/* Makes a file within the limit ready to grow past it: its current bytes
+ * must be on disk and out of the arena. */
+static int stream_begin(int id) {
+    uint32_t size = (uint32_t)nodes[id].size;
+    /* A save made for room writes this file too, and then it is clean. */
+    if (nodes[id].dirty && size && stream_room(bfs_blocks_for(size)) < 0) return -1;
+    if (nodes[id].dirty) {
+        BfsExtent *fresh = 0;
+        uint32_t added = 0;
+        if (size && bfs_write_data(&bfs, fs_data(id), size, &fresh, &added) != BFS_OK) return -1;
+        bfs_let_go(nodes[id].extents, nodes[id].extent_count);
+        kfree(nodes[id].extents);
+        nodes[id].extents = fresh;
+        nodes[id].extent_count = added;
+    }
+    nodes[id].dirty = 0;
+    if (nodes[id].size && !nodes[id].absent) evict(id);
+    /* Even when empty: the bytes about to be written live only on disk. */
+    nodes[id].absent = 1;
+    return 0;
+}
+int fs_read_at(int id, unsigned offset, void *out, unsigned len) {
+    if (!fs_valid(id) || nodes[id].is_dir || nodes[id].is_app || (len && !out)) return -1;
+    unsigned size = (unsigned)nodes[id].size;
+    if (offset >= size) return 0;
+    if (len > size - offset) len = size - offset;
+    if (!streamed(id)) {
+        copy_bytes(out, fs_data(id) + offset, len);
+        return (int)len;
+    }
+    /* The device cannot serve a save and these reads at once. */
+    if (fs_sync_busy()) (void)fs_sync();
+    BfsRecord record = stream_record(id);
+    return bfs_read(&bfs, &record, offset, out, len) == BFS_OK ? (int)len : -1;
+}
+/* Within the limit: the new contents, written whole. */
+static int write_within(int id, unsigned offset, const void *data, unsigned len, unsigned size) {
+    char *whole = size ? kmalloc(size) : 0;
+    if (size && !whole) return -1;
+    unsigned keep = (unsigned)nodes[id].size < size ? (unsigned)nodes[id].size : size;
+    if (keep) copy_bytes(whole, fs_data(id), keep);
+    if (size > keep) kmemset(whole + keep, 0, (int)(size - keep));
+    if (len) copy_bytes(whole + offset, data, len);
+    int result = fs_write(id, whole, (int)size);
+    kfree(whole);
+    return result < 0 ? result : 0;
+}
+/* Writes at offset <= size in pieces; without data, zeros. */
+static int stream_write(int id, unsigned offset, const unsigned char *data, unsigned len) {
+    unsigned char *chunk = kmalloc(STREAM_CHUNK), *zeros = data ? 0 : kmalloc(STREAM_CHUNK);
+    int result = chunk && (data || zeros) ? 0 : -1;
+    if (zeros) kmemset(zeros, 0, STREAM_CHUNK);
+    while (len && result >= 0) {
+        unsigned piece = !data && len > STREAM_CHUNK ? STREAM_CHUNK : len;
+        result = stream_put(id, offset, data ? data : zeros, piece, chunk);
+        if (result > 0) {
+            offset += (unsigned)result;
+            len -= (unsigned)result;
+            if (data) data += result;
+        }
+    }
+    kfree(chunk);
+    kfree(zeros);
+    return result < 0 ? -1 : 0;
+}
+static int write_at(int id, unsigned offset, const void *data, unsigned len, int truncate, unsigned size) {
+    if (fs_sync_busy()) return FS_ERR_BUSY;
+    if (!fs_valid(id) || nodes[id].is_dir || nodes[id].is_app || (len && !data) ||
+        len > FS_STREAM_MAX || offset > FS_STREAM_MAX - len) return -1;
+    unsigned old = (unsigned)nodes[id].size;
+    if (!truncate) size = offset + len > old ? offset + len : old;
+    if (size > FS_STREAM_MAX) return -1;
+    if (!streamed(id) && size <= fs_file_limit()) {
+        if (truncate) return write_within(id, 0, 0, 0, size);
+        return write_within(id, offset, data, len, size);
+    }
+    if (data_backend != 3 || stream_begin(id) < 0) return -1;
+    int result = 0;
+    if (truncate && size < old) {
+        /* Keep the extents below size; the one holding the new end is
+         * rewritten short. */
+        uint64_t p = 0;
+        uint32_t k = 0, count = nodes[id].extent_count;
+        while (k < count && size > p + (uint64_t)nodes[id].extents[k].blocks * BFS_BLOCK)
+            p += (uint64_t)nodes[id].extents[k++].blocks * BFS_BLOCK;
+        uint32_t length = (uint32_t)(size - p);
+        if (k < count && length == (uint32_t)nodes[id].extents[k].blocks * BFS_BLOCK) {
+            /* The new end is an extent boundary: nothing to rewrite. */
+            ++k;
+            length = 0;
+        }
+        unsigned char *chunk = length ? kmalloc(STREAM_CHUNK) : 0;
+        BfsRecord record = stream_record(id);
+        if (length && (!chunk || bfs_read(&bfs, &record, p, chunk, length) != BFS_OK)) result = -1;
+        else if (length) result = stream_replace(id, k, count, chunk, length);
+        else {
+            if (count > k) bfs_let_go(nodes[id].extents + k, count - k);
+            nodes[id].extent_count = k;
+        }
+        kfree(chunk);
+        if (!result) {
+            nodes[id].size = (int)size;
+            nodes[id].absent = size != 0;
+        }
+    } else {
+        unsigned end = truncate ? size : offset;
+        if (end > old) result = stream_write(id, old, 0, end - old);
+        if (!result && !truncate && len) result = stream_write(id, offset, data, len);
+    }
+    /* Pieces written before a failure are part of the file now. */
+    stream_changed(id);
+    return result;
+}
+int fs_write_at(int id, unsigned offset, const void *data, unsigned len) {
+    int result = write_at(id, offset, data, len, 0, 0);
+    return result < 0 ? result : (int)len;
+}
+int fs_truncate(int id, unsigned size) { return write_at(id, 0, 0, 0, 1, size); }
 
 int fs_list(int parent, int *ids, int max) {
     int n = 0;
@@ -954,7 +1175,7 @@ int fs_delete(int id) {
     release_data(id);
     nodes[id].used = 0;
     nodes[id].revision=0;
-    if (data_backend == 3) bfs_released += extent_blocks(id);
+    if (data_backend == 3) bfs_let_go(nodes[id].extents, nodes[id].extent_count);
     bfs_forget(id);
     set_name_storage(id, 0);
     fs_touched = 1;
@@ -1047,6 +1268,20 @@ static void make_copy_name(char *out, const char *base, int n) {
     out[i] = 0;
 }
 
+/* A file past the limit copies a piece at a time. */
+static int copy_streamed(int id, int dst) {
+    char *piece = kmalloc(STREAM_CHUNK);
+    if (!piece) return -1;
+    unsigned size = (unsigned)nodes[id].size, done = 0;
+    int result = 0;
+    while (done < size && result >= 0) {
+        unsigned n = size - done < STREAM_CHUNK ? size - done : STREAM_CHUNK;
+        result = fs_read_at(id, done, piece, n) == (int)n ? fs_write_at(dst, done, piece, n) : -1;
+        done += n;
+    }
+    kfree(piece);
+    return result < 0 ? -1 : 0;
+}
 static int copy_into(int id, int parent, const char *name) {
     if (fs_sync_busy()) return FS_ERR_BUSY;
     if (!fs_valid(id) || !fs_is_dir(parent))
@@ -1067,6 +1302,11 @@ static int copy_into(int id, int parent, const char *name) {
                 fs_delete(dst);
                 return -1;
             }
+        }
+    } else if (streamed(id)) {
+        if (copy_streamed(id, dst) < 0) {
+            fs_delete(dst);
+            return -1;
         }
     } else if (!nodes[id].is_app && nodes[id].size > 0) {
         if (fs_write(dst, fs_data(id), nodes[id].size) < 0) {
@@ -1538,7 +1778,7 @@ static int import_basefs(BfsRecord *records, uint32_t count) {
         BfsRecord *r = &records[i];
         int directory = (r->flags & BFS_DIRECTORY) != 0, app = (r->flags & BFS_APP) != 0;
         if ((i && !valid_name(r->name)) || (directory && app) || (app && r->size) ||
-            (directory && r->size) || r->size > fs_file_limit()) return -1;
+            (directory && r->size) || r->size > FS_STREAM_MAX) return -1;
         FsNode *n = &nodes[i];
         if (set_name((int)i, r->name, kstrlen(r->name)) < 0) return -1;
         n->parent = i ? (int)r->parent : -1;
@@ -1854,6 +2094,8 @@ static struct {
 } bfs_job;
 
 static void bfs_job_end(int result) {
+    if (result && sync_job.header_attempted) bfs_unsettled = 1;
+    if (!result) bfs_unsettled = 0;
     if (bfs_job.begun)
         (void)bfs_commit_end(&bfs, &bfs_job.commit, bfs_job.records, bfs_job.count,
                              sync_job.header_attempted ? BFS_COMMIT_UNCERTAIN : BFS_COMMIT_FAILED);

@@ -595,8 +595,7 @@ static int file_call(unsigned call,unsigned path_offset,unsigned path_length,
         /* Subtract before adding: even an offset near UINT_MAX is a safe EOF. */
         if(offset>=size)return 0;
         size-=offset;if(size>length)size=length;
-        kmemcpy((void *)(USER_BASE+buffer),fs_data(id)+offset,(int)size);
-        return (int)size;
+        return fs_read_at(id,offset,(void *)(USER_BASE+buffer),size)==(int)size?(int)size:-1;
     }
     char name[FS_NAME_LEN];int parent=fs_destination(fs_root(),path,name);
     if(!document_parent(parent)) return -1;

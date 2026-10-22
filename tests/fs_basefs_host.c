@@ -483,6 +483,111 @@ int main(void) {
     image_capacity = FS_IMG_CAPACITY;
     assert(mount() == 0 && fs_child_count(fs_find_child(0, "many")) == MANY / 2 + added);
 
+    /* Files grow past the file limit in pieces. They never load whole: they
+     * are read and written at offsets, survive a save and a remount, and a
+     * power cut during a save keeps the previous contents. */
+    memset(data_disk, 0, sizeof data_disk);
+    device = bfs_device();
+    assert(bfs_format(&device, 6) == BFS_OK);
+    assert(mount() == 0 && fs_streams());
+    enum { HUGE = 5u << 20 };
+    static unsigned char huge[HUGE + 300000], back[HUGE + 300000];
+    for (unsigned i = 0; i < sizeof huge; ++i) huge[i] = (unsigned char)(i * 2654435761u >> 24);
+    uint32_t blocks_before = bfs.free_blocks;
+    int large = fs_create(0, "large.bin");
+    for (unsigned at = 0; at < HUGE; at += 100000) {
+        unsigned n = HUGE - at < 100000 ? HUGE - at : 100000;
+        assert(fs_write_at(large, at, huge + at, n) == (int)n);
+    }
+    assert(fs_size(large) == (int)HUGE && fs_streamed(large) && !fs_data(large) && fs_needs_sync());
+    assert(fs_read_at(large, 0, back, HUGE) == (int)HUGE && !memcmp(back, huge, HUGE));
+    assert(fs_read_at(large, HUGE - 10, back, 100) == 10 && fs_read_at(large, HUGE, back, 1) == 0);
+    /* An overwrite across extent boundaries replaces just those extents. */
+    for (unsigned i = 0; i < 200000; ++i) huge[3000000 + i] ^= 0x5A;
+    assert(fs_write_at(large, 3000000, huge + 3000000, 200000) == 200000);
+    assert(fs_read_at(large, 2900000, back, 400000) == 400000 && !memcmp(back, huge + 2900000, 400000));
+    assert(fs_sync() == 0 && mount() == 0);
+    large = fs_find_child(0, "large.bin");
+    assert(fs_streamed(large) && fs_read_at(large, 0, back, HUGE) == (int)HUGE && !memcmp(back, huge, HUGE));
+    /* A power cut at any write of the save after a change keeps the old or
+     * the new contents. */
+    memcpy(saved, data_disk, sizeof data_disk);
+    for (long budget = 0;; budget += 7) {
+        memcpy(data_disk, saved, sizeof data_disk);
+        assert(mount() == 0);
+        large = fs_find_child(0, "large.bin");
+        for (unsigned i = 0; i < 70000; ++i) back[i] = (unsigned char)~huge[1000000 + i];
+        assert(fs_write_at(large, 1000000, back, 70000) == 70000);
+        write_budget = budget;
+        int result = fs_sync();
+        assert(mount() == 0);
+        large = fs_find_child(0, "large.bin");
+        assert(fs_read_at(large, 990000, back + 100000, 90000) == 90000);
+        int changed = back[100000 + 10000] == (unsigned char)~huge[1000000];
+        for (unsigned i = 0; i < 90000; ++i) {
+            unsigned at = 990000 + i;
+            unsigned char want = at >= 1000000 && at < 1070000 && changed ? (unsigned char)~huge[at] : huge[at];
+            assert(back[100000 + i] == want);
+        }
+        if (result == 0) { assert(changed); break; }
+    }
+    for (unsigned i = 0; i < 70000; ++i) huge[1000000 + i] = (unsigned char)~huge[1000000 + i];
+    /* A write past the end fills the gap with zeros. */
+    assert(fs_write_at(large, HUGE + 100000, huge + HUGE + 100000, 200000) == 200000);
+    memset(huge + HUGE, 0, 100000);
+    assert(fs_size(large) == (int)HUGE + 300000);
+    assert(fs_read_at(large, HUGE - 1000, back, 301000) == 301000 && !memcmp(back, huge + HUGE - 1000, 301000));
+    /* A copy reads and writes in pieces. */
+    int copy_of_large = fs_copy(large, 0);
+    assert(copy_of_large >= 0 && fs_streamed(copy_of_large) && fs_size(copy_of_large) == (int)HUGE + 300000);
+    assert(fs_read_at(copy_of_large, 0, back, HUGE + 300000) == (int)HUGE + 300000 && !memcmp(back, huge, HUGE + 300000));
+    assert(fs_delete(copy_of_large) == 0);
+    /* Shrinking past an extent cuts it short; below the limit the file loads
+     * whole again; growing fills with zeros. */
+    assert(fs_truncate(large, 3000123) == 0 && fs_size(large) == 3000123);
+    assert(fs_read_at(large, 2999000, back, 5000) == 1123 && !memcmp(back, huge + 2999000, 1123));
+    assert(fs_truncate(large, 1048576) == 0 && !fs_streamed(large));
+    assert(fs_data(large) && !memcmp(fs_data(large), huge, 1048576));
+    assert(fs_truncate(large, 3u << 20) == 0 && fs_streamed(large));
+    assert(fs_read_at(large, 1048570, back, 20) == 20 && !memcmp(back, huge + 1048570, 6));
+    for (int i = 6; i < 20; ++i) assert(back[i] == 0);
+    assert(fs_sync() == 0 && mount() == 0);
+    large = fs_find_child(0, "large.bin");
+    assert(fs_size(large) == 3 << 20 && fs_read_at(large, 0, back, 1048576) == 1048576 && !memcmp(back, huge, 1048576));
+    /* A write within the limit makes it an ordinary file again. */
+    assert(fs_write(large, "short", 5) == 5 && !fs_streamed(large) && !strcmp(fs_data(large), "short"));
+    assert(fs_sync() == 0 && mount() == 0 && fs_size(fs_find_child(0, "large.bin")) == 5);
+    assert(fs_delete(fs_find_child(0, "large.bin")) == 0 && fs_sync() == 0 && mount() == 0);
+    assert(bfs.free_blocks == blocks_before);
+    /* An empty file truncated straight past the limit lives on disk only. */
+    int grown = fs_create(0, "grown.bin");
+    assert(fs_truncate(grown, FS_FILE_MAX + 1) == 0 && fs_streamed(grown) && pool_used == 0);
+    assert(fs_write(grown, "x", 1) == 1 && fs_delete(grown) == 0 && pool_used == 0);
+    /* Overwriting a saved big file on a nearly full volume saves along the
+     * way to free the extents it replaced. */
+    large = fs_create(0, "again.bin");
+    assert(fs_write_at(large, 0, huge, HUGE) == (int)HUGE && fs_sync() == 0);
+    int filler = fs_create(0, "filler.bin");
+    assert(fs_write_at(filler, 0, huge, HUGE) == (int)HUGE);
+    assert(fs_write_at(filler, HUGE, huge, 2u << 20) == (int)(2u << 20) && fs_sync() == 0);
+    assert(bfs.free_blocks * BFS_BLOCK < HUGE);
+    for (unsigned i = 0; i < HUGE; ++i) back[i] = (unsigned char)(huge[i] + 1);
+    assert(fs_write_at(large, 0, back, HUGE) == (int)HUGE && fs_sync() == 0 && mount() == 0);
+    assert(fs_read_at(fs_find_child(0, "again.bin"), 0, huge + 0, 0) == 0);
+    {
+        static unsigned char check_copy[HUGE];
+        assert(fs_read_at(fs_find_child(0, "again.bin"), 0, check_copy, HUGE) == (int)HUGE);
+        assert(!memcmp(check_copy, back, HUGE));
+    }
+    assert(fs_delete(fs_find_child(0, "again.bin")) == 0 && fs_delete(fs_find_child(0, "filler.bin")) == 0);
+    assert(fs_sync() == 0 && mount() == 0);
+    /* A write that does not fit is refused once the volume is full. */
+    large = fs_create(0, "fill.bin");
+    unsigned filled = 0;
+    while (fs_write_at(large, filled, huge, 65536) == 65536) filled += 65536;
+    assert(filled > HUGE && filled < sizeof data_disk && fs_sync() == 0 && mount() == 0);
+    assert(fs_size(fs_find_child(0, "fill.bin")) == (int)filled);
+
     /* The snapshot formats keep their limits. */
     fs_init();
     assert(fs_name_max() == 23 && fs_mkdir(0, "a name of twenty four bb") < 0);

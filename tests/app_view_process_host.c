@@ -26,6 +26,7 @@ int fs_is_dir(int id){(void)id;return 0;}
 int fs_is_app(int id){(void)id;return 0;}
 unsigned fs_identity(int id){return id==1?7:0;}
 const char *fs_data(int id){assert(id==1);return (const char *)image;}
+int fs_streamed(int id){(void)id;return 0;}
 int fs_size(int id){assert(id==1);return sizeof image;}
 const char *fs_name(int id){assert(id==1);return "view.bex";}
 

@@ -55,6 +55,9 @@ int fs_resolve(int cwd,const char *path){(void)cwd;return !strcmp(path,"/Documen
 int fs_destination(int cwd,const char *path,char *name){(void)cwd;(void)path;strcpy(name,"data.txt");return 1;}
 int fs_size(int id){assert(id==2);return sizeof disk_bytes;}
 const char *fs_data(int id){assert(id==2);return (const char *)disk_bytes;}
+int fs_read_at(int id,unsigned offset,void *out,unsigned len){
+    assert(id==2);if(offset>=sizeof disk_bytes)return 0;if(len>sizeof disk_bytes-offset)len=sizeof disk_bytes-offset;
+    memcpy(out,disk_bytes+offset,len);return (int)len;}
 int fs_create(int parent,const char *name){(void)name;assert(parent==1);return 2;}
 int fs_write(int id,const char *data,int length){assert(id==2);assert(length>=0);if(length)assert(data);legacy_writes++;return length;}
 int fs_delete(int id){assert(id==2);return 0;}

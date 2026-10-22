@@ -104,6 +104,10 @@ int bfs_allocate(BfsVolume *volume, uint64_t size, BfsExtent **extents, uint32_t
 int bfs_write_data(BfsVolume *volume, const void *data, uint64_t size, BfsExtent **extents, uint32_t *count);
 /* Gives back blocks reserved since the last commit that no commit will use. */
 void bfs_discard(BfsVolume *volume, const BfsExtent *extents, uint32_t count);
+/* Extents a file no longer uses: bfs_discard, returning how many of their
+ * blocks the current commit owns (they become free once the next commit
+ * lands). */
+uint32_t bfs_drop(BfsVolume *volume, const BfsExtent *extents, uint32_t count);
 
 /* Makes records the current state: writes the checkpoint, flushes, reads it
  * back, then writes the other superblock, flushes and reads it back. Blocks

@@ -179,7 +179,7 @@ def main(build, keep=False, compile_only=False):
         before = digest(full)
         run(boot[1], full, directory, 'full-readonly-reboot', 'LARGE-FULL-READONLY-REBOOT-PASS')
         assert digest(full) == before
-        run(boot[2], full, directory, 'low-ram-protected', 'LARGE-LOW-RAM-PASS', memory='64M')
+        run(boot[2], full, directory, 'low-ram-streamed', 'LARGE-LOW-RAM-PASS', memory='64M')
         assert digest(full) == before
         run(boot[3], migration, directory, 'legacy-migrate', 'LARGE-MIGRATION-PASS')
         validate_data(migration, legacy)

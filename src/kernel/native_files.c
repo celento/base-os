@@ -1,5 +1,6 @@
 #include "kernel/native_files.h"
 #include "kernel/fs.h"
+#include "kernel/kheap.h"
 
 /* Handles are opaque, tagged, and never reused within a kernel lifetime.
  * Keeping the node index private does not pin FS data in the compacting arena. */
@@ -121,8 +122,18 @@ int native_file_read_at(uint32_t owner, uint32_t handle, uint32_t offset,
     if (size > capacity) size = capacity;
     /* No app dispatch or file mutation can occur between the version check
      * and this bounded copy. On any error, output is completely untouched. */
-    kmemcpy(out, fs_data(file->node) + offset, (int)size);
-    return (int)size;
+    if (!fs_streamed(file->node)) {
+        kmemcpy(out, fs_data(file->node) + offset, (int)size);
+        return (int)size;
+    }
+    /* A file past the file limit is read from disk, through a bounce
+     * buffer so that a failed read leaves out untouched. */
+    char *bounce = kmalloc(size);
+    if (!bounce) return BOS_E_CAPACITY;
+    int result = fs_read_at(file->node, offset, bounce, size);
+    if (result == (int)size) kmemcpy(out, bounce, (int)size);
+    kfree(bounce);
+    return result == (int)size ? (int)size : BOS_E_IO;
 }
 int native_file_replace(uint32_t owner, uint32_t handle, const void *data,
                         uint32_t length, BosFileInfo *out) {
