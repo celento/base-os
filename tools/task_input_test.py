@@ -10,8 +10,8 @@ build=pathlib.Path(sys.argv[1]);work=pathlib.Path(tempfile.mkdtemp(prefix='baseo
 data=work/'data.img';initialize(data)
 with DesktopSession(build,'task-input',extra=('-drive',f'file={data},format=raw,index=0,if=ide')) as session:
     print(session.directory,flush=True);session.boot();session.launch('terminal')
-    session.text('start /Programs/counter.bex');session.key('ret');time.sleep(3.2);session.key('s')
-    session.key('ctrl-n');session.text('start /Programs/counter.bex');session.key('ret');time.sleep(.3)
+    session.text('start /Scripts/counter.bex');session.key('ret');time.sleep(3.2);session.key('s')
+    session.key('ctrl-n');session.text('start /Scripts/counter.bex');session.key('ret');time.sleep(.3)
     for _ in range(5):session.key('equal')
     session.key('s')
     session.key('ctrl-n');session.text('echo Desktop remains responsive');session.key('ret');time.sleep(.2)
@@ -20,7 +20,7 @@ with DesktopSession(build,'task-input',extra=('-drive',f'file={data},format=raw,
     session.text('echo stopped-ok');session.key('ret')
     session.screenshot('native-stop.png')
     session.key('ctrl-w');session.key('ctrl-w');session.key('alt-tab');session.key('s');session.key('ctrl-w')
-    session.launch('terminal');session.text('start /Programs/counter.bex');session.key('ret');time.sleep(.25);session.key('q')
+    session.launch('terminal');session.text('start /Scripts/counter.bex');session.key('ret');time.sleep(.25);session.key('q')
     time.sleep(.25);session.text('echo restart-ok');session.key('ret');time.sleep(2)
     memory=session.memory(session.layout['APPS_BASE']+0x300000,0xc0000)
     assert b'Native task finished.\x00' in memory,'Q did not end task cleanly'

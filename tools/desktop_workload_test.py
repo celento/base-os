@@ -79,7 +79,7 @@ def run(build, pdf=False):
             session.launch('work.bwr'); writer_slot = files.front()['slot']
             session.key('ctrl-h'); session.text('alpha'); session.key('tab'); session.text('beta')
             session.launch('terminal'); native_slot = files.front()['slot']
-            session.text('start /Programs/docstats.bex /Documents/bulk.txt'); session.key('ret')
+            session.text('start /Scripts/docstats.bex /Documents/bulk.txt'); session.key('ret')
             session.wait(lambda: terminal.ready(native_slot), 'initial complete 2 MiB native scan', 45)
             session.launch('browser'); browser_slot = files.front()['slot']
             type_url(session, f'http://10.0.2.2:{server.server_port}/combined.bin')

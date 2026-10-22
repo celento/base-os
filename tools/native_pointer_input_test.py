@@ -278,7 +278,7 @@ def fixture(output, profile):
     disk = output / 'pointer-data.img'
     require(initialize(disk, profile=profile), 'Refusing to reuse a volume fixture')
     nodes = {0: dict(parent=-1, name='', directory=1, app=0, data=b'', modified=0),
-             1: dict(parent=0, name='Programs', directory=1, app=0, data=b'', modified=0),
+             1: dict(parent=0, name='Scripts', directory=1, app=0, data=b'', modified=0),
              2: dict(parent=0, name='Documents', directory=1, app=0, data=b'', modified=0)}
     for name, data in apps.items():
         nodes[len(nodes)] = dict(parent=1, name=name, directory=0, app=0, data=data, modified=1)
@@ -549,7 +549,7 @@ def run(build, profile, output):
         raw = disk.read_bytes()
         slot, generation, nodes = load(raw)
         for name, expected in apps.items():
-            require(nodes[resolve(nodes, '/Programs/'+name)]['data'] == expected,
+            require(nodes[resolve(nodes, '/Scripts/'+name)]['data'] == expected,
                     'Guest application bytes changed: '+name)
         saved = {path: int(nodes[resolve(nodes, path)]['data']) for path in baselines}
         changed = {path: value for path, value in saved.items() if value != baselines[path]}

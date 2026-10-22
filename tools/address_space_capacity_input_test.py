@@ -56,7 +56,7 @@ def prepare(args,runtime,modules):
     for name,data in apps.items():
         path=work/name
         if not path.exists():path.write_bytes(data)
-        report['original_files']['/Programs/'+name]=desktop.artifact(path)
+        report['original_files']['/Scripts/'+name]=desktop.artifact(path)
     constants=modules['layout'].constants();boot=bytearray(constants['DISK_SECTORS']*512)
     boot[:512]=(args.build/'boot.bin').read_bytes()
     modules['update_image'].install_kernel(boot,(args.build/'kernel.bin').read_bytes(),constants)

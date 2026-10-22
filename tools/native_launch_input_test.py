@@ -26,7 +26,7 @@ def run(build):
         session.launch('Files')
         # Use the public name filter rather than an obsolete insertion-order
         # row index. Files now sorts names and starts with no selected row.
-        session.key('ctrl-f'); session.text('Programs'); session.key('down'); session.key('ret')
+        session.key('ctrl-f'); session.text('Scripts'); session.key('down'); session.key('ret')
         time.sleep(.25)
         session.screenshot('native-files.png')
         session.key('ctrl-f'); session.text('counter.bex'); session.key('down'); session.key('ret')

@@ -31,7 +31,7 @@ def make_fixture(directory):
     data = bytearray(disk.read_bytes())
     nodes = {
         0: dict(parent=-1, name='', directory=1, app=0, data=b'', modified=0),
-        1: dict(parent=0, name='Programs', directory=1, app=0, data=b'', modified=0),
+        1: dict(parent=0, name='Scripts', directory=1, app=0, data=b'', modified=0),
         2: dict(parent=1, name='elf-check', directory=0, app=0, data=program.read_bytes(), modified=0),
         3: dict(parent=0, name='Documents', directory=1, app=0, data=b'', modified=0),
         4: dict(parent=3, name='hello', directory=0, app=0, data=b'\n', modified=0),
@@ -55,10 +55,10 @@ def run(build):
         print('Screenshots and serial log:', session.directory, flush=True)
         session.boot()
         session.launch('terminal')
-        session.text('start /Programs/elf-check /Documents/hello')
+        session.text('start /Scripts/elf-check /Documents/hello')
         session.key('ret')
         session.wait(lambda: 'uproc: pid 1 exited status 7' in session.log.read_text(), 'hello exit')
-        session.text('start /Programs/elf-check /Documents/threads')
+        session.text('start /Scripts/elf-check /Documents/threads')
         session.key('ret')
         session.wait(lambda: 'uproc: pid 2 exited status 0' in session.log.read_text(), 'threads exit')
         time.sleep(.5)

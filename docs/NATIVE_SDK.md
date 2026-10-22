@@ -20,7 +20,7 @@ skipped in floppy-only mode. You can import your own application and input while
 QEMU is shut down:
 
 ```sh
-python3 tools/volume.py build/baseos-data.img import build/docstats.bex /Programs/docstats.bex
+python3 tools/volume.py build/baseos-data.img import build/docstats.bex /Scripts/docstats.bex
 python3 tools/volume.py build/baseos-data.img import build/stats-sample.txt /Documents/stats-sample.txt
 ```
 
@@ -56,7 +56,7 @@ but apps can read files and write documents through the documented API.
 Or, for a long-lived, interactive or streaming app, run:
 
 ```text
-start /Programs/docstats.bex /Documents/stats-sample.txt
+start /Scripts/docstats.bex /Documents/stats-sample.txt
 ```
 
 `exec` remains synchronous with its two-second watchdog. `start` gives the app
@@ -95,7 +95,7 @@ without keeping the whole file in application memory. Its 320×200 canvas shows
 byte, word and line counts and a 256-bin byte-frequency histogram. Low byte values
 are at the left; bar heights are normalized to the most frequent byte.
 
-- Pass an input directly: `start /Programs/docstats.bex "/Documents/my notes.txt"`.
+- Pass an input directly: `start /Scripts/docstats.bex "/Documents/my notes.txt"`.
 - Without a startup argument, default input: `/Documents/stats-sample.txt`.
 - Without a startup argument, choose another file by saving its absolute path as the entire contents of
   `/Documents/stats-path.txt`. One trailing LF or CRLF is allowed. The path is at
@@ -437,7 +437,7 @@ hardware latency. Each stream was intentionally stopped after the scan finished.
 
 `examples/c/pointer.c` is a regular C client for the pointer service described in
 [NATIVE_UI.md](NATIVE_UI.md). Build it as the default BEX1 or with the existing
-`--format bex2` option. Kernel startup installs `/Programs/pointer.bex` only
+`--format bex2` option. Kernel startup installs `/Scripts/pointer.bex` only
 when that name is absent, including on saved disks; an existing file or directory
 is preserved. The hosted-UI runtime supports it; it
 queries capabilities first and exits normally with an unsupported message on

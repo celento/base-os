@@ -152,8 +152,8 @@ void feature_test(void){
         lm_exact_files();as_checkpoint("reboot");platform_log("LARGER-MEMORY-REBOOT-PASS\n");return;
     }
     as_check(!fs_sync(),"LM initial sync");
-    int a=as_file("/Programs/memory-a.bex"),b=as_file("/Programs/memory-b.bex");
-    int counter=as_file("/Programs/counter.bex");
+    int a=as_file("/Scripts/memory-a.bex"),b=as_file("/Scripts/memory-b.bex");
+    int counter=as_file("/Scripts/counter.bex");
     as_check(a>=0&&b>=0&&counter>=0,"LM fixture apps missing");
     as_launch(3,counter,0);
     as_check(process_key(as_handles[3],' '),"LM freeze counter before first step");

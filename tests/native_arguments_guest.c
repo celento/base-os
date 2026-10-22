@@ -16,7 +16,7 @@ static void tick(void){poll_time();platform_poll();__asm__ volatile("hlt");}
 static int has_line(const char *s){for(int i=0;i<term_count();i++)if(!kstrcmp(term_get(i),s))return 1;return 0;}
 void feature_test(void){
     const PhysmemStats backing_before=guest_process_memory();
-    int app=file("/Programs/arguments.bex");check(app>=0,"argument app missing");
+    int app=file("/Scripts/arguments.bex");check(app>=0,"argument app missing");
     if(file("/Documents/arguments-done.txt")>=0){
         record(1,"/Documents/a sample.txt");record(3,"none");
         guest_process_memory_restored(&backing_before);
@@ -52,10 +52,10 @@ void feature_test(void){
     platform_log("NATIVE-ARGUMENT-COPY-ISOLATION-PASS\n");
     /* Two real Terminal paths, one quoted and one relative. Their source image
      * and argument bytes remain owned after ordinary source edits/deletion. */
-    int renamed=fs_create(file("/Programs"),"argument tool.bex");
+    int renamed=fs_create(file("/Scripts"),"argument tool.bex");
     check(renamed>=0&&fs_write(renamed,fs_data(app),fs_size(app))==fs_size(app),"quoted program copy");
-    term_select(0);term_reset();command("start \"/Programs/argument tool.bex\" \"/Documents/a sample.txt\"");
-    term_select(1);term_reset();term_set_cwd(file("/Documents"));command("start ../Programs/arguments.bex \"a sample.txt\"");
+    term_select(0);term_reset();command("start \"/Scripts/argument tool.bex\" \"/Documents/a sample.txt\"");
+    term_select(1);term_reset();term_set_cwd(file("/Documents"));command("start ../Scripts/arguments.bex \"a sample.txt\"");
     TermTaskInfo one,two;char title[TERM_TASK_TITLE_LEN];
     check(term_task_info(0,&one)&&term_task_info(1,&two)&&one.instance!=two.instance,"quoted launch owners");
     check(term_task_title(0,title,sizeof title)&&!kstrcmp(title,"argument tool.bex - a sample.txt"),"copied document title");
@@ -69,7 +69,7 @@ void feature_test(void){
     term_select(1);check(has_line("Native task finished."),"relative argument execution failed");
     record(1,"/Documents/a sample.txt");record(2,"/Documents/a sample.txt");
     check(!term_task_title(0,title,sizeof title)&&!title[0],"finished title leaked");
-    term_select(2);term_reset();command("start /Programs/arguments.bex");
+    term_select(2);term_reset();command("start /Scripts/arguments.bex");
     began=timer_ticks();while(term_task_running(2)&&timer_ticks()-began<5*TIMER_HZ){term_task_poll();tick();}
     check(has_line("Native task finished."),"no-argument slot reuse");record(3,"none");
     int done=fs_create(file("/Documents"),"arguments-done.txt");

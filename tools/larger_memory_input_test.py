@@ -124,7 +124,7 @@ def prepare(args, runtime, modules):
             raise ValueError('The two clients must have distinct binaries and full-byte checksums')
         documents = {'relaunch.txt': b'Ordinary immutable argument selects the fresh-zero generation.\n'}
         report['original_files'] = {}
-        for parent, entries in (('Programs', apps), ('Documents', documents)):
+        for parent, entries in (('Scripts', apps), ('Documents', documents)):
             for name, data in entries.items():
                 local = work / name
                 if not local.exists():
@@ -341,7 +341,7 @@ def run_profile(args, profile, report, modules, font):
         focus_client(session, font, first, clients, item, args.timeout)
         verify_client(session, font, first, report['plans']['1'], item, saved, args.timeout, 'survivor-after-close')
         session.key('ctrl-n');session.key('alt-ret')
-        session.text('start /Programs/larger-b.bex /Documents/relaunch.txt');session.key('ret')
+        session.text('start /Scripts/larger-b.bex /Documents/relaunch.txt');session.key('ret')
         replacement = ready(session, font, 2, 2, 'replacement-fresh-zero', args.timeout)
         if replacement['task'] == first['task']:
             raise AssertionError('Relaunch replaced the survivor')

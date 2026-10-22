@@ -10,7 +10,7 @@ from update_image import install_packed_kernel
 def floppy_fixture(build, directory, app):
     directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
     nodes={0:dict(parent=-1,name='',directory=1,app=0,data=b'',modified=0),
-           1:dict(parent=0,name='Programs',directory=1,app=0,data=b'',modified=0),
+           1:dict(parent=0,name='Scripts',directory=1,app=0,data=b'',modified=0),
            2:dict(parent=0,name='Documents',directory=1,app=0,data=b'',modified=0),
            3:dict(parent=1,name='platform.bex',directory=0,app=0,data=Path(app).read_bytes(),modified=1),
            4:dict(parent=2,name='platform.bin',directory=0,app=0,data=b'A'*8192,modified=1)}
@@ -27,7 +27,7 @@ def run_contexts(build,work,app,old_build=None):
     result={}
     with PlatformSession(build,'platform-floppy-context',image=image) as session:
         result['floppy_directory']=str(session.directory);session.boot();session.launch('terminal')
-        session.text('start /Programs/platform.bex');session.key('ret');session.key('alt-ret')
+        session.text('start /Scripts/platform.bex');session.key('ret');session.key('alt-ret')
         session.until(lambda o:o['page']==0,'platform app on floppy')
         caps=session.page(1);limits=session.page(2)
         assert (caps['features']&15)==9 and caps['context']==2 and caps['file_bytes']==16383
@@ -35,7 +35,7 @@ def run_contexts(build,work,app,old_build=None):
         assert limits['operations_per_process']==limits['operations_total']==limits['wait_ms']==0
         session.page(0);session.key('s')
         unsupported=session.until(lambda o:o['sync_result']==-1000,'floppy async reports unsupported')[0]
-        session.key('q');session.text('exec /Programs/platform.bex');session.key('ret')
+        session.key('q');session.text('exec /Scripts/platform.bex');session.key('ret')
         legacy=session.until(lambda o:o['page']==1 and o['context']==1,'legacy exec truthful capability query')[0]
         assert (legacy['features']&15)==9 and legacy['process']!=caps['process'] and legacy['slot']==0
         result.update(floppy_task=caps,floppy_limits=limits,floppy_async=unsupported,floppy_exec=legacy)
@@ -46,7 +46,7 @@ def run_contexts(build,work,app,old_build=None):
         old_image=floppy_fixture(old_build,work/'old-kernel',app)
         with PlatformSession(old_build,'platform-old-query',image=old_image) as old:
             result['old_directory']=str(old.directory);old.boot();old.launch('terminal')
-            old.text('start /Programs/platform.bex');old.key('ret');old.key('alt-ret')
+            old.text('start /Scripts/platform.bex');old.key('ret');old.key('alt-ret')
             fallback=old.until(lambda o:o['page']==0 and o['file_result']==-1,'actual older kernel query fallback')[0]
             assert fallback['process']==0 and fallback['operation']==0 and fallback['errors']==0
             result['old_query_fallback']=fallback

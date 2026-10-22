@@ -17,7 +17,7 @@ PARAGRAPHS = [
     ('A recovered draft only saves back to an unchanged original file. If the source changed while the machine was stopped, choose a new name with Save As.', 0),
     ('Files and native apps', 4),
     ('Files supports Ctrl+C, Ctrl+X and Ctrl+V for copies and moves. Ctrl+F filters the current folder; Ctrl+1 through Ctrl+4 choose Name, Type, Size or Modified sorting. Open a second window with Ctrl+N.', 0),
-    ('Open .bex programs from Files or the launcher. In Terminal, start /Programs/docstats.bex /Documents/stats-sample.txt scans that document. S saves its report; Q exits. Existing installed examples are never overwritten automatically.', 0),
+    ('Open .bex programs from Files or the launcher. In Terminal, start /Scripts/docstats.bex /Documents/stats-sample.txt scans that document. S saves its report; Q exits. Existing installed examples are never overwritten automatically.', 0),
     ('Limits', 4),
     ('Writer supports 32,768 ASCII text bytes, eight grouped undo operations and one window. Plain-text imports accept LF or CRLF line endings.', 0),
     ('RTF and PDF are export-only. PDF uses standard Times fonts and a 512 KiB output limit. Unicode, DOCX, embedded images, paginated editing and guest printer drivers are not implemented.', 0),

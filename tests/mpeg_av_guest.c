@@ -28,9 +28,9 @@ static unsigned native_saved_value(int owner){
 }
 static void native_begin(int first){
     if(fs_find_child(fs_root(),"Documents")<0)require_av(fs_mkdir(fs_root(),"Documents")>=0,"MPEG native documents");
-    native_first=first;native_command("start /Programs/counter.bex");
+    native_first=first;native_command("start /Scripts/counter.bex");
     wins[first].x=28;wins[first].y=74;wins[first].w=450;wins[first].h=278;
-    open_term();native_second=win_front();native_command("start /Programs/counter.bex");
+    open_term();native_second=win_front();native_command("start /Scripts/counter.bex");
     wins[native_second].x=28;wins[native_second].y=374;wins[native_second].w=450;wins[native_second].h=278;
     require_av(term_task_running(native_first)&&term_task_running(native_second),"MPEG native counters did not start");
     term_task_key(native_first,'+');term_task_key(native_first,'+');term_task_key(native_second,'+');

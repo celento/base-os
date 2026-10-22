@@ -86,7 +86,7 @@ class NativeWindowCollectorTests(unittest.TestCase):
             disk = Path(temporary) / 'data.img'
             record = collector.make_volume(disk, 'default', apps)
             _, _, nodes = collector.load(disk.read_bytes())
-            self.assertEqual(nodes[collector.resolve(nodes, '/Programs/counter.bex')]['data'], apps['counter.bex'])
+            self.assertEqual(nodes[collector.resolve(nodes, '/Scripts/counter.bex')]['data'], apps['counter.bex'])
             self.assertEqual(nodes[collector.resolve(nodes, '/Documents/counter-8.txt')]['data'], b'108\n')
             before = record['sha256']
             with self.assertRaises(AssertionError): collector.make_volume(disk, 'default', apps)

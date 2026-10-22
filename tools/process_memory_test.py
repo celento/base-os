@@ -49,7 +49,7 @@ def disk(path, profile, files):
     initialize(path, profile=profile)
     nodes = {
         0: dict(parent=-1, name='', directory=1, app=0, data=b'', modified=0),
-        1: dict(parent=0, name='Programs', directory=1, app=0, data=b'', modified=0),
+        1: dict(parent=0, name='Scripts', directory=1, app=0, data=b'', modified=0),
         2: dict(parent=0, name='Documents', directory=1, app=0, data=b'', modified=0)}
     for name, data in files.items():
         nodes[len(nodes)] = dict(parent=1, name=name, directory=0, app=0, data=data, modified=1234)

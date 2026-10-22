@@ -83,9 +83,9 @@ Scripts contain one terminal command per line; blank lines and lines beginning w
 Try these inside Terminal:
 
 ```text
-run /Programs/demo.sh
-basic /Programs/demo.bas
-exec /Programs/hello.bex
+run /Scripts/demo.sh
+basic /Scripts/demo.bas
+exec /Scripts/hello.bex
 ```
 
 ## 5. Host file exchange
@@ -215,10 +215,10 @@ python3 tools/build_app.py examples/c/docstats.c build/docstats.bex
 ```
 
 The examples are installed without replacing existing files. Run
-`exec /Programs/hello-c.bex` for graphics and `exec /Programs/notebook.bex` to read
+`exec /Scripts/hello-c.bex` for graphics and `exec /Scripts/notebook.bex` to read
 and write a persistent document. The compiler runs on the host; these default
 BEX1 examples retain the 64 KiB address space. The two-second watchdog applies to `exec` only.
-Open two terminals and run `start /Programs/counter.bex` in each for independent
+Open two terminals and run `start /Scripts/counter.bex` in each for independent
 long-running counters. +/- changes the value, Space pauses, S saves to that
 terminal slot's `/Documents/counter-N.txt`, and Q/Escape exits. Sleep and yield
 wrappers are `bos_sleep(milliseconds)` and `bos_yield()`; `bos_task_id()` identifies
@@ -227,7 +227,7 @@ the owning terminal slot. Task memory is not restored after reboot.
 Test the C build/run/persistence path with `python3 tools/sdk_test.py build`, and
 the task runtime with `python3 tools/task_test.py build`.
 
-`start /Programs/docstats.bex` streams a configurable document into byte/word/line
+`start /Scripts/docstats.bex` streams a configurable document into byte/word/line
 counts and a 320×200 byte histogram. Edit `/Documents/stats-path.txt` to select an
 absolute input path; R reloads, S saves a synchronized per-slot report, and Q exits.
 The included 56,812-byte sample requires IDE storage. The [native SDK guide](docs/NATIVE_SDK.md)
@@ -235,11 +235,11 @@ documents the extended ABI, memory limits, exact counting rules and bounded
 replacement writes. `python3 tools/native_sdk_test.py build` verifies the new
 streaming, large-image, canvas, capacity and reboot paths.
 
-`examples/hello.asm` is assembled during every build and installed as `/Programs/hello.bex` if missing. To assemble another example with the same header and ABI:
+`examples/hello.asm` is assembled during every build and installed as `/Scripts/hello.bex` if missing. To assemble another example with the same header and ABI:
 
 ```sh
 nasm -f bin examples/hello.asm -o build/custom.bex
-python3 tools/volume.py build/baseos-data.img import build/custom.bex /Programs/custom.bex
+python3 tools/volume.py build/baseos-data.img import build/custom.bex /Scripts/custom.bex
 ```
 
 Native execution requires a Pentium-or-newer CPU with 4 MB page support. The normal QEMU configuration supplies this. Task state occupies one MiB at 48 MiB; all integrated arenas are validated through 63 MiB. Normal runs use 64 MiB.

@@ -48,7 +48,7 @@ def shell_phase(session,evidence):
     # Two remaining windows: minimized document and Monitor. Fill all six free
     # slots with ordinary visible Terminals; no record/page pressure is faked.
     for _ in range(6):session.launch('Terminal')
-    session.key('alt-ret');session.text('start /Programs/pointer-window.bex');session.key('ret')
+    session.key('alt-ret');session.text('start /Scripts/pointer-window.bex');session.key('ret')
     image=evidence.frame('capacity-refusal-keeps-calling-shell')
     region=(0,36,image.shape[1],image.shape[0]-80)
     evidence.check('full eight-window launch is refused in existing shell',

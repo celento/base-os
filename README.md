@@ -21,7 +21,7 @@ BaseOS runs in QEMU with 64 MiB of RAM, or 128 MiB for the optional large-data p
 - View JPEG, PNG, BMP, GIF's first frame and BaseOS images, with fit, actual size, zoom, pan and transparency. Images are bounded to 1,024 pixels per side and 786,432 pixels total.
 - Build C applications with the host SDK: unchanged BEX1 supports 48 KiB images in 64 KiB; opt-in BEX2 supports 256 KiB images and launch-declared private regions in a sparse 4 MiB extent, subject to actual free pages and the per-process limit. Native tasks can stream files in bounded chunks (2 MiB by default, 16 MiB on the large profile), replace 32 KiB documents with explicit sync, and use an optional 320x200 canvas. The included DocStats app accepts an optional document path, counts its bytes/words/lines and displays a byte histogram. The [ABI 1.3 file-transaction service](docs/NATIVE_FILE_TRANSACTIONS.md) adds conditional staged RAM publication up to 256 KiB with separately confirmed durability; UI remains 1.1, and Close/Stop remains forced.
 - Native canvases publish stable frames at explicit present/yield/sleep/exit boundaries. Safe front-client updates avoid rebuilding the desktop; menus and overlapping/structural changes retain conservative full redraws.
-- Launch `.bex` native apps directly from Files or `Ctrl+Space`. BEX1/unflagged BEX2 stay hosted in Terminal; explicitly GUI-flagged BEX2 apps open independent native windows with owned input and bounded Output. Try `/Programs/pointer-window.bex`. Run shell scripts, Tiny BASIC and the legacy synchronous `exec` interface. Calculator, Todo, Clock, Calendar and the original games remain included. System Monitor lists native tasks with Show and Stop controls, alongside resource and window information.
+- Launch `.bex` native apps directly from Files or `Ctrl+Space`. BEX1/unflagged BEX2 stay hosted in Terminal; explicitly GUI-flagged BEX2 apps open independent native windows with owned input and bounded Output. Try `/Scripts/pointer-window.bex`. Run shell scripts, Tiny BASIC and the legacy synchronous `exec` interface. Calculator, Todo, Clock, Calendar and the original games remain included. System Monitor lists native tasks with Show and Stop controls, alongside resource and window information.
 - Keep local Calendar appointments with optional times, day markers and guarded edits. Unfinished entries recover after a confirmed disk save or normal shutdown; see [Calendar](docs/CALENDAR.md).
 - Search apps and files with `Ctrl+Space`; use the mouse wheel to scroll. Restore saved window arrangements and Editor/Paint/Writer/Spreadsheet drafts after reboot.
 
@@ -35,7 +35,7 @@ These captures come from the running QEMU guest with sample documents and artwor
 
 ### Files
 
-A sidebar of places (Home, Documents, Pictures, Media, Programs, Trash) with a storage meter, back, forward and up buttons, a clickable path, sortable columns, a name filter and color-coded file types.
+A sidebar of places (Home, Documents, Pictures, Media, Scripts, Applications, Trash) with a storage meter, back, forward and up buttons, a clickable path, sortable columns, a name filter and color-coded file types.
 
 ![Files showing the Documents folder with the places sidebar and path bar](screenshots/gallery/files.png)
 
@@ -169,7 +169,7 @@ Host and reference-media tests additionally need Clang, FFmpeg and Pillow (`pyth
 | List terminal commands | `help` |
 | Read a command's manual | `man basic` |
 
-Open `Programs/counter.bex`, `notebook.bex`, `docstats.bex` or `pointer.bex` from Files, or search
+Open `Scripts/counter.bex`, `notebook.bex`, `docstats.bex` or `pointer.bex` from Files, or search
 for their filenames with `Ctrl+Space`. Counter and Notebook explicitly synchronize
 before showing Saved. Existing disks keep their installed example binaries; see
 the SDK guide before deliberately replacing an older example.
@@ -177,10 +177,10 @@ the SDK guide before deliberately replacing an older example.
 Try the included examples in Terminal:
 
 ```text
-run /Programs/demo.sh
-basic /Programs/demo.bas
-exec /Programs/hello.bex
-start /Programs/counter.bex
+run /Scripts/demo.sh
+basic /Scripts/demo.bas
+exec /Scripts/hello.bex
+start /Scripts/counter.bex
 ```
 
 The [desktop and programming guide](FEATURES.md) covers all shortcuts, persistence behavior, file exchange, BASIC syntax, and the native-program ABI. The [technical reference](docs/TECHNICAL.md) covers hardware assumptions, disk recovery, memory layout, rendering, and regression checks.

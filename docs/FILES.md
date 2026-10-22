@@ -7,8 +7,23 @@ desktop mode without requiring a wide, four-column table.
 ## Navigation
 
 Windows at least 520 pixels wide show a **Places** sidebar with Home (the root
-folder), Documents, Pictures, Media, Programs and Trash, plus a storage meter for
-the current volume. Narrower windows hide the sidebar and keep the full list.
+folder), Documents, Pictures, Media, Scripts, Applications and Trash, plus a
+storage meter for the current volume. Narrower windows hide the sidebar and keep
+the full list.
+
+## System folders
+
+Every built-in app has an entry in **Applications**; opening one starts the app,
+the same as its launcher entry. A missing entry is created again at the next
+boot. Applications, the apps inside it, Trash and prefs cannot be renamed, moved
+or put in the Trash, and Terminal `rm` refuses a folder that holds apps.
+
+**Scripts** holds the bundled example programs (`.bex`), the Tiny BASIC demo and
+the shell script demo, and is the place for your own. Older volumes kept apps at
+the root and these files in `/Programs`. The first boot with this release moves
+them; a file whose name is already taken in Scripts stays in `/Programs`. Once
+no `/Programs` folder is left, paths that start with `/Programs` resolve to
+`/Scripts`, so existing scripts and commands keep working.
 
 The toolbar has **Back**, **Forward** and **Up** buttons and a path bar. Each
 window keeps its own history of the last 12 folders it visited; Back and Forward

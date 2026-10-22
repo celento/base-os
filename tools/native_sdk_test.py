@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def snapshot(files):
     data = bytearray(volume.DATA_LAYOUT.sectors * 512)
     data[:512] = volume.data_marker()
-    nodes = [(0, -1, '', True, b''), (1, 0, 'Programs', True, b''),
+    nodes = [(0, -1, '', True, b''), (1, 0, 'Scripts', True, b''),
              (2, 0, 'Documents', True, b'')]
     for parent, name, content in files:
         nodes.append((len(nodes), parent, name, False, content))

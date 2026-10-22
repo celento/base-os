@@ -1230,6 +1230,11 @@ static int menu_sel = -1;
 static int icon_sel = -1;
 static int trash_id = -1;
 static int prefs_id = -1;
+/* The root, apps, folders holding apps (Applications) and the Trash and
+ * prefs folders: never renamed, moved or put in the Trash. */
+static int system_node(int id) {
+    return id == fs_root() || fs_is_app(id) || fs_holds_app(id) || id == trash_id || id == prefs_id;
+}
 static int properties_id=-1;
 static const char *properties_reason="";
 
@@ -4633,10 +4638,8 @@ static void open_fs_file(int id) {
         return;
     const char *n = fs_name(id);
     if(!fs_is_dir(id)&&!fs_is_app(id))recent_add(id);
-    if(fs_is_app(id)&&!kstrcmp(n,"Browser")){open_browser(-1);return;}
-    if(fs_is_app(id)&&!kstrcmp(n,"Media Player")){open_player(-1);return;}
-    if(fs_is_app(id)&&!kstrcmp(n,"Writer")){open_writer(-1);return;}
-    if(fs_is_app(id)&&!kstrcmp(n,"Spreadsheet")){open_spreadsheet(-1);return;}
+    /* App nodes open the app their launcher entry opens. */
+    if(fs_is_app(id))for(int i=0;i<ICON_DESK_TRASH;i++)if(!kstrcmp(icons[i].label,n)){icon_open(i);return;}
     if(!fs_is_dir(id)&&!fs_is_app(id)){
         if(file_extension(n,".bex")){open_native_file(id);return;}
         if(file_extension(n,".bwr")){open_writer(id);return;}
@@ -5054,7 +5057,7 @@ static void fm_rename_cancel(void) {
 }
 
 static void fm_rename_begin(int id) {
-    if (id < 0 || fm_row_id(fm_selected)!=id)
+    if (id < 0 || fm_row_id(fm_selected)!=id || system_node(id))
         return;
     if (fm_renaming && fm_rename_id == id)
         return;
@@ -5194,9 +5197,9 @@ static int app_icon_by_name(const char *name) {
  * The Places sidebar, the path bar and the detail list. Files, Open and
  * Save As draw with these and hit test the rectangles they were drawn in. */
 
-#define PLACE_MAX 10
+#define PLACE_MAX 12
 typedef struct { const char *name; int id, icon; } Place;
-static const char *const place_folders[] = {"Desktop", "Documents", "Downloads", "Pictures", "Media", "Programs"};
+static const char *const place_folders[] = {"Desktop", "Documents", "Downloads", "Pictures", "Media", FS_SCRIPTS_DIR, FS_APPS_DIR};
 
 /* Folders first, then devices from *devices on. */
 static int places_build(Place *p, int *devices, int with_trash) {
@@ -5204,7 +5207,8 @@ static int places_build(Place *p, int *devices, int with_trash) {
     p[n++] = (Place){"Home", fs_root(), UI_ICON_HOME};
     for (unsigned i = 0; i < sizeof place_folders / sizeof *place_folders; i++) {
         int id = fs_find_child(fs_root(), place_folders[i]);
-        if (fs_is_dir(id)) p[n++] = (Place){place_folders[i], id, i == 0 ? UI_ICON_DESK : UI_ICON_FOLDER};
+        int icon = i == 0 ? UI_ICON_DESK : !kstrcmp(place_folders[i], FS_APPS_DIR) ? UI_ICON_APPS : UI_ICON_FOLDER;
+        if (fs_is_dir(id)) p[n++] = (Place){place_folders[i], id, icon};
     }
     *devices = n;
     p[n++] = (Place){"System", fs_root(), UI_ICON_DISK};
@@ -6428,7 +6432,7 @@ static int prop_len, prop_for = -1, prop_failed;
 static unsigned prop_identity;
 
 static int prop_editable(int id) {
-    return fs_valid(id) && id != fs_root() && !fs_is_app(id) && id != trash_id && id != prefs_id;
+    return fs_valid(id) && !system_node(id);
 }
 
 static void prop_sync(void) {
@@ -6766,7 +6770,7 @@ static const HelpRow help_rows[] = {
     {0, "Writer"},
     {"Ctrl+S", "Save the document as BWR"},
     {"Ctrl+Shift+P", "Export the document as PDF"},
-    {0, "Programs"},
+    {0, "Scripts"},
     {".bex", "Open a .bex file to run a native app"},
     {"Ctrl+C", "Stop the native task in Terminal"},
 };
@@ -7431,7 +7435,7 @@ static void files_drop(void) {
     fm_drag_id = -1;
     if (!active || !file_view_valid(fm_drag_parent,id,fm_drag_identity))
         return;
-    if (id == trash_id)
+    if (system_node(id))
         return;
     if (!icon_hit(ICON_DESK_TRASH, mouse_x, mouse_y))
         return;
@@ -7817,8 +7821,7 @@ static void fm_sort_set(int sort, int descending) {
 /* Move the selected Files row to the Trash. */
 static void fm_trash_selected(void) {
     int id = fm_row_id(fm_selected);
-    if (id < 0 || trash_id < 0 || id == trash_id || id == fs_root() || fs_is_app(id) ||
-        fs_parent(id) == trash_id) return;
+    if (id < 0 || trash_id < 0 || system_node(id) || fs_parent(id) == trash_id) return;
     if (files_storage_busy()) return;
     fm_rename_cancel();
     if (fs_move(id, trash_id) < 0) { dirty = 1; return; }
@@ -7859,7 +7862,7 @@ static int act_enabled(int act) {
     case ACT_OPEN_ITEM: return fk == WK_FILES && fm_row_id(fm_selected) >= -1;
     case ACT_RENAME: case ACT_TRASH:
         id = files_selected_item();
-        return id >= 0 && !fs_is_app(id) && id != trash_id && id != prefs_id &&
+        return id >= 0 && !system_node(id) &&
                (act != ACT_TRASH || (trash_id >= 0 && fs_parent(id) != trash_id));
     case ACT_COPY_PATH: return files_selected_item() >= 0;
     case ACT_OPEN_WITH_MENU:

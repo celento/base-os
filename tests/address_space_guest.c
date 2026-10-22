@@ -129,8 +129,8 @@ void feature_test(void){
     as_baseline=initial.total;as_check(as_baseline==797||as_baseline==1021,"AS default/large real pool");as_checkpoint("baseline");
     if(as_file("/Documents/as-complete.txt")>=0){as_exact_files();as_checkpoint("reboot");platform_log("ADDRESS-SPACE-REBOOT-PASS\n");return;}
     as_check(!fs_sync(),"AS initial sync");
-    int app=as_file("/Programs/address-space.bex"),big=as_file("/Programs/address-large.bex");
-    int counter=as_file("/Programs/counter.bex"),notebook=as_file("/Programs/notebook.bex");
+    int app=as_file("/Scripts/address-space.bex"),big=as_file("/Scripts/address-large.bex");
+    int counter=as_file("/Scripts/counter.bex"),notebook=as_file("/Scripts/notebook.bex");
     as_check(app>=0&&big>=0&&counter>=0&&notebook>=0,"AS fixture apps missing");
     ProcessHandle first=as_launch(5,app,1);as_until(5,2,1);as_checkpoint("one-filled");
     ProcessHandle second=as_launch(1,app,1);as_until(1,2,1);as_checkpoint("both-filled-barrier");
@@ -139,7 +139,7 @@ void feature_test(void){
     as_launch(3,counter,0);as_step(3);as_checkpoint("mixed-frozen-bex1");
     as_check(process_key(first,'v')&&process_key(second,'v'),"AS verify keys");
     as_until(5,2,2);as_until(1,2,2);as_until(5,14,as_reports[5][14]+2);
-    int fpu_a=as_file("/Programs/fpu-a.bex"),fpu_b=as_file("/Programs/fpu-b.bex");
+    int fpu_a=as_file("/Scripts/fpu-a.bex"),fpu_b=as_file("/Scripts/fpu-b.bex");
     as_check(fpu_a>=0&&fpu_b>=0,"AS normal x87 apps missing");
     as_launch(2,fpu_a,0);as_launch(4,fpu_b,0);as_checkpoint("mixed-x87-owners");
     for(int i=0;i<20;i++){

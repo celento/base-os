@@ -29,7 +29,7 @@ def writer(text):
 def seed(path):
     initialize(path)
     nodes = {ident: dict(parent=parent, name=name, directory=1, app=0, data=b'', modified=0)
-             for ident, parent, name in ((0, -1, ''), (1, 0, 'Documents'), (2, 0, 'Programs'))}
+             for ident, parent, name in ((0, -1, ''), (1, 0, 'Documents'), (2, 0, 'Scripts'))}
     header, payload = encode_snapshot(nodes, data_layout(), 1)
     raw = bytearray(path.read_bytes()); raw[512:1024] = header.ljust(512, b'\0')
     raw[1024:1024 + len(payload)] = payload; path.write_bytes(raw)

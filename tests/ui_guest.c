@@ -14,8 +14,8 @@ void feature_test(void){
         check_ui(!kstrcmp(window_state[1].doc.buf,"beta"),"restore beta");
         check_ui(!kstrcmp(fs_data(fs_find_child(0,"alpha.txt")),"alpha"),"saved document preserved");
         check_ui(wins[0].x==0&&wins[1].x==fb_w/2,"restore snapped positions");
-        check_ui(window_state[2].cwd==fs_root()&&window_state[3].cwd==fs_find_child(0,"Programs"),"restore folder paths");
-        term_select(4);check_ui(term_cwd()==fs_find_child(0,"Programs"),"restore terminal cwd");
+        check_ui(window_state[2].cwd==fs_root()&&window_state[3].cwd==fs_find_child(0,"Scripts"),"restore folder paths");
+        term_select(4);check_ui(term_cwd()==fs_find_child(0,"Scripts"),"restore terminal cwd");
         check_ui(paint_pix[0]==17,"restore paint draft");
         platform_log("SESSION-RESTORE-PASS\n");return;
     }
@@ -41,7 +41,7 @@ void feature_test(void){
     win_arrange(0,1);win_arrange(1,2);check_ui(wins[0].x==0&&wins[0].w==fb_w/2&&wins[1].x==fb_w/2&&wins[1].x+wins[1].w==fb_w,"snap");
     int width=wins[1].w;win_arrange(1,0);check_ui(wins[1].maximized&&wins[1].w==fb_w+2,"maximize a snapped window");win_arrange(1,3);check_ui(!wins[1].maximized,"restore size");win_arrange(1,2);check_ui(wins[1].w==width,"resnap");
     platform_log("UI folders\n");
-    open_files(fs_root());open_files(fs_find_child(0,"Programs"));check_ui(window_state[2].cwd==0&&window_state[3].cwd!=0,"independent folders");
+    open_files(fs_root());open_files(fs_find_child(0,"Scripts"));check_ui(window_state[2].cwd==0&&window_state[3].cwd!=0,"independent folders");
     {Win *f=&wins[win_front()];int ix,iy,iw,ih;check_ui(files_item_rect(f->x,f->y,f->w,f->h,1,&ix,&iy,&iw,&ih),"second file is on screen");mouse_x=ix+iw/2;mouse_y=iy+ih/2;}
     handle_files_click(wins[win_front()].x,wins[win_front()].y,wins[win_front()].w,wins[win_front()].h);
     check_ui(fm_selected==1,"file rows match new header and spacing");
@@ -50,10 +50,10 @@ void feature_test(void){
     platform_log("UI properties\n");
     properties_id=fs_find_child(0,"alpha.txt");int prop=win_open(WK_PROPERTIES);draw_ui();win_close(prop);
     platform_log("UI terminal\n");
-    open_term();command_ui("cd /Programs");command_ui("run demo.sh");command_ui("cd /Programs");command_ui("basic demo.bas");check_ui(term_canvas()!=0,"BASIC canvas");
+    open_term();command_ui("cd /Scripts");command_ui("run demo.sh");command_ui("cd /Scripts");command_ui("basic demo.bas");check_ui(term_canvas()!=0,"BASIC canvas");
     platform_log("UI native\n");
     command_ui("exec hello.bex");check_ui(!kstrcmp(term_get(term_count()-1),"Program finished."),"native terminal execution");
-    open_term();command_ui("echo second terminal");term_select(4);check_ui(term_cwd()==fs_find_child(0,"Programs"),"independent terminal cwd");context_set(win_front());
+    open_term();command_ui("echo second terminal");term_select(4);check_ui(term_cwd()==fs_find_child(0,"Scripts"),"independent terminal cwd");context_set(win_front());
     platform_log("UI paint\n");
     open_paint();paint_init();history_record(&paint_history,paint_pix);paint_pix[0]=17;paint_undo(0);check_ui(paint_pix[0]!=17,"paint undo");paint_undo(1);check_ui(paint_pix[0]==17,"paint redo");
     int pictures=fs_find_child(fs_root(),"Pictures");

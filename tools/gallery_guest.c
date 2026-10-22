@@ -61,12 +61,12 @@ void feature_test(void) {
 
     gallery_clear();
     const char *program="10 REM Colored columns\n20 LET A=0\n30 RECT A,0,10,100,A+112\n40 LET A=A+10\n50 IF A < 160 THEN 30\n60 PRINT \"Hello from Tiny BASIC\"\n70 PRINT \"Canvas: 160 x 100\"\n80 END\n";
-    int dir=fs_find_child(fs_root(),"Programs"),file=fs_create(dir,"colors.bas");
+    int dir=fs_find_child(fs_root(),"Scripts"),file=fs_create(dir,"colors.bas");
     fs_write(file,program,kstrlen(program));
     open_edit();gallery_place(285,100,555,450);
     const char *q=program;while(*q)edit_insert(*q++);edit_file=file;edit_saved_ok=1;
     open_term();gallery_place(700,210,550,420);
-    gallery_command("basic /Programs/colors.bas");gallery_show(2);
+    gallery_command("basic /Scripts/colors.bas");gallery_show(2);
 
     gallery_clear();
     win_open(WK_2048);g2048_new(37);gallery_place(830,190,0,0);

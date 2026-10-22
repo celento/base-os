@@ -130,7 +130,7 @@ def run_profile(build, work, profile, song, reference):
             session.launch('terminal')
             session.wait(lambda: files.front()['kind'] == 11, 'native Terminal launch is focused')
             native_slot = files.front()['slot']
-            session.text('start /Programs/counter.bex'); session.key('ret')
+            session.text('start /Scripts/counter.bex'); session.key('ret')
             session.wait(lambda: terminal.terminal(native_slot)['canvas_on'] == 1, 'native counter is running')
             report_path = f'/Documents/counter-{native_slot + 1}.txt'
             event('protected native counter is running beside large audio')

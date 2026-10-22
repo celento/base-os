@@ -116,10 +116,10 @@ class LargerMemoryTests(unittest.TestCase):
             apps = {'counter.bex': b'frozen bytes'}
             documents = {name.rsplit('/', 1)[1]: data for name, data in gate.expected_files().items()}
             gate.desktop.seed_disk(disk, 'default', apps, documents, dict(init_data=init_data, volume=volume))
-            report = dict(original_files={'/Programs/counter.bex': dict(bytes=12, sha256=hashlib.sha256(b'frozen bytes').hexdigest())})
+            report = dict(original_files={'/Scripts/counter.bex': dict(bytes=12, sha256=hashlib.sha256(b'frozen bytes').hexdigest())})
             output = gate.validate_stopped(disk, report, volume)
             self.assertEqual(output['/Documents/counter-4.txt']['bytes'], 3)
-            report['original_files']['/Programs/counter.bex']['bytes'] = 13
+            report['original_files']['/Scripts/counter.bex']['bytes'] = 13
             with self.assertRaisesRegex(AssertionError, 'Original frozen'):
                 gate.validate_stopped(disk, report, volume)
 

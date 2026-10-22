@@ -124,7 +124,7 @@ class AddressSpaceInputTests(unittest.TestCase):
                 nodes = seed_disk(path, profile, apps, documents, modules)
                 self.assertEqual(volume.load(path.read_bytes())[2], nodes)
                 self.assertEqual(path.stat().st_size, volume.data_layout(profile).sectors * 512)
-                for parent, entries in (('Programs', apps), ('Documents', documents)):
+                for parent, entries in (('Scripts', apps), ('Documents', documents)):
                     for name, expected in entries.items():
                         self.assertEqual(nodes[volume.resolve(nodes, '/' + parent + '/' + name)]['data'], expected)
                 with self.assertRaises(ValueError):
@@ -149,7 +149,7 @@ class AddressSpaceInputTests(unittest.TestCase):
     def test_stopped_validation_requires_exact_saved_bytes_and_unchanged_inputs(self):
         apps = {'counter.bex': b'frozen bytes'}
         documents = {'workspace-array-2.txt': b'report\n', 'source.txt': b'original\n'}
-        report = dict(original_files={'/Programs/counter.bex': dict(bytes=12, sha256=hashlib.sha256(apps['counter.bex']).hexdigest())})
+        report = dict(original_files={'/Scripts/counter.bex': dict(bytes=12, sha256=hashlib.sha256(apps['counter.bex']).hexdigest())})
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / 'default.img'
             seed_disk(path, 'default', apps, documents, dict(init_data=init_data, volume=volume))
@@ -157,7 +157,7 @@ class AddressSpaceInputTests(unittest.TestCase):
             self.assertEqual(result['/Documents/workspace-array-2.txt']['text'], 'report\n')
             with self.assertRaises(AssertionError):
                 validate_stopped_files(path, report, {'/Documents/workspace-array-2.txt': b'wrong\n'}, volume)
-            report['original_files']['/Programs/counter.bex']['bytes'] = 1
+            report['original_files']['/Scripts/counter.bex']['bytes'] = 1
             with self.assertRaises(AssertionError):
                 validate_stopped_files(path, report, {}, volume)
 

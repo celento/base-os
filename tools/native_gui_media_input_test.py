@@ -169,7 +169,7 @@ def prepare(build, output, build_log):
             folder = output/profile; folder.mkdir()
             disk, nodes, details = fixture(folder, profile, song, output/'snap-probe.bex')
             ident = next(i for i in range(data_layout(profile).node_limit) if i not in nodes)
-            nodes[ident] = dict(parent=resolve(nodes, '/Programs'), name='pointer-window.bex', directory=0,
+            nodes[ident] = dict(parent=resolve(nodes, '/Scripts'), name='pointer-window.bex', directory=0,
                                app=0, data=(output/'pointer-window.bex').read_bytes(), modified=123400+ident)
             header, payload = encode_snapshot(nodes, data_layout(profile), 1)
             raw = bytearray(disk.read_bytes()); offset = data_layout(profile).lbas[0]*512
