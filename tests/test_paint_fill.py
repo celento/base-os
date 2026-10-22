@@ -1,7 +1,6 @@
 """Ordinary Paint fills using current production input, flood and undo helpers."""
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import tempfile
