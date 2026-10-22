@@ -361,7 +361,7 @@ void gui_draw_window(int x, int y, int w, int h, const char *title,
 }
 
 static void draw_button_styled(int x, int y, int w, int h, const char *label, int primary) {
-    kit_button(x, y, w, h, label, -1, primary ? KB_PRIMARY : KB_DEFAULT, ctl_state(x, y, w, h));
+    kit_button(x, y, w, h, label, -1, primary ? KB_PRIMARY : KB_DEFAULT, ctl_state(x, y, w, h) | (primary ? KIT_DEFAULT : 0));
 }
 
 void draw_button(int x, int y, int w, int h, const char *label) {
@@ -927,7 +927,6 @@ static uint32_t frame_count = 0;
 
 static int alt_down;
 /* Draw a label with its mnemonic underlined while Alt is held. */
-static int menu_by_key;  /* menus opened from the keyboard show mnemonics */
 static void draw_mnemonic(const char *label, int x, int y, uint8_t ink, int maxw, int show) {
     char t[96];
     int mn;
@@ -952,19 +951,8 @@ static void draw_popup(const Popup *p) {
         int en = act_enabled(it->act);
         int st = (i == p->sel ? KIT_HOVER : 0) | (en ? 0 : KIT_DISABLED) |
                  ((it->flags & (KIT_MENU_CHECK | KIT_MENU_RADIO)) && act_checked(it->act) ? KIT_ON : 0);
-        char t[96];
-        int mn;
-        mi_text(it->label, t, sizeof t, &mn);
-        kit_menu_item(p->x, y, p->w, t, it->key, it->flags, st);
-        if ((alt_down || menu_by_key) && mn >= 0) {
-            char pre[96];
-            for (int k = 0; k < mn; k++) pre[k] = t[k];
-            pre[mn] = 0;
-            char one[2] = {t[mn], 0};
-            int lx = p->x + (MODERN ? 36 : 28) + ui_string_w(pre);
-            draw_hline(lx, y + kit_ty(0, MENU_ROW) + 15, ui_string_w(one),
-                       (i == p->sel && en) ? TK_ON_ACCENT : en ? TK_TEXT : TK_LINE_STRONG);
-        }
+        /* Items always underline their access letter, as in the design. */
+        kit_menu_item(p->x, y, p->w, it->label, it->key, it->flags, st);
     }
 }
 
@@ -4526,7 +4514,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         break;
     case WK_ABOUT:
         *w = 460;
-        *h = 260;
+        *h = MODERN ? 280 : 260;
         break;
     case WK_SETTINGS:
         *w = 800;
@@ -5692,7 +5680,10 @@ static void chooser_layout(Chooser *c, int x, int y, int w, int h, int band, int
 }
 
 static int chooser_cols(void) { return pick_save ? FL_DATE : FL_SIZE | FL_DATE; }
-static int chooser_row_w(const Chooser *c) { return c->list_w - (pick_count > c->rows ? SB : 0); }
+/* Modern rows sit 2px in from the list on both sides, so with kit_row's own
+ * 6px the selection is inset 8px left and right. */
+static int chooser_row_x(const Chooser *c) { return c->list_x + (MODERN ? 2 : 0); }
+static int chooser_row_w(const Chooser *c) { return c->list_w - (pick_count > c->rows ? SB : 0) - (MODERN ? 4 : 0); }
 static int chooser_right_w(void) { return pick_save ? kit_button_w("New Folder", UI_ICON_NEWF) : 168; }
 static int chooser_right_x(const Chooser *c) { return c->x + c->w - (MODERN ? 12 : 8) - chooser_right_w(); }
 static int chooser_ctl_y(const Chooser *c) { return c->tool_y + (c->tool_h - 1 - BTN_H) / 2; }
@@ -5744,10 +5735,10 @@ static void chooser_draw(const Chooser *c) {
         int id = pick_ids[i], state = 0;
         if (!od_row_enabled(id)) state = KIT_DISABLED;
         else if (i == pick_selected && i != warn) state = KIT_ON | (pick_focus ? KIT_UNFOCUSED : 0);
-        flist_row(c->list_x, y, rw, cols, id, state, i == warn);
+        flist_row(chooser_row_x(c), y, rw, cols, id, state, i == warn);
     }
     int nx, sx, dx;
-    flist_columns(c->list_x, rw, cols, &nx, &sx, &dx);
+    flist_columns(chooser_row_x(c), rw, cols, &nx, &sx, &dx);
     if (!pick_count && !pick_hidden)
         kit_text(pick_view.filter[0] ? "No matching names" : "This folder is empty", nx, kit_ty(y, ROW_H),
                  TK_TEXT2, rw - 24, 0);
@@ -5807,7 +5798,7 @@ static int chooser_click(const Chooser *c) {
         pick_scroll(mouse_y < c->rows_y + at ? -c->rows : c->rows, c->rows);
         return 1;
     }
-    if (!hit(mouse_x, mouse_y, c->list_x, c->rows_y, rw, c->foot_y - c->rows_y)) return 0;
+    if (!hit(mouse_x, mouse_y, chooser_row_x(c), c->rows_y, rw, c->foot_y - c->rows_y)) return 0;
     int i = pick_first + (mouse_y - c->rows_y) / ROW_H;
     if (i >= pick_count || i >= pick_first + c->rows) {
         if (pick_save) pick_selected = -1;
@@ -5903,7 +5894,7 @@ static void draw_open_dialog(void) {
     int can = id >= 0;
     kit_button(cx, oy, cw, BTN_H, "Cancel", -1, KB_DEFAULT, hot(cx, oy, cw, BTN_H) | (pick_focus == 1 ? KIT_FOCUS : 0));
     kit_button(ox, oy, ow, BTN_H, "Open", -1, KB_PRIMARY,
-               can ? hot(ox, oy, ow, BTN_H) | (pick_focus == 2 ? KIT_FOCUS : 0) : KIT_DISABLED);
+               can ? hot(ox, oy, ow, BTN_H) | (pick_focus != 1 ? KIT_DEFAULT : 0) : KIT_DISABLED);
 }
 
 static void start_open_dialog(int pics_only) {
@@ -6325,7 +6316,7 @@ static void draw_properties(int wx, int wy, int ww, int wh, int fl) {
     prop_buttons(wx, wy, ww, wh, &ok, &cancel, &by, &bw);
     if (valid && prop_editable(id))
         kit_button(cancel, by, bw, BTN_H, "Cancel", -1, KB_DEFAULT, hot(cancel, by, bw, BTN_H));
-    kit_button(ok, by, bw, BTN_H, "OK", -1, KB_PRIMARY, hot(ok, by, bw, BTN_H));
+    kit_button(ok, by, bw, BTN_H, "OK", -1, KB_PRIMARY, hot(ok, by, bw, BTN_H) | KIT_DEFAULT);
 }
 
 /* OK renames when the name changed; the window stays open on failure. */
@@ -7702,6 +7693,12 @@ static void menu_step(Popup *p, int dir) {
 
 /* Keys while a menu or the focused menu row is up. Returns 1 when used. */
 static int menu_key(void) {
+    /* A Ctrl shortcut leaves the menus and runs, as if they were closed
+     * (Ctrl itself and the other modifiers only change the state). */
+    if (ctrl_down && key_sc != 0x1D && key_sc != 0x2A && key_sc != 0x36 && key_sc != 0x38) {
+        menu_close();
+        return 0;
+    }
     if (open_menu == MENU_BAR) {
         menu_bar_init();
         if (key_sc == KEY_ESC || key_sc == 0x44) { menu_close(); return 1; }
@@ -8428,8 +8425,12 @@ static void namedlg_paper(int x, int y, int w, int i, int *px, int *py, int *pw,
     *pw = 132;
     *ph = 24;
 }
+/* The message line takes room only while there is a message (PDF keeps it,
+ * so its paper row stays put). */
+static int saveas_has_message(void);
 static int namedlg_band_h(void) {
-    return (MODERN ? 9 : 10) + BTN_H + 6 + namedlg_message_h() + (name_target == 6 ? 30 : 0) + (MODERN ? 10 : 8);
+    int msg = name_target == 6 || saveas_has_message() ? 6 + namedlg_message_h() : 0;
+    return (MODERN ? 9 : 10) + BTN_H + msg + (name_target == 6 ? 30 : 0) + (MODERN ? 10 : 8);
 }
 static int namedlg_foot_h(void) { return MODERN ? 56 : 48; }
 
@@ -8687,9 +8688,9 @@ static const char *saveas_title(void) {
            name_target == 3 ? "Export Rich Text" : name_target == 1 ? "Save Picture As" : "Save As";
 }
 
-/* Message line: errors, a name that exists, or a note about the type. */
-static void saveas_message(int x, int y, int w, int existing) {
-    char text[FS_NAME_LEN + 64];
+/* Message line: errors, a name that exists, or a note about the type.
+ * Returns 0 when there is nothing to say. */
+static const char *saveas_message_text(int existing, char *text, int *kind_out) {
     const char *message = 0;
     int kind = KIT_INFO;
     if (name_failed) {
@@ -8704,7 +8705,21 @@ static void saveas_message(int x, int y, int w, int existing) {
                 " already exists here. Saving will replace it." : " already exists here. Choose another name.");
         message = text; kind = KIT_WARN;
     } else if (name_target == 5) message = "Other apps may run formula-like CSV text.";
-    if (!message || !message[0]) return;
+    *kind_out = kind;
+    return message && message[0] ? message : 0;
+}
+
+static int saveas_has_message(void) {
+    char text[FS_NAME_LEN + 64];
+    int kind;
+    return saveas_message_text(saveas_existing(), text, &kind) != 0;
+}
+
+static void saveas_message(int x, int y, int w, int existing) {
+    char text[FS_NAME_LEN + 64];
+    int kind;
+    const char *message = saveas_message_text(existing, text, &kind);
+    if (!message) return;
     static const uint8_t fills[] = {TK_ACCENT_50, TK_AMBER_50, TK_RED_50, TK_GREEN_50};
     static const uint8_t inks[] = {TK_ACCENT_700, TK_AMBER_700, TK_RED_700, TK_GREEN_700};
     static const int icons[] = {UI_ICON_INFO_C, UI_ICON_WARN, UI_ICON_ERR, UI_ICON_OK};
@@ -8772,15 +8787,19 @@ static void draw_namedlg(void) {
     saveas_type_rect(&c, &ttx, &tty, &ttw);
     kit_text("Type", x + pad, kit_ty(tty, BTN_H), TK_TEXT, ttx - x - pad - 8, 0);
     int switchable = saveas_family_next(name_target) != name_target;
+    /* A single type is still the document's real type, so it reads as an
+     * enabled box; only the switchable families react to the pointer. */
     kit_dropdown(ttx, tty, ttw, BTN_H, saveas_types[name_target_valid() ? name_target : 0],
-                 switchable ? hot(ttx, tty, ttw, BTN_H) : KIT_DISABLED);
+                 switchable ? hot(ttx, tty, ttw, BTN_H) : 0);
     int sx, cx, by, bw;
     namedlg_buttons(x, y, w, h, &sx, &cx, &by, &bw);
     const char *action = name_target == 3 || name_target == 5 || pdf ? "Export" :
                          existing >= 0 && pick_ids[existing] == saveas_own_file() ? "Replace" : "Save";
     int stop = pdf ? 3 : 1;
     kit_button(cx, by, bw, BTN_H, "Cancel", -1, KB_DEFAULT, hot(cx, by, bw, BTN_H) | (name_focus == stop ? KIT_FOCUS : 0));
-    kit_button(sx, by, bw, BTN_H, action, -1, KB_PRIMARY, hot(sx, by, bw, BTN_H) | (name_focus == stop + 1 ? KIT_FOCUS : 0));
+    /* Enter saves from the name field and from the button itself. */
+    kit_button(sx, by, bw, BTN_H, action, -1, KB_PRIMARY,
+               hot(sx, by, bw, BTN_H) | (name_focus == 0 || name_focus == stop + 1 ? KIT_DEFAULT : 0));
 }
 
 static int namedlg_click(void) {
@@ -9686,6 +9705,7 @@ static void handle_key(void) {
 
     if(fk==WK_SETTINGS){ settings_key(); return; }
     if(fk==WK_PROPERTIES){ properties_key(); return; }
+    if (fk == WK_ABOUT && (key_sc == KEY_ENTER || key_sc == KEY_ESC)) { close_front(); return; }
     if (fk == WK_CALC) {
         /* Keys mirror the buttons; Esc still dismisses the window. */
         if (key_sc == KEY_ESC) { close_front(); return; }
@@ -10045,8 +10065,22 @@ static void about_lines(char lines[4][64]) {
     fmt_cat_uint(lines[3], (unsigned)(si.fs_cap / 1024)); fmt_cat(lines[3], " KB");
 }
 
+/* Modern puts OK on a footer band like the other dialogs; Classic keeps it
+ * on the content. */
+static int about_foot_h(void) { return MODERN ? 58 : 0; }
+static void about_ok_rect(int wx, int wy, int ww, int wh, int *bx, int *by, int *bw) {
+    *bw = 88;
+    if (MODERN) {
+        *bx = wx + ww - 16 - *bw;
+        *by = wy + wh - (about_foot_h() + BTN_H) / 2;
+    } else {
+        int pad = ui_theme.pad_dialog + 4;
+        *bx = wx + ww - pad - *bw;
+        *by = wy + wh - pad - BTN_H;
+    }
+}
+
 static void draw_about(int wx, int wy, int ww, int wh, int fl) {
-    (void)wh;
     gui_draw_window(wx, wy, ww, wh, "About BaseOS", 0, fl | WIN_NOMENU | WIN_DIALOG);
     int top = wy + TITLE_BAR, pad = ui_theme.pad_dialog + 4;
     ui_icon_draw(UI_ICON_LOGO, wx + pad, top + pad, 48, TK_ACCENT, ui_theme.content);
@@ -10057,12 +10091,15 @@ static void draw_about(int wx, int wy, int ww, int wh, int fl) {
     for (int i = 0; i < 4; i++)
         kit_text(lines[i], tx, ty + 24 + i * 20, TK_TEXT2, wx + ww - pad - tx, 0);
     kit_text("(C) 2026 CCG", tx, ty + 24 + 4 * 20 + 8, TK_TEXT2, wx + ww - pad - tx, 0);
-    int bw = 88, bh = BTN_H;
-    draw_default_button(wx + ww - pad - bw, wy + wh - pad - bh, bw, bh, "OK");
+    if (MODERN) dlg_footer(wx, ww, wy + wh - about_foot_h(), about_foot_h());
+    int bx, by, bw;
+    about_ok_rect(wx, wy, ww, wh, &bx, &by, &bw);
+    draw_default_button(bx, by, bw, BTN_H, "OK");
 }
 static void handle_about_click(int wx, int wy, int ww, int wh) {
-    int pad = ui_theme.pad_dialog + 4, bw = 88, bh = BTN_H;
-    if (hit(mouse_x, mouse_y, wx + ww - pad - bw, wy + wh - pad - bh, bw, bh)) close_front();
+    int bx, by, bw;
+    about_ok_rect(wx, wy, ww, wh, &bx, &by, &bw);
+    if (hit(mouse_x, mouse_y, bx, by, bw, BTN_H)) close_front();
 }
 
 /* ---------- Settings ----------
