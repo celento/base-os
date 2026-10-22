@@ -44,6 +44,7 @@ def desktop_input_defs(source):
 def desktop_input_kernel(source, function, names=()):
     """Gesture helpers, any extra named functions and the ordered adapter."""
     code = ''.join(function(source, name) for name in (
-        'input_gesture_ticks', 'double_click', 'win_resize_tick', 'win_snap_edges', 'saver_start') + tuple(names))
+        'input_gesture_ticks', 'double_click', 'win_resize_tick', 'win_snap_edges', 'saver_start',
+        'doc_client') + tuple(names))
     return code + block(source, '/* Desktop-only compatibility adapter',
                         '/* ---------- Shell contract (kernel/shell.h)', include_end=False)
