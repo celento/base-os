@@ -15,6 +15,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 from document_save_input_test import (ENTRY_BYTES, MANIFEST_LIMIT, MANIFEST_MAGIC,
     Session, StoppedDisk, WhiteUiText, expected_outputs, fixture, fnv, manifest_bytes, name_field_bounds,
+    name_fields, theme_metrics,
     native_sheet, native_writer,
     pending_generations, snapshot_jobs, verify_payloads)
 from init_data import initialize
@@ -204,22 +205,30 @@ class DocumentCollectorTest(unittest.TestCase):
         self.assertEqual(matcher.find(pixels, 'document.rtf', (32, 32, 32)), [])
 
     def test_filename_match_is_field_bounded_and_rejects_suffix_despite_ocr(self):
-        self.assertEqual(name_field_bounds(1280, 720), (452, 204, 828, 282))
+        # Classic (the default style): 640px dialog centered under no top bar;
+        # the PDF dialog is 34px taller, so its name field sits 17px higher.
+        self.assertEqual(name_fields(1280, 720), [(412, 125, 536, 26, 419, 129), (412, 108, 536, 26, 419, 112)])
+        self.assertEqual(name_field_bounds(1280, 720), (412, 108, 948, 151))
+        # Modern: 28px top bar, 40px header, 30px controls, 16px padding.
+        self.assertEqual(name_field_bounds(1280, 720, 'modern'), (412, 132, 944, 179))
+        ink = theme_metrics()['tokens']['TK_TEXT']
+        self.assertEqual(ink, (0x1B, 0x1F, 0x24))
         with tempfile.TemporaryDirectory() as temporary:
             session = Session.__new__(Session); session.directory = pathlib.Path(temporary)
             matcher = WhiteUiText(ROOT / 'src/kernel/font.h')
-            for word, x, expected in (('document.rtf', 464, True), ('document.rtfX', 464, False),
-                                      ('document.rtf', 40, False), ('Xdocument.rtf', 464, False)):
-                pixels = np.full((720, 1280, 3), 246, dtype=np.uint8)
-                template = matcher.template(word)
-                top = name_field_bounds(1280, 720)[1] + 8
-                pixels[top:top + template.shape[0], x:x + template.shape[1]][template] = (32, 32, 32)
-                path = session.directory / 'filename.png'; Image.fromarray(pixels).save(path)
-                event = dict(ocr='document.rtf', screenshot=str(path), dumped=12.125, pending_generations=[])
-                self.assertEqual(session.has_text(event, 'document.rtf'), expected)
-                self.assertEqual(event['ocr'], 'document.rtf')
-                self.assertEqual(event['glyph_matches'][0]['foreground_rgb'], [32, 32, 32])
-                self.assertEqual(event['glyph_matches'][0]['bounds'], [452, 204, 828, 282])
+            for row in (129, 112):
+                for word, x, y, expected in (('document.rtf', 419, row, True), ('document.rtfX', 419, row, False),
+                                             ('document.rtf', 40, row, False), ('Xdocument.rtf', 419, row, False),
+                                             ('document.rtf', 419, row + 1, False)):
+                    pixels = np.full((720, 1280, 3), 246, dtype=np.uint8)
+                    template = matcher.template(word)
+                    pixels[y:y + template.shape[0], x:x + template.shape[1]][template] = ink
+                    path = session.directory / 'filename.png'; Image.fromarray(pixels).save(path)
+                    event = dict(ocr='document.rtf', screenshot=str(path), dumped=12.125, pending_generations=[])
+                    self.assertEqual(session.has_text(event, 'document.rtf'), expected)
+                    self.assertEqual(event['ocr'], 'document.rtf')
+                    self.assertEqual(event['glyph_matches'][0]['foreground_rgb'], list(ink))
+                    self.assertEqual(event['glyph_matches'][0]['bounds'], [412, 108, 948, 151])
 
     def test_floppy_does_not_wait_for_async_markers(self):
         session = Session.__new__(Session)
