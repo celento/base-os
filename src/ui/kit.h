@@ -16,6 +16,7 @@
 #define KIT_MIXED    32
 #define KIT_ERROR    64
 #define KIT_UNFOCUSED 128 /* selection in a list that does not have focus */
+#define KIT_DEFAULT  256  /* the button Enter activates: draws the default ring */
 
 enum { KB_DEFAULT, KB_PRIMARY, KB_DANGER, KB_FLAT };
 
@@ -27,7 +28,8 @@ enum { KB_DEFAULT, KB_PRIMARY, KB_DANGER, KB_FLAT };
 
 /* Rounded shapes. aa paints the first pixel of each inset row as a mix with
  * whatever is already drawn; pass 0 for windows and menus over unknown
- * pixels. */
+ * pixels. Round shapes (radius 8 or more and at least half the height or
+ * width: circles, pills, knobs) are antialiased by pixel coverage instead. */
 void kit_fill(int x, int y, int w, int h, int r, uint8_t color, int aa);
 /* Fill plus a 1px border (border 0: none). */
 void kit_box(int x, int y, int w, int h, int r, uint8_t fill, uint8_t border);
@@ -37,7 +39,9 @@ void kit_fill_top(int x, int y, int w, int h, int r, uint8_t color);
 void kit_fill_bottom(int x, int y, int w, int h, int r, uint8_t color);
 int kit_inset(int r, int row);  /* pixels skipped at corner row `row` */
 /* Window and menu shadow: Classic draws 2px of TK_SHADOW right and below;
- * Modern draws two 2px bands below the shape. */
+ * Modern draws two 2px bands below the shape. A shadow never lightens what
+ * is under it, so it stays dark over dark content and drawing it twice
+ * gives the same pixels. */
 void kit_shadow(int x, int y, int w, int h, int r);
 /* Focus ring around a control box (Modern draws outside it). */
 void kit_focus(int x, int y, int w, int h, int r);
@@ -58,7 +62,8 @@ void kit_icon_button(int x, int y, int size, int icon, int state);
 /* Text field box; the caller draws the text. Returns the text x. */
 int kit_field(int x, int y, int w, int h, int state);
 /* Search field with a magnifier and, when filled, a clear button at the
- * right (kit_search_clear_x gives its x). */
+ * right (kit_search_clear_x gives its x). Modern draws it unfocused as a
+ * borderless sunken well and focused as a field with the focus ring. */
 int kit_search(int x, int y, int w, int h, const char *text, const char *placeholder, int state);
 int kit_search_clear_x(int x, int w);
 /* Dropdown box with its label and chevron. */
@@ -106,12 +111,15 @@ void kit_vseparator(int x, int y, int h);
 #define KIT_MENU_RADIO  2
 #define KIT_MENU_SUB    4
 #define KIT_MENU_SEP    8
+#define KIT_MENU_DANGER 0x40 /* Modern draws the label in the danger color */
 void kit_menu_frame(int x, int y, int w, int h);
 int kit_menu_pad(void);    /* padding above the first item */
 int kit_menu_sep_h(void);
+/* label may mark its access letter with '&' ("Save &As..."); the letter is
+ * underlined. */
 void kit_menu_item(int x, int y, int w, const char *label, const char *shortcut, int flags, int state);
 void kit_menu_sep(int x, int y, int w);
-int kit_menu_width(const char *label, const char *shortcut);
+int kit_menu_width(const char *label, const char *shortcut);  /* label without '&' */
 /* Status bar and toolbar strips (fill plus their rule). */
 void kit_statusbar(int x, int y, int w, int h);
 void kit_toolbar(int x, int y, int w, int h);
