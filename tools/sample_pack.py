@@ -29,9 +29,10 @@ EXTRA = {'Media/Sample/Harbor theme.mp3': ROOT / 'assets/examples/harbor.mp3',
 
 
 def default_files(root=SAMPLES):
-    """Every file under assets/samples plus EXTRA, sorted by path."""
+    """Every file in the */Sample folders of assets/samples plus EXTRA,
+    sorted by path. Other files there (README.md) are not samples."""
     files = {path.relative_to(root).as_posix(): path.read_bytes()
-             for path in root.rglob('*') if path.is_file()}
+             for path in root.glob('*/Sample/*') if path.is_file()}
     files.update({name: path.read_bytes() for name, path in EXTRA.items()})
     return dict(sorted(files.items()))
 
