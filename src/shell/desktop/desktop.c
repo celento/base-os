@@ -53,6 +53,7 @@
 #include "apps/wordle.h"
 #include "apps/term.h"
 #include "apps/todo.h"
+#include "apps/pane_chrome.h"
 #include "assets/cursor_art.h"
 
 #define CHAR_H         UI_FONT_H
@@ -3736,6 +3737,7 @@ static int snk_next_dir;
 static int snk_food_x;
 static int snk_food_y;
 static int snk_score;
+static int snk_best;   /* best score since boot */
 static int snk_over;
 static uint32_t snk_last_tick;
 static unsigned snk_rng;
@@ -3827,6 +3829,8 @@ static void snake_tick(void) {
     snk_y[0] = (unsigned char)ny;
     if (ate) {
         snk_score++;
+        if (snk_score > snk_best)
+            snk_best = snk_score;
         snk_place_food();
     }
     dirty = 1;
@@ -3843,6 +3847,10 @@ static void handle_snake_key(void) {
         close_front();
         return;
     }
+    if (snk_over && (key_sc == KEY_ENTER || key_sc == KEY_SPACE)) {
+        snake_reset();
+        return;
+    }
     if (key_sc == KEY_RIGHT)
         snake_turn(0);
     else if (key_sc == KEY_DOWN)
@@ -3853,44 +3861,56 @@ static void handle_snake_key(void) {
         snake_turn(3);
 }
 
-static void snake_info(char *out, int cap) {
-    const char *lbl = "Score: ";
-    char num[12];
-    int i = 0;
-    for (int p = 0; lbl[p] && i < cap - 1; p++)
-        out[i++] = lbl[p];
-    utoa((unsigned)snk_score, num);
-    for (int p = 0; num[p] && i < cap - 1; p++)
-        out[i++] = num[p];
-    if (snk_over) {
-        const char *go = "  GAME OVER";
-        for (int p = 0; go[p] && i < cap - 1; p++)
-            out[i++] = go[p];
-    }
-    out[i] = 0;
+/* Snake layout: a toolbar with the score and New game, the playfield, and
+ * a status bar. Drawing and clicks share snake_layout. */
+#define SNK_MARGIN 16
+typedef struct {
+    PaneRect field, again, card, card_button;
+    int cx, cy, cw, ch;
+} SnakeLayout;
+
+static void snake_layout(int wx, int wy, int ww, int wh, SnakeLayout *L) {
+    L->cx = wx + 1; L->cy = wy + TITLE_H; L->cw = ww - 2; L->ch = wh - TITLE_H - 1;
+    int body = pane_body_y(L->cy), bottom = pane_status_y(L->cy, L->ch);
+    int fw = SNK_COLS * SNK_CELL, fh = SNK_ROWS * SNK_CELL;
+    L->field = (PaneRect){L->cx + (L->cw - fw) / 2, body + (bottom - body - fh) / 2, fw, fh};
+    int bw = pane_tool_w("New game");
+    L->again = (PaneRect){L->cx + L->cw - pane_pad() - bw, pane_ctl_y(L->cy), bw, BTN_H};
+    pane_card_layout(L->field.x, L->field.y, fw, fh, &L->card, &L->card_button);
+}
+
+static int snake_window_h(void) {
+    return TITLE_H + pane_tool_h() - (MODERN ? 1 : 0) + 2 * SNK_MARGIN + SNK_ROWS * SNK_CELL +
+           pane_status_h() + 1;
 }
 
 static void draw_snake(int wx, int wy, int ww, int wh, int inactive) {
-    char info[32];
-    snake_info(info, 32);
-    gui_draw_window(wx, wy, ww, wh, "Snake", info,
-                    WIN_INFO | (inactive ? WIN_INACTIVE : 0));
-
-    int bx = wx + 1;
-    int by = wy + TITLE_H + INFO_H + 1;
-    int bw = ww - 2;
-    int bh = wh - TITLE_H - INFO_H - 2;
-    if (bw < 1 || bh < 1)
-        return;
+    gui_draw_window(wx, wy, ww, wh, "Snake", 0, inactive ? WIN_INACTIVE : 0);
+    SnakeLayout L;
+    snake_layout(wx, wy, ww, wh, &L);
+    PaneHot hp = inactive ? 0 : hot;
+    /* Toolbar: score, length and best, then New game. */
+    pane_toolbar(L.cx, L.cy, L.cw);
+    char num[12];
+    int x = L.cx + pane_pad() + 4, ty = pane_ctl_y(L.cy);
+    utoa((unsigned)snk_score, num);
+    x += pane_inline_stat(x, ty, BTN_H, "Score", num) + 20;
+    utoa((unsigned)snk_len, num);
+    x += pane_inline_stat(x, ty, BTN_H, "Length", num) + 20;
+    utoa((unsigned)snk_best, num);
+    pane_inline_stat(x, ty, BTN_H, "Best", num);
+    pane_tool(&L.again, ICON_REFRESH, "New game", KB_DEFAULT,
+              pane_hot(hp, L.again.x, L.again.y, L.again.w, L.again.h));
+    /* Playfield art: a dark board with a faint grid. */
+    PaneRect *f = &L.field;
     uint8_t field = gfx_rgb(0x16, 0x1A, 0x24);
     uint8_t grid = gfx_rgb(0x1E, 0x23, 0x30);
-    draw_rect(bx, by, bw, bh, field);
-
-    int gx = bx + (bw - SNK_COLS * SNK_CELL) / 2;
-    int gy = by + (bh - SNK_ROWS * SNK_CELL) / 2;
-    for (int r = 0; r <= SNK_ROWS; r++)
+    kit_fill(f->x - 1, f->y - 1, f->w + 2, f->h + 2, MODERN ? 8 : KIT_R_SQUARE, TK_LINE, 1);
+    kit_fill(f->x, f->y, f->w, f->h, MODERN ? 7 : KIT_R_SQUARE, field, 1);
+    int gx = f->x, gy = f->y;
+    for (int r = 1; r < SNK_ROWS; r++)
         draw_hline(gx, gy + r * SNK_CELL, SNK_COLS * SNK_CELL, grid);
-    for (int c = 0; c <= SNK_COLS; c++)
+    for (int c = 1; c < SNK_COLS; c++)
         draw_vline(gx + c * SNK_CELL, gy, SNK_ROWS * SNK_CELL, grid);
     for (int i = 0; i < snk_len; i++) {
         uint8_t body = (i == 0) ? TK_ACCENT_700 : ui_accent;
@@ -3899,6 +3919,24 @@ static void draw_snake(int wx, int wy, int ww, int wh, int inactive) {
     }
     draw_round_rect(gx + snk_food_x * SNK_CELL + 2, gy + snk_food_y * SNK_CELL + 2,
                     SNK_CELL - 4, SNK_CELL - 4, (SNK_CELL - 4) / 2, gfx_rgb(0xF0, 0x50, 0x48));
+    if (snk_over) {
+        shade_rect(f->x, f->y, f->w, f->h, 1);
+        char text[40];
+        utoa((unsigned)snk_score, num);
+        pane_join(text, sizeof text, "You scored ", num, snk_score == 1 ? " point." : " points.");
+        pane_card(&L.card, &L.card_button, "Game over", text, "Play again",
+                  pane_hot(hp, L.card_button.x, L.card_button.y, L.card_button.w, L.card_button.h));
+    }
+    pane_statusbar(L.cx, L.cy, L.cw, L.ch,
+                   snk_over ? "Enter or Space plays again; Esc closes" : "Arrow keys steer; Esc closes",
+                   TK_TEXT2, snk_over ? "Game over" : "Playing", snk_over ? TK_RED_700 : TK_TEXT2);
+}
+
+static void handle_snake_click(int wx, int wy, int ww, int wh) {
+    SnakeLayout L;
+    snake_layout(wx, wy, ww, wh, &L);
+    if (pane_hit(mouse_x, mouse_y, &L.again) || (snk_over && pane_hit(mouse_x, mouse_y, &L.card_button)))
+        snake_reset();
 }
 
 static void open_snake(void) {
@@ -4154,110 +4192,104 @@ static void open_term(void) {
 
 /* ---------- Todo ---------- */
 
-#define TODO_CIRCLE  12
-#define TODO_MARK_X  12
-#define TODO_LABEL_X 32
+/* Todo layout: a toolbar with the new-task field, Add and Save, the task
+ * rows with check boxes, and a status bar with the counts and the save
+ * state. Drawing and clicks share todo_layout. */
+typedef struct {
+    PaneRect field, add, save;
+    int cx, cw, list_y, rows;
+} TodoLayout;
 
-static void draw_todo_mark(int x, int y, int done) {
-    int s = TODO_CIRCLE + 4;
-    if (done) {
-        draw_round_rect(x - 2, y - 2, s, s, s / 2, ui_accent);
-        uint8_t w = ui_on_accent;
-        draw_line(x + 2, y + 6, x + 5, y + 9, w);
-        draw_line(x + 3, y + 6, x + 6, y + 9, w);
-        draw_line(x + 5, y + 9, x + 11, y + 3, w);
-        draw_line(x + 6, y + 9, x + 12, y + 3, w);
-    } else {
-        draw_round_rect(x - 2, y - 2, s, s, s / 2, INK(12));
-        draw_round_rect(x - 1, y - 1, s - 2, s - 2, s / 2 - 1, ui_field);
-    }
+static void todo_layout(int wx, int wy, int ww, int wh, TodoLayout *L) {
+    int cx = wx + 1, cy = wy + TITLE_H, cw = ww - 2, ch = wh - TITLE_H - 1;
+    int pad = pane_pad(), y = pane_ctl_y(cy), sw = pane_tool_w("Save"), aw = kit_button_w("Add", -1);
+    L->cx = cx; L->cw = cw;
+    L->save = (PaneRect){cx + cw - pad - sw, y, sw, BTN_H};
+    L->add = (PaneRect){L->save.x - 10 - aw, y, aw, BTN_H};
+    L->field = (PaneRect){cx + pad, y, L->add.x - 8 - cx - pad, BTN_H};
+    L->list_y = pane_body_y(cy) + (MODERN ? 6 : 4);
+    int n = (pane_status_y(cy, ch) - 4 - L->list_y) / ROW_H;
+    L->rows = n < 0 ? 0 : n > TODO_MAX ? TODO_MAX : n;
 }
 
-static void todo_field_box(int wx, int wy, int ww, int wh,
-                           int *fx, int *fy, int *fw, int *fh) {
-    *fx = wx + 12;
-    *fy = wy + wh - TODO_FOOT_H + 8;
-    *fw = ww - 100;
-    *fh = 24;
-}
-
-static int todo_rows_fit(int wh) {
-    int room = wh - TITLE_H - 8 - TODO_FOOT_H;
-    int n = room / TODO_ROW_H;
-    if (n > TODO_MAX)
-        n = TODO_MAX;
-    return n < 0 ? 0 : n;
+/* Default height: every task row fits. */
+static int todo_window_h(void) {
+    return TITLE_H + pane_tool_h() - (MODERN ? 1 : 0) + (MODERN ? 6 : 4) + TODO_MAX * ROW_H + 4 +
+           pane_status_h() + 1;
 }
 
 static void draw_todo(int wx, int wy, int ww, int wh, int inactive) {
     gui_draw_window(wx, wy, ww, wh, "Todo", 0, inactive ? WIN_INACTIVE : 0);
-    draw_rect(wx + 1, wy + TITLE_H + 1, ww - 2, wh - TITLE_H - 2, ui_body);
-
-    int rows = todo_rows_fit(wh);
-    int n = todo_count();
-    if (n > rows)
-        n = rows;
-    if (!n) {
-        const char *empty = "No tasks yet", *hint = "Type below and press Enter to add one.";
-        int my = wy + TITLE_H + (wh - TITLE_H - TODO_FOOT_H) / 2 - CHAR_H;
-        draw_string_bold(empty, wx + (ww - uib_string_w(empty)) / 2, my, ui_text);
-        draw_string(hint, wx + (ww - ui_string_w(hint)) / 2, my + CHAR_H + 6, ui_text_dim);
-    }
-    for (int i = 0; i < n; i++) {
-        int ry = wy + TITLE_H + 8 + i * TODO_ROW_H;
-        draw_todo_mark(wx + TODO_MARK_X, ry + (TODO_ROW_H - TODO_CIRCLE) / 2,
-                       todo_done(i));
-        draw_string_clip(todo_text(i), wx + TODO_LABEL_X,
-                         ry + (TODO_ROW_H - CHAR_H) / 2,
-                         todo_done(i) ? ui_text_dim : ui_text, wx + ww - 12);
-        if (todo_done(i))
-            draw_hline(wx + TODO_LABEL_X, ry + TODO_ROW_H / 2,
-                       ui_string_w(todo_text(i)), ui_text_dim);
-    }
-
-    int ruley = wy + wh - TODO_FOOT_H;
-    draw_rect(wx, ruley, ww, TODO_FOOT_H, ui_chrome);
-    draw_hline(wx, ruley, ww, ui_chrome_dk);
-
-    int fx, fy, fw, fh;
-    todo_field_box(wx, wy, ww, wh, &fx, &fy, &fw, &fh);
-    tool_button(wx+ww-76, fy, 64, fh, ICON_SAVE, 0, TB_NORMAL);
-    draw_string_clip(todo_status(), wx+12, ruley+37, ui_text_dim, wx+ww-12);
-    int active = todo_field_active();
-    draw_round_rect(fx, fy, fw, fh, 5, active ? ui_accent : ui_border);
-    draw_round_rect(fx + 1, fy + 1, fw - 2, fh - 2, 4, ui_field);
-
+    TodoLayout L;
+    todo_layout(wx, wy, ww, wh, &L);
+    int cy = wy + TITLE_H, ch = wh - TITLE_H - 1, n = todo_count();
+    PaneHot hp = inactive ? 0 : hot;
+    /* Toolbar: field, Add, Save. */
+    pane_toolbar(L.cx, cy, L.cw);
+    int active = todo_field_active() && !inactive, full = n >= TODO_MAX;
     const char *txt = todo_field();
-    int ty = fy + (fh - CHAR_H) / 2;
-    if (txt[0])
-        draw_string_clip(txt, fx + 8, ty, ui_text, fx + fw - 6);
-    else
-        draw_string_clip("Add a task and press Enter", fx + 8, ty, ui_text_dim, fx + fw - 6);
-    if (active) {
-        int cx = fx + 8 + ui_string_w(txt);
-        if (cx < fx + fw - 6)
-            draw_rect(cx, fy + 4, 1, fh - 8, ui_text);
+    PaneRect *f = &L.field;
+    int tx = kit_field(f->x, f->y, f->w, f->h, active ? KIT_FOCUS : 0), ty = kit_ty(f->y, f->h);
+    int room = f->x + f->w - (MODERN ? 10 : 6) - tx, start = 0;
+    while (txt[start] && kit_text_w(txt + start, 0) > room - 2) start++;
+    if (txt[0]) kit_text(txt + start, tx, ty, TK_TEXT, room, 0);
+    else kit_text(full ? "The list is full" : "Add a task", tx, ty, TK_TEXT2, room, 0);
+    if (active && ((frame_count / 35) & 1) == 0) kit_caret(tx + kit_text_w(txt + start, 0), ty);
+    int can_add = txt[0] && !full;
+    kit_button(L.add.x, L.add.y, L.add.w, L.add.h, "Add", -1, KB_PRIMARY,
+               can_add ? pane_hot(hp, L.add.x, L.add.y, L.add.w, L.add.h) : KIT_DISABLED);
+    kit_vseparator(L.save.x - 5, L.save.y + 4, L.save.h - 8);
+    pane_tool(&L.save, ICON_SAVE, "Save", KB_DEFAULT, pane_hot(hp, L.save.x, L.save.y, L.save.w, L.save.h));
+    /* Rows */
+    int shown = n < L.rows ? n : L.rows, done = 0, pad = pane_pad();
+    for (int i = 0; i < n; i++) done += todo_done(i) != 0;
+    for (int i = 0; i < shown; i++) {
+        int ry = L.list_y + i * ROW_H, d = todo_done(i);
+        int state = pane_hot(hp, L.cx, ry, L.cw, ROW_H);
+        uint8_t ink = kit_row(L.cx, ry, L.cw, ROW_H, state);
+        int bx = L.cx + pad + (MODERN ? 6 : 0), lx = bx + ui_theme.check + 10;
+        kit_check(bx, ry + (ROW_H - ui_theme.check) / 2, d ? KIT_ON : 0);
+        const char *s = todo_text(i);
+        int lw = kit_text(s, lx, kit_ty(ry, ROW_H), d ? TK_TEXT2 : ink, L.cx + L.cw - pad - lx, 0);
+        if (d) draw_hline(lx, ry + ROW_H / 2, lw, TK_TEXT2);
     }
+    if (!n) {
+        int my = L.list_y + (pane_status_y(cy, ch) - L.list_y) / 2 - UI_FONT_H;
+        kit_text_center("No tasks yet", L.cx, my, L.cw, TK_TEXT, 1);
+        kit_text_center("Type a task above and press Enter.", L.cx, my + UI_FONT_H + 4, L.cw, TK_TEXT2, 0);
+    }
+    /* Status bar: counts, then the save state. */
+    char left[48], a[12], b[12];
+    pane_num(a, (unsigned)n);
+    pane_num(b, (unsigned)done);
+    pane_join(left, sizeof left, a, n == 1 ? " task, " : " tasks, ", b);
+    pane_append(left, sizeof left, full ? " done (list full)" : " done");
+    pane_statusbar(L.cx, cy, L.cw, ch, left, TK_TEXT2, todo_status(), TK_TEXT2);
 }
 
 static void handle_todo_click(int wx, int wy, int ww, int wh) {
-    int fx, fy, fw, fh;
-    todo_field_box(wx, wy, ww, wh, &fx, &fy, &fw, &fh);
-    if(hit(mouse_x,mouse_y,wx+ww-76,fy,64,fh)){
+    TodoLayout L;
+    todo_layout(wx, wy, ww, wh, &L);
+    if (pane_hit(mouse_x, mouse_y, &L.save)) {
         todo_retry_save();dirty=1;return;
     }
-    if (hit(mouse_x, mouse_y, fx, fy, fw, fh)) {
+    if (pane_hit(mouse_x, mouse_y, &L.add)) {
+        todo_focus_field();
+        todo_field_enter();
+        dirty = 1;
+        return;
+    }
+    if (pane_hit(mouse_x, mouse_y, &L.field)) {
         todo_focus_field();
         dirty = 1;
         return;
     }
-    int rows = todo_rows_fit(wh);
     int n = todo_count();
-    if (n > rows)
-        n = rows;
+    if (n > L.rows)
+        n = L.rows;
     for (int i = 0; i < n; i++) {
-        int ry = wy + TITLE_H + 8 + i * TODO_ROW_H;
-        if (hit(mouse_x, mouse_y, wx + 1, ry, ww - 2, TODO_ROW_H)) {
+        int ry = L.list_y + i * ROW_H;
+        if (hit(mouse_x, mouse_y, L.cx, ry, L.cw, ROW_H)) {
             todo_toggle(i);
             dirty = 1;
             return;
@@ -4520,11 +4552,11 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *w=IMAGE_VIEWER_W+2;*h=IMAGE_VIEWER_H+TITLE_H+2;break;
     case WK_SNAKE:
         *w = 520;
-        *h = 400;
+        *h = snake_window_h();
         break;
     case WK_WORDLE:
-        *w = WORDLE_W;
-        *h = WORDLE_WIN_H;
+        *w = WORDLE_W + 2;
+        *h = TITLE_H + wordle_client_h() + 1;
         break;
     case WK_TERM:
         *w = TERM_WIN_W;
@@ -4532,27 +4564,27 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         break;
     case WK_TODO:
         *w = TODO_W;
-        *h = TODO_WIN_H;
+        *h = todo_window_h();
         break;
     case WK_CLOCK:
-        *w = CLOCK_W;
-        *h = CLOCK_H + TITLE_H;
+        *w = CLOCK_W + 2;
+        *h = CLOCK_H + TITLE_H + 1;
         break;
     case WK_CAL:
-        *w = CAL_W;
-        *h = CAL_H + TITLE_H;
+        *w = CAL_W + 2;
+        *h = CAL_H + TITLE_H + 1;
         break;
     case WK_MINES:
-        *w = MINES_W;
-        *h = MINES_H + TITLE_H;
+        *w = MINES_W + 2;
+        *h = TITLE_H + mines_client_h() + 1;
         break;
     case WK_2048:
-        *w = G2048_W;
-        *h = G2048_H + TITLE_H;
+        *w = G2048_W + 2;
+        *h = TITLE_H + g2048_client_h() + 1;
         break;
     case WK_BREAKOUT:
-        *w = BO_W;
-        *h = BO_H + TITLE_H;
+        *w = BO_CLIENT_W + 2;
+        *h = TITLE_H + bo_client_h() + 1;
         break;
     case WK_SYSMON:
         *w = SYSMON_W;
@@ -4565,8 +4597,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     }
     /* These sizes predate the window menu strip; give back its height so the
      * content keeps its original bottom margin. */
-    if (kind == WK_CALC || kind == WK_SNAKE ||
-        kind == WK_WORDLE || kind == WK_TERM || kind == WK_TODO || kind == WK_PAINT)
+    if (kind == WK_CALC || kind == WK_TERM || kind == WK_PAINT)
         *h += WMENU_H;
     int maxh = fb_h - MENUBAR_H - TASKBAR_H - 8;
     if (*w > fb_w - 24)
@@ -6414,7 +6445,7 @@ static void draw_window_contents(Win *w, int inactive) {
         draw_snake(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_WORDLE) {
         gui_draw_window(wx, wy, ww, wh, "Wordle", 0, fl);
-        wordle_draw(wx, wy + TITLE_H);
+        wordle_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_TERM) {
         draw_term(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_NATIVE) {
@@ -6423,19 +6454,19 @@ static void draw_window_contents(Win *w, int inactive) {
         draw_todo(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_CLOCK) {
         gui_draw_window(wx, wy, ww, wh, "Clock", 0, fl);
-        clock_draw(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1);
+        clock_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1);
     } else if (w->kind == WK_CAL) {
         gui_draw_window(wx, wy, ww, wh, "Calendar", 0, fl);
-        cal_draw(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1);
+        cal_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_MINES) {
         gui_draw_window(wx, wy, ww, wh, "Minesweeper", 0, fl);
-        mines_draw(wx, wy + TITLE_H + 1);
+        mines_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_2048) {
         gui_draw_window(wx, wy, ww, wh, "2048", 0, fl);
-        g2048_draw(wx, wy + TITLE_H + 1);
+        g2048_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_BREAKOUT) {
         gui_draw_window(wx, wy, ww, wh, "Breakout", 0, fl);
-        bo_draw(wx, wy + TITLE_H + 1);
+        bo_draw(wx + 1, wy + TITLE_H, ww - 2, wh - TITLE_H - 1, inactive ? 0 : hot);
     } else if (w->kind == WK_SPREADSHEET || w->kind == WK_WRITER) {
         int sheet = w->kind == WK_SPREADSHEET, cx, cy, cw, ch;
         chrome_dirty = sheet ? spreadsheet_dirty() : writer_dirty();
@@ -7239,6 +7270,12 @@ static void menu_activate(int m, int item) {
                 snake_reset();
             } else if (front_kind() == WK_WORDLE) {
                 wordle_new_game(frame_count);
+            } else if (front_kind() == WK_MINES) {
+                mines_new(frame_count);
+            } else if (front_kind() == WK_2048) {
+                g2048_new(frame_count);
+            } else if (front_kind() == WK_BREAKOUT) {
+                bo_new();
             } else if (front_kind() == WK_CAL) {
                 cal_new();dirty=1;
             } else if (front_kind() == WK_TODO) {
@@ -9027,7 +9064,7 @@ static void handle_rclick(void) {
             return;
         }
         if (w->kind == WK_MINES) {
-            if (mines_click(w->x, w->y + TITLE_H + 1, mouse_x, mouse_y, 1)) dirty = 1;
+            if (mines_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y, 1)) dirty = 1;
             return;
         }
         if (w->kind == WK_FILES && mouse_y >= w->y + TITLE_H) {
@@ -9100,8 +9137,10 @@ static void window_body_click(int i) {
         handle_properties_click(w->x, w->y, w->w, w->h);
     else if (w->kind == WK_PAINT)
         handle_paint_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_SNAKE)
+        handle_snake_click(w->x, w->y, w->w, w->h);
     else if (w->kind == WK_WORDLE) {
-        if (wordle_click(w->x, w->y + TITLE_H, mouse_x, mouse_y)) dirty = 1;
+        if (wordle_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y, frame_count)) dirty = 1;
     } else if (w->kind == WK_VIEW) {
         int cx, cy, cw, ch;
         app_client(w->x, w->y, w->w, w->h, 1, &cx, &cy, &cw, &ch);
@@ -9127,12 +9166,13 @@ static void window_body_click(int i) {
     } else if (w->kind == WK_TODO)
         handle_todo_click(w->x, w->y, w->w, w->h);
     else if (w->kind == WK_CAL) {
-        if (cal_click(w->x, w->y + TITLE_H + 1, w->w, mouse_x, mouse_y)) dirty = 1;
+        if (cal_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_MINES) {
-        if (mines_click(w->x, w->y + TITLE_H + 1, mouse_x, mouse_y, shift_down)) dirty = 1;
+        if (mines_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y, shift_down)) dirty = 1;
+    } else if (w->kind == WK_2048) {
+        if (g2048_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_BREAKOUT) {
-        bo_click();
-        dirty = 1;
+        if (bo_click(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_SYSMON) {
         SysInfo si;
         int cx, cy, cw, ch;
@@ -9677,6 +9717,11 @@ static void handle_key(void) {
     if (fk == WK_WORDLE) {
         if (key_sc == KEY_ESC) {
             close_front();
+            return;
+        }
+        if (key_sc == KEY_ENTER && wordle_over()) {
+            wordle_new_game(frame_count);
+            dirty = 1;
             return;
         }
         int act = WORDLE_ACT_NONE;
