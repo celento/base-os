@@ -45,6 +45,7 @@ int fs_is_dir(int file){(void)file;return 0;}
 int fs_is_app(int file){(void)file;return 0;}
 unsigned fs_identity(int file){return file==1?9:0;}
 const char *fs_data(int file){assert(file==1);return file_bytes;}
+int fs_streamed(int id){(void)id;return 0;}
 int fs_size(int file){assert(file==1);return sizeof file_bytes;}
 const char *fs_name(int file){assert(file==1);return filename;}
 void term_write_at(int slot,const char *text){assert(text);term_lines[slot]++;app_view_mark(slot,APP_VIEW_TEXT);}

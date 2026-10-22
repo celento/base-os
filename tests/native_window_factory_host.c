@@ -26,6 +26,7 @@ int fs_is_dir(int id){return id==0;}
 int fs_is_app(int id){(void)id;return 0;}
 unsigned fs_identity(int id){return fs_valid(id)?(unsigned)id+8:0;}
 const char *fs_data(int id){assert(fs_valid(id));return (const char *)(id==1?gui_file:hosted_file);}
+int fs_streamed(int id){(void)id;return 0;}
 int fs_size(int id){assert(fs_valid(id));return id==1?sizeof gui_file:sizeof hosted_file;}
 const char *fs_name(int id){assert(fs_valid(id));return id==1?"window.bex":"hosted.bex";}
 int fs_parent(int id){assert(fs_valid(id));return 0;}

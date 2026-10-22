@@ -249,6 +249,15 @@ void bfs_discard(BfsVolume *volume, const BfsExtent *extents, uint32_t count) {
             }
 }
 
+uint32_t bfs_drop(BfsVolume *volume, const BfsExtent *extents, uint32_t count) {
+    uint32_t committed = 0;
+    for (uint32_t e = 0; e < count; ++e)
+        for (uint32_t b = extents[e].start; b < extents[e].start + extents[e].blocks; ++b)
+            if (b < volume->blocks && bfsi_bit(volume->used, b)) ++committed;
+    bfs_discard(volume, extents, count);
+    return committed;
+}
+
 int bfs_allocate(BfsVolume *volume, uint64_t size, BfsExtent **extents, uint32_t *count) {
     *extents = 0;
     *count = 0;

@@ -47,11 +47,20 @@ void large_volume_guest(void) {
     fs_init(); int loaded = fs_load_disk();
     platform_log("LARGE-VOLUME-TEST-START\n");
 #if LARGE_VOLUME_MODE == 2
-    check(loaded < 0 && !fs_large_profile() && fs_storage_status(), "large: low RAM did not protect disk");
-    check(fs_file_limit() == FS_MAX_SIZE - 1 && !fs_large_arenas_available(), "large: low RAM selected high arenas");
-    verify(fs_find_child(0, "legacy"), 12345, 0);
-    check(fs_write(fs_find_child(0, "legacy"), "RAM only", 8) == 8 && fs_sync() < 0,
-          "large: protected disk accepted sync");
+    /* Without the large arenas, files past the 2 MiB limit are read in
+     * pieces, so the volume still mounts. Nothing here writes to it. */
+    check(loaded >= 0 && !fs_large_profile() && !fs_large_arenas_available(), "large: low RAM did not mount");
+    check(fs_file_limit() == FS_FILE_MAX, "large: low RAM file limit");
+    int maximum = fs_find_child(0, "maximum");
+    check(maximum > 0 && fs_streamed(maximum) && !fs_data(maximum) && fs_size(maximum) == FS_LARGE_FILE_MAX,
+          "large: low RAM did not stream the largest file");
+    static char piece[65536];
+    for (unsigned at = 0; at < FS_LARGE_FILE_MAX; at += sizeof piece) {
+        check(fs_read_at(maximum, at, piece, sizeof piece) == (int)sizeof piece, "large: streamed read failed");
+        for (unsigned i = 0; i < sizeof piece; ++i)
+            check((unsigned char)piece[i] == pattern(at + i), "large: streamed byte mismatch");
+    }
+    check(!fs_needs_sync(), "large: reading changed the volume");
     platform_log("LARGE-LOW-RAM-PASS\n");
 #elif LARGE_VOLUME_MODE == 3
     check(loaded >= 0 && fs_large_profile(), "large: migration failed");

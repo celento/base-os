@@ -28,6 +28,9 @@ typedef struct UFile {
     char *buffer;
     uint32_t size, capacity;
     int dirty;
+    /* Writable node past the volume's file limit: no buffer, reads and
+     * writes go to the volume as they happen. */
+    int direct;
     UPipe *pipe;
     struct UFile *next_orphan;
 } UFile;
@@ -48,7 +51,7 @@ static void wait_volume(void) {
 }
 
 static int write_back(UFile *file, int may_wait) {
-    if (!file->dirty) return 0;
+    if (!file->dirty || file->direct) return 0;
     for (;;) {
         /* Checked on every attempt: while this waited, the file may have
          * been deleted and its node slot given to another file. */
@@ -67,6 +70,69 @@ static int write_back(UFile *file, int may_wait) {
         file->dirty = 0;
         return 0;
     }
+}
+
+/* Volume access in pieces through a kernel bounce buffer, for files that
+ * never load whole. A mutation refused while a save runs is retried. */
+#define DIRECT_PIECE 65536u
+static int direct_read(Uproc *process, UFile *file, uint32_t buffer, uint32_t length) {
+    char *bounce = kmalloc(length < DIRECT_PIECE ? length : DIRECT_PIECE);
+    if (!bounce) return -BOS_ENOMEM;
+    uint32_t done = 0;
+    int result = 0;
+    while (done < length) {
+        uint32_t n = length - done < DIRECT_PIECE ? length - done : DIRECT_PIECE;
+        int got = fs_read_at(file->node, file->offset, bounce, n);
+        if (got < 0) { result = -BOS_EIO; break; }
+        if (got && (result = uproc_copy_out(process, buffer + done, bounce, (uint32_t)got))) break;
+        file->offset += (uint32_t)got;
+        done += (uint32_t)got;
+        if ((uint32_t)got < n) break;
+    }
+    kfree(bounce);
+    return done ? (int)done : result;
+}
+static int direct_result(int result, uint32_t end) {
+    if (result >= 0) return 0;
+    return end > fs_file_limit() && !fs_streams() ? -BOS_EFBIG : -BOS_ENOSPC;
+}
+static int direct_write(Uproc *process, UFile *file, uint32_t buffer, uint32_t length) {
+    char *bounce = kmalloc(length < DIRECT_PIECE ? length : DIRECT_PIECE);
+    if (!bounce) return -BOS_ENOMEM;
+    uint32_t done = 0;
+    int result = 0;
+    while (done < length) {
+        uint32_t n = length - done < DIRECT_PIECE ? length - done : DIRECT_PIECE;
+        if ((result = uproc_copy_in(process, bounce, buffer + done, n))) break;
+        if (!node_current(file)) { result = -BOS_EIO; break; }
+        int written = fs_write_at(file->node, file->offset, bounce, n);
+        if (written == FS_ERR_BUSY) { wait_volume(); continue; }
+        if ((result = direct_result(written, file->offset + n))) break;
+        file->offset += n;
+        done += n;
+    }
+    kfree(bounce);
+    return done ? (int)done : result;
+}
+static int direct_truncate(UFile *file, uint32_t length) {
+    for (;;) {
+        if (!node_current(file)) return -BOS_EIO;
+        int result = fs_truncate(file->node, length);
+        if (result != FS_ERR_BUSY) return direct_result(result, length);
+        wait_volume();
+    }
+}
+/* A buffered file about to pass the volume's file limit goes direct. */
+static int go_direct(UFile *file) {
+    if (file->direct) return 0;
+    if (!fs_streams()) return -BOS_EFBIG;
+    int result = write_back(file, 1);
+    if (result) return result;
+    kfree(file->buffer);
+    file->buffer = 0;
+    file->size = file->capacity = 0;
+    file->direct = 1;
+    return 0;
 }
 
 static void free_file(UFile *file) {
@@ -281,7 +347,13 @@ int ufile_open(Uproc *process, uint32_t path, int flags, int mode) {
     file->flags = flags & (BOS_O_ACCMODE | BOS_O_APPEND);
     file->node = node;
     file->identity = fs_identity(node);
-    if (!directory && access != BOS_O_RDONLY) {
+    if (!directory && access != BOS_O_RDONLY && fs_streamed(node)) {
+        file->direct = 1;
+        if ((flags & BOS_O_TRUNC) && (result = direct_truncate(file, 0))) {
+            free_file(file);
+            return result;
+        }
+    } else if (!directory && access != BOS_O_RDONLY) {
         if ((result = load_contents(file))) {
             free_file(file);
             return result;
@@ -375,6 +447,7 @@ int ufile_read(Uproc *process, int fd, uint32_t buffer, uint32_t length) {
             size = file->size;
         } else {
             if (!node_current(file)) return -BOS_EIO;
+            if (fs_streamed(file->node)) return direct_read(process, file, buffer, length);
             data = fs_data(file->node);
             size = (uint32_t)fs_size(file->node);
         }
@@ -420,10 +493,14 @@ int ufile_write(Uproc *process, int fd, uint32_t buffer, uint32_t length) {
     }
     case UFILE_NODE: {
         if (!length) return 0;
-        if (file->flags & BOS_O_APPEND) file->offset = file->size;
+        if (file->flags & BOS_O_APPEND)
+            file->offset = file->direct ? (node_current(file) ? (uint32_t)fs_size(file->node) : 0) : file->size;
         uint32_t end = file->offset + length;
-        if (end < file->offset) return -BOS_EFBIG;
-        int result = reserve(file, end);
+        if (end < file->offset || end > FS_STREAM_MAX) return -BOS_EFBIG;
+        int result = end > fs_file_limit() ? go_direct(file) : 0;
+        if (result) return result;
+        if (file->direct) return direct_write(process, file, buffer, length);
+        result = reserve(file, end);
         if (result) return result;
         if (file->offset > file->size)
             kmemset(file->buffer + file->size, 0, (int)(file->offset - file->size));
@@ -446,7 +523,8 @@ int ufile_seek(Uproc *process, int fd, uint32_t low, uint32_t high, int whence, 
     long long base = 0;
     if (whence == BOS_SEEK_CUR) base = file->offset;
     else if (whence == BOS_SEEK_END)
-        base = file->buffer ? (long long)file->size : (file->kind == UFILE_NODE && node_current(file) ? fs_size(file->node) : 0);
+        base = file->buffer && !file->direct ? (long long)file->size
+             : (file->kind == UFILE_NODE && node_current(file) ? fs_size(file->node) : 0);
     else if (whence != BOS_SEEK_SET) return -BOS_EINVAL;
     long long position = base + offset;
     if (position < 0) return -BOS_EINVAL;
@@ -458,8 +536,12 @@ int ufile_seek(Uproc *process, int fd, uint32_t low, uint32_t high, int whence, 
 
 int ufile_truncate(Uproc *process, int fd, uint32_t length) {
     UFile *file = lookup(&process->files, fd);
-    if (!file || file->kind != UFILE_NODE || !file->buffer) return -BOS_EINVAL;
-    int result = reserve(file, length);
+    if (!file || file->kind != UFILE_NODE || (!file->buffer && !file->direct)) return -BOS_EINVAL;
+    if (length > FS_STREAM_MAX) return -BOS_EFBIG;
+    int result = length > fs_file_limit() ? go_direct(file) : 0;
+    if (result) return result;
+    if (file->direct) return direct_truncate(file, length);
+    result = reserve(file, length);
     if (result) return result;
     if (length > file->size) kmemset(file->buffer + file->size, 0, (int)(length - file->size));
     file->size = length;
@@ -505,7 +587,7 @@ int ufile_fstat(Uproc *process, int fd, uint32_t out) {
     if (file->kind == UFILE_NODE || file->kind == UFILE_DIRECTORY) {
         if (!node_current(file)) return -BOS_EIO;
         stat_node(file->node, &stat);
-        if (file->buffer) stat.size = file->size;
+        if (file->buffer && !file->direct) stat.size = file->size;
     } else {
         kmemset(&stat, 0, sizeof stat);
         stat.struct_size = sizeof stat;

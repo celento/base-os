@@ -155,7 +155,10 @@ static int download_command(int cwd,const char *url,const char *remaining,int qu
     if(download_start(cwd,url,path)){push(download_last_error());return -1;}
     push("Download started in background. Use downloads for status; cancel to stop.");return 0;
 }
-static void cat(int id){char row[81];int n=0;for(int i=0;i<fs_size(id);i++){char c=fs_data(id)[i];if(c=='\r')continue;if(c=='\n'){row[n]=0;push(row);n=0;continue;}row[n++]=c>=32&&c<=126?c:'.';if(n==80){row[n]=0;push(row);n=0;}}if(n){row[n]=0;push(row);}}
+/* Reads in pieces, so files past the file limit print too. */
+static void cat(int id){char row[81],piece[512];int n=0,have=0,at=0;for(int i=0;i<fs_size(id);i++){
+    if(at==have){have=fs_read_at(id,(unsigned)i,piece,sizeof piece);at=0;if(have<=0)break;}
+    char c=piece[at++];if(c=='\r')continue;if(c=='\n'){row[n]=0;push(row);n=0;continue;}row[n++]=c>=32&&c<=126?c:'.';if(n==80){row[n]=0;push(row);n=0;}}if(n){row[n]=0;push(row);}}
 /* Synchronous BASIC/exec retain their selected-Terminal, unbuffered adapter. */
 static void plot(int x,int y,int color){app_view_plot(selected,x,y,color);}
 static void canvas_rect(int x,int y,int width,int height,int color){app_view_rect(selected,x,y,width,height,color);}
@@ -303,6 +306,7 @@ usage:
 }
 static int start_dispatch(int file,const char *argument,unsigned length){
     int owner=selected;
+    if(fs_streamed(file)){push("Cannot start: the program is too large to load.");return TERM_COMMAND_REPORTED;}
     const unsigned char *image=(const unsigned char *)fs_data(file);
     if(fs_size(file)>=4&&image[0]==0x7F&&image[1]=='E'&&image[2]=='L'&&image[3]=='F')
         return elf_start(owner,file,argument);
@@ -404,6 +408,7 @@ static int execute(const char *s,int depth,int *budget){
     else if(!kstrcmp(cmd,"basic")||!kstrcmp(cmd,"exec")){
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
         if(term_task_running(selected)){push("Stop this terminal's native task first.");return -1;}
+        if(fs_streamed(id)){push("Cannot run: the program is too large to load.");return -1;}
         const unsigned char *image=(const unsigned char *)fs_data(id);
         if(!kstrcmp(cmd,"exec")&&fs_size(id)>=4&&image[0]=='B'&&image[1]=='E'&&image[2]=='X'&&image[3]=='2'){
             push("Legacy exec supports BEX1 only; use start for this program.");return -1;

@@ -43,6 +43,7 @@ int fs_parent(int id){return parents[id];}
 int fs_find_child(int p,const char *s){return p==0&&!strcmp(s,"trash")?1:-1;}
 int fs_size(int id){(void)id;return 4096;}
 const char *fs_data(int id){(void)id;return "MP3";}
+int fs_streamed(int id){(void)id;return 0;}
 uint32_t timer_ticks(void){return now;}
 const AudioStatus *audio_status(void){return &fake;}
 uint32_t audio_capacity_bytes(void){return capacity;}
