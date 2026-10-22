@@ -1,7 +1,7 @@
 #ifndef PLAYER_APP_H
 #define PLAYER_APP_H
 #define PLAYER_W 640
-#define PLAYER_H 614
+#define PLAYER_H 540
 #define PLAYER_MIN_W 420
 #define PLAYER_MIN_H 414
 enum { PLAYER_CHANGED=1, PLAYER_VIDEO_FRAME=2, PLAYER_AUDIO_PROGRESS=3 };
@@ -18,6 +18,9 @@ void player_draw_playback(int x, int y, int w, int h);
  * unobscured/frontmost and cursor guarantees as player_draw_playback. Restores
  * the opaque audio progress/time strip before drawing antialiased content. */
 void player_draw_audio_progress(int x, int y, int w, int h);
+/* Hover source for controls: the desktop's hover tracker while the window
+ * is active, or 0. It returns KIT_* state bits for a rectangle. */
+void player_set_hover(int (*hover)(int x, int y, int w, int h));
 int player_click(int x, int y, int w, int h, int mouse_x, int mouse_y);
 int player_key(int scancode, char character);
 /* Services video. Returns 0, PLAYER_CHANGED (full client redraw),

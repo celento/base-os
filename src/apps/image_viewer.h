@@ -15,6 +15,9 @@
 int image_viewer_open(const void *file, unsigned bytes, const char *name);
 void image_viewer_draw(int x, int y, int w, int h);
 int image_viewer_key(int sc, char ch);
+/* Hover source for toolbar controls: the desktop's hover tracker while the
+ * window is active, or 0. It returns KIT_* state bits for a rectangle. */
+void image_viewer_set_hover(int (*hover)(int x, int y, int w, int h));
 int image_viewer_click(int x, int y, int w, int h, int mx, int my);
 int image_viewer_scroll(int lines);
 void image_viewer_close(void);

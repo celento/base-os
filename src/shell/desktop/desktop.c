@@ -3521,9 +3521,21 @@ static void open_view(int file_id) {
     open_dlg=0;dirty=1;
 }
 
+/* Client rectangle of Browser, Image Viewer, Media Player and System
+ * Monitor, shared by drawing, clicks and the player's fast paths. Classic
+ * starts under the menu row; in Modern an app with a toolbar starts on the
+ * header rule, so its toolbar continues the header. */
+static void app_client(int wx, int wy, int ww, int wh, int toolbar, int *x, int *y, int *cw, int *ch) {
+    int top = MODERN ? wy + TITLE_BAR - (toolbar ? 1 : 0) : wy + TITLE_H;
+    *x = wx + 1; *y = top; *cw = ww - 2; *ch = wy + wh - 1 - top;
+}
+
 static void draw_view(int wx,int wy,int ww,int wh,int inactive) {
+    int cx, cy, cw, ch;
     gui_draw_window(wx,wy,ww,wh,image_viewer_title(),0,inactive?WIN_INACTIVE:0);
-    image_viewer_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
+    app_client(wx, wy, ww, wh, 1, &cx, &cy, &cw, &ch);
+    image_viewer_set_hover(inactive ? 0 : hot);
+    image_viewer_draw(cx, cy, cw, ch);
 }
 
 static void handle_paint_click(int wx, int wy, int ww, int wh) {
@@ -6419,16 +6431,25 @@ static void draw_window_contents(Win *w, int inactive) {
         gui_draw_window(wx,wy,ww,wh,writer_title(),0,fl);
         writer_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
     } else if (w->kind == WK_BROWSER) {
+        int cx, cy, cw, ch;
         gui_draw_window(wx,wy,ww,wh,"Browser",0,fl);
-        browser_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
+        app_client(wx, wy, ww, wh, 1, &cx, &cy, &cw, &ch);
+        browser_set_hover(inactive ? 0 : hot);
+        browser_draw(cx, cy, cw, ch);
     } else if (w->kind == WK_PLAYER) {
+        int cx, cy, cw, ch;
         gui_draw_window(wx,wy,ww,wh,"Media Player",0,fl);
-        player_draw(wx+1,wy+TITLE_H+1,ww-2,wh-TITLE_H-2);
+        app_client(wx, wy, ww, wh, 0, &cx, &cy, &cw, &ch);
+        player_set_hover(inactive ? 0 : hot);
+        player_draw(cx, cy, cw, ch);
     } else if (w->kind == WK_SYSMON) {
+        int cx, cy, cw, ch;
         gui_draw_window(wx, wy, ww, wh, "System Monitor", 0, fl);
         SysInfo si;
         sysinfo_fill(&si);
-        sysmon_draw(wx, wy + TITLE_H + 1, ww, wh - TITLE_H - 1, &si);
+        app_client(wx, wy, ww, wh, 1, &cx, &cy, &cw, &ch);
+        sysmon_set_hover(inactive ? 0 : hot);
+        sysmon_draw(cx, cy, cw, ch, &si);
     }
 }
 
@@ -9068,9 +9089,13 @@ static void window_body_click(int i) {
     else if (w->kind == WK_WORDLE) {
         if (wordle_click(w->x, w->y + TITLE_H, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_VIEW) {
-        if (image_viewer_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2, mouse_x, mouse_y)) dirty = 1;
+        int cx, cy, cw, ch;
+        app_client(w->x, w->y, w->w, w->h, 1, &cx, &cy, &cw, &ch);
+        if (image_viewer_click(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_BROWSER) {
-        if (browser_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2, mouse_x, mouse_y)) dirty = 1;
+        int cx, cy, cw, ch;
+        app_client(w->x, w->y, w->w, w->h, 1, &cx, &cy, &cw, &ch);
+        if (browser_click(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_SPREADSHEET) {
         spreadsheet_result(spreadsheet_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2,
             mouse_x, mouse_y, (ctrl_down ? SPREADSHEET_MOD_CTRL : 0) | (shift_down ? SPREADSHEET_MOD_SHIFT : 0)));
@@ -9078,7 +9103,9 @@ static void window_body_click(int i) {
         writer_result(writer_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2,
             mouse_x, mouse_y, (ctrl_down ? WRITER_MOD_CTRL : 0) | (shift_down ? WRITER_MOD_SHIFT : 0)));
     } else if (w->kind == WK_PLAYER) {
-        if (player_click(w->x + 1, w->y + TITLE_H + 1, w->w - 2, w->h - TITLE_H - 2, mouse_x, mouse_y)) dirty = 1;
+        int cx, cy, cw, ch;
+        app_client(w->x, w->y, w->w, w->h, 0, &cx, &cy, &cw, &ch);
+        if (player_click(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_TODO)
         handle_todo_click(w->x, w->y, w->w, w->h);
     else if (w->kind == WK_CAL) {
@@ -9090,8 +9117,10 @@ static void window_body_click(int i) {
         dirty = 1;
     } else if (w->kind == WK_SYSMON) {
         SysInfo si;
+        int cx, cy, cw, ch;
         sysinfo_fill(&si);
-        SysmonAction action = sysmon_click(w->x, w->y + TITLE_H + 1, w->w, w->h - TITLE_H - 1, mouse_x, mouse_y, &si);
+        app_client(w->x, w->y, w->w, w->h, 1, &cx, &cy, &cw, &ch);
+        SysmonAction action = sysmon_click(cx, cy, cw, ch, mouse_x, mouse_y, &si);
         if (action.kind == SYSMON_ACTION_REDRAW) dirty = 1;
         else if (action.kind == SYSMON_ACTION_CLOSE_WINDOW) {
             int owner = action.owner;
@@ -11542,10 +11571,12 @@ static int desktop_turn(void) {
                 draw_term_canvas(w->x,w->y,w->w,w->h);
             }else{
                 Win *w=&wins[player_slot];
+                int cx,cy,cw,ch;
                 context_set(player_slot);
+                app_client(w->x,w->y,w->w,w->h,0,&cx,&cy,&cw,&ch);
                 if(player_update==PLAYER_AUDIO_PROGRESS)
-                    player_draw_audio_progress(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
-                else player_draw_playback(w->x+1,w->y+TITLE_H+1,w->w-2,w->h-TITLE_H-2);
+                    player_draw_audio_progress(cx,cy,cw,ch);
+                else player_draw_playback(cx,cy,cw,ch);
             }
             redraw_count++;
             dirty = 0;
