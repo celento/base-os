@@ -53,9 +53,55 @@ static void mix_px(int x, int y, uint8_t c) {
     put_pixel(x, y, gfx_mix(get_pixel(x, y), c, 128));
 }
 
+static void cov_px(int x, int y, uint8_t c, int cov) {
+    if (cov <= 0 || x < 0 || y < 0 || x >= fb_w || y >= fb_h) return;
+    put_pixel(x, y, cov >= 16 ? c : gfx_mix(get_pixel(x, y), c, cov * 16));
+}
+
+/* Coverage (0-16) of pixel col,row of a corner square of radius r, whose
+ * circle center sits at its inner corner (r, r): 4x4 samples per pixel, in
+ * eighths of a pixel. */
+static int corner_cov(int col, int row, int r) {
+    int d = r * 8, n = 0;
+    for (int j = 0; j < 4; j++) {
+        int dy = d - (row * 8 + 1 + j * 2);
+        for (int i = 0; i < 4; i++) {
+            int dx = d - (col * 8 + 1 + i * 2);
+            if (dx * dx + dy * dy <= d * d) n++;
+        }
+    }
+    return n;
+}
+
+/* Circles, pills and knobs: the corner arcs are blended by coverage, so
+ * steep parts of the curve get smooth edges too (the inset tables only soften
+ * one pixel per row). */
+static int round_shape(int w, int h, int r) {
+    return r >= 8 && (2 * r >= h || 2 * r >= w);
+}
+
+static void fill_round_aa(int x, int y, int w, int h, int r, uint8_t color) {
+    if (w <= 0 || h <= 0) return;
+    if (2 * r > w) r = w / 2;
+    if (2 * r > h) r = h / 2;
+    for (int j = 0; j < h; j++) {
+        int cr = j < r ? j : (j >= h - r ? h - 1 - j : -1);
+        if (cr < 0) { draw_hline(x, y + j, w, color); continue; }
+        int solid = r;
+        for (int i = 0; i < r; i++) {
+            int cov = corner_cov(i, cr, r);
+            if (cov >= 16) { solid = i; break; }
+            cov_px(x + i, y + j, color, cov);
+            cov_px(x + w - 1 - i, y + j, color, cov);
+        }
+        draw_hline(x + solid, y + j, w - 2 * solid, color);
+    }
+}
+
 static void fill_rows(int x, int y, int w, int h, int r, uint8_t color, int aa, int top, int bottom) {
     if (w <= 0 || h <= 0) return;
     if (r == KIT_R_NOTCH) r = KIT_R_SQUARE;
+    if (aa && top && bottom && round_shape(w, h, r)) { fill_round_aa(x, y, w, h, r, color); return; }
     for (int j = 0; j < h; j++) {
         int a = top ? kit_inset(r, j) : 0, b = bottom ? kit_inset(r, h - 1 - j) : 0;
         int in = a > b ? a : b;
@@ -100,6 +146,12 @@ void kit_frame(int x, int y, int w, int h, int r, uint8_t border) {
 
 void kit_box(int x, int y, int w, int h, int r, uint8_t fill, uint8_t border) {
     if (w <= 0 || h <= 0) return;
+    if (border && round_shape(w, h, r) && w > 2 && h > 2) {
+        /* A smooth ring: the border shape, then the fill one pixel in. */
+        fill_round_aa(x, y, w, h, r, border);
+        fill_round_aa(x + 1, y + 1, w - 2, h - 2, r - 1, fill);
+        return;
+    }
     if (r > KIT_R_NOTCH && border) {
         /* Soften the outer stair against the surface before covering it. */
         for (int j = 0; j < h; j++) {
@@ -120,10 +172,29 @@ static int inside(int r, int w, int h, int col, int row) {
     return col >= in && col < w - in;
 }
 
+/* Shadow pixels take the darker of the band color and what is already
+ * there, channel by channel. Over the light desktop and content that is the
+ * band color itself; over darker pixels (the Terminal, a dark desktop) the
+ * shadow can no longer show up as a light glow. Taking the minimum also
+ * means a redraw over pixels that already hold a shadow changes nothing. */
+static void shadow_px(int x, int y, uint8_t band) {
+    if (x < 0 || y < 0 || x >= fb_w || y >= fb_h) return;
+    uint8_t under = get_pixel(x, y);
+    if (under == band) return;
+    uint32_t u = pal32[under], b = pal32[band];
+    int ur = (u >> 16) & 255, ug = (u >> 8) & 255, ub = u & 255;
+    int br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+    int r = ur < br ? ur : br, g = ug < bg ? ug : bg, bl = ub < bb ? ub : bb;
+    if (r == br && g == bg && bl == bb) put_pixel(x, y, band);
+    else if (r != ur || g != ug || bl != ub) put_pixel(x, y, gfx_rgb(r, g, bl));
+}
+
 void kit_shadow(int x, int y, int w, int h, int r) {
     if (!MODERN) {
-        draw_rect(x + w, y + 2, 2, h, TK_SHADOW);
-        draw_rect(x + 2, y + h, w - 2, 2, TK_SHADOW);
+        for (int j = 0; j < h; j++)
+            for (int i = 0; i < 2; i++) shadow_px(x + w + i, y + 2 + j, TK_SHADOW);
+        for (int j = 0; j < 2; j++)
+            for (int i = 0; i < w - 2; i++) shadow_px(x + 2 + i, y + h + j, TK_SHADOW);
         return;
     }
     int rows = 12;
@@ -134,7 +205,7 @@ void kit_shadow(int x, int y, int w, int h, int r) {
             uint8_t c = 0;
             if (inside(r, w, h, col, row - 2)) c = TK_SHADOW;
             else if (inside(r, w, h, col, row - 4)) c = ui_theme.shadow2;
-            if (c) put_pixel(x + col, y + row, c);
+            if (c) shadow_px(x + col, y + row, c);
         }
     }
 }
@@ -214,7 +285,8 @@ int kit_button_w(const char *label, int icon) {
 
 void kit_button(int x, int y, int w, int h, const char *label, int icon, int kind, int state) {
     int r = ctl_r(), dis = state & KIT_DISABLED, prs = (state & KIT_PRESSED) && !dis;
-    int hov = (state & KIT_HOVER) && !dis, foc = (state & KIT_FOCUS) && !dis;
+    /* The default ring is the focus ring: Enter acts on that button. */
+    int hov = (state & KIT_HOVER) && !dis, foc = (state & (KIT_FOCUS | KIT_DEFAULT)) && !dis;
     uint8_t fill = TK_RAISED, border = TK_LINE, ink = TK_TEXT;
     int bold = 0, ghost = 0;
     if (kind == KB_PRIMARY || kind == KB_DANGER) {
@@ -308,14 +380,21 @@ int kit_field(int x, int y, int w, int h, int state) {
 int kit_search_clear_x(int x, int w) { return x + w - (MODERN ? 28 : 24); }
 
 int kit_search(int x, int y, int w, int h, const char *text, const char *placeholder, int state) {
-    int tx = kit_field(x, y, w, h, state);
-    ui_icon_draw(UI_ICON_SEARCH, tx - 1, y + (h - 16) / 2, 16, (state & KIT_FOCUS) ? TK_ICON : TK_TEXT2, TK_RAISED);
+    uint8_t paper = TK_RAISED;
+    int tx;
+    if (MODERN && !(state & (KIT_FOCUS | KIT_ERROR | KIT_DISABLED))) {
+        /* Borderless well; the text sits where the field would put it. */
+        paper = TK_HOVER;
+        kit_fill(x, y, w, h, ctl_r(), paper, 1);
+        tx = x + 11;
+    } else tx = kit_field(x, y, w, h, state);
+    ui_icon_draw(UI_ICON_SEARCH, tx - 1, y + (h - 16) / 2, 16, (state & KIT_FOCUS) ? TK_ICON : TK_TEXT2, paper);
     tx += 21;
     int filled = text && text[0];
     int right = filled ? kit_search_clear_x(x, w) - 4 : x + w - 6;
     if (filled) {
         kit_text(text, tx, kit_ty(y, h), TK_TEXT, right - tx, 0);
-        ui_icon_draw(UI_ICON_X, kit_search_clear_x(x, w) + 2, y + (h - 16) / 2, 16, TK_TEXT, TK_RAISED);
+        ui_icon_draw(UI_ICON_X, kit_search_clear_x(x, w) + 2, y + (h - 16) / 2, 16, TK_TEXT, paper);
     } else if (placeholder) {
         kit_text(placeholder, tx, kit_ty(y, h), TK_TEXT2, right - tx, 0);
     }
@@ -664,8 +743,12 @@ void kit_menu_frame(int x, int y, int w, int h) {
     kit_box(x, y, w, h, r, ui_theme.overlay, MODERN ? TK_LINE_STRONG : TK_TEXT2);
 }
 
+/* Label inset from the menu's left edge; Classic keeps a wider check
+ * column. */
+static int menu_text_dx(void) { return MODERN ? 30 : 28; }
+
 int kit_menu_width(const char *label, const char *shortcut) {
-    int w = (MODERN ? 36 : 28) + ui_string_w(label) + (MODERN ? 22 : 16);
+    int w = menu_text_dx() + ui_string_w(label) + (MODERN ? 22 : 16);
     if (shortcut && shortcut[0]) w += 24 + ui_string_w(shortcut);
     return w;
 }
@@ -681,12 +764,12 @@ void kit_menu_item(int x, int y, int w, const char *label, const char *shortcut,
         dim = MODERN ? TK_ACCENT_100 : TK_ON_ACCENT;
         bg = TK_ACCENT;
     }
-    int mark = x + (MODERN ? 14 : 8);
+    int mark = x + (MODERN ? 10 : 8);
     if ((flags & KIT_MENU_CHECK) && (state & KIT_ON))
         ui_icon_draw(UI_ICON_CHECK, mark, y + (h - 16) / 2, 16, ink, bg);
     if ((flags & KIT_MENU_RADIO) && (state & KIT_ON))
         ui_icon_draw(UI_ICON_DOT, mark, y + (h - 16) / 2, 16, ink, bg);
-    int lx = x + (MODERN ? 36 : 28);
+    int lx = x + menu_text_dx();
     int right = x + w - m - (MODERN ? 10 : 8);
     if (flags & KIT_MENU_SUB) {
         ui_icon_draw(UI_ICON_RIGHT, right - 14, y + (h - 16) / 2, 16, sel ? ink : dim, bg);
@@ -694,7 +777,21 @@ void kit_menu_item(int x, int y, int w, const char *label, const char *shortcut,
     }
     int sw = shortcut && shortcut[0] ? ui_string_w(shortcut) : 0;
     if (sw) draw_string(shortcut, right - sw, kit_ty(y, h), dim);
-    kit_text(label, lx, kit_ty(y, h), ink, right - lx - (sw ? sw + 16 : 0), 0);
+    /* Strip the '&' marker and remember which letter it names. */
+    char t[96];
+    int n = 0, mn = -1;
+    for (int i = 0; label && label[i] && n < (int)sizeof t - 1; i++) {
+        if (label[i] == '&' && label[i + 1]) { if (mn < 0) mn = n; continue; }
+        t[n++] = label[i];
+    }
+    t[n] = 0;
+    int maxw = right - lx - (sw ? sw + 16 : 0);
+    int drawn = kit_text(t, lx, kit_ty(y, h), ink, maxw, 0);
+    if (mn >= 0 && drawn >= kit_text_w(t, 0)) {
+        char one[2] = {t[mn], 0};
+        t[mn] = 0;
+        draw_hline(lx + ui_string_w(t), kit_ty(y, h) + 15, ui_string_w(one), ink);
+    }
 }
 
 void kit_menu_sep(int x, int y, int w) {
