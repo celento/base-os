@@ -49,6 +49,9 @@ a disk checker can repair without losing data that a finished call wrote:
 - If the old name of a rename cannot be erased, the new name is taken back.
   If that fails too, the volume stops accepting changes until it is mounted
   again, so two names never stay live over one chain.
+- If a moved folder's ".." entry cannot be updated, the volume likewise
+  stops accepting changes, since later moves rely on that link to refuse
+  putting a folder inside itself.
 - Overwriting existing bytes in place is not atomic: a crash can leave a mix of
   old and new bytes in the range being written.
 

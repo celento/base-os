@@ -446,6 +446,21 @@ class FatTests(unittest.TestCase):
                 if '/B       TXT' in files:
                     self.assertEqual(self.tool('cat', path, 'B.TXT').stdout, pattern(1, 3000))
 
+    def test_failed_folder_move_cannot_lose_a_folder(self):
+        # A move whose ".." write fails must not let a later move put a
+        # folder inside itself and cut it off.
+        for k in range(1, 8):
+            with self.subTest(failing_write=k):
+                path = self.image('fat12', 'dirmove')
+                self.tool('script', path, stdin=b'mkdir\tA\nmkdir\tB\nmkdir\tA/D\nput\tB/keep.txt\t1\t3000\t0\n')
+                script = f'failwrite\t{k}\nmv\tA/D\tB/D\nmv\tB\tB/D/B\nput\tafter.txt\t2\t1000\t0\nsync\n'
+                result = self.tool('script', path, stdin=script.encode(), check=False)
+                files = check_structure(self, path.read_bytes())
+                self.assertEqual(sum(name.endswith('/KEEP    TXT') for name in files), 1, files)
+                # A volume that stopped taking changes waits for a checker.
+                if b'error -14' not in result.stdout:
+                    self.fsck(path)
+
     def test_full_volume(self):
         path = self.image('fat12', 'full')
         script = ''.join(f'put\tfile{i}\t{i}\t300000\t0\n' for i in range(6))
