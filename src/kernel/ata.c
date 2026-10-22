@@ -1,5 +1,6 @@
-/* BaseOS's optional data disk. The boot floppy remains independently usable.
- * Legacy ATA primary-master, 512-byte sectors, LBA28 READ/WRITE SECTORS.
+/* BaseOS's optional data disk (primary master) and exchange disks on the
+ * secondary channel. The boot floppy remains independently usable.
+ * Legacy ATA, 512-byte sectors, LBA28 READ/WRITE SECTORS.
  * Polling uses the alternate status register and leaves hardware IRQs disabled.
  * Explicit cache flushes form the durability barriers in fs.c's commit protocol.
  * QEMU implementation reference: https://github.com/qemu/qemu/blob/master/hw/ide/core.c
@@ -51,12 +52,12 @@ static unsigned short inw(unsigned short port) {
 #endif
 
 /* Each DRQ sector remains the transfer/error-accounting boundary. */
-static void transfer_sector(unsigned char *buffer, int writing) {
+static void transfer_sector(unsigned short data, unsigned char *buffer, int writing) {
 #ifdef ATA_HOST_TEST
     for (unsigned word = 0; word < 256; ++word) {
-        if (writing) outw(ATA_DATA, buffer[0] | (unsigned)buffer[1] << 8);
+        if (writing) outw(data, buffer[0] | (unsigned)buffer[1] << 8);
         else {
-            unsigned short value = inw(ATA_DATA);
+            unsigned short value = inw(data);
             buffer[0] = value; buffer[1] = value >> 8;
         }
         buffer += 2;
@@ -65,39 +66,63 @@ static void transfer_sector(unsigned char *buffer, int writing) {
     unsigned words = 256;
     if (writing)
         __asm__ volatile("cld; rep outsw" : "+S"(buffer), "+c"(words)
-                         : "d"((unsigned short)ATA_DATA) : "memory", "cc");
+                         : "d"(data) : "memory", "cc");
     else
         __asm__ volatile("cld; rep insw" : "+D"(buffer), "+c"(words)
-                         : "d"((unsigned short)ATA_DATA) : "memory", "cc");
+                         : "d"(data) : "memory", "cc");
 #endif
 }
 
-static unsigned capacity;
-static int ready;
 enum RequestPhase { REQUEST_IDLE, REQUEST_WAIT_IDLE, REQUEST_DATA,
                     REQUEST_FINISH, REQUEST_DONE, REQUEST_ERROR };
-static struct {
+typedef struct {
     enum RequestPhase phase;
     unsigned char *buffer;
     unsigned lba, left, chunk_left, started;
-    int writing, flushing;
-} request;
-_Static_assert(sizeof(request) <= 40, "ATA request must remain small and fixed-size");
+    unsigned char writing, flushing;
+    unsigned char selected;     /* this unit is selected on its channel */
+} Request;
+_Static_assert(sizeof(Request) <= 40, "ATA request must remain small and fixed-size");
 
-int ata_request_active(void) {
-    return request.phase == REQUEST_WAIT_IDLE || request.phase == REQUEST_DATA ||
-           request.phase == REQUEST_FINISH;
+/* Port offsets from a channel's command block. */
+enum { REG_DATA = 0, REG_COUNT = 2, REG_LBA0, REG_LBA1, REG_LBA2, REG_DEVICE, REG_STATUS };
+
+typedef struct {
+    unsigned short base, control;
+    unsigned char select;       /* 0xA0 master, 0xB0 slave */
+    unsigned capacity;
+    int ready;
+    Request request;
+} Unit;
+
+static Unit units[ATA_UNITS] = {
+    {ATA_DATA, ATA_CONTROL, 0xA0, 0, 0, {0}},
+    {0x170, 0x376, 0xA0, 0, 0, {0}},
+    {0x170, 0x376, 0xB0, 0, 0, {0}},
+};
+#define PRIMARY (&units[0])
+
+static int active(const Unit *u) {
+    return u->request.phase == REQUEST_WAIT_IDLE || u->request.phase == REQUEST_DATA ||
+           u->request.phase == REQUEST_FINISH;
 }
-int ata_ready(void) { return ready; }
+/* Units on one channel share its registers: one request at a time. */
+static int channel_busy(const Unit *u) {
+    for (int i = 0; i < ATA_UNITS; ++i)
+        if (units[i].base == u->base && active(&units[i])) return 1;
+    return 0;
+}
+int ata_request_active(void) { return active(PRIMARY); }
+int ata_ready(void) { return PRIMARY->ready; }
 
-static void settle(void) {
+static void settle(const Unit *u) {
     /* Four alternate-status reads supply the ATA 400 ns selection delay. */
-    for (int i = 0; i < 4; ++i) (void)inb(ATA_CONTROL);
+    for (int i = 0; i < 4; ++i) (void)inb(u->control);
 }
-static int wait_status(int data_phase) {
+static int wait_status(const Unit *u, int data_phase) {
     unsigned start = timer_ticks();
     do {
-        unsigned char status = inb(ATA_CONTROL);
+        unsigned char status = inb(u->control);
         if (!status || status == 0xFF) return -1;
         if (!(status & ATA_BUSY)) {
             if (status & (ATA_ERROR | ATA_FAULT)) return -1;
@@ -107,145 +132,178 @@ static int wait_status(int data_phase) {
     } while ((unsigned)(timer_ticks() - start) < 2 * TIMER_HZ);
     return -1;
 }
-int ata_probe(void) {
+static int probe(Unit *u) {
     unsigned short identify[256];
-    if (ata_request_active()) return -1;
-    request.phase = REQUEST_IDLE;
-    request.buffer = 0;
-    ready = 0; capacity = 0;
-    outb(ATA_CONTROL, 2); /* nIEN: the controller is always polled. */
-    outb(ATA_DEVICE, 0xA0); settle();
-    unsigned char status = inb(ATA_STATUS);
+    if (channel_busy(u)) return -1;
+    u->request.phase = REQUEST_IDLE;
+    u->request.buffer = 0;
+    u->ready = 0; u->capacity = 0;
+    outb(u->control, 2); /* nIEN: the controller is always polled. */
+    outb(u->base + REG_DEVICE, u->select); settle(u);
+    unsigned char status = inb(u->base + REG_STATUS);
     if (!status || status == 0xFF) return 0;
-    outb(ATA_COUNT, 0); outb(ATA_LBA0, 0); outb(ATA_LBA1, 0); outb(ATA_LBA2, 0);
-    outb(ATA_STATUS, ATA_IDENTIFY); settle();
-    status = inb(ATA_STATUS);
+    outb(u->base + REG_COUNT, 0); outb(u->base + REG_LBA0, 0);
+    outb(u->base + REG_LBA1, 0); outb(u->base + REG_LBA2, 0);
+    outb(u->base + REG_STATUS, ATA_IDENTIFY); settle(u);
+    status = inb(u->base + REG_STATUS);
     if (!status || status == 0xFF) return 0;
-    if (wait_status(1) < 0) return -1;
-    if (inb(ATA_LBA1) || inb(ATA_LBA2)) return -1; /* Not an ATA disk. */
-    for (int i = 0; i < 256; ++i) identify[i] = inw(ATA_DATA);
-    settle();
-    if (wait_status(0) < 0 || (identify[0] & 0x8000) ||
+    if (wait_status(u, 1) < 0) return -1;
+    if (inb(u->base + REG_LBA1) || inb(u->base + REG_LBA2)) return -1; /* Not an ATA disk. */
+    for (int i = 0; i < 256; ++i) identify[i] = inw(u->base + REG_DATA);
+    settle(u);
+    if (wait_status(u, 0) < 0 || (identify[0] & 0x8000) ||
         !(identify[49] & 0x200) || !(identify[83] & 0x1000)) return -1;
     /* Reject disks that report logical sectors other than 512 bytes. */
     if ((identify[106] & 0xC000) == 0x4000 && (identify[106] & 0x1000) &&
         ((unsigned)identify[117] | (unsigned)identify[118] << 16) != 256) return -1;
-    capacity = identify[60] | (unsigned)identify[61] << 16;
-    if (!capacity || capacity > 0x10000000u) { capacity = 0; return -1; }
-    ready = 1;
+    u->capacity = identify[60] | (unsigned)identify[61] << 16;
+    if (!u->capacity || u->capacity > 0x10000000u) { u->capacity = 0; return -1; }
+    u->ready = 1;
     return 1;
 }
-unsigned ata_sector_count(void) { return capacity; }
+int ata_probe(void) { return probe(PRIMARY); }
+unsigned ata_sector_count(void) { return PRIMARY->capacity; }
 
-static int request_transfer(unsigned lba, unsigned char *buffer, int sectors, int writing) {
-    if (ata_request_active() || !ready || sectors < 0 || lba > capacity ||
-        (unsigned)sectors > capacity - lba || (sectors && !buffer))
+static int request_transfer(Unit *u, unsigned lba, unsigned char *buffer, int sectors, int writing) {
+    if (channel_busy(u) || !u->ready || sectors < 0 || lba > u->capacity ||
+        (unsigned)sectors > u->capacity - lba || (sectors && !buffer))
         return -1;
-    request.buffer = sectors ? buffer : 0;
-    request.lba = lba;
-    request.left = (unsigned)sectors;
-    request.chunk_left = 0;
-    request.writing = writing;
-    request.flushing = 0;
-    request.started = timer_ticks();
-    request.phase = sectors ? REQUEST_WAIT_IDLE : REQUEST_DONE;
+    Request *r = &u->request;
+    r->buffer = sectors ? buffer : 0;
+    r->lba = lba;
+    r->left = (unsigned)sectors;
+    r->chunk_left = 0;
+    r->writing = writing;
+    r->flushing = 0;
+    r->selected = 0;
+    r->started = timer_ticks();
+    r->phase = sectors ? REQUEST_WAIT_IDLE : REQUEST_DONE;
     return 0;
 }
 int ata_request_read(unsigned lba, void *buffer, int sectors) {
-    return request_transfer(lba, buffer, sectors, 0);
+    return request_transfer(PRIMARY, lba, buffer, sectors, 0);
 }
 int ata_request_write(unsigned lba, const void *buffer, int sectors) {
-    return request_transfer(lba, (unsigned char *)buffer, sectors, 1);
+    return request_transfer(PRIMARY, lba, (unsigned char *)buffer, sectors, 1);
 }
-int ata_request_flush(void) {
-    if (ata_request_active() || !ready) return -1;
-    request.buffer = 0;
-    request.flushing = 1;
-    request.started = timer_ticks();
-    request.phase = REQUEST_WAIT_IDLE;
+static int request_flush(Unit *u) {
+    if (channel_busy(u) || !u->ready) return -1;
+    u->request.buffer = 0;
+    u->request.flushing = 1;
+    u->request.selected = 0;
+    u->request.started = timer_ticks();
+    u->request.phase = REQUEST_WAIT_IDLE;
     return 0;
 }
-static enum AtaProgress request_failed(void) {
-    ready = 0; /* Uncertain controller state requires an explicit remount. */
-    request.buffer = 0;
-    request.phase = REQUEST_ERROR;
+int ata_request_flush(void) { return request_flush(PRIMARY); }
+static enum AtaProgress request_failed(Unit *u) {
+    u->ready = 0; /* Uncertain controller state requires an explicit remount. */
+    u->request.buffer = 0;
+    u->request.phase = REQUEST_ERROR;
     return ATA_PROGRESS_ERROR;
 }
-static enum AtaProgress request_waiting(void) {
+static enum AtaProgress request_waiting(Unit *u) {
     /* Count time across polls only when the observed hardware still requires
      * a wait. Ready hardware is not a timeout after a caller scheduling gap. */
-    return (unsigned)(timer_ticks() - request.started) >= 2 * TIMER_HZ ?
-           request_failed() : ATA_PROGRESS_WAIT;
+    return (unsigned)(timer_ticks() - u->request.started) >= 2 * TIMER_HZ ?
+           request_failed(u) : ATA_PROGRESS_WAIT;
 }
-enum AtaProgress ata_poll(unsigned sector_budget) {
-    if (!ata_request_active()) {
-        return request.phase == REQUEST_DONE ? ATA_PROGRESS_DONE :
-               request.phase == REQUEST_ERROR ? ATA_PROGRESS_ERROR : ATA_PROGRESS_IDLE;
+static enum AtaProgress poll_unit(Unit *u, unsigned sector_budget) {
+    Request *r = &u->request;
+    if (!active(u)) {
+        return r->phase == REQUEST_DONE ? ATA_PROGRESS_DONE :
+               r->phase == REQUEST_ERROR ? ATA_PROGRESS_ERROR : ATA_PROGRESS_IDLE;
     }
     unsigned transferred = 0;
+    /* Status belongs to the selected unit: on a shared channel another unit
+     * (or a probe of it) may have been selected last. The primary channel
+     * has one unit, selected with each command. */
+    if (u != PRIMARY && !r->selected) {
+        outb(u->base + REG_DEVICE, u->select); settle(u);
+        r->selected = 1;
+    }
     for (;;) {
         /* A loop iteration must advance a protocol phase, transfer one sector,
          * or return. Never repeat an observation to wait for hardware. */
-        unsigned char status = inb(ATA_CONTROL);
-        if (!status || status == 0xFF) return request_failed();
-        if (status & ATA_BUSY) return request_waiting();
-        if (status & (ATA_ERROR | ATA_FAULT)) return request_failed();
+        unsigned char status = inb(u->control);
+        if (!status || status == 0xFF) return request_failed(u);
+        if (status & ATA_BUSY) return request_waiting(u);
+        if (status & (ATA_ERROR | ATA_FAULT)) return request_failed(u);
 
-        if (request.phase == REQUEST_WAIT_IDLE) {
-            if (status & ATA_DRQ) return request_waiting();
-            if (request.flushing) {
-                outb(ATA_STATUS, ATA_FLUSH); settle();
-                request.phase = REQUEST_FINISH;
+        if (r->phase == REQUEST_WAIT_IDLE) {
+            if (status & ATA_DRQ) return request_waiting(u);
+            if (r->flushing) {
+                outb(u->base + REG_STATUS, ATA_FLUSH); settle(u);
+                r->phase = REQUEST_FINISH;
             } else {
-                request.chunk_left = request.left > 128 ? 128 : request.left;
-                outb(ATA_DEVICE, 0xE0 | ((request.lba >> 24) & 15)); settle();
-                outb(ATA_COUNT, request.chunk_left);
-                outb(ATA_LBA0, request.lba);
-                outb(ATA_LBA1, request.lba >> 8);
-                outb(ATA_LBA2, request.lba >> 16);
-                outb(ATA_STATUS, request.writing ? ATA_WRITE : ATA_READ); settle();
-                request.phase = REQUEST_DATA;
+                r->chunk_left = r->left > 128 ? 128 : r->left;
+                outb(u->base + REG_DEVICE, (u->select | 0x40) | ((r->lba >> 24) & 15)); settle(u);
+                outb(u->base + REG_COUNT, r->chunk_left);
+                outb(u->base + REG_LBA0, r->lba);
+                outb(u->base + REG_LBA1, r->lba >> 8);
+                outb(u->base + REG_LBA2, r->lba >> 16);
+                outb(u->base + REG_STATUS, r->writing ? ATA_WRITE : ATA_READ); settle(u);
+                r->phase = REQUEST_DATA;
             }
-            request.started = timer_ticks();
-        } else if (request.phase == REQUEST_DATA) {
-            if (!(status & ATA_DRQ)) return request_waiting();
+            r->started = timer_ticks();
+        } else if (r->phase == REQUEST_DATA) {
+            if (!(status & ATA_DRQ)) return request_waiting(u);
             if (transferred == sector_budget) return ATA_PROGRESS_MORE;
-            transfer_sector(request.buffer, request.writing);
-            request.buffer += 512;
-            ++transferred; ++request.lba; --request.left;
-            if (!--request.chunk_left) request.phase = REQUEST_FINISH;
-            settle();
-            request.started = timer_ticks();
+            transfer_sector(u->base + REG_DATA, r->buffer, r->writing);
+            r->buffer += 512;
+            ++transferred; ++r->lba; --r->left;
+            if (!--r->chunk_left) r->phase = REQUEST_FINISH;
+            settle(u);
+            r->started = timer_ticks();
         } else { /* REQUEST_FINISH: command/flush completion, not just data. */
-            if (status & ATA_DRQ) return request_waiting();
-            if (request.flushing || !request.left) {
-                request.buffer = 0;
-                request.phase = REQUEST_DONE;
+            if (status & ATA_DRQ) return request_waiting(u);
+            if (r->flushing || !r->left) {
+                r->buffer = 0;
+                r->phase = REQUEST_DONE;
                 return ATA_PROGRESS_DONE;
             }
-            request.phase = REQUEST_WAIT_IDLE;
-            request.started = timer_ticks();
+            r->phase = REQUEST_WAIT_IDLE;
+            r->started = timer_ticks();
         }
     }
 }
-static int complete_request(void) {
+enum AtaProgress ata_poll(unsigned sector_budget) { return poll_unit(PRIMARY, sector_budget); }
+static int complete_request(Unit *u) {
     for (;;) {
         /* A one-sector budget keeps the legacy device-service opportunity
          * after every sector, including the final one. */
-        unsigned left = request.left;
-        enum AtaProgress progress = ata_poll(1);
+        unsigned left = u->request.left;
+        enum AtaProgress progress = poll_unit(u, 1);
         if (progress == ATA_PROGRESS_MORE || progress == ATA_PROGRESS_WAIT ||
-            (!request.flushing && request.left != left)) platform_poll();
+            (!u->request.flushing && u->request.left != left)) platform_poll();
         if (progress == ATA_PROGRESS_DONE) return 0;
         if (progress == ATA_PROGRESS_ERROR || progress == ATA_PROGRESS_IDLE) return -1;
     }
 }
 int ata_read(unsigned lba, void *buffer, int sectors) {
-    return ata_request_read(lba, buffer, sectors) < 0 ? -1 : complete_request();
+    return ata_request_read(lba, buffer, sectors) < 0 ? -1 : complete_request(PRIMARY);
 }
 int ata_write(unsigned lba, const void *buffer, int sectors) {
-    return ata_request_write(lba, buffer, sectors) < 0 ? -1 : complete_request();
+    return ata_request_write(lba, buffer, sectors) < 0 ? -1 : complete_request(PRIMARY);
 }
 int ata_flush(void) {
-    return ata_request_flush() < 0 ? -1 : complete_request();
+    return ata_request_flush() < 0 ? -1 : complete_request(PRIMARY);
+}
+
+/* ---------- exchange disks ---------- */
+
+static Unit *unit_of(int unit) { return unit > 0 && unit < ATA_UNITS ? &units[unit] : 0; }
+int ata_unit_probe(int unit) { Unit *u = unit_of(unit); return u ? probe(u) : -1; }
+unsigned ata_unit_sectors(int unit) { Unit *u = unit_of(unit); return u && u->ready ? u->capacity : 0; }
+int ata_unit_read(int unit, unsigned lba, void *buffer, int sectors) {
+    Unit *u = unit_of(unit);
+    return !u || request_transfer(u, lba, buffer, sectors, 0) < 0 ? -1 : complete_request(u);
+}
+int ata_unit_write(int unit, unsigned lba, const void *buffer, int sectors) {
+    Unit *u = unit_of(unit);
+    return !u || request_transfer(u, lba, (unsigned char *)buffer, sectors, 1) < 0 ? -1 : complete_request(u);
+}
+int ata_unit_flush(int unit) {
+    Unit *u = unit_of(unit);
+    return !u || request_flush(u) < 0 ? -1 : complete_request(u);
 }

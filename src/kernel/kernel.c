@@ -16,6 +16,7 @@
 #include "kernel/net.h"
 #include "kernel/net_driver.h"
 #include "kernel/ufile.h"
+#include "kernel/fatvol.h"
 #include "kernel/download.h"
 #include "build_info.h"
 
@@ -296,6 +297,7 @@ void kernel_services_poll(void) {
     audio_poll();
     net_poll();
     ufile_poll();
+    fatvol_poll();
     if (download_tick()) pending_events |= KERNEL_EVENT_DOWNLOADS;
 }
 
@@ -348,6 +350,7 @@ void kmain(void) {
         kprint_debug("FS seeded fresh\n");
     else
         kprint_debug("FS load failed; disk protected, session is RAM-only\n");
+    fatvol_init();
 
     kprint_debug("Shell ");
     kprint_debug(baseos_shell.name);

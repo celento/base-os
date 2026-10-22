@@ -1,6 +1,8 @@
 #ifndef ATA_H
 #define ATA_H
 /* Optional primary-master ATA disk, polled 28-bit LBA PIO. No partitioning.
+ * The calls below, other than the ata_unit ones, are for this disk, which
+ * holds the native volume.
  * Probe: 1 usable ATA disk, 0 absent, -1 unsupported/unreadable or a request
  * is active. An active-request probe does not touch hardware or request state. */
 int ata_probe(void);
@@ -45,4 +47,14 @@ enum AtaProgress ata_poll(unsigned sector_budget);
 int ata_read(unsigned lba, void *buffer, int sectors);
 int ata_write(unsigned lba, const void *buffer, int sectors);
 int ata_flush(void);
+
+/* Exchange disks on the secondary channel: unit 1 master, unit 2 slave.
+ * Blocking only; the two share the channel and take turns. Probe as above;
+ * sectors is 0 until a probe succeeds. */
+#define ATA_UNITS 3
+int ata_unit_probe(int unit);
+unsigned ata_unit_sectors(int unit);
+int ata_unit_read(int unit, unsigned lba, void *buffer, int sectors);
+int ata_unit_write(int unit, unsigned lba, const void *buffer, int sectors);
+int ata_unit_flush(int unit);
 #endif

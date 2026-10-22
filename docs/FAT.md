@@ -5,8 +5,7 @@ disk images can move between BaseOS and other systems (DOS, Windows, Linux,
 emulators). BaseFS 2 stays the native volume format; FAT is for exchange.
 
 This page covers what the core supports, how it keeps a volume repairable
-after a crash, and how it is tested. Mounting FAT disks for programs is a
-separate layer on top.
+after a crash, how programs reach FAT disks, and how it is tested.
 
 ## What it handles
 
@@ -76,6 +75,34 @@ reached, so sequential reads and writes do not walk the chain from the start.
 Copies of a node are independent: after one copy changes the file, other
 copies are stale.
 
+## FAT disks for programs
+
+Exchange disks sit on the secondary ATA channel: the master is `/disk1` and
+the slave is `/disk2` (`kernel/fatvol.c`). The primary master stays the native
+BaseFS 2 volume. At boot each secondary disk is probed and the FAT volume on it
+(whole disk or first MBR partition) is mounted; the serial log says
+`FAT: mounted /disk1`, adding "(not cleanly unmounted)" when another system
+left it marked in use.
+
+ELF programs use them through the ordinary file calls (`kernel/ufile.c`):
+open, read, write, seek, ftruncate, fsync, stat, fstat, readdir, mkdir,
+unlink, rmdir, rename, chdir and getcwd. Details:
+
+- Paths are normalized by name ("." and ".."), so `cd /disk1/GAMES; cd ../..`
+  lands in the native root. `/` lists the mounted disks next to the native
+  folders; a mounted disk hides a native root folder of the same name.
+- Every open of one file shares one node, so all descriptors see the same
+  size and data, and a rename through a path keeps open files working.
+- Deleting an open file fails with EBUSY, as on other systems that use FAT.
+- Renaming between volumes fails with EXDEV. Renaming onto an existing file
+  replaces it, as POSIX rename does.
+- Reads and writes go to the disk as they happen, in pieces of up to 64 KiB
+  through a kernel buffer. FSInfo and the clean mark are written a second
+  after the last change, or at once by fsync.
+- The two secondary units share one channel and take turns; each request
+  selects its unit before reading status, so probing one unit cannot confuse
+  the other.
+
 ## Tests
 
 `tests/test_fat.py` builds `tests/fat_host.c` (the core on an in-memory disk,
@@ -92,3 +119,10 @@ with ASan and UBSan) and checks it against dosfstools and mtools:
 - a power cut at many points of a script leaves every chain consistent (only
   the renamed file may appear under two names), untouched files intact, and a
   volume `fsck.fat` repairs to clean.
+
+`tools/fat_volume_test.py` boots the ELF fixture with a FAT32 disk made by
+`mkfs.fat` and `mcopy` on the secondary master. `examples/elf/fatdisk.c` reads
+a host file, makes folders, writes, patches, truncates and reads back a 3 MiB
+file through two descriptors, appends, renames across folders and checks the
+EBUSY, EXDEV and ENOTEMPTY cases. The host then runs `fsck.fat -n` and
+compares what `mcopy` extracts.
