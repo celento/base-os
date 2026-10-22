@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from test_editor_binding import function
+from desktop_source import chrome_defines
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,7 +17,7 @@ class PaintFillTests(unittest.TestCase):
         source = (ROOT / 'src/shell/desktop/desktop.c').read_text()
         first = source.index('#define PAINT_W ')
         last = source.index('static void paint_init(void)', first)
-        implementation = re.search(r'^#define TITLE_H\s+\d+', source, re.M).group() + '\n'
+        implementation = chrome_defines(source)
         implementation += source[first:last]
         implementation += ''.join(function(source, name) for name in (
             'paint_init', 'plot_lg', 'paint_stamp', 'bresenham_lg', 'rect_lg',
