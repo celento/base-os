@@ -2,15 +2,17 @@
  *   fat_host info IMAGE
  *   fat_host ls IMAGE PATH            one "d|f size modified name" line per entry
  *   fat_host cat IMAGE PATH           the file's bytes on stdout
- *   fat_host script IMAGE [BUDGET]    tab-separated operations from stdin
+ *   fat_host script IMAGE [BUDGET [SEED]]  tab-separated operations from stdin
  *   fat_host self                     unit checks on a RAM disk
  * Script operations (paths from the root, '/'-separated):
  *   put PATH SEED SIZE OFFSET   write SIZE pattern bytes at OFFSET, creating the file
  *   trunc PATH SIZE | mkdir PATH | rm PATH | mv FROM TO | sync
  *   failwrite N                 the Nth sector write from now fails, once
  * BUDGET limits sector writes, as if power failed after that many; the image
- * is saved as the disk holds it then. A failed operation prints its error and
- * the script goes on. */
+ * is saved as the disk holds it then. With SEED the disk has a write-back
+ * cache: writes wait in it until a flush, and at the cut a random subset of
+ * the waiting writes (picked by SEED) reaches the image. A failed operation
+ * prints its error and the script goes on. */
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -32,12 +34,21 @@ typedef struct {
     long writes;
     long fail_in;           /* >0: the write that brings this to 0 fails */
     int cut;
+    int cache;              /* writes wait in pending until a flush */
+    uint32_t *pending_lba;
+    uint8_t *pending;
+    size_t count, capacity;
 } Disk;
+
+static void commit(Disk *d, size_t i) { memcpy(d->data + (size_t)d->pending_lba[i] * 512, d->pending + i * 512, 512); }
 
 static int disk_read(void *context, uint32_t lba, void *buffer, uint32_t sectors) {
     Disk *d = context;
     if (lba > d->sectors || sectors > d->sectors - lba) return -1;
     memcpy(buffer, d->data + (size_t)lba * 512, (size_t)sectors * 512);
+    for (size_t i = 0; i < d->count; ++i)
+        if (d->pending_lba[i] >= lba && d->pending_lba[i] - lba < sectors)
+            memcpy((uint8_t *)buffer + (size_t)(d->pending_lba[i] - lba) * 512, d->pending + i * 512, 512);
     return 0;
 }
 static int disk_write(void *context, uint32_t lba, const void *buffer, uint32_t sectors) {
@@ -48,11 +59,27 @@ static int disk_write(void *context, uint32_t lba, const void *buffer, uint32_t 
         if (d->fail_in > 0 && !--d->fail_in) return -1;
         if (d->budget > 0) --d->budget;
         ++d->writes;
-        memcpy(d->data + (size_t)(lba + i) * 512, (const uint8_t *)buffer + (size_t)i * 512, 512);
+        if (!d->cache) {
+            memcpy(d->data + (size_t)(lba + i) * 512, (const uint8_t *)buffer + (size_t)i * 512, 512);
+            continue;
+        }
+        if (d->count == d->capacity) {
+            d->capacity = d->capacity ? d->capacity * 2 : 64;
+            d->pending_lba = realloc(d->pending_lba, d->capacity * sizeof *d->pending_lba);
+            d->pending = realloc(d->pending, d->capacity * 512);
+        }
+        d->pending_lba[d->count] = lba + i;
+        memcpy(d->pending + d->count++ * 512, (const uint8_t *)buffer + (size_t)i * 512, 512);
     }
     return 0;
 }
-static int disk_flush(void *context) { return ((Disk *)context)->cut ? -1 : 0; }
+static int disk_flush(void *context) {
+    Disk *d = context;
+    if (d->cut) return -1;
+    for (size_t i = 0; i < d->count; ++i) commit(d, i);
+    d->count = 0;
+    return 0;
+}
 static FatDevice device_of(Disk *d) { return (FatDevice){disk_read, disk_write, disk_flush, d, d->sectors}; }
 
 static uint32_t clock_value = 24u * 365u * 86400u + 12345u;
@@ -66,7 +93,7 @@ static Disk load(const char *path) {
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    Disk d = {malloc((size_t)size), (uint32_t)(size / 512), -1, 0, 0, 0};
+    Disk d = {malloc((size_t)size), (uint32_t)(size / 512), -1, 0, 0, 0, 0, 0, 0, 0, 0};
     if (fread(d.data, 1, (size_t)size, f) != (size_t)size) exit(2);
     fclose(f);
     return d;
@@ -245,9 +272,16 @@ int main(int argc, char **argv) {
     } else if (!strcmp(argv[1], "cat") && argc == 4) {
         cat(&v, argv[3]);
     } else if (!strcmp(argv[1], "script")) {
-        if (argc == 4) disk.budget = strtol(argv[3], 0, 0);
+        if (argc >= 4) disk.budget = strtol(argv[3], 0, 0);
+        unsigned seed = argc >= 5 ? (unsigned)strtoul(argv[4], 0, 0) : 0;
+        disk.cache = argc >= 5;
         status = run_script(&v) ? 1 : 0;
         if (fat_unmount(&v) && !disk.cut) { fprintf(stderr, "unmount failed\n"); status = 5; }
+        /* What a write-back cache may have saved when the power went. */
+        for (size_t i = 0; i < disk.count; ++i)
+            if ((seed = seed * 1103515245u + 12345u) >> 16 & 1) commit(&disk, i);
+        free(disk.pending_lba);
+        free(disk.pending);
         save(argv[2], &disk);
         fprintf(stderr, "writes %ld\n", disk.writes);
         free(disk.data);
