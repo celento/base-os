@@ -46,6 +46,36 @@ int ui_icon_has(int id, int size) {
     return i >= 0 && ui_icon_images[i].size == size;
 }
 
+/* The active style's icon data, unpacked on first use and again after a
+ * style change. A truncated or corrupt stream leaves the rest zeroed, which
+ * draws as transparent pixels. */
+static uint8_t icon_data[UI_ICON_DATA_MAX];
+static int icon_data_style = -1;
+
+static const uint8_t *ui_icon_unpacked(int style) {
+    if (icon_data_style == style) return icon_data;
+    const uint8_t *in = ui_icon_packed[style];
+    uint32_t n = ui_icon_packed_size[style], cap = ui_icon_data_size[style], i = 0, o = 0;
+    if (cap > UI_ICON_DATA_MAX) cap = UI_ICON_DATA_MAX;
+    while (i < n && o < cap) {
+        uint8_t flags = in[i++];
+        for (int bit = 0; bit < 8 && i < n && o < cap; bit++) {
+            if (!(flags & (1u << bit))) {
+                icon_data[o++] = in[i++];
+                continue;
+            }
+            if (i + 1 >= n) { i = n; break; }
+            uint32_t back = in[i] | ((uint32_t)(in[i + 1] & 15) << 8), len = (uint32_t)(in[i + 1] >> 4) + 3;
+            i += 2;
+            if (!back || back > o) { i = n; break; }
+            while (len-- && o < cap) { icon_data[o] = icon_data[o - back]; o++; }
+        }
+    }
+    while (o < UI_ICON_DATA_MAX) icon_data[o++] = 0;
+    icon_data_style = style;
+    return icon_data;
+}
+
 static uint8_t ui_icon_color(uint8_t index, uint8_t ink, uint8_t paper) {
     return index == 255 ? ink : index == 254 ? paper : index;
 }
@@ -59,7 +89,7 @@ void ui_icon_draw(int id, int x, int y, int size, uint8_t ink, uint8_t paper) {
     /* A smaller image than asked for is centered in the requested box. */
     x += (size - s) / 2;
     y += (size - s) / 2;
-    const uint8_t *idx = ui_icon_data[style] + ui_icon_offsets[style][image][0];
+    const uint8_t *idx = ui_icon_unpacked(style) + ui_icon_offsets[style][image][0];
     const uint8_t *alpha = idx + s * s;
     const uint8_t *mix = alpha + s * s / 2;
     int mixes = (int)ui_icon_offsets[style][image][1], m = 0;
