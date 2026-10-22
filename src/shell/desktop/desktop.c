@@ -3664,6 +3664,7 @@ static int snk_next_dir;
 static int snk_food_x;
 static int snk_food_y;
 static int snk_score;
+static int snk_best;   /* best score since boot */
 static int snk_over;
 static uint32_t snk_last_tick;
 static unsigned snk_rng;
@@ -3755,6 +3756,8 @@ static void snake_tick(void) {
     snk_y[0] = (unsigned char)ny;
     if (ate) {
         snk_score++;
+        if (snk_score > snk_best)
+            snk_best = snk_score;
         snk_place_food();
     }
     dirty = 1;
@@ -3771,6 +3774,10 @@ static void handle_snake_key(void) {
         close_front();
         return;
     }
+    if (snk_over && (key_sc == KEY_ENTER || key_sc == KEY_SPACE)) {
+        snake_reset();
+        return;
+    }
     if (key_sc == KEY_RIGHT)
         snake_turn(0);
     else if (key_sc == KEY_DOWN)
@@ -3781,44 +3788,56 @@ static void handle_snake_key(void) {
         snake_turn(3);
 }
 
-static void snake_info(char *out, int cap) {
-    const char *lbl = "Score: ";
-    char num[12];
-    int i = 0;
-    for (int p = 0; lbl[p] && i < cap - 1; p++)
-        out[i++] = lbl[p];
-    utoa((unsigned)snk_score, num);
-    for (int p = 0; num[p] && i < cap - 1; p++)
-        out[i++] = num[p];
-    if (snk_over) {
-        const char *go = "  GAME OVER";
-        for (int p = 0; go[p] && i < cap - 1; p++)
-            out[i++] = go[p];
-    }
-    out[i] = 0;
+/* Snake layout: a toolbar with the score and New game, the playfield, and
+ * a status bar. Drawing and clicks share snake_layout. */
+#define SNK_MARGIN 16
+typedef struct {
+    PaneRect field, again, card, card_button;
+    int cx, cy, cw, ch;
+} SnakeLayout;
+
+static void snake_layout(int wx, int wy, int ww, int wh, SnakeLayout *L) {
+    L->cx = wx + 1; L->cy = wy + TITLE_H; L->cw = ww - 2; L->ch = wh - TITLE_H - 1;
+    int body = pane_body_y(L->cy), bottom = pane_status_y(L->cy, L->ch);
+    int fw = SNK_COLS * SNK_CELL, fh = SNK_ROWS * SNK_CELL;
+    L->field = (PaneRect){L->cx + (L->cw - fw) / 2, body + (bottom - body - fh) / 2, fw, fh};
+    int bw = pane_tool_w("New game");
+    L->again = (PaneRect){L->cx + L->cw - pane_pad() - bw, pane_ctl_y(L->cy), bw, BTN_H};
+    pane_card_layout(L->field.x, L->field.y, fw, fh, &L->card, &L->card_button);
+}
+
+static int snake_window_h(void) {
+    return TITLE_H + pane_tool_h() - (MODERN ? 1 : 0) + 2 * SNK_MARGIN + SNK_ROWS * SNK_CELL +
+           pane_status_h() + 1;
 }
 
 static void draw_snake(int wx, int wy, int ww, int wh, int inactive) {
-    char info[32];
-    snake_info(info, 32);
-    gui_draw_window(wx, wy, ww, wh, "Snake", info,
-                    WIN_INFO | (inactive ? WIN_INACTIVE : 0));
-
-    int bx = wx + 1;
-    int by = wy + TITLE_H + INFO_H + 1;
-    int bw = ww - 2;
-    int bh = wh - TITLE_H - INFO_H - 2;
-    if (bw < 1 || bh < 1)
-        return;
+    gui_draw_window(wx, wy, ww, wh, "Snake", 0, inactive ? WIN_INACTIVE : 0);
+    SnakeLayout L;
+    snake_layout(wx, wy, ww, wh, &L);
+    PaneHot hp = inactive ? 0 : hot;
+    /* Toolbar: score, length and best, then New game. */
+    pane_toolbar(L.cx, L.cy, L.cw);
+    char num[12];
+    int x = L.cx + pane_pad() + 4, ty = pane_ctl_y(L.cy);
+    utoa((unsigned)snk_score, num);
+    x += pane_inline_stat(x, ty, BTN_H, "Score", num) + 20;
+    utoa((unsigned)snk_len, num);
+    x += pane_inline_stat(x, ty, BTN_H, "Length", num) + 20;
+    utoa((unsigned)snk_best, num);
+    pane_inline_stat(x, ty, BTN_H, "Best", num);
+    pane_tool(&L.again, ICON_REFRESH, "New game", KB_DEFAULT,
+              pane_hot(hp, L.again.x, L.again.y, L.again.w, L.again.h));
+    /* Playfield art: a dark board with a faint grid. */
+    PaneRect *f = &L.field;
     uint8_t field = gfx_rgb(0x16, 0x1A, 0x24);
     uint8_t grid = gfx_rgb(0x1E, 0x23, 0x30);
-    draw_rect(bx, by, bw, bh, field);
-
-    int gx = bx + (bw - SNK_COLS * SNK_CELL) / 2;
-    int gy = by + (bh - SNK_ROWS * SNK_CELL) / 2;
-    for (int r = 0; r <= SNK_ROWS; r++)
+    kit_fill(f->x - 1, f->y - 1, f->w + 2, f->h + 2, MODERN ? 8 : KIT_R_SQUARE, TK_LINE, 1);
+    kit_fill(f->x, f->y, f->w, f->h, MODERN ? 7 : KIT_R_SQUARE, field, 1);
+    int gx = f->x, gy = f->y;
+    for (int r = 1; r < SNK_ROWS; r++)
         draw_hline(gx, gy + r * SNK_CELL, SNK_COLS * SNK_CELL, grid);
-    for (int c = 0; c <= SNK_COLS; c++)
+    for (int c = 1; c < SNK_COLS; c++)
         draw_vline(gx + c * SNK_CELL, gy, SNK_ROWS * SNK_CELL, grid);
     for (int i = 0; i < snk_len; i++) {
         uint8_t body = (i == 0) ? TK_ACCENT_700 : ui_accent;
@@ -3827,6 +3846,24 @@ static void draw_snake(int wx, int wy, int ww, int wh, int inactive) {
     }
     draw_round_rect(gx + snk_food_x * SNK_CELL + 2, gy + snk_food_y * SNK_CELL + 2,
                     SNK_CELL - 4, SNK_CELL - 4, (SNK_CELL - 4) / 2, gfx_rgb(0xF0, 0x50, 0x48));
+    if (snk_over) {
+        shade_rect(f->x, f->y, f->w, f->h, 1);
+        char text[40];
+        utoa((unsigned)snk_score, num);
+        pane_join(text, sizeof text, "You scored ", num, snk_score == 1 ? " point." : " points.");
+        pane_card(&L.card, &L.card_button, "Game over", text, "Play again",
+                  pane_hot(hp, L.card_button.x, L.card_button.y, L.card_button.w, L.card_button.h));
+    }
+    pane_statusbar(L.cx, L.cy, L.cw, L.ch,
+                   snk_over ? "Enter or Space plays again; Esc closes" : "Arrow keys steer; Esc closes",
+                   TK_TEXT2, snk_over ? "Game over" : "Playing", snk_over ? TK_RED_700 : TK_TEXT2);
+}
+
+static void handle_snake_click(int wx, int wy, int ww, int wh) {
+    SnakeLayout L;
+    snake_layout(wx, wy, ww, wh, &L);
+    if (pane_hit(mouse_x, mouse_y, &L.again) || (snk_over && pane_hit(mouse_x, mouse_y, &L.card_button)))
+        snake_reset();
 }
 
 static void open_snake(void) {
@@ -4376,7 +4413,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *w=IMAGE_VIEWER_W+2;*h=IMAGE_VIEWER_H+TITLE_H+2;break;
     case WK_SNAKE:
         *w = 520;
-        *h = 400;
+        *h = snake_window_h();
         break;
     case WK_WORDLE:
         *w = WORDLE_W;
@@ -4421,7 +4458,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     }
     /* These sizes predate the window menu strip; give back its height so the
      * content keeps its original bottom margin. */
-    if (kind == WK_CALC || kind == WK_SNAKE ||
+    if (kind == WK_CALC ||
         kind == WK_WORDLE || kind == WK_TERM || kind == WK_PAINT)
         *h += WMENU_H;
     int maxh = fb_h - MENUBAR_H - TASKBAR_H - 8;
@@ -8915,6 +8952,8 @@ static void window_body_click(int i) {
         handle_properties_click(w->x, w->y, w->w, w->h);
     else if (w->kind == WK_PAINT)
         handle_paint_click(w->x, w->y, w->w, w->h);
+    else if (w->kind == WK_SNAKE)
+        handle_snake_click(w->x, w->y, w->w, w->h);
     else if (w->kind == WK_WORDLE) {
         if (wordle_click(w->x, w->y + TITLE_H, mouse_x, mouse_y)) dirty = 1;
     } else if (w->kind == WK_VIEW) {
