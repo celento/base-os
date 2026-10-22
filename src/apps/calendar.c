@@ -18,6 +18,10 @@ static int first_row, confirm, caret, select_all, entry_focus;
 /* Agenda rows on screen, from the last layout; keyboard paging uses it. */
 static int page_rows = 6;
 static const char *notice = "";
+/* The field a failed save points at; it shows the error state while its
+ * message is the notice. */
+static const char *error_notice = "";
+static int error_field = -1;
 
 static int length(const char *s) { int n = 0; while (s[n]) ++n; return n; }
 static void copy(char *d, const char *s) { while ((*d++ = *s++)) {} }
@@ -134,14 +138,14 @@ static void save_entry(void) {
     int y, m, day, minute;
     if (!d->active) return;
     if (!cal_agenda_parse_date(d->date, &y, &m, &day)) {
-        focus_field(0); notice = "Use a real date: YYYY-MM-DD (1900-9999)."; return;
+        focus_field(0); error_field = 0; notice = error_notice = "Use a real date: YYYY-MM-DD (1900-9999)."; return;
     }
     if (!cal_agenda_parse_time(d->time, &minute)) {
-        focus_field(1); notice = "Use 24-hour HH:MM, or leave time blank for all-day."; return;
+        focus_field(1); error_field = 1; notice = error_notice = "Use 24-hour HH:MM, or leave time blank for all-day."; return;
     }
     int nonspace = 0;
     for (int i = 0; d->title[i]; ++i) nonspace |= d->title[i] != ' ';
-    if (!nonspace) { focus_field(2); notice = "Add an appointment title."; return; }
+    if (!nonspace) { focus_field(2); error_field = 2; notice = error_notice = "Add an appointment title."; return; }
     unsigned id = cal_agenda_commit_draft();
     if (!id) { notice = "Entry kept. List full or edited appointment unavailable."; return; }
     view_year = y; view_month = m; view_day = day;
@@ -233,7 +237,8 @@ static void cal_layout(int bx, int by, int bw, int bh, CalLayout *L) {
 static int cal_hit(int mx, int my, const CalRect *r) { return pane_hit(mx, my, r); }
 static int field_state(int field, int active) {
     if (!active) return KIT_DISABLED;
-    return entry_focus && cal_agenda_draft()->field == field && !confirm ? KIT_FOCUS : 0;
+    int error = notice[0] && notice == error_notice && error_field == field ? KIT_ERROR : 0;
+    return (entry_focus && cal_agenda_draft()->field == field && !confirm ? KIT_FOCUS : 0) | error;
 }
 static void draw_field(const CalRect *r, const char *s, const char *placeholder, int field, int active) {
     int state = field_state(field, active), focused = state & KIT_FOCUS;
