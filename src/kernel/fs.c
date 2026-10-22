@@ -289,11 +289,22 @@ static uint64_t basefs_spare(unsigned count, uint64_t reserve) {
     while (blocks && blocks + bfs_blocks_for(bytes + 12u * blocks) > available) --blocks;
     return blocks * BFS_BLOCK;
 }
-/* A new node fits while the volume keeps its reserve. */
-static int bfs_node_fits(unsigned count) {
+/* Metadata for count nodes, grown by grow name bytes, fits while the volume
+ * keeps its reserve and the checkpoint still fits the image arena it is
+ * staged in. */
+static int bfs_meta_fits(unsigned count, uint64_t grow) {
     uint64_t reserve = bfs_largest_blocks();
-    return bfs_pending_blocks(-1) + reserve +
-           bfs_blocks_for(bfs_checkpoint_bytes(count, -1, 0, 0) + 12u * reserve) <= bfs.free_blocks;
+    uint64_t bytes = bfs_checkpoint_bytes(count, -1, 0, 0) + grow + 12u * reserve;
+    return (uint64_t)bfs_blocks_for(bytes) * BFS_BLOCK <= image_capacity &&
+           bfs_pending_blocks(-1) + reserve + bfs_blocks_for(bytes) <= bfs.free_blocks;
+}
+/* A new node fits while the volume keeps its reserve. */
+static int bfs_node_fits(unsigned count) { return bfs_meta_fits(count, 0); }
+/* A longer name on node id grows the checkpoint the same way. */
+static int bfs_name_fits(int id, const char *name) {
+    unsigned now = ((unsigned)kstrlen(nodes[id].name) + 3u) & ~3u;
+    unsigned next = ((unsigned)kstrlen(name) + 3u) & ~3u;
+    return next <= now || bfs_meta_fits((unsigned)fs_node_count(), next - now);
 }
 static unsigned basefs_capacity(unsigned count) {
     uint64_t total = fs_used_bytes() + basefs_spare(count, bfs_largest_blocks());
@@ -412,6 +423,7 @@ static int tree_fits(int id, int parent, const char *name) {
     if (path_shape(parent, &depth, &bytes) < 0) return 0;
     ++depth; bytes += 1 + kstrlen(name);
     if (depth > FS_MAX_DEPTH || bytes >= FS_PATH_LEN) return 0;
+    if (id >= 0 && data_backend == 3 && !bfs_name_fits(id, name)) return 0;
     if (id < 0 || !nodes[id].is_dir) return 1;
     for (int i = 1; i < node_slots; ++i) {
         if (!nodes[i].used || i == id) continue;

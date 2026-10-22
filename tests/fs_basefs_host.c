@@ -462,6 +462,26 @@ int main(void) {
         assert(fs_delete(fs_find_child(many, item)) == 0);
     }
     assert(fs_sync() == 0 && mount() == 0 && fs_child_count(fs_find_child(0, "many")) == MANY / 2);
+    /* New nodes and longer names stop where the checkpoint would outgrow the
+     * image arena it is staged in, so every accepted change still saves. */
+    many = fs_find_child(0, "many");
+    image_capacity = (unsigned)bfs_checkpoint_bytes((unsigned)fs_node_count(), -1, 0, 0) + 4096u;
+    int added = 0;
+    for (;; ++added) {
+        snprintf(item, sizeof item, "more %d", added);
+        if (fs_create(many, item) < 0) break;
+    }
+    assert(added > 0 && added < 100);
+    int name_refused = 0;
+    for (int i = 2; i < MANY && !name_refused; i += 2) {
+        snprintf(item, sizeof item, "item %d.txt", i);
+        long_name[0] = (char)('a' + i % 26); long_name[1] = (char)('a' + i / 26 % 26);
+        long_name[2] = (char)('a' + i / 676 % 26);
+        name_refused = fs_rename(fs_find_child(many, item), long_name) < 0;
+    }
+    assert(name_refused && fs_sync() == 0);
+    image_capacity = FS_IMG_CAPACITY;
+    assert(mount() == 0 && fs_child_count(fs_find_child(0, "many")) == MANY / 2 + added);
 
     /* The snapshot formats keep their limits. */
     fs_init();
