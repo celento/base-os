@@ -64,6 +64,7 @@ static uint32_t stage_base;
 static uint64_t resample_frame;
 
 static void clear_pcm_stream(void) { pcm_reader = 0; pcm_context = 0; }
+void *audio_stream_context(void) { return pcm_reader ? pcm_context : 0; }
 static void reset_playback(void) {
     /* QEMU's SB16 SAMPLE_RATE_MAX is 45000, so programming 48000 directly
      * silently changes pitch and duration. All source formats share this path. */

@@ -40,6 +40,8 @@ int audio_play_wav(const void *data, uint32_t bytes);
  * must not reenter audio functions; each audio_poll calls it at most once. */
 int audio_play_pcm_stream(unsigned rate, unsigned channels, uint32_t total_frames,
                           AudioPcmReader reader, void *context);
+/* The context of the PCM stream that plays now, or 0. */
+void *audio_stream_context(void);
 /* Run from main loop and platform_poll. Never call from an interrupt handler.
  * Every call reads at most 4096 source PCM samples, decodes one MP3 frame, or
  * calls the PCM reader once for at most 4096 samples. Resampling also writes
