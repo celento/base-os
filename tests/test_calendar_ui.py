@@ -11,12 +11,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class CalendarUITests(unittest.TestCase):
     def test_smallest_production_display_fits(self):
-        kernel = (ROOT / 'src/shell/desktop/desktop.c').read_text()
+        theme = (ROOT / 'src/ui/theme.c').read_text()
         header = (ROOT / 'src/apps/calendar.h').read_text()
-        def constant(source, name):
-            return int(re.search(r'^#define\s+' + name + r'\s+(\d+)', source, re.M)[1])
-        available = 600 - constant(kernel, 'MENUBAR_H') - constant(kernel, 'TASKBAR_H') - 8
-        self.assertLessEqual(constant(header, 'CAL_H') + constant(kernel, 'TITLE_H'), available)
+        cal_h = int(re.search(r'^#define\s+CAL_H\s+(\d+)', header, re.M)[1])
+        # Each style's top bar, taskbar or dock (Modern reserves 60 px) and window chrome.
+        for name in ('classic_metrics', 'modern_metrics'):
+            block = re.search(name + r'\s*=\s*\{(.*?)\};', theme, re.S)[1]
+            value = lambda key: int(re.search(r'\.' + key + r'\s*=\s*(\d+)', block)[1])
+            taskbar = 60 if 'MODERN' in block else value('taskbar_h')
+            title = value('border') + value('title_h') + value('menu_h') + (0 if value('menu_h') else 1)
+            available = 600 - value('topbar_h') - taskbar - 8
+            with self.subTest(style=name):
+                self.assertLessEqual(cal_h + title, available)
 
     def test_calendar_mouse_keyboard_recovery_and_rendering(self):
         with tempfile.TemporaryDirectory(prefix='baseos-calendar-ui-') as temporary:

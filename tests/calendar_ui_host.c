@@ -13,6 +13,7 @@ static unsigned char presented[FB_CAPACITY];
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
+#include "../src/ui/theme.c"
 #include "../src/apps/calendar_agenda.c"
 #include "../src/apps/calendar.c"
 

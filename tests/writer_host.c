@@ -11,6 +11,7 @@ static unsigned char presented[FB_CAPACITY];
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
+#include "../src/ui/theme.c"
 #include "ui/app.h"
 /* Theme tokens normally owned by kernel.c's theme_apply. The fixture keeps the
  * classic light mapping so pixel assertions stay literal and distinct. */

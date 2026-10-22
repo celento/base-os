@@ -10,6 +10,7 @@ static unsigned char host_presented[FB_CAPACITY];
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
+#include "../src/ui/theme.c"
 #define IMAGE_VIEWER_HOST_TEST
 #include "../src/apps/image_viewer.c"
 
@@ -72,9 +73,10 @@ int main(int argc, char **argv) {
     image_viewer_draw(730, 540, 360, 200);
     /* The retained image cannot use the palette ramps that a theme replaces. */
     for (unsigned i = 0; i < count; i++)
-        assert(IMAGE_MEMORY[i] < PAL_DESK || IMAGE_MEMORY[i] >= PAL_CUBE);
-    gfx_set_ramp(PAL_DESK, PAL_DESK_N, 0xff0000, 0x00ff00);
-    gfx_set_ramp(PAL_ACCENT, PAL_ACCENT_N, 0x00ff00, 0x0000ff); gfx_pal_commit();
+        assert(IMAGE_MEMORY[i] < PAL_TOKEN || (IMAGE_MEMORY[i] >= PAL_GRAY && IMAGE_MEMORY[i] < PAL_ICON_X) ||
+               IMAGE_MEMORY[i] >= PAL_CUBE);
+    gfx_set_ramp(PAL_TOKEN, PAL_TOKEN_N, 0xff0000, 0x00ff00);
+    gfx_set_ramp(PAL_ANSI, PAL_ANSI_N, 0x00ff00, 0x0000ff); gfx_pal_commit();
     assert(!memcmp(owned, IMAGE_MEMORY, count));
     assert(image_viewer_open("plain text", 10, "notes.txt") == IMAGE_UNSUPPORTED);
     assert(image_decode_set_poll_hook(NULL) == NULL);

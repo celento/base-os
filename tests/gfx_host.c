@@ -9,6 +9,7 @@ static uint8_t test_mirror[FB_CAPACITY];
 #define GFX_HOST_TEST
 #include "../src/kernel/gfx.c"
 #include "../src/ui/icons.c"
+#include "../src/ui/theme.c"
 void kmemset(void *d,int v,int n){memset(d,v,(size_t)n);}
 void kmemcpy(void *d,const void *s,int n){memmove(d,s,(size_t)n);}
 static uint8_t back[73*53],linear[73*53*4+53*12],reference[sizeof linear];
@@ -17,14 +18,14 @@ static void service_hook(void){serviced++;}
 static void output_equivalence(int bpp){
     int pitch=73*(bpp/8)+12;
     memset(linear,0xa5,sizeof linear);gfx_init(back,linear,73,53,bpp,pitch);
-    draw_ramp(0,0,73,53,PAL_DESK,PAL_DESK_N,0,RAMP_END(PAL_DESK_N));gfx_present();
+    draw_ramp(0,0,73,53,PAL_TOKEN,PAL_TOKEN_N,0,RAMP_END(PAL_TOKEN_N));gfx_present();
     draw_rect(0,0,1,1,COLOR_RED);draw_rect(72,52,1,1,COLOR_WHITE);
     draw_round_rect(10,9,40,30,8,COLOR_BLUE);draw_string("Test",11,15,COLOR_WHITE);gfx_present();
     memcpy(reference,linear,sizeof linear);flip_vga();assert(!memcmp(linear,reference,sizeof linear));
     /* Explicit cursor updates must not leave a stale presentation cache. */
     uint8_t old=back[12*73+12];put_pixel(12,12,COLOR_GREEN);flip_rect(12,12,1,1);put_pixel(12,12,old);gfx_present();
     memcpy(reference,linear,sizeof linear);flip_vga();assert(!memcmp(linear,reference,sizeof linear));
-    gfx_set_ramp(PAL_DESK,PAL_DESK_N,0xff0000,0x200000);gfx_pal_commit();gfx_present();
+    gfx_set_ramp(PAL_TOKEN,PAL_TOKEN_N,0xff0000,0x200000);gfx_pal_commit();gfx_present();
     memcpy(reference,linear,sizeof linear);flip_vga();assert(!memcmp(linear,reference,sizeof linear));
     for(int y=0;y<53;y++)for(int i=73*(bpp/8);i<pitch;i++)assert(linear[y*pitch+i]==0xa5);
 }
@@ -50,8 +51,8 @@ int main(void){
     draw_round_frame(-4,-4,12,12,6,COLOR_WHITE);
     draw_round_frame(0,0,1,1,8,COLOR_WHITE);assert(get_pixel(0,0)==COLOR_WHITE);
     /* Palette changes must invalidate cached nearest-color results. */
-    gfx_set_ramp(PAL_DESK,1,0x123456,0x123456);gfx_pal_commit();assert(gfx_rgb(0x12,0x34,0x56)==PAL_DESK);
-    gfx_set_ramp(PAL_DESK,1,0xffeeee,0xffeeee);gfx_pal_commit();assert(gfx_rgb(0x12,0x34,0x56)!=PAL_DESK);
+    gfx_set_ramp(PAL_TOKEN,1,0x123456,0x123456);gfx_pal_commit();assert(gfx_rgb(0x12,0x34,0x56)==PAL_TOKEN);
+    gfx_set_ramp(PAL_TOKEN,1,0xffeeee,0xffeeee);gfx_pal_commit();assert(gfx_rgb(0x12,0x34,0x56)!=PAL_TOKEN);
     for(int ch=32;ch<127;ch++){draw_char(ch,65,45,COLOR_BLACK);draw_edit_char(ch,-4,-3,COLOR_WHITE);}
     assert(glyph_level((uint8_t[]){0x1f},1,0,0)==1&&glyph_level((uint8_t[]){0x1f},1,0,1)==15);
     puts("graphics: clipped rounded corners, palette invalidation, 4-bit fonts, dirty spans, cursor restoration, 16/24/32-bit pitch passed");
