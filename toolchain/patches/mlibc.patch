@@ -11,3 +11,42 @@ index ce5a195..59e1395 100644
  # ANCHOR: demo-sysdeps
  elif host_machine.system() == 'demo'
  	subdir('sysdeps/demo')
+diff --git a/options/internal/generic/locale.cpp b/options/internal/generic/locale.cpp
+index 9a41bdd..8c1339f 100644
+--- a/options/internal/generic/locale.cpp
++++ b/options/internal/generic/locale.cpp
+@@ -15,8 +15,10 @@
+ 
+ namespace {
+ 
+-mlibc::localeinfo cLocale{};
+-mlibc::localeinfo startingLocale{};
++// Static programs run their own constructors before the C library's, and
++// those may call ctype functions: construct the locales first.
++[[gnu::init_priority(101)]] mlibc::localeinfo cLocale{};
++[[gnu::init_priority(101)]] mlibc::localeinfo startingLocale{};
+ 
+ thread_local mlibc::localeinfo *current_locale = nullptr;
+ mlibc::localeinfo *current_global_locale = &startingLocale;
+diff --git a/options/posix/generic/unistd.cpp b/options/posix/generic/unistd.cpp
+index e7a65d6..bced50f 100644
+--- a/options/posix/generic/unistd.cpp
++++ b/options/posix/generic/unistd.cpp
+@@ -264,6 +264,8 @@ long fpathconf(int, int name) {
+ 	switch (name) {
+ 	case _PC_NAME_MAX:
+ 		return NAME_MAX;
++	case _PC_PATH_MAX:
++		return PATH_MAX;
+ 	case _PC_FILESIZEBITS:
+ 		return FILESIZEBITS;
+ 	default:
+@@ -633,6 +635,8 @@ long pathconf(const char *, int name) {
+ 	switch (name) {
+ 	case _PC_NAME_MAX:
+ 		return NAME_MAX;
++	case _PC_PATH_MAX:
++		return PATH_MAX;
+ 	case _PC_FILESIZEBITS:
+ 		return FILESIZEBITS;
+ 	default:

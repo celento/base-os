@@ -54,7 +54,7 @@ typedef struct Thread {
     uint32_t tls_base;
     struct Thread *next;        /* ring of every thread */
     struct Thread *sibling;     /* threads of the same process */
-    uint8_t fpu[108] __attribute__((aligned(16)));
+    uint8_t fpu[512] __attribute__((aligned(16)));  /* FXSAVE area, or FNSAVE without FXSR */
 } Thread;
 
 void thread_init(void);

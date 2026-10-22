@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build third-party libraries for BaseOS ELF programs into the toolchain sysroot.
 
-    python3 ports/build.py            # zlib, libpng, libogg, opus, opusfile, iir1, SDL2
+    python3 ports/build.py            # zlib, libpng, libogg, opus, opusfile, iir1, SDL2, DOSBox
 
 Needs build/toolchain (toolchain/build.py). Each library is pinned by version
 and SHA-256 (or git commit), built as a static library with i686-baseos-gcc,
@@ -13,13 +13,21 @@ the cross compiler finds it without extra flags:
 with PKG_CONFIG_SYSROOT_DIR and PKG_CONFIG_LIBDIR set as env() below does.
 SDL 2 gets the BaseOS video and audio drivers from ports/sdl2. Steps are
 skipped when their stamp exists; --rebuild NAME forces one again.
+
+The last step builds DOSBox Staging with ports/dosbox/dosbox-staging.patch
+into build/ports/dosbox: the DOSBOX program, its resources folder and the
+BaseOS settings file. Copy that folder anywhere BaseOS can read and start
+DOSBOX; the settings file next to it keeps DOSBox in its portable layout.
 """
 import argparse
+import hashlib
 import os
 import pathlib
 import shutil
 import subprocess
 import sys
+import urllib.request
+import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'toolchain'))
@@ -46,6 +54,16 @@ SOURCES = {
              '24b574f71c87a763f50704bbb630cbe38298d544a1f890f099a4696b1d6beba4'),
 }
 IIR = ('iir1-1.9.3', 'https://github.com/berndporr/iir1.git', '1.9.3')
+DOSBOX = ('dosbox-staging-0.82.2', 'https://github.com/dosbox-staging/dosbox-staging.git', 'v0.82.2',
+          'f8c24f87d7fb0f41c2b7ef2a1aa97d16a52206be')
+# DOSBox builds SpeexDSP from its meson wrap. xiph.org is not always
+# reachable, so take the same release tag from GitHub and the wrap's build
+# files from WrapDB, both pinned.
+SPEEXDSP = ('speexdsp-1.2.1', 'https://github.com/xiph/speexdsp.git', 'SpeexDSP-1.2.1',
+            '1b28a0f61bc31162979e1f26f3981fc3637095c8')
+SPEEXDSP_WRAP = ('https://wrapdb.mesonbuild.com/v2/speexdsp_1.2.1-7/get_patch', 'speexdsp_1.2.1-7_patch.zip',
+                 '2e6ea56de3e8c20089c038acc1eb63745004e3935929f40e0afcfcfe05532952')
+OUTPUT = ROOT / 'build/ports'
 
 
 def tool(name):
@@ -180,14 +198,25 @@ def build_opusfile(work, cache):
     pkgconfig('opusfile', '0.12', '-I${includedir}/opus', '-L${libdir} -lopusfile', 'ogg opus')
 
 
+def git_tag(tree, url, tag, commit=None):
+    """A fresh checkout of tag in tree; commit, when given, must match."""
+    if tree.exists():
+        shutil.rmtree(tree)
+    tree.parent.mkdir(parents=True, exist_ok=True)
+    run(['git', 'init', '-q', tree], cwd=tree.parent)
+    run(['git', 'fetch', '-q', '--depth', '1', url, f'refs/tags/{tag}'], cwd=tree)
+    run(['git', 'checkout', '-q', 'FETCH_HEAD'], cwd=tree)
+    if commit:
+        head = subprocess.run(['git', 'rev-parse', 'HEAD^{commit}'], cwd=tree, check=True,
+                              capture_output=True, text=True).stdout.strip()
+        if head != commit:
+            raise SystemExit(f'{tree.name}: tag {tag} is {head}, expected {commit}')
+
+
 def build_iir(work, cache):
     directory, url, version = IIR
     tree = work / directory
-    if tree.exists():
-        shutil.rmtree(tree)
-    run(['git', 'init', '-q', tree], cwd=work)
-    run(['git', 'fetch', '-q', '--depth', '1', url, f'refs/tags/{version}'], cwd=tree)
-    run(['git', 'checkout', '-q', 'FETCH_HEAD'], cwd=tree)
+    git_tag(tree, url, version)
     files = sorted(str(path.relative_to(tree)) for path in (tree / 'iir').glob('*.cpp'))
     compile_library(tree, 'iir', files, ['-std=c++17', '-I.'], cxx=True)
     install_headers([tree / 'Iir.h'], USR / 'include')
@@ -241,8 +270,68 @@ def build_sdl2(work, cache):
     pkgconfig('sdl2', '2.30.9', '-I${includedir}/SDL2 -D_REENTRANT', '-L${libdir} -lSDL2 -lpthread')
 
 
+def dosbox_cross_file(path):
+    binary = TOOLCHAIN / 'bin'
+    path.write_text(f"""[binaries]
+c = '{binary}/{TARGET}-gcc'
+cpp = '{binary}/{TARGET}-g++'
+ar = '{binary}/{TARGET}-ar'
+strip = '{binary}/{TARGET}-strip'
+pkg-config = 'pkg-config'
+
+[properties]
+sys_root = '{SYSROOT}'
+pkg_config_libdir = '{USR}/lib/pkgconfig'
+
+[host_machine]
+system = 'baseos'
+cpu_family = 'x86'
+cpu = 'i686'
+endian = 'little'
+""")
+
+
+def build_dosbox(work, cache):
+    directory, url, tag, commit = DOSBOX
+    tree = work / directory
+    git_tag(tree, url, tag, commit)
+    run(['git', 'apply', HERE / 'dosbox/dosbox-staging.patch'], cwd=tree)
+    name, speex_url, speex_tag, speex_commit = SPEEXDSP
+    speex = tree / 'subprojects' / name
+    git_tag(speex, speex_url, speex_tag, speex_commit)
+    wrap_url, wrap_name, wrap_digest = SPEEXDSP_WRAP
+    archive = cache / wrap_name
+    if not archive.exists():
+        log(f'downloading {wrap_url}')
+        with urllib.request.urlopen(wrap_url) as response:
+            archive.write_bytes(response.read())
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != wrap_digest:
+        raise SystemExit(f'checksum mismatch for {archive}')
+    with zipfile.ZipFile(archive) as bundle:
+        bundle.extractall(tree / 'subprojects')
+    build = tree / 'build-baseos'
+    cross = work / 'dosbox.cross'
+    dosbox_cross_file(cross)
+    # Programs cannot run at configure time, so give the page size and turn
+    # off the parts that need OpenGL, MIDI synthesizers or networking.
+    run(['meson', 'setup', build, '--cross-file', cross, '--buildtype', 'release',
+         '-Ddefault_library=static', '-Dunit_tests=disabled', '-Dtry_static_libs=[]',
+         '-Duse_opengl=false', '-Duse_fluidsynth=false', '-Duse_mt32emu=false', '-Duse_slirp=false',
+         '-Duse_sdl2_net=false', '-Duse_alsa=false', '-Duse_zlib_ng=false', '-Ddynamic_core=none',
+         '-Dpagesize=4096'], cwd=tree, env=env())
+    run(['ninja', '-C', build], cwd=tree, env=env())
+    target = OUTPUT / 'dosbox'
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+    run([tool('strip'), '-o', target / 'DOSBOX', build / 'dosbox'], cwd=tree)
+    shutil.copytree(build / 'resources', target / 'resources', symlinks=False)
+    shutil.copy(HERE / 'dosbox/dosbox-staging.conf', target / 'dosbox-staging.conf')
+    log(f'DOSBox ready in {target}')
+
+
 STEPS = [('zlib', build_zlib), ('libpng', build_libpng), ('libogg', build_libogg), ('opus', build_opus),
-         ('opusfile', build_opusfile), ('iir', build_iir), ('sdl2', build_sdl2)]
+         ('opusfile', build_opusfile), ('iir', build_iir), ('sdl2', build_sdl2), ('dosbox', build_dosbox)]
 
 
 def main():

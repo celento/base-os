@@ -63,30 +63,38 @@ def fetch_tarball(cache, name, url, digest):
     return archive
 
 
+def patched(source, patch):
+    """Whether source carries this exact version of patch."""
+    marker = source / '.baseos-patched'
+    return marker.exists() and marker.read_text() == sha256(patch)
+
+
 def unpack(cache, work, name, url, digest, patch):
+    """The patched source tree, and whether it was (re)created now."""
     source = work / name
-    if (source / '.baseos-patched').exists():
-        return source
+    if patched(source, patch):
+        return source, False
     if source.exists():
         shutil.rmtree(source)
     archive = fetch_tarball(cache, name, url, digest)
     run(['tar', 'xf', archive, '-C', work], cwd=work)
     run(['patch', '-p1', '-i', patch], cwd=source)
-    (source / '.baseos-patched').write_text('')
-    return source
+    (source / '.baseos-patched').write_text(sha256(patch))
+    return source, True
 
 
 def checkout_mlibc(work):
     name, url, commit = MLIBC
     source = work / name
-    if (source / '.baseos-patched').exists():
-        return source
+    patch = HERE / 'patches/mlibc.patch'
+    if patched(source, patch):
+        return source, False
     if source.exists():
         shutil.rmtree(source)
     run(['git', 'init', '-q', source], cwd=work)
     run(['git', 'fetch', '-q', '--depth', '1', url, commit], cwd=source)
     run(['git', 'checkout', '-q', 'FETCH_HEAD'], cwd=source)
-    run(['git', 'apply', HERE / 'patches/mlibc.patch'], cwd=source)
+    run(['git', 'apply', patch], cwd=source)
     sysdeps = source / 'sysdeps/baseos'
     shutil.copytree(HERE / 'mlibc-sysdeps', sysdeps)
     shutil.copy(ROOT / 'sdk/baseos_sys.h', sysdeps / 'include/baseos_sys.h')
@@ -97,8 +105,8 @@ def checkout_mlibc(work):
         link = abi / header.name
         if not link.exists():
             link.symlink_to(os.path.relpath(header, abi))
-    (source / '.baseos-patched').write_text('')
-    return source
+    (source / '.baseos-patched').write_text(sha256(patch))
+    return source, True
 
 
 def stamp(prefix, step):
@@ -148,15 +156,22 @@ def main():
     env = dict(os.environ, PATH=f'{prefix / "bin"}{os.pathsep}{os.environ["PATH"]}')
     jobs = f'-j{args.jobs}'
 
-    binutils = unpack(cache, work, *BINUTILS, HERE / 'patches/binutils-2.43.1.patch')
-    gcc = unpack(cache, work, *GCC, HERE / 'patches/gcc-14.2.0.patch')
+    # A changed patch recreates its tree and rebuilds what came from it.
+    binutils, fresh = unpack(cache, work, *BINUTILS, HERE / 'patches/binutils-2.43.1.patch')
+    if fresh:
+        stamp(prefix, 'binutils').unlink(missing_ok=True)
+    gcc, fresh = unpack(cache, work, *GCC, HERE / 'patches/gcc-14.2.0.patch')
+    if fresh:
+        for name in ('gcc-stage1', 'libstdcxx'):
+            stamp(prefix, name).unlink(missing_ok=True)
     if args.rebuild_mlibc:
+        shutil.rmtree(work / 'mlibc', ignore_errors=True)
+    mlibc, fresh = checkout_mlibc(work)
+    if fresh:
         for name in ('mlibc', 'mlibc-headers', 'libstdcxx'):
             stamp(prefix, name).unlink(missing_ok=True)
-        shutil.rmtree(work / 'mlibc', ignore_errors=True)
         shutil.rmtree(work / 'build-mlibc', ignore_errors=True)
         shutil.rmtree(work / 'build-mlibc-headers', ignore_errors=True)
-    mlibc = checkout_mlibc(work)
     meson_cross = work / 'baseos-cross.ini'
     cross_file(prefix, meson_cross)
 

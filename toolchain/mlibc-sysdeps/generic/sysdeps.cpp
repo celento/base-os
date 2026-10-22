@@ -14,6 +14,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdarg.h>
+#include <sched.h>
 #include <signal.h>
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
@@ -386,6 +387,54 @@ int Sysdeps<Uname>::operator()(struct utsname *out) {
 int Sysdeps<GetHostname>::operator()(char *buffer, size_t size) {
 	if (size < 7) return ENAMETOOLONG;
 	strcpy(buffer, "baseos");
+	return 0;
+}
+
+int Sysdeps<GetEntropy>::operator()(void *buffer, size_t length) {
+	auto bytes = static_cast<char *>(buffer);
+	while (length) {
+		size_t n = length < 256 ? length : 256;
+		if (int e = error_of(call(BOS_SYS_RANDOM, long(bytes), long(n)))) return e;
+		bytes += n;
+		length -= n;
+	}
+	return 0;
+}
+
+// One scheduling class: every thread is SCHED_OTHER at priority 0.
+int Sysdeps<GetPriority>::operator()(int, id_t, int *value) {
+	*value = 0;
+	return 0;
+}
+
+int Sysdeps<SetPriority>::operator()(int, id_t, int) { return 0; }
+
+int Sysdeps<GetSchedparam>::operator()(void *, int *policy, struct sched_param *param) {
+	*policy = SCHED_OTHER;
+	param->sched_priority = 0;
+	return 0;
+}
+
+int Sysdeps<SetSchedparam>::operator()(void *, int policy, const struct sched_param *param) {
+	return policy == SCHED_OTHER && param->sched_priority == 0 ? 0 : EPERM;
+}
+
+int Sysdeps<GetScheduler>::operator()(pid_t, int *policy) {
+	*policy = SCHED_OTHER;
+	return 0;
+}
+
+int Sysdeps<SetScheduler>::operator()(pid_t, int policy, const struct sched_param *param) {
+	return policy == SCHED_OTHER && param->sched_priority == 0 ? 0 : EPERM;
+}
+
+int Sysdeps<GetMaxPriority>::operator()(int, int *out) {
+	*out = 0;
+	return 0;
+}
+
+int Sysdeps<GetMinPriority>::operator()(int, int *out) {
+	*out = 0;
 	return 0;
 }
 

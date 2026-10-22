@@ -17,6 +17,7 @@
 #include "kernel/net_driver.h"
 #include "kernel/ufile.h"
 #include "kernel/fatvol.h"
+#include "kernel/entropy.h"
 #include "kernel/download.h"
 #include "build_info.h"
 
@@ -175,6 +176,7 @@ static void ps2_collect(void) {
         if (ps2_count == PS2_RING) status |= 0x40;  /* report the overflow as loss */
         else ++ps2_count;
         ps2_ring[(ps2_head + ps2_count - 1) % PS2_RING] = (Ps2Entry){timer_ticks(), status, data};
+        entropy_mix((uint32_t)data << 8 | status);  /* interrupt timing */
     }
 }
 static int ps2_pending(void) { return ps2_count != 0; }

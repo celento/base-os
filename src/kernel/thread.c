@@ -18,7 +18,19 @@ void thread_switch(uint32_t *save, uint32_t next);
 static Thread desktop = {.state = THREAD_RUNNABLE, .next = &desktop};
 static Thread *current = &desktop;
 static uint32_t next_tid = 1;
-static int have_fpu;
+static int have_fpu, have_fxsr;
+
+/* With FXSR the x87, MMX and SSE registers travel together. FXSAVE leaves
+ * the x87 state loaded, unlike FNSAVE, so reset it for kernel code. */
+static void fpu_save(uint8_t *area) {
+    if (have_fxsr) __asm__ volatile("fxsave %0\n\tfninit" : "=m"(*(uint8_t (*)[512])area) :: "memory");
+    else __asm__ volatile("fnsave %0" : "=m"(*(uint8_t (*)[108])area) :: "memory");
+}
+
+static void fpu_restore(const uint8_t *area) {
+    if (have_fxsr) __asm__ volatile("fxrstor %0" :: "m"(*(const uint8_t (*)[512])area) : "memory");
+    else __asm__ volatile("frstor %0" :: "m"(*(const uint8_t (*)[108])area) : "memory");
+}
 /* When thread 0 handed over the CPU, and when the current thread started. */
 static uint32_t round_start, slice_start;
 /* When the current thread got the CPU, for per-process CPU time. */
@@ -40,6 +52,14 @@ void thread_init(void) {
     unsigned a, b, c, d;
     __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1));
     have_fpu = (d & 1) != 0;
+    /* FXSR (bit 24) with SSE (bit 25): let programs use SSE registers. */
+    have_fxsr = have_fpu && (d & (3u << 24)) == (3u << 24);
+    if (have_fxsr) {
+        uint32_t cr4;
+        __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+        cr4 |= 0x600;           /* OSFXSR, OSXMMEXCPT */
+        __asm__ volatile("mov %0, %%cr4" :: "r"(cr4) : "memory");
+    }
     tls_descriptor(0);
 }
 
@@ -67,13 +87,21 @@ Thread *thread_create_user(Uproc *process, uint32_t eip, uint32_t esp, uint32_t 
         unsigned flags;
         __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
         /* Save the live state, capture a clean one, put the live one back. */
-        uint8_t live[108] __attribute__((aligned(16)));
-        __asm__ volatile("fnsave %0" : "=m"(live) :: "memory");
-        /* FNINIT keeps the register contents, so overwrite all eight before
-         * capturing; no other program's values reach the new thread. */
+        static uint8_t live[512] __attribute__((aligned(16)));
+        fpu_save(live);
+        /* FNINIT keeps the register contents, so overwrite all eight (and the
+         * SSE registers) before capturing; no other program's values reach
+         * the new thread. */
         __asm__ volatile("fninit\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\tfldz\n\t"
-                         "fninit\n\tfnsave %0" : "=m"(thread->fpu) :: "memory");
-        __asm__ volatile("frstor %0" :: "m"(live) : "memory");
+                         "fninit" ::: "memory");
+        if (have_fxsr) {
+            static const uint32_t mxcsr = 0x1f80;   /* all exceptions masked */
+            __asm__ volatile("xorps %%xmm0, %%xmm0\n\txorps %%xmm1, %%xmm1\n\txorps %%xmm2, %%xmm2\n\t"
+                             "xorps %%xmm3, %%xmm3\n\txorps %%xmm4, %%xmm4\n\txorps %%xmm5, %%xmm5\n\t"
+                             "xorps %%xmm6, %%xmm6\n\txorps %%xmm7, %%xmm7\n\tldmxcsr %0" :: "m"(mxcsr) : "memory");
+        }
+        fpu_save(thread->fpu);
+        fpu_restore(live);
         __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
     }
     /* A ring-3 frame for interrupt_return, below it the registers that
@@ -111,14 +139,14 @@ static void switch_to(Thread *next) {
     uint32_t now = timer_milliseconds();
     if (previous->process) previous->process->cpu_ms += now - switched_at;
     switched_at = now;
-    if (previous->process && have_fpu) __asm__ volatile("fnsave %0" : "=m"(previous->fpu) :: "memory");
+    if (previous->process && have_fpu) fpu_save(previous->fpu);
     current = next;
     if (next->process) {
         tls_descriptor(next->tls_base);
         process_set_kernel_stack(((uint32_t)(uintptr_t)next->kernel_stack + KERNEL_STACK_BYTES) & ~15u);
         if (!previous->process || previous->process != next->process)
             vm_activate(&next->process->space);
-        if (have_fpu) __asm__ volatile("frstor %0" :: "m"(next->fpu) : "memory");
+        if (have_fpu) fpu_restore(next->fpu);
     } else {
         process_set_kernel_stack(process_legacy_kernel_stack());
         vm_activate(0);
