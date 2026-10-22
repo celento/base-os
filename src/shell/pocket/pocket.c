@@ -319,7 +319,7 @@ static int ed_valid(void) { return ed_file >= 0 && fs_valid(ed_file) && fs_ident
 static const char *ed_title(void) { return ed_valid() ? fs_name(ed_file) : "untitled"; }
 static int ed_load(int id) {
     int n = fs_size(id);
-    if (n > ED_CAP) { notify("Too large for Editor."); return 0; }
+    if (n > ED_CAP || fs_streamed(id) || (n && !fs_data(id))) { notify("Too large for Editor."); return 0; }
     if (!ed_text_like(fs_data(id), n)) { notify("Pocket opens text files only."); return 0; }
     kmemcpy(ed_buf, fs_data(id), n);
     ed_buf[n] = 0;
