@@ -7,6 +7,7 @@
  * Script operations (paths from the root, '/'-separated):
  *   put PATH SEED SIZE OFFSET   write SIZE pattern bytes at OFFSET, creating the file
  *   trunc PATH SIZE | mkdir PATH | rm PATH | mv FROM TO | sync
+ *   failwrite N                 the Nth sector write from now fails, once
  * BUDGET limits sector writes, as if power failed after that many; the image
  * is saved as the disk holds it then. A failed operation prints its error and
  * the script goes on. */
@@ -29,6 +30,7 @@ typedef struct {
     uint32_t sectors;
     long budget;            /* sector writes left; <0 unlimited */
     long writes;
+    long fail_in;           /* >0: the write that brings this to 0 fails */
     int cut;
 } Disk;
 
@@ -43,6 +45,7 @@ static int disk_write(void *context, uint32_t lba, const void *buffer, uint32_t 
     if (lba > d->sectors || sectors > d->sectors - lba) return -1;
     for (uint32_t i = 0; i < sectors; ++i) {
         if (d->budget == 0) { d->cut = 1; return -1; }
+        if (d->fail_in > 0 && !--d->fail_in) return -1;
         if (d->budget > 0) --d->budget;
         ++d->writes;
         memcpy(d->data + (size_t)(lba + i) * 512, (const uint8_t *)buffer + (size_t)i * 512, 512);
@@ -63,7 +66,7 @@ static Disk load(const char *path) {
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    Disk d = {malloc((size_t)size), (uint32_t)(size / 512), -1, 0, 0};
+    Disk d = {malloc((size_t)size), (uint32_t)(size / 512), -1, 0, 0, 0};
     if (fread(d.data, 1, (size_t)size, f) != (size_t)size) exit(2);
     fclose(f);
     return d;
@@ -147,6 +150,8 @@ static int run_script(FatVolume *v) {
             result = fat_resolve(v, field[1], &node);
             if (!result) result = split(v, field[2], &parent, &name);
             if (!result) result = fat_rename(v, &node, &parent, name);
+        } else if (!strcmp(field[0], "failwrite")) {
+            ((Disk *)v->device.context)->fail_in = strtol(field[1], 0, 0);
         } else if (!strcmp(field[0], "sync")) {
             result = fat_sync(v);
         } else {

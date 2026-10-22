@@ -617,8 +617,15 @@ static int slot_lba(FatVolume *v, uint32_t first, uint32_t slot, uint32_t *lba, 
         if (!next) {
             if (!grow) return 1;
             if ((result = take_cluster(v, &next))) return result;
-            if ((result = zero_cluster(v, next)) || (result = entry_set(v, v->walk_cluster, next)) ||
-                (result = window_flush(v))) {
+            int linked = 0;
+            if (!(result = zero_cluster(v, next)) && !(result = entry_set(v, v->walk_cluster, next))) {
+                linked = 1;
+                result = window_flush(v);
+            }
+            if (result) {
+                /* The old tail ends the chain again before the new cluster
+                 * is free, so no later flush can leave it pointing there. */
+                if (linked) entry_set(v, v->walk_cluster, end_mark(v));
                 entry_set(v, next, 0);
                 if (v->free_count != NONE) ++v->free_count;
                 return result;
@@ -644,7 +651,13 @@ static int slot_entry(FatVolume *v, uint32_t first, uint32_t slot, uint8_t **e, 
     *e = v->dir + slot % SLOTS_PER_SECTOR * ENTRY;
     return FAT_OK;
 }
-static int dir_store(FatVolume *v) { return dev_write(v, v->dir_lba, v->dir, 1); }
+/* Writes back the cached directory sector. On failure the cache is dropped,
+ * so a later write of the same sector cannot publish the failed change. */
+static int dir_store(FatVolume *v) {
+    int result = dev_write(v, v->dir_lba, v->dir, 1);
+    if (result) v->dir_lba = NONE;
+    return result;
+}
 
 static int is_dot_entry(const uint8_t *e) {
     return e[0] == '.' && (e[1] == ' ' || (e[1] == '.' && e[2] == ' '));
@@ -806,8 +819,10 @@ static int choose_short(FatVolume *v, uint32_t first, const uint16_t *u, unsigne
         if (found < 0) { result = found; goto done; }
         if (found == 1 || !e[0]) break;
         if (e[0] == FREE_SLOT || (e[11] & 0x3F) == LFN_ATTRIBUTES || slot == skip) continue;
-        unsigned tilde = 0;
-        while (tilde < 8 && e[tilde] != '~') ++tilde;
+        /* The tail is after the last tilde: the basis may hold one too. */
+        unsigned tilde = 8;
+        for (unsigned k = 0; k < 8; ++k)
+            if (e[k] == '~') tilde = k;
         uint32_t number = 0;
         unsigned i = tilde + 1;
         while (i < 8 && e[i] >= '0' && e[i] <= '9' && number < TAILS) number = number * 10 + (e[i++] - '0');
@@ -821,6 +836,11 @@ static int choose_short(FatVolume *v, uint32_t first, const uint16_t *u, unsigne
     for (uint32_t number = 1; number < TAILS; ++number) {
         if (taken[number / 8] & (1u << number % 8)) continue;
         short_tail(basis, base, number, name11);
+        /* Belt and braces: an entry another system named oddly may still
+         * hold this alias. */
+        int used = short_used(v, first, name11, skip);
+        if (used < 0) { result = used; break; }
+        if (used) continue;
         result = FAT_OK;
         break;
     }
@@ -829,15 +849,18 @@ done:
     return result;
 }
 
-/* Finds count free slots in a row, past the end if need be. */
-static int free_run(FatVolume *v, uint32_t first, uint32_t count, uint32_t *start) {
+/* Finds count free slots in a row, past the end if need be; *past_end says
+ * the run reaches the end marker. */
+static int free_run(FatVolume *v, uint32_t first, uint32_t count, uint32_t *start, int *past_end) {
     uint32_t run = 0;
+    *past_end = 0;
     for (uint32_t slot = 0;; ++slot) {
         uint8_t *e;
         int result = slot_entry(v, first, slot, &e, 0);
         if (result < 0) return result;
         if (result == 1 || !e[0]) {
             if (!run) *start = slot;
+            *past_end = 1;
             uint32_t limit = first ? DIR_SLOT_MAX : v->root_entries;
             return *start + count <= limit ? FAT_OK : FAT_ERR_NOSPACE;
         }
@@ -854,8 +877,19 @@ static int free_run(FatVolume *v, uint32_t first, uint32_t count, uint32_t *star
 static int write_entries(FatVolume *v, uint32_t first, const uint16_t *u, unsigned n, int long_name,
                          const uint8_t *short_entry, uint32_t *slot, uint32_t *lfn_slots) {
     uint32_t parts = long_name ? (n + LFN_CHARS - 1) / LFN_CHARS : 0, start;
-    int result = free_run(v, first, parts + 1, &start);
+    int past_end, result = free_run(v, first, parts + 1, &start, &past_end);
     if (result) return result;
+    if (past_end) {
+        /* Slots past the end marker may hold stale entries: a new marker
+         * after the run goes first, so they never become visible. */
+        uint8_t *e;
+        result = slot_entry(v, first, start + parts + 1, &e, 0);
+        if (result < 0) return result;
+        if (!result && e[0]) {
+            e[0] = 0;
+            if ((result = dir_store(v))) return result;
+        }
+    }
     uint8_t checksum = lfn_checksum(short_entry);
     for (uint32_t i = 0; i <= parts; ++i) {
         uint8_t *e;
