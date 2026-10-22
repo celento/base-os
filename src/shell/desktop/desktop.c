@@ -1351,7 +1351,7 @@ typedef struct {
 } CalcKey;
 
 static const CalcKey calc_keys[] = {
-    {'C', 0, 0},
+    {'C', 0, 0}, {'E', 0, 1}, {'B', 0, 2}, {'N', 0, 3},
     {'7', 1, 0}, {'8', 1, 1}, {'9', 1, 2}, {'/', 1, 3},
     {'4', 2, 0}, {'5', 2, 1}, {'6', 2, 2}, {'*', 2, 3},
     {'1', 3, 0}, {'2', 3, 1}, {'3', 3, 2}, {'-', 3, 3},
@@ -2739,6 +2739,35 @@ static void calc_press(char ch) {
     }
     if (calc_error)
         return;
+    if (ch == 'E') {                      /* clear the entry, keep the operation */
+        kstrcpy(calc_entry, "0");
+        calc_entry_len = 1;
+        calc_has_dot = 0;
+        calc_fresh = 1;
+        return;
+    }
+    if (ch == 'B') {                      /* backspace in the entry being typed */
+        if (calc_fresh) return;
+        if (calc_entry_len > 0 && calc_entry[calc_entry_len - 1] == '.') calc_has_dot = 0;
+        if (calc_entry_len > 0) calc_entry[--calc_entry_len] = 0;
+        if (!calc_entry_len || (calc_entry_len == 1 && calc_entry[0] == '-')) {
+            kstrcpy(calc_entry, "0");
+            calc_entry_len = 1;
+            calc_fresh = 1;
+        }
+        return;
+    }
+    if (ch == 'N') {                      /* change sign */
+        if (calc_entry[0] == '-') {
+            for (int i = 0; i < calc_entry_len; i++) calc_entry[i] = calc_entry[i + 1];
+            calc_entry_len--;
+        } else if (!(calc_entry_len == 1 && calc_entry[0] == '0') && calc_entry_len < (int)sizeof calc_entry - 1) {
+            for (int i = calc_entry_len; i >= 0; i--) calc_entry[i + 1] = calc_entry[i];
+            calc_entry[0] = '-';
+            calc_entry_len++;
+        }
+        return;
+    }
     if (ch >= '0' && ch <= '9')
         calc_digit(ch);
     else if (ch == '.')
@@ -2798,10 +2827,16 @@ static void draw_calc(int wx, int wy, int ww, int wh, int inactive) {
     int dy = wy + TITLE_H + 12;
     int dw = CALC_W - 2 * CALC_MARGIN;
     int dh = CALC_DISP_H + 10;
-    draw_round_rect(dx, dy, dw, dh, 6, ui_chrome_dk);
-    draw_round_rect(dx + 1, dy + 1, dw - 2, dh - 2, 5, INK(1));
+    /* Display: a sunken readout with the pending operator at the left. */
+    if (MODERN) kit_fill(dx, dy, dw, dh, 8, TK_SUNKEN, 1);
+    else kit_box(dx, dy, dw, dh, 0, TK_RAISED, TK_LINE_STRONG);
+    if (calc_op && !calc_error) {
+        char op[2] = { calc_op == '*' ? 'x' : (char)calc_op, 0 };
+        kit_text(op, dx + 10, dy + 6, TK_ACCENT_700, 20, 1);
+    }
 
     const char *s = calc_entry;
+    uint8_t ink = calc_error ? TK_RED_700 : TK_TEXT;
     int tw = logo_string_w(s);
     int use_logo = 1;
     for (const char *q = s; *q; q++) {
@@ -2810,15 +2845,15 @@ static void draw_calc(int wx, int wy, int ww, int wh, int inactive) {
             break;
         }
     }
-    if (use_logo && tw <= dw - 20) {
+    if (use_logo && tw <= dw - 36) {
         int tx = dx + dw - 12 - tw;
-        draw_logo_string(s, tx, dy + (dh - LOGO_FONT_H) / 2, ui_text);
+        draw_logo_string(s, tx, dy + (dh - LOGO_FONT_H) / 2, ink);
     } else {
-        tw = uib_string_w(s);
+        tw = kit_text_w(s, 1);
         int tx = dx + dw - 12 - tw;
-        if (tx < dx + 6)
-            tx = dx + 6;
-        draw_string_bold_clip(s, tx, dy + (dh - CHAR_H) / 2, ui_text, dx + dw - 6);
+        if (tx < dx + 24)
+            tx = dx + 24;
+        kit_text(s, tx, kit_ty(dy, dh), ink, dx + dw - 12 - tx, 1);
     }
 
     int kx = wx + CALC_MARGIN;
@@ -2826,11 +2861,25 @@ static void draw_calc(int wx, int wy, int ww, int wh, int inactive) {
     for (int i = 0; i < CALC_NKEYS; i++) {
         int x, y, w, h;
         calc_key_rect(kx, ky, i, &x, &y, &w, &h);
-        char lab[2];
+        char lab[4];
         lab[0] = calc_keys[i].ch;
         lab[1] = 0;
         char ch = calc_keys[i].ch;
-        draw_button_styled(x, y, w, h, lab, ch == '=');
+        if (ch == 'E') kstrcpy(lab, "CE");
+        else if (ch == 'B') kstrcpy(lab, "<");
+        else if (ch == 'N') kstrcpy(lab, "+/-");
+        else if (ch == '*') kstrcpy(lab, "x");
+        int digit = (ch >= '0' && ch <= '9') || ch == '.';
+        int st = hot(x, y, w, h);
+        /* Digits are plain keys, operators and Clear are tinted, = is primary. */
+        if (ch == '=') kit_button(x, y, w, h, lab, -1, KB_PRIMARY, st);
+        else if (digit) kit_button(x, y, w, h, lab, -1, KB_DEFAULT, st);
+        else {
+            int on = calc_op == ch && calc_fresh;
+            uint8_t fill = on ? TK_ACCENT_100 : (st & KIT_PRESSED) ? TK_HOVER : (st & KIT_HOVER) ? TK_HOVER : MODERN ? TK_SUNKEN : TK_BASE;
+            kit_box(x, y, w, h, ui_theme.r_control, fill, MODERN ? 0 : TK_LINE);
+            kit_text_center(lab, x, kit_ty(y, h), w, ch == 'C' || ch == 'E' ? TK_RED_700 : ch == 'B' || ch == 'N' ? TK_TEXT : TK_ACCENT_700, 1);
+        }
     }
 }
 
@@ -3236,63 +3285,57 @@ static void draw_tool_doodle(int kind, int x, int y) {
     }
 }
 
+/* A tool cell: flat until hovered, accent-tinted while selected. */
+static void paint_cell_bg(int x, int y, int on) {
+    int st = hot(x, y, PAINT_CELL, PAINT_CELL);
+    if (on) kit_box(x, y, PAINT_CELL, PAINT_CELL, ui_theme.r_control, TK_ACCENT_100, MODERN ? 0 : TK_ACCENT_300);
+    else if (st & (KIT_HOVER | KIT_PRESSED)) kit_box(x, y, PAINT_CELL, PAINT_CELL, ui_theme.r_control, TK_HOVER, MODERN ? 0 : TK_LINE);
+}
+
 static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
     paint_init();
     gui_draw_window(wx, wy, ww, wh, "Paint", 0,
                     inactive ? WIN_INACTIVE : 0);
 
-    /* tool strip */
+    /* Tool strip: tools, brush sizes, then the current color. */
     int strip_y = wy + TITLE_H;
-    draw_rect(wx, strip_y + 1, ww, PAINT_TOOL_H - 1, ui_chrome);
-    draw_hline(wx, strip_y + PAINT_TOOL_H, ww, ui_chrome_dk);
+    kit_toolbar(wx + 1, strip_y, ww - 2, PAINT_TOOL_H + 1);
     for (int i = 0; i < PAINT_NTOOLS; i++) {
         int tx, ty;
         paint_tool_cell(wx, wy, i, &tx, &ty);
-        if (i == paint_tool) {
-            draw_round_rect(tx, ty, PAINT_CELL, PAINT_CELL, 6, ui_accent_dk);
-            draw_round_rect(tx + 1, ty + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, TK_ACCENT_100);
-        } else {
-            draw_round_rect(tx, ty, PAINT_CELL, PAINT_CELL, 6, INK(10));
-            draw_round_rect(tx + 1, ty + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, INK(6));
-        }
-        doodle_ink = i == paint_tool ? ui_on_accent : ui_text;
+        paint_cell_bg(tx, ty, i == paint_tool);
+        doodle_ink = i == paint_tool ? TK_ACCENT_700 : TK_ICON;
         draw_tool_doodle(i, tx, ty);
     }
 
     {
         int dx, dy;
         paint_brush_cell(wx, wy, 0, &dx, &dy);
-        draw_vline(dx - 9, dy + 2, PAINT_CELL - 4, ui_chrome_dk);
+        kit_vseparator(dx - 9, dy + 4, PAINT_CELL - 8);
         for (int i = 0; i < 3; i++) {
             int bx, by;
             paint_brush_cell(wx, wy, i, &bx, &by);
             int on = (paint_brush == i + 1);
-            if (on) {
-                draw_round_rect(bx, by, PAINT_CELL, PAINT_CELL, 6, ui_accent_dk);
-                draw_round_rect(bx + 1, by + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, TK_ACCENT_100);
-            } else {
-                draw_round_rect(bx, by, PAINT_CELL, PAINT_CELL, 6, INK(10));
-                draw_round_rect(bx + 1, by + 1, PAINT_CELL - 2, PAINT_CELL - 2, 5, INK(6));
-            }
+            paint_cell_bg(bx, by, on);
             int rad = i + 1;
-            uint8_t dotc = on ? ui_on_accent : ui_text;
+            uint8_t dotc = on ? TK_ACCENT_700 : TK_ICON;
             draw_round_rect(bx + PAINT_CELL / 2 - rad, by + PAINT_CELL / 2 - rad,
                             rad * 2, rad * 2, rad, dotc);
         }
         int cx, cy;
         paint_chip_cell(wx, wy, ww, &cx, &cy);
-        draw_round_rect(cx - 2, cy - 2, 44, 28, 7, INK(12));
-        draw_round_rect(cx - 1, cy - 1, 42, 26, 6, INK(2));
-        draw_round_rect(cx + 2, cy + 2, 36, 20, 4, paint_color);
+        kit_box(cx - 2, cy - 2, 44, 28, ui_theme.r_control, TK_RAISED, TK_LINE_STRONG);
+        kit_fill(cx + 2, cy + 2, 36, 20, MODERN ? 3 : 0, paint_color, 0);
     }
 
-    /* canvas pane + 1px black inset */
+    /* Canvas on a workspace, with the window shadow under it. */
     int px, py, pw, ph, cx, cy;
     paint_canvas_geom(wx, wy, ww, wh, &px, &py, &pw, &ph, &cx, &cy);
-    draw_rect(px, py, pw, 1, INK(9));
-    draw_rect(px, py + ph - 1, pw, 1, INK(9));
-    draw_rect(px, py, 1, ph, INK(9));
-    draw_rect(px + pw - 1, py, 1, ph, INK(9));
+    draw_rect(wx + 1, strip_y + PAINT_TOOL_H + 1, ww - 2, wh - TITLE_H - PAINT_TOOL_H - PAINT_WELL_H - 1,
+              MODERN ? TK_SUNKEN : TK_HOVER);
+    kit_shadow(cx, cy, PAINT_W * PAINT_SCALE, PAINT_H * PAINT_SCALE, 0);
+    draw_frame(cx - 1, cy - 1, PAINT_W * PAINT_SCALE + 2, PAINT_H * PAINT_SCALE + 2, TK_LINE_STRONG);
+    (void)px; (void)py; (void)pw; (void)ph;
 
     for (int ly = 0; ly < PAINT_H; ly++) {
         for (int lx = 0; lx < PAINT_W; lx++) {
@@ -3317,10 +3360,12 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
         plot_dest = 0;
     }
 
-    /* color well */
+    /* Color well. */
     int well_top = wy + wh - PAINT_WELL_H;
-    draw_rect(wx, well_top, ww, PAINT_WELL_H, ui_chrome);
-    draw_hline(wx, well_top, ww, ui_chrome_dk);
+    if (MODERN) {
+        draw_hline(wx + 1, well_top, ww - 2, TK_LINE_SUBTLE);
+        kit_fill_bottom(wx + 1, well_top + 1, ww - 2, PAINT_WELL_H - 2, ui_theme.r_window - 1, ui_theme.statusbar);
+    } else kit_statusbar(wx + 1, well_top, ww - 2, PAINT_WELL_H - 1);
     for (int i = 0; i < PAINT_NWELL + PAINT_NWELL2; i++) {
         int sx, sy;
         uint8_t c;
@@ -3332,12 +3377,10 @@ static void draw_paint(int wx, int wy, int ww, int wh, int inactive) {
             c = paint_well2[i - PAINT_NWELL];
         }
         int cur = (paint_color == c);
-        draw_round_rect(sx, sy, 22, 18, 4, cur ? ui_text : INK(10));
-        draw_round_rect(sx + 1, sy + 1, 20, 16, 3, c);
-        if (cur) {
-            uint8_t mk = gfx_luma(c) < 128 ? COLOR_WHITE : ui_text;
-            draw_round_frame(sx + 3, sy + 3, 16, 12, 2, mk);
-        }
+        int r = MODERN ? 4 : 0;
+        if (cur) kit_frame(sx - 2, sy - 2, 26, 22, r ? r + 2 : 0, TK_ACCENT);
+        kit_box(sx, sy, 22, 18, r, c, cur ? TK_ACCENT_700 : TK_LINE);
+        (void)hot(sx, sy, 22, 18);
     }
 }
 
@@ -4403,6 +4446,7 @@ static void open_fs_file(int id) {
 
 
 
+static int help_window_h(void);
 static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     switch (kind) {
     case WK_NATIVE:
@@ -4419,11 +4463,11 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h) {
         *w=380;*h=properties_h();break;
     case WK_HELLO:
         *w = 520;
-        *h = 170;
+        *h = TITLE_BAR + 140;
         break;
     case WK_HELP:
-        *w = 640;
-        *h = 262;
+        *w = 560;
+        *h = help_window_h();
         break;
     case WK_ABOUT:
         *w = 460;
@@ -5976,12 +6020,6 @@ static void draw_editor(int wx, int wy, int ww, int wh, int inactive) {
     kit_text_right(state, wx + ww - pad, ty, edit_save_busy ? TK_RED_700 : TK_TEXT2, 0);
 }
 
-static void draw_string_in_win(const char *str, int wx, int ww, int y, uint8_t color) {
-    int tw = ui_string_w(str);
-    int x = wx + (ww - tw) / 2;
-    draw_string(str, x, y, color);
-}
-
 static const char *win_app_name(int kind) {
     switch (kind) {
     case WK_FILES: return "Files";
@@ -6269,6 +6307,60 @@ static void properties_key(void) {
     dirty = 1;
 }
 
+/* ---------- Hello and Help ---------- */
+
+static void draw_hello(int wx, int wy, int ww, int wh, int fl) {
+    gui_draw_window(wx, wy, ww, wh, "Hello", 0, fl | WIN_NOMENU);
+    int top = wy + TITLE_BAR, lw = logo_string_w("BaseOS"), gap = 14;
+    int x = wx + (ww - (40 + gap + lw)) / 2, y = top + 26;
+    ui_icon_draw(UI_ICON_LOGO, x, y + (LOGO_FONT_H - 40) / 2, 40, TK_ACCENT, ui_theme.content);
+    draw_logo_string("BaseOS", x + 40 + gap, y, TK_ACCENT_700);
+    kit_text_center("Hello, world. Everything you see is drawn from scratch.", wx, y + LOGO_FONT_H + 14, ww, TK_TEXT2, 0);
+}
+
+/* Keyboard reference: sections of shortcut chips and what they do. */
+typedef struct { const char *keys, *text; } HelpRow;
+static const HelpRow help_rows[] = {
+    {0, "Getting around"},
+    {"Ctrl+Space", "Search apps and files"},
+    {"Alt+Tab", "Switch between windows"},
+    {"Ctrl+C / X / V", "Copy, cut and paste files or selected text"},
+    {0, "Files"},
+    {"Ctrl+F", "Filter the current folder"},
+    {"Ctrl+1 to Ctrl+4", "Choose the sort column"},
+    {0, "Writer"},
+    {"Ctrl+S", "Save the document as BWR"},
+    {"Ctrl+Shift+P", "Export the document as PDF"},
+    {0, "Programs"},
+    {".bex", "Open a .bex file to run a native app"},
+    {"Ctrl+C", "Stop the native task in Terminal"},
+};
+#define HELP_ROWS ((int)(sizeof help_rows / sizeof help_rows[0]))
+static int help_window_h(void) {
+    int h = TITLE_BAR + 20 + 24;
+    for (int i = 0; i < HELP_ROWS; i++) h += help_rows[i].keys ? 28 : (i ? 38 : 28);
+    return h + 24 + 20;
+}
+static void draw_help(int wx, int wy, int ww, int wh, int fl) {
+    gui_draw_window(wx, wy, ww, wh, "Help", 0, fl | WIN_NOMENU);
+    int pad = ui_theme.pad_dialog + 4, x = wx + pad, y = wy + TITLE_BAR + 20, kx = x + 170;
+    kit_text("Keyboard shortcuts", x, y, TK_TEXT, ww - 2 * pad, 1);
+    y += 24;
+    for (int i = 0; i < HELP_ROWS; i++) {
+        const HelpRow *r = &help_rows[i];
+        if (!r->keys) {
+            if (i) { kit_separator(x, y + 12, ww - 2 * pad); y += 10; }
+            kit_text(r->text, x, y + 8, TK_TEXT2, ww - 2 * pad, 1);
+            y += 28;
+            continue;
+        }
+        kit_kbd(x, y + 3, r->keys);
+        kit_text(r->text, kx, kit_ty(y, 28), TK_TEXT, wx + ww - pad - kx, 0);
+        y += 28;
+    }
+    kit_text("Documents has Writer and Spreadsheet quick starts.", x, y + 8, TK_TEXT2, ww - 2 * pad, 0);
+}
+
 static void draw_window_contents(Win *w, int inactive) {
     context_set((int)(w - wins));
     chrome_icon = app_icon_for(kind_icon(w->kind));
@@ -6277,30 +6369,9 @@ static void draw_window_contents(Win *w, int inactive) {
     if (w->kind == WK_PROPERTIES) {
         draw_properties(wx, wy, ww, wh, fl);
     } else if (w->kind == WK_HELLO) {
-        gui_draw_window(wx, wy, ww, wh, "Hello", 0, fl | WIN_NOMENU);
-        int lw = logo_string_w("BaseOS");
-        draw_logo_string("BaseOS", wx + (ww - lw) / 2, wy + TITLE_BAR + 30, ui_accent);
-        draw_string_in_win("Hello, world. Everything you see is drawn from scratch.", wx, ww,
-                           wy + TITLE_BAR + 30 + LOGO_FONT_H + 10, ui_text_dim);
+        draw_hello(wx, wy, ww, wh, fl);
     } else if (w->kind == WK_HELP) {
-        gui_draw_window(wx, wy, ww, wh, "Help", 0, fl | WIN_NOMENU);
-        int y = wy + TITLE_BAR + 22;
-        int x = wx + 24;
-        static const char *tips[] = {
-            "Ctrl+Space searches apps/files; Alt+Tab changes windows",
-            "Files: Ctrl+F filters; Ctrl+1 through Ctrl+4 select sorting",
-            "Ctrl+C/X/V copy, cut and paste files or selected text",
-            "Writer: Ctrl+S saves BWR; Ctrl+Shift+P exports PDF",
-            "Open .bex files to run native apps; Ctrl+C stops a task",
-            "Documents includes Writer and Spreadsheet quick starts",
-        };
-        draw_string_bold("Getting around", x, y, ui_text);
-        y += LINE_H + 8;
-        for (int t = 0; t < 6; t++) {
-            draw_round_rect(x, y + CHAR_H / 2 - 2, 6, 6, 3, ui_accent);
-            draw_string(tips[t], x + 16, y, ui_text);
-            y += LINE_H + 4;
-        }
+        draw_help(wx, wy, ww, wh, fl);
     } else if (w->kind == WK_ABOUT) {
         draw_about(wx, wy, ww, wh, fl);
     } else if (w->kind == WK_SETTINGS) {
@@ -9527,9 +9598,19 @@ static void handle_key(void) {
     if(fk==WK_SETTINGS){ settings_key(); return; }
     if(fk==WK_PROPERTIES){ properties_key(); return; }
     if (fk == WK_CALC) {
-        /* Mouse clicks only; ESC still dismisses the window. */
-        if (key_sc == KEY_ESC)
-            close_front();
+        /* Keys mirror the buttons; Esc still dismisses the window. */
+        if (key_sc == KEY_ESC) { close_front(); return; }
+        char ch = 0;
+        if (key_sc == KEY_ENTER) ch = '=';
+        else if (key_sc == KEY_BACKSPACE) ch = 'B';
+        else if (key_sc == 0x53) ch = 'E';
+        else if (!ctrl_down && !alt_down && key_char) {
+            char k = key_char;
+            if ((k >= '0' && k <= '9') || k == '.' || k == '+' || k == '-' || k == '*' || k == '/' || k == '=') ch = k;
+            else if (k == ',') ch = '.';
+            else if (k == 'c' || k == 'C') ch = 'C';
+        }
+        if (ch) { calc_press(ch); dirty = 1; }
         return;
     }
 
