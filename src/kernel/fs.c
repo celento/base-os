@@ -641,6 +641,9 @@ int fs_write(int id, const char *data, int len) {
         (unsigned)len > fs_file_limit() || (len && !data)) return -1;
     uintptr_t source = (uintptr_t)data;
     unsigned required = len ? (unsigned)len + 1 : 0;
+    /* A write that cannot fit even after a save fails before anything is
+     * saved for it. */
+    if (data_backend == 3 && !write_fits(id, len) && !bfs_save_frees()) return -1;
     if (data_backend == 3 && required > dirty_limit() - (dirty_bytes(id) < dirty_limit() ?
                                                          dirty_bytes(id) : dirty_limit())) {
         /* Too much is changed to keep in memory: save it first. A source in
