@@ -171,6 +171,8 @@ void gfx_set_color(int index, uint32_t rgb) {
 }
 
 static void pal_build(void) {
+    /* A new mode starts with no presented frame and a fresh color cache. */
+    palette_changed();
     for (int i = 0; i < 16; i++)
         pal32[i] = pal_base[i];
     /* Until a theme is installed the bands hold a light-to-dark ramp. */
