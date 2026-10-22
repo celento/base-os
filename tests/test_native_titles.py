@@ -21,6 +21,8 @@ class NativeTitleTests(unittest.TestCase):
 #define MAX_WIN 8
 #define WK_TERM 11
 #define WK_NATIVE 24
+#define WK_PROGRAM 25
+static const char *program_title(int slot) { (void)slot; return "Program"; }
 static struct { int kind; } wins[MAX_WIN];
 static int live[MAX_WIN], calls;
 static const char *names[MAX_WIN];

@@ -218,9 +218,8 @@ static void elf_release(int slot){
     if(!elf_pids[slot])return;
     uproc_release(elf_pids[slot]);elf_pids[slot]=0;elf_line_length[slot]=0;
 }
-static int elf_start(int slot,int file,const char *argument){
+static int elf_start(int slot,const char *path,const char *argument){
     if(elf_pids[slot]||term_task_running(slot)){push("Stop this terminal's program first.");return TERM_COMMAND_REPORTED;}
-    char path[FS_PATH_LEN];fs_path(file,path,sizeof path);
     const char *argv[2]={path,argument};
     uint32_t pid,size;void *image;
     /* Loaded through ufile, so programs larger than a whole-file load start too. */
@@ -314,7 +313,7 @@ static int start_dispatch(int file,const char *argument,unsigned length){
     if(fs_streamed(file)){push("Cannot start: the program is too large to load.");return TERM_COMMAND_REPORTED;}
     const unsigned char *image=(const unsigned char *)fs_data(file);
     if(fs_size(file)>=4&&image[0]==0x7F&&image[1]=='E'&&image[2]=='L'&&image[3]=='F')
-        return elf_start(owner,file,argument);
+        {char path[FS_PATH_LEN];fs_path(file,path,sizeof path);return elf_start(owner,path,argument);}
     int result=native_launch_hook?native_launch_hook(owner,file,fs_identity(file),argument,length):
         term_task_start_file_with_arg(owner,file,fs_identity(file),argument,length);
     /* Focus may now belong to a GUI, but the remainder of this shell command
@@ -408,6 +407,12 @@ static int execute(const char *s,int depth,int *budget){
     }
     else if(!kstrcmp(cmd,"stop")){if(!term_task_running(selected)&&!term_elf_running(selected))push("No native task in this terminal.");else term_task_stop(selected);}
     else if(!kstrcmp(cmd,"start")){
+        if(arg[0]=='/'&&!fs_valid(id)){
+            /* Not on the native volume: an ELF program on a FAT disk (/disk1). */
+            const char *rest=quote?p+1:p;
+            while(*rest==' ')rest++;
+            return elf_start(selected,arg,*rest?rest:0);
+        }
         if(!arg[0]||!fs_valid(id)||fs_is_dir(id))return -1;
         return start_command(id,p,quote!=0);
     }

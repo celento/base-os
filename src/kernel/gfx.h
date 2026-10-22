@@ -115,6 +115,21 @@ void gfx_set_color(int index, uint32_t rgb);
  * the top row to t1 at the bottom (0..256), inside a rounded rectangle. */
 void glass_round(int x, int y, int w, int h, int r, int round_bottom, uint8_t tint, int t0, int t1);
 
+/* True-color overlays. Palette index GFX_OVERLAY_KEY is never returned by a
+ * color lookup; where the backbuffer holds it inside an overlay's rectangle,
+ * the screen shows the overlay's 0xXXRRGGBB surface, scaled to fit, instead.
+ * The newest overlay wins where rectangles overlap. Overlays are held until
+ * gfx_overlay_clear or gfx_overlay_forget; free a surface only after the latter. */
+#define GFX_OVERLAY_KEY 255
+#define GFX_OVERLAYS 16
+void gfx_overlay_clear(void);
+/* Place (or move to the top) the overlay named key. */
+void gfx_overlay_set(const void *key, int x, int y, int w, int h,
+                     const uint32_t *pixels, int width, int height);
+void gfx_overlay_forget(const void *key);
+/* Send the overlay's rectangle to the screen again, e.g. after a new frame. */
+void gfx_overlay_flip(const void *key);
+
 void flip_rect(int x0, int y0, int rw, int rh);
 void flip_vga(void);
 void gfx_present(void);

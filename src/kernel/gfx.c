@@ -803,6 +803,67 @@ int hit(int px, int py, int x, int y, int w, int h) {
     return px >= x && px < x + w && py >= y && py < y + h;
 }
 
+typedef struct {
+    const void *key;
+    int x, y, w, h;
+    const uint32_t *pixels;
+    int width, height;
+    uint32_t step_x, step_y;     /* source pixels per screen pixel, 16.16 */
+} Overlay;
+static Overlay overlays[GFX_OVERLAYS];
+static int overlay_count;
+
+void gfx_overlay_clear(void) {
+    overlay_count = 0;
+}
+
+void gfx_overlay_forget(const void *key) {
+    for (int i = 0; i < overlay_count; i++)
+        if (overlays[i].key == key) {
+            for (int j = i + 1; j < overlay_count; j++) overlays[j - 1] = overlays[j];
+            --overlay_count;
+            return;
+        }
+}
+
+void gfx_overlay_set(const void *key, int x, int y, int w, int h,
+                     const uint32_t *pixels, int width, int height) {
+    gfx_overlay_forget(key);
+    if (w <= 0 || h <= 0 || width <= 0 || height <= 0 || width > 32767 || height > 32767 || !pixels) return;
+    if (overlay_count == GFX_OVERLAYS) gfx_overlay_forget(overlays[0].key);
+    Overlay *o = &overlays[overlay_count++];
+    o->key = key; o->x = x; o->y = y; o->w = w; o->h = h;
+    o->pixels = pixels; o->width = width; o->height = height;
+    o->step_x = ((uint32_t)width << 16) / (uint32_t)w;  /* sizes stay below 32768 */
+    o->step_y = ((uint32_t)height << 16) / (uint32_t)h;
+}
+
+void gfx_overlay_flip(const void *key) {
+    for (int i = 0; i < overlay_count; i++)
+        if (overlays[i].key == key) {
+            flip_rect(overlays[i].x, overlays[i].y, overlays[i].w, overlays[i].h);
+            return;
+        }
+}
+
+/* The overlay color under screen pixel (x, y) of a keyed backbuffer pixel. */
+static uint32_t overlay_pixel(int x, int y) {
+    for (int i = overlay_count - 1; i >= 0; i--) {
+        const Overlay *o = &overlays[i];
+        if (x < o->x || y < o->y || x >= o->x + o->w || y >= o->y + o->h) continue;
+        uint32_t sx = ((uint32_t)(x - o->x) * o->step_x) >> 16;
+        uint32_t sy = ((uint32_t)(y - o->y) * o->step_y) >> 16;
+        return o->pixels[sy * (uint32_t)o->width + sx] & 0xFFFFFF;
+    }
+    return pal32[GFX_OVERLAY_KEY];
+}
+
+static int overlay_row(int y) {
+    for (int i = 0; i < overlay_count; i++)
+        if (y >= overlays[i].y && y < overlays[i].y + overlays[i].h) return 1;
+    return 0;
+}
+
 void flip_rect(int x0, int y0, int rw, int rh) {
     if (!lfb)
         return;
@@ -813,26 +874,40 @@ void flip_rect(int x0, int y0, int rw, int rh) {
     for (int y = y0; y < y0 + rh; y++) {
         uint8_t *src = fb + y * fb_w + x0;
         uint8_t *dst = lfb + y * pitch;
+        int keyed = overlay_count && overlay_row(y);
         if (bpp == 32) {
             uint32_t *d = (uint32_t *)(dst + x0 * 4);
-            for (int x = 0; x < rw; x++)
-                d[x] = pal32[src[x]];
+            if (keyed) {
+                for (int x = 0; x < rw; x++)
+                    d[x] = src[x] == GFX_OVERLAY_KEY ? overlay_pixel(x0 + x, y) : pal32[src[x]];
+            } else {
+                for (int x = 0; x < rw; x++)
+                    d[x] = pal32[src[x]];
+            }
         } else if (bpp == 16) {
             uint16_t *d = (uint16_t *)(dst + x0 * 2);
-            for (int x = 0; x < rw; x++)
-                d[x] = pal16[src[x]];
+            for (int x = 0; x < rw; x++) {
+                if (keyed && src[x] == GFX_OVERLAY_KEY) {
+                    uint32_t c = overlay_pixel(x0 + x, y);
+                    d[x] = (uint16_t)(((c >> 8) & 0xF800) | ((c >> 5) & 0x07E0) | ((c >> 3) & 0x001F));
+                } else d[x] = pal16[src[x]];
+            }
         } else if (bpp == 24) {
             uint8_t *d = dst + x0 * 3;
             for (int x = 0; x < rw; x++) {
-                uint32_t c = pal32[src[x]];
+                uint32_t c = keyed && src[x] == GFX_OVERLAY_KEY ? overlay_pixel(x0 + x, y) : pal32[src[x]];
                 d[x * 3 + 0] = (uint8_t)(c);
                 d[x * 3 + 1] = (uint8_t)(c >> 8);
                 d[x * 3 + 2] = (uint8_t)(c >> 16);
             }
         } else {
             uint8_t *d = dst + x0;
-            for (int x = 0; x < rw; x++)
-                d[x] = src[x];
+            for (int x = 0; x < rw; x++) {
+                if (keyed && src[x] == GFX_OVERLAY_KEY) {
+                    uint32_t c = overlay_pixel(x0 + x, y);
+                    d[x] = gfx_rgb((int)(c >> 16) & 255, (int)(c >> 8) & 255, (int)c & 255);
+                } else d[x] = src[x];
+            }
         }
         uint8_t *mirror=(uint8_t *)PRESENT_BASE+y*fb_w+x0;
         for(int x=0;x<rw;x++)mirror[x]=src[x];

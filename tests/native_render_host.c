@@ -33,6 +33,7 @@ static int open_menu=-1,display_pending,saver_on,dragging_win=-1,resizing_win=-1
 static int drag_cached=-1,fm_dragging,fm_drag_active,fm_renaming,edit_dragging,paint_dragging,paint_shape_drag;
 static int render_skip=-1;
 static int cursor_sx,cursor_sy,cursor_on;
+static int program_cursor_hidden;
 static uint8_t cursor_saved[CURSOR_W*CURSOR_H];
 typedef struct {uint8_t pixels[64000];int w,h,on;} TestCanvas;
 static TestCanvas canvases[MAX_WIN];

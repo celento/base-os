@@ -51,6 +51,7 @@
 #include "kernel/fs.h"
 #include "kernel/native_sync.h"
 #include "kernel/native_ui.h"
+#include "kernel/uwin.h"
 #include "apps/wordle.h"
 #include "apps/term.h"
 #include "apps/todo.h"
@@ -1113,6 +1114,7 @@ static uint32_t input_gesture_ticks(void) { return input_routing ? input_sample_
 static uint8_t cursor_saved[CURSOR_W * CURSOR_H];
 static int cursor_sx = -1, cursor_sy = -1;
 static int cursor_on = 0;
+static int program_cursor_hidden;   /* a program window asked for no cursor */
 
 
 void cursor_restore(void) {
@@ -1138,6 +1140,8 @@ void cursor_save_draw(void) {
             int oa = cursor_outline_a[j][i];
             int fa = cursor_fill_a[j][i];
             if (!oa && !fa)
+                continue;
+            if (program_cursor_hidden)
                 continue;
             uint8_t c = bg;
             if (oa)
@@ -1189,7 +1193,8 @@ enum WinKind {
     WK_PLAYER,
     WK_WRITER,
     WK_SPREADSHEET,
-    WK_NATIVE /* Ephemeral owned native primary window; never persisted. */
+    WK_NATIVE, /* Ephemeral owned native primary window; never persisted. */
+    WK_PROGRAM /* A window of an ELF program (kernel/uwin.h); never persisted. */
 };
 _Static_assert(WK_TERM==11&&WK_SPREADSHEET==23,"persisted built-in kinds must not move");
 static int session_window_kind(int kind){
@@ -1209,6 +1214,9 @@ typedef struct {
 
 static Win wins[MAX_WIN];
 static Win display_saved_windows[MAX_WIN];
+static void draw_program_window(int slot, int inactive);
+static int program_close(int slot);
+static const char *program_title(int slot);
 static int wm_z;
 static int wm_seq;
 static int native_output_scroll[MAX_WIN];
@@ -1614,7 +1622,7 @@ static void front_window_origin(int *x, int *y) {
     *y = f >= 0 ? wins[f].y : 0;
 }
 static int win_has_menu(int kind) {
-    return kind != WK_ABOUT && kind != WK_PROPERTIES;
+    return kind != WK_ABOUT && kind != WK_PROPERTIES && kind != WK_PROGRAM;
 }
 /* Fixed-size information windows: a close button only, no snapping. */
 static int win_is_dialog(int kind) {
@@ -1690,6 +1698,7 @@ static void layout_window(int kind, int *x, int *y, int *w, int *h);
 static void win_minimum(Win *w, int *mw, int *mh) {
     if (w->kind == WK_EDIT || w->kind == WK_FILES || w->kind == WK_TERM) { *mw = 360; *mh = 200; }
     else if(w->kind==WK_NATIVE){*mw=240;*mh=180;}
+    else if(w->kind==WK_PROGRAM){*mw=160;*mh=120;}
     else if (w->kind == WK_SETTINGS) { *mw = 600; *mh = 320; }  /* the page scrolls */
     else if(w->kind==WK_VIEW){*mw=IMAGE_VIEWER_MIN_W+2;*mh=IMAGE_VIEWER_MIN_H+TITLE_H+2;}
     else if(w->kind==WK_BROWSER){*mw=BROWSER_MIN_W+2;*mh=BROWSER_MIN_H+TITLE_H+2;}
@@ -1844,6 +1853,7 @@ static void win_close(int i) {
     if(wins[i].kind==WK_VIEW)image_viewer_close();
     if(wins[i].kind==WK_TERM&&!term_task_close(i))return;
     if(wins[i].kind==WK_NATIVE&&!app_view_close(i))return;
+    if(wins[i].kind==WK_PROGRAM&&!program_close(i))return;
     if(wins[i].kind==WK_BROWSER)browser_close();
     if(wins[i].kind==WK_PLAYER)player_close();
     if(wins[i].kind==WK_WRITER)writer_close();
@@ -4729,6 +4739,7 @@ static int help_window_h(void);
 static void layout_window(int kind, int *x, int *y, int *w, int *h) {
     switch (kind) {
     case WK_NATIVE:
+    case WK_PROGRAM:
         *w=640;*h=480;break;
     case WK_SPREADSHEET:
         { /* The client starts below the title (Modern) or menu row (Classic). */
@@ -6360,6 +6371,7 @@ static const char *win_app_name(int kind) {
     case WK_WORDLE: return "Wordle";
     case WK_TERM: return "Terminal";
     case WK_NATIVE: return "Native app";
+    case WK_PROGRAM: return "Program";
     case WK_TODO: return "Todo";
     case WK_CLOCK: return "Clock";
     case WK_CAL: return "Calendar";
@@ -6381,6 +6393,7 @@ static const char *win_display_title(int slot, char *buffer) {
     if ((wins[slot].kind == WK_TERM || wins[slot].kind == WK_NATIVE) &&
         app_view_title(slot, buffer, APP_VIEW_TITLE_LEN))
         return buffer;
+    if (wins[slot].kind == WK_PROGRAM) return program_title(slot);
     return win_app_name(wins[slot].kind);
 }
 
@@ -6417,7 +6430,7 @@ static int kind_icon(int kind) {
     case WK_SYSMON: return ICON_APP_MONITOR;   case WK_SETTINGS: return ICON_APP_SETTINGS;
     case WK_BROWSER: return ICON_APP_BROWSER;  case WK_PLAYER: return ICON_APP_PLAYER;
     case WK_WRITER: return ICON_APP_WRITER;    case WK_SPREADSHEET: return ICON_APP_SHEET;
-    case WK_NATIVE: return ICON_APP_NATIVE;    case WK_HELLO: return ICON_APP_HELLO;
+    case WK_NATIVE: case WK_PROGRAM: return ICON_APP_NATIVE;    case WK_HELLO: return ICON_APP_HELLO;
     case WK_ABOUT: return ICON_APP_ABOUT;      case WK_HELP: return ICON_APP_HELP;
     default: return ICON_WINDOW;
     }
@@ -6835,6 +6848,8 @@ static void draw_window_contents(Win *w, int inactive) {
         draw_term(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_NATIVE) {
         draw_native_window((int)(w-wins),inactive);
+    } else if (w->kind == WK_PROGRAM) {
+        draw_program_window((int)(w-wins),inactive);
     } else if (w->kind == WK_TODO) {
         draw_todo(wx, wy, ww, wh, inactive);
     } else if (w->kind == WK_CLOCK) {
@@ -11762,6 +11777,7 @@ static void session_restore(void){
 int program_key(void){ return desktop_program_key(); }
 void program_present(void){cursor_restore();draw_ui();flip_vga();cursor_on=0;dirty=1;}
 static void render_scene(void) {
+                gfx_overlay_clear();
                 hot_n = 0;
                 int isel = icon_sel;
                 if (fm_drag_active && icon_hit(DESK_TRASH, mouse_x, mouse_y))
@@ -12014,6 +12030,268 @@ static unsigned desktop_native_pointer(const InputSample *sample) {
     return native_ui_route(sample,target);
 }
 
+static int desktop_input_blocked(void);
+/* ---------- Program windows (kernel/uwin.h) ----------
+ * An ELF program's window shows its true-color surface through a graphics
+ * overlay: the client area is filled with GFX_OVERLAY_KEY and the screen
+ * takes those pixels from the surface, scaled to fit. Input goes to the
+ * program while its window is in front. */
+static uint32_t program_handle[MAX_WIN], program_frame[MAX_WIN], program_config[MAX_WIN];
+static uint32_t program_close_at[MAX_WIN];
+static unsigned program_spec_w[MAX_WIN], program_spec_h[MAX_WIN], program_flags[MAX_WIN];
+static int program_client_w[MAX_WIN], program_client_h[MAX_WIN];
+static int program_focused = -1;    /* slot that last got FOCUS_IN */
+static int program_captured = -1;   /* relative-mouse slot holding the pointer */
+static int program_held = -1;       /* slot that saw a button go down */
+static unsigned program_buttons;    /* buttons program_held saw pressed */
+
+static UWin *program_window(int slot) {
+    if (slot < 0 || slot >= MAX_WIN || !wins[slot].open || wins[slot].kind != WK_PROGRAM) return 0;
+    return uwin_find(program_handle[slot]);
+}
+static const char *program_title(int slot) {
+    UWin *u = program_window(slot);
+    return u && u->spec.title[0] ? u->spec.title : "Program";
+}
+static void program_client(const Win *w, int *x, int *y, int *cw, int *ch) {
+    *x = w->x + 1; *y = w->y + TITLE_BAR; *cw = w->w - 2; *ch = w->h - TITLE_BAR - 1;
+}
+/* The surface's place in the client area: as large as fits, aspect kept. */
+static void program_image(int slot, const UWin *u, int *x, int *y, int *iw, int *ih) {
+    int cx, cy, cw, ch;
+    program_client(&wins[slot], &cx, &cy, &cw, &ch);
+    int sw = (int)u->spec.width, sh = (int)u->spec.height;
+    int w = cw, h = cw > 0 ? sh * cw / sw : 0;
+    if (h > ch) { h = ch; w = ch > 0 ? sw * ch / sh : 0; }
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    *x = cx + (cw - w) / 2; *y = cy + (ch - h) / 2; *iw = w; *ih = h;
+}
+/* Window size whose client area holds the surface one to one. */
+static void program_fit(Win *w, const UWin *u) {
+    w->w = (int)u->spec.width + 2;
+    w->h = (int)u->spec.height + TITLE_BAR + 1;
+}
+static void draw_program_window(int slot, int inactive) {
+    Win *w = &wins[slot];
+    UWin *u = program_window(slot);
+    gui_draw_window(w->x, w->y, w->w, w->h, program_title(slot), 0,
+                    WIN_NOMENU | (inactive ? WIN_INACTIVE : 0));
+    int cx, cy, cw, ch;
+    program_client(w, &cx, &cy, &cw, &ch);
+    draw_rect(cx, cy, cw, ch, COLOR_BLACK);
+    if (!u) return;
+    int x, y, iw, ih;
+    program_image(slot, u, &x, &y, &iw, &ih);
+    draw_rect(x, y, iw, ih, GFX_OVERLAY_KEY);
+    gfx_overlay_set(u, x, y, iw, ih, u->pixels, (int)u->spec.width, (int)u->spec.height);
+}
+static void program_push(int slot, unsigned type, int a, int b, int c, int d) {
+    UWin *u = program_window(slot);
+    if (!u) return;
+    BosWindowEvent event = {0};
+    event.type = type; event.a = a; event.b = b; event.c = c; event.d = d;
+    event.modifiers = (shift_down ? BOS_MOD_SHIFT : 0) | (ctrl_down ? BOS_MOD_CTRL : 0) |
+                      (alt_down ? BOS_MOD_ALT : 0);
+    uwin_push(u, event);
+}
+/* Close asks the program; asking again after two seconds ends it. */
+static int program_close(int slot) {
+    UWin *u = program_window(slot);
+    if (u) {
+        uint32_t now = timer_ticks();
+        if (!program_close_at[slot] || now - program_close_at[slot] < 2 * TIMER_HZ) {
+            if (!program_close_at[slot]) program_close_at[slot] = now | 1;
+            program_push(slot, BOS_EVENT_CLOSE, 0, 0, 0, 0);
+            return 0;
+        }
+        uproc_kill(u->pid);
+    }
+    program_handle[slot] = 0;
+    if (program_focused == slot) program_focused = -1;
+    if (program_captured == slot) program_captured = -1;
+    if (program_held == slot) { program_held = -1; program_buttons = 0; }
+    return 1;
+}
+static void program_release_buttons(void) {
+    for (unsigned bit = 0; bit < 2; bit++)
+        if (program_buttons & (1u << bit))
+            program_push(program_held, BOS_EVENT_MOUSE_UP, (int)bit + 1, 0, 0, 0);
+    program_buttons = 0;
+    program_held = -1;
+}
+/* Front slot when it is a program window taking input, or -1. */
+static int program_input_slot(void) {
+    if (desktop_input_blocked() || switcher_on) return -1;
+    int f = win_front();
+    return f >= 0 && wins[f].kind == WK_PROGRAM && program_window(f) ? f : -1;
+}
+static void program_pin_pointer(int slot) {
+    UWin *u = program_window(slot);
+    if (!u) return;
+    int x, y, iw, ih;
+    program_image(slot, u, &x, &y, &iw, &ih);
+    device_input.x = mouse_x = x + iw / 2;
+    device_input.y = mouse_y = y + ih / 2;
+}
+static void program_cursor_update(void) {
+    int hidden = program_captured >= 0;
+    if (!hidden) {
+        int top = -1;
+        for (int i = 0; i < MAX_WIN; i++)
+            if (wins[i].open && !wins[i].min && hit(mouse_x, mouse_y, wins[i].x, wins[i].y, wins[i].w, wins[i].h) &&
+                (top < 0 || wins[i].z > wins[top].z)) top = i;
+        UWin *u = program_window(top);
+        if (u && (u->spec.flags & BOS_WINDOW_HIDE_CURSOR)) {
+            int x, y, iw, ih;
+            program_image(top, u, &x, &y, &iw, &ih);
+            hidden = hit(mouse_x, mouse_y, x, y, iw, ih);
+        }
+    }
+    if (hidden != program_cursor_hidden) { program_cursor_hidden = hidden; mouse_moved = 1; }
+}
+/* Adopt new windows, follow programs' changes and the focus. */
+static void program_windows_poll(void) {
+    uwin_set_work_area((unsigned)fb_w, (unsigned)(TASKBAR_Y - MENUBAR_H - TITLE_BAR));
+    UWin *u;
+    while ((u = uwin_take_new())) {
+        int slot = -1;
+        for (int i = 0; i < MAX_WIN; i++) if (!wins[i].open) { slot = i; break; }
+        if (slot < 0) {
+            BosWindowEvent close = {0};
+            close.type = BOS_EVENT_CLOSE;
+            uwin_push(u, close);
+            native_launch_status = "Too many windows are open.";
+            dirty = 1;
+            continue;
+        }
+        kmemset(&wins[slot], 0, sizeof(Win));
+        window_state_clear(slot);
+        wins[slot].kind = WK_PROGRAM;
+        wins[slot].open = 1;
+        wins[slot].seq = ++wm_seq;
+        program_handle[slot] = u->handle;
+        program_frame[slot] = u->frame;
+        program_config[slot] = u->config;
+        program_spec_w[slot] = u->spec.width; program_spec_h[slot] = u->spec.height;
+        program_flags[slot] = u->spec.flags;
+        program_close_at[slot] = 0;
+        program_fit(&wins[slot], u);
+        win_place(&wins[slot]);
+        if (u->spec.flags & BOS_WINDOW_MAXIMIZED) win_arrange(slot, 0);
+        int cx, cy;
+        program_client(&wins[slot], &cx, &cy, &program_client_w[slot], &program_client_h[slot]);
+        win_focus(slot);
+    }
+    for (int i = 0; i < MAX_WIN; i++) {
+        if (!wins[i].open || wins[i].kind != WK_PROGRAM) continue;
+        u = program_window(i);
+        if (!u) { win_close(i); continue; }
+        if (u->config != program_config[i]) {
+            program_config[i] = u->config;
+            unsigned was = program_flags[i];
+            if ((u->spec.width != program_spec_w[i] || u->spec.height != program_spec_h[i]) && !wins[i].maximized) {
+                program_fit(&wins[i], u);
+                win_clamp(&wins[i]);
+            }
+            if ((u->spec.flags ^ was) & BOS_WINDOW_MAXIMIZED)
+                win_arrange(i, (u->spec.flags & BOS_WINDOW_MAXIMIZED) ? 0 : 3);
+            program_spec_w[i] = u->spec.width; program_spec_h[i] = u->spec.height;
+            program_flags[i] = u->spec.flags;
+            dirty = 1;
+        }
+        int cx, cy, cw, ch;
+        program_client(&wins[i], &cx, &cy, &cw, &ch);
+        if (cw != program_client_w[i] || ch != program_client_h[i]) {
+            program_client_w[i] = cw; program_client_h[i] = ch;
+            program_push(i, BOS_EVENT_RESIZED, cw, ch, 0, 0);
+        }
+    }
+    int focus = program_input_slot();
+    if (focus != program_focused) {
+        if (program_held >= 0 && program_held != focus) program_release_buttons();
+        program_push(program_focused, BOS_EVENT_FOCUS_OUT, 0, 0, 0, 0);
+        program_push(focus, BOS_EVENT_FOCUS_IN, 0, 0, 0, 0);
+        program_focused = focus;
+    }
+    int capture = -1;
+    if (focus >= 0 && (program_window(focus)->spec.flags & BOS_WINDOW_RELATIVE_MOUSE)) capture = focus;
+    if (capture != program_captured) {
+        program_captured = capture;
+        if (capture >= 0) program_pin_pointer(capture);
+    }
+    program_cursor_update();
+}
+/* Send new frames to the screen; all of them after the scene was redrawn. */
+static void program_windows_flip(int rendered) {
+    if (saver_on) return;
+    for (int i = 0; i < MAX_WIN; i++) {
+        UWin *u = program_window(i);
+        if (!u || wins[i].min) continue;
+        if (u->frame != program_frame[i] || rendered) {
+            program_frame[i] = u->frame;
+            gfx_overlay_flip(u);
+        }
+    }
+}
+/* Keys go to a program window in front, except the desktop's own: Super
+ * and its shortcuts, Alt+Tab and Alt+F4. */
+static int program_key_sample(const InputSample *sample) {
+    int slot = program_input_slot();
+    if (slot < 0) return 0;
+    int make = !!(sample->flags & INPUT_MAKE), extended = !!(sample->flags & INPUT_EXTENDED);
+    if (extended && (sample->scancode == 0x5b || sample->scancode == 0x5c)) return 0;
+    if (super_down) return 0;
+    if (alt_down && make && sample->scancode == 0x3e && !extended) {
+        win_close(slot);    /* Alt+F4 asks the program to close */
+        return 1;
+    }
+    if (alt_down && make && sample->scancode == KEY_TAB) {
+        program_push(slot, BOS_EVENT_KEY_UP, 0x38, 0, 0, 0);
+        return 0;
+    }
+    program_push(slot, make ? BOS_EVENT_KEY_DOWN : BOS_EVENT_KEY_UP,
+                 (int)sample->scancode | (extended ? BOS_KEY_EXTENDED : 0),
+                 make ? (int)sample->character : 0, 0, 0);
+    return 1;
+}
+/* Pointer samples over a program's surface, all of them while it holds a
+ * button or relative mouse mode, go to the program. Returns 1 when used. */
+static int program_pointer_sample(const InputSample *sample, unsigned buttons) {
+    int slot = program_captured >= 0 ? program_captured : program_held;
+    if (slot >= 0 && !program_window(slot)) { program_buttons = 0; program_held = program_captured = -1; slot = -1; }
+    if (slot < 0) {
+        if (mouse_left || mouse_right || desktop_input_blocked() || switcher_on) return 0;
+        int top = -1;
+        for (int i = 0; i < MAX_WIN; i++)
+            if (wins[i].open && !wins[i].min && hit(sample->x, sample->y, wins[i].x, wins[i].y, wins[i].w, wins[i].h) &&
+                (top < 0 || wins[i].z > wins[top].z)) top = i;
+        UWin *u = program_window(top);
+        if (!u) return 0;
+        int x, y, iw, ih;
+        program_image(top, u, &x, &y, &iw, &ih);
+        if (!hit(sample->x, sample->y, x, y, iw, ih)) return 0;
+        slot = top;
+    }
+    UWin *u = program_window(slot);
+    int x, y, iw, ih;
+    program_image(slot, u, &x, &y, &iw, &ih);
+    int sx = (sample->x - x) * (int)u->spec.width / iw, sy = (sample->y - y) * (int)u->spec.height / ih;
+    if (sample->dx || sample->dy || program_captured < 0)
+        program_push(slot, BOS_EVENT_MOUSE_MOVE, sx, sy, sample->dx, sample->dy);
+    unsigned pressed = buttons & ~program_buttons, released = program_buttons & ~buttons;
+    if (pressed && win_front() != slot) win_focus(slot);
+    for (unsigned bit = 0; bit < 2; bit++) {
+        if (released & (1u << bit)) program_push(slot, BOS_EVENT_MOUSE_UP, (int)bit + 1, sx, sy, 0);
+        if (pressed & (1u << bit)) program_push(slot, BOS_EVENT_MOUSE_DOWN, (int)bit + 1, sx, sy, 0);
+    }
+    program_buttons = buttons & (INPUT_LEFT | INPUT_RIGHT);
+    program_held = program_buttons ? slot : -1;
+    if (sample->wheel) program_push(slot, BOS_EVENT_WHEEL, sample->wheel, sx, sy, 0);
+    if (program_captured == slot) program_pin_pointer(slot);
+    program_cursor_update();
+    return 1;
+}
 /* Desktop-only compatibility adapter for the one ordered device stream. */
 typedef struct {
     Win win[MAX_WIN];
@@ -12191,6 +12469,11 @@ static void desktop_pointer_sample(const InputSample *sample) {
     mouse_moved=sample->x!=mouse_x || sample->y!=mouse_y;
     input_cursor_moved |= mouse_moved;
     mouse_x=sample->x; mouse_y=sample->y;
+    if(program_pointer_sample(sample,buttons)){
+        if(mouse_moved&&dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
+        return;
+    }
+    if(mouse_moved)program_cursor_update();
     unsigned native=desktop_native_pointer(sample);
     if(native&NATIVE_UI_CONSUMED_POINTER){
         mouse_left=mouse_right=0;
@@ -12325,6 +12608,7 @@ static unsigned desktop_input_turn(void) {
         } else {
             int was_alt=alt_down;
             desktop_input_modifiers(sample.modifiers);
+            if(program_key_sample(&sample)){alt_tap=0;goto routed;}
             desktop_modifier_sample(&sample,was_alt);
             if(sample.kind==INPUT_KEY && (sample.flags&INPUT_MAKE) && !desktop_super_sample(&sample)) {
                 key_sc=(uint8_t)sample.scancode;key_char=(char)sample.character;
@@ -12334,6 +12618,7 @@ static unsigned desktop_input_turn(void) {
                 if(desktop_input_scene_changed())desktop_input_cancel(sample.buttons);
             } else if(sample.kind==INPUT_KEY) desktop_super_sample(&sample);
         }
+        routed:
         native_ui_refresh(sample.ticks,sample.buttons);
         input_routing=0;
         desktop_input_remember_scene();
@@ -12444,6 +12729,7 @@ static int desktop_turn(void) {
     int player_slot=find_open_kind(WK_PLAYER);
     if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
     term_elf_poll();
+    program_windows_poll();
     TermTaskUpdate term_update=app_view_poll_update();
     native_window_complete(term_update);
     /* Publication/clear changes become visible to input before the next
@@ -12514,6 +12800,7 @@ static int desktop_turn(void) {
     if(mouse_moved&&dragging_win<0){int h=taskbar_hover_at();if(h!=taskbar_hover){taskbar_hover=h;dirty=1;}}
     int moved = mouse_moved;
     mouse_moved = 0;
+    unsigned redraws_before = redraw_count;
     int term_action=term_task_render_action(term_update);
     if(term_action==TERM_RENDER_FULL)dirty=1;
     int playback_update=player_update==PLAYER_VIDEO_FRAME||player_update==PLAYER_AUDIO_PROGRESS;
@@ -12552,6 +12839,7 @@ static int desktop_turn(void) {
             flip_rect(cursor_sx, cursor_sy, CURSOR_W, CURSOR_H);
         }
     }
+    program_windows_flip(redraw_count!=redraws_before);
     return dirty||mouse_left||mouse_moved;
 }
 
