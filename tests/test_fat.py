@@ -432,6 +432,20 @@ class FatTests(unittest.TestCase):
                 check_structure(self, path.read_bytes())
                 self.fsck(path)
 
+    def test_failed_rename_keeps_one_name(self):
+        # A rename that fails after writing the new name takes it back, so
+        # deleting the old name cannot free data the new one points at.
+        for k in range(1, 8):
+            with self.subTest(failing_write=k):
+                path = self.image('fat12', 'rename')
+                self.tool('script', path, stdin=b'put\tA.TXT\t1\t3000\t0\n')
+                script = f'failwrite\t{k}\nmv\tA.TXT\tB.TXT\nrm\tA.TXT\nput\tC.TXT\t2\t3000\t0\nsync\n'
+                self.tool('script', path, stdin=script.encode(), check=False)
+                files = check_structure(self, path.read_bytes())
+                self.fsck(path)
+                if '/B       TXT' in files:
+                    self.assertEqual(self.tool('cat', path, 'B.TXT').stdout, pattern(1, 3000))
+
     def test_full_volume(self):
         path = self.image('fat12', 'full')
         script = ''.join(f'put\tfile{i}\t{i}\t300000\t0\n' for i in range(6))
