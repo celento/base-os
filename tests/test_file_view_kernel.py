@@ -33,7 +33,7 @@ class FileViewKernelTests(unittest.TestCase):
             first = source.index('/* Back/forward history for each Files window.')
             last = source.index('static void fm_open_selected(', first)
             history = source[first:last]
-            for name in ('files_storage_busy', 'fm_set_cwd', 'fm_cwd_valid', 'fm_checked_cwd', 'fm_has_parent',
+            for name in ('system_node', 'files_storage_busy', 'fm_set_cwd', 'fm_cwd_valid', 'fm_checked_cwd', 'fm_has_parent',
                          'fm_vis_count', 'fm_row_id', 'fm_refresh', 'fm_rename_cancel',
                          'fm_filter_show', 'fm_filter_clear', 'fm_sort_by', 'fm_filter_key',
                          'fm_select_id', 'fm_new_file', 'fm_rename_begin', 'fm_rename_commit',
