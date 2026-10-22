@@ -11528,7 +11528,6 @@ static void desktop_pointer_motion(void) {
             if (spreadsheet_drag(cx, cy, cw, ch, mouse_x, mouse_y)) dirty = 1;
         }
         if (paint_dragging || paint_shape_drag) paint_drag_tick();
-        if (mouse_moved) paint_hover_tick();
         if (set_slider_drag) settings_drag();
 }
 static void desktop_pointer_release(void) {
@@ -11580,6 +11579,7 @@ static void desktop_pointer_sample(const InputSample *sample) {
     if(mouse_moved && (prior&INPUT_LEFT)) desktop_pointer_motion();
     mouse_left=!!(buttons&INPUT_LEFT); mouse_right=!!(buttons&INPUT_RIGHT);
     if(open_menu>=0 && open_menu!=MENU_BAR && mouse_moved) menu_hover();
+    if(mouse_moved) paint_hover_tick();
     if(volume_on && mouse_left && mouse_moved) volume_drag();
     if((buttons&INPUT_RIGHT) && !(prior&INPUT_RIGHT))handle_rclick();
     if((buttons&INPUT_LEFT) && !(prior&INPUT_LEFT))handle_click();
