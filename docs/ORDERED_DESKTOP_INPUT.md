@@ -20,6 +20,13 @@ left/right Shift/Ctrl/Alt latches. Keyboard make-to-character translation remain
 the existing US mapping; extended arrows/Enter remain compatible. Print Screen's
 fake shifts and Pause's prefix sequence do not alter the physical latches.
 
+Pointer speed is applied when a packet is decoded, per axis. Up to two counts
+move one pixel each at every speed, so slow hand motion stays exact; counts
+beyond that are scaled by the chosen level, from 0.5x to 4x (default 2x).
+Settings > Keyboard and Mouse saves the level in `/prefs/pointer`, and both
+shells apply it at start. QEMU tests that step the relative PS/2 mouse use
+`tools/pointer_motion.py`, which mirrors the curve so moves stay exact.
+
 The desktop consumes at most 64 records per turn, allowing normal storage,
 cooperative tasks and rendering between batches. Existing compatibility handlers
 receive each record once, in order. Pointer movement is applied to the current

@@ -12,6 +12,7 @@ import time
 
 from init_data import initialize
 from qemu_session import DesktopSession
+import pointer_motion
 
 build = pathlib.Path(sys.argv[1]).resolve()
 symbols = {}
@@ -70,7 +71,7 @@ with DesktopSession(build, 'monitor-input', extra=('-drive', f'file={data},forma
             if (mx, my) == (x, y):
                 return
             assert time.monotonic() < deadline, ('mouse move timed out', (mx, my), (x, y))
-            dx, dy = max(-100, min(100, x - mx)), max(-100, min(100, y - my))
+            dx, dy = pointer_motion.step(x - mx, 100), pointer_motion.step(y - my, 100)
             events = []
             if dx:
                 events.append({'type': 'rel', 'data': {'axis': 'x', 'value': dx}})

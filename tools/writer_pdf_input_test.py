@@ -19,6 +19,7 @@ from PIL import Image
 from init_data import initialize
 from qemu_session import DesktopSession
 from volume import MAGIC, data_layout, load, resolve
+import pointer_motion
 
 
 class PdfSession(DesktopSession):
@@ -54,12 +55,9 @@ class PdfSession(DesktopSession):
             self.command('input-send-event', {'events': [
                 {'type': 'rel', 'data': {'axis': axis, 'value': -80}} for axis in ('x', 'y')]})
             time.sleep(.015)
-        while x or y:
-            dx, dy = min(x, 60), min(y, 60)
-            self.command('input-send-event', {'events': [
-                {'type': 'rel', 'data': {'axis': axis, 'value': value}}
-                for axis, value in (('x', dx), ('y', dy)) if value]})
-            x -= dx; y -= dy; time.sleep(.025)
+        for events in pointer_motion.rel_events(x, y, 60):
+            self.command('input-send-event', {'events': events})
+            time.sleep(.025)
         for down in (True, False):
             self.command('input-send-event', {'events': [
                 {'type': 'btn', 'data': {'button': 'left', 'down': down}}]})

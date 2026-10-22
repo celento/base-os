@@ -47,7 +47,7 @@ static void fixture(void){
         native_live[i]=1;pixels_available[i]=1;published_w[i]=160;published_h[i]=100;
     }
     /* Start inside the first Terminal's canvas, below the style's chrome. */
-    mouse_x=80;mouse_y=wins[0].y+TITLE_H+1+TERM_PAD+14;input_init(&device_input,800,600,mouse_x,mouse_y);input_mouse_type(&device_input,3);
+    mouse_x=80;mouse_y=wins[0].y+TITLE_H+1+TERM_PAD+14;input_init(&device_input,800,600,mouse_x,mouse_y);input_mouse_type(&device_input,3);input_set_speed(&device_input,INPUT_SPEED_UNITY);
     const NativeUiHooks hooks={native_host_snapshot,native_host_acquired,native_host_focus};native_ui_init(&hooks);
     desktop_input_remember_scene();
 }

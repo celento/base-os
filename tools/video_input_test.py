@@ -25,6 +25,7 @@ from mpeg_av_fixture import make_av_fixture, probe_av_fixture
 from qemu_session import DesktopSession
 from video_fixture import run_ffmpeg
 from volume import DATA_LAYOUT, MAGIC, load, resolve
+import pointer_motion
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 STOPPED, LOADING, PLAYING, PAUSED = range(4)
@@ -172,7 +173,7 @@ def move_mouse(session, observe, x, y):
         dx, dy = x - observe.integer('mouse_x'), y - observe.integer('mouse_y')
         if dx == dy == 0:
             return
-        dx, dy = max(-80, min(80, dx)), max(-80, min(80, dy))
+        dx, dy = pointer_motion.step(dx), pointer_motion.step(dy)
         session.command('human-monitor-command', {'command-line': f'mouse_move {dx} {dy}'})
         time.sleep(.035)
     raise AssertionError('PS/2 mouse did not reach taskbar target')

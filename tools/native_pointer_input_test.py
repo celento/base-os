@@ -28,6 +28,7 @@ from files_view_input_test import FilesSession
 from init_data import initialize
 from paint_save_input_test import PaintSession
 from volume import data_layout, encode_snapshot, load, resolve
+import pointer_motion
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / 'examples/c/pointer.c'
@@ -190,8 +191,10 @@ class Session(PaintSession):
 
     def release_motion(self, dx, dy):
         require(abs(dx) <= 80 and abs(dy) <= 80, 'Final-UP motion must fit an ordinary PS/2 packet')
-        events = [{'type': 'rel', 'data': {'axis': axis, 'value': value}}
-                  for axis, value in (('x', dx), ('y', dy)) if value]
+        lead, events = pointer_motion.release_split(dx, dy)
+        for batch in lead:
+            self.command('input-send-event', {'events': batch})
+            time.sleep(.04)
         events.append({'type': 'btn', 'data': {'button': 'left', 'down': False}})
         self.command('input-send-event', {'events': events})
         self.pointer = self.pointer[0]+dx, self.pointer[1]+dy

@@ -16,6 +16,7 @@ import time
 from kernel_space_test import symbols
 from qemu_session import DesktopSession
 from update_image import install_kernel
+import pointer_motion
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 STATUS_H, HEADER_H = 30, 48
@@ -56,7 +57,7 @@ class PocketSession(DesktopSession):
             dx, dy = x - self.int('pocket_mouse_x'), y - self.int('pocket_mouse_y')
             if not dx and not dy:
                 return
-            events = [{'type': 'rel', 'data': {'axis': axis, 'value': max(-40, min(40, delta))}}
+            events = [{'type': 'rel', 'data': {'axis': axis, 'value': pointer_motion.step(delta, 40)}}
                       for axis, delta in (('x', dx), ('y', dy)) if delta]
             self.command('input-send-event', {'events': events})
             time.sleep(.1)

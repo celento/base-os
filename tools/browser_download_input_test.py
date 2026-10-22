@@ -17,6 +17,7 @@ from download_input_test import browser_memory, download_status, command
 from init_data import initialize
 from qemu_session import DesktopSession
 from volume import load, resolve
+import pointer_motion
 
 BINARY = bytes((i * 37 + 91) & 255 for i in range(90001))
 PAGE = (b'<title>Browser download controls</title><a href="/sound.wav?picked=1#track">Get sound</a>'
@@ -80,7 +81,7 @@ def move(session, symbols, x, y):
         my = struct.unpack('<i', session.memory(symbols['mouse_y'], 4))[0]
         if (mx, my) == (x, y):
             return
-        dx, dy = max(-90, min(90, x - mx)), max(-90, min(90, y - my))
+        dx, dy = pointer_motion.step(x - mx, 90), pointer_motion.step(y - my, 90)
         events = [{'type': 'rel', 'data': {'axis': axis, 'value': value}}
                   for axis, value in (('x', dx), ('y', dy)) if value]
         session.command('input-send-event', {'events': events}); time.sleep(.04)

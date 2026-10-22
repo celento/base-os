@@ -20,6 +20,7 @@ from init_data import initialize
 from video_fixture import make_fixture
 from video_input_test import Observations, ProductionSession
 from volume import DATA_LAYOUT, MAGIC, load, resolve
+import pointer_motion
 
 build = pathlib.Path(sys.argv[1]).resolve()
 work = pathlib.Path(tempfile.mkdtemp(prefix='baseos-editor-close-data-'))
@@ -134,7 +135,7 @@ class Check:
             events = []
             for axis, delta in (('x', x - mx), ('y', y - my)):
                 if delta:
-                    events.append({'type': 'rel', 'data': {'axis': axis, 'value': max(-80, min(80, delta))}})
+                    events.append({'type': 'rel', 'data': {'axis': axis, 'value': pointer_motion.step(delta)}})
             self.s.command('input-send-event', {'events': events})
             time.sleep(.025)
         raise AssertionError('Mouse did not reach target')
