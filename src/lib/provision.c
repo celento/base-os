@@ -18,6 +18,16 @@ static const char *const system_apps[]={
     "Writer","Spreadsheet","Help",
 };
 
+/* DOS programs on the DOS disk (tools/dos_apps.py makes it; make run attaches
+ * it as /disk1). Each launcher file holds the path DOSBox starts. */
+static const struct { const char *name, *target; } dos_app_launchers[]={
+    {"FED Editor.dos","/disk1/DOS/FED.BAT"},
+    {"NetHack.dos","/disk1/DOS/NETHACK.BAT"},
+    {"Floppy Bird.dos","/disk1/DOS/FLPYBIRD.BAT"},
+    {"Vitetris.dos","/disk1/DOS/VITETRIS.BAT"},
+    {"Sudoku86.dos","/disk1/DOS/SUDOKU86.BAT"},
+};
+
 static int root_folder(const char *name){
     int id=fs_find_child(fs_root(),name);
     if(id<0)id=fs_mkdir(fs_root(),name);
@@ -47,6 +57,11 @@ void provision_system_files(char *scratch, unsigned capacity){
     migrate_layout(apps,scripts);
     for(unsigned i=0;apps>=0&&i<sizeof system_apps/sizeof *system_apps;i++)
         if(fs_find_child(apps,system_apps[i])<0)fs_create_app(apps,system_apps[i]);
+    for(unsigned i=0;apps>=0&&i<sizeof dos_app_launchers/sizeof *dos_app_launchers;i++)
+        if(fs_find_child(apps,dos_app_launchers[i].name)<0){
+            int id=fs_create(apps,dos_app_launchers[i].name),length=kstrlen(dos_app_launchers[i].target);
+            if(id>=0&&fs_write(id,dos_app_launchers[i].target,length)!=length)fs_delete(id);
+        }
     int media=fs_find_child(fs_root(),"Media");if(media<0)media=fs_mkdir(fs_root(),"Media");
     if(media>=0&&fs_find_child(media,"chime.wav")<0){int id=fs_create(media,"chime.wav");if(id>=0)fs_write(id,(const char *)audio_example,sizeof audio_example);}
     int docs=fs_find_child(fs_root(),"Documents");

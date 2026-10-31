@@ -24,6 +24,21 @@ index b83a11d..77cc881 100644
  				                           : reinterpret_cast<uintptr_t>(native_id);
  				#else
  				                           : static_cast<uintptr_t>(native_id);
+diff --git a/src/libs/loguru/meson.build b/src/libs/loguru/meson.build
+index 06a1e92..f84186c 100644
+--- a/src/libs/loguru/meson.build
++++ b/src/libs/loguru/meson.build
+@@ -17,7 +17,9 @@ has_stacktrace_functions = cc.has_function(
+     prefix: '#include <execinfo.h>'
+ )
+ 
+-if has_stacktrace_headers and has_stacktrace_functions
++# BaseOS: mlibc's backtrace_symbols is not implemented and panics, which
++# would hide the signal a crash report names.
++if has_stacktrace_headers and has_stacktrace_functions and host_machine.system() != 'baseos'
+     add_project_arguments('-DLOGURU_STACKTRACES=1', language: 'cpp')
+     add_project_link_arguments('-rdynamic', language: 'cpp')
+ endif
 diff --git a/src/libs/whereami/whereami.c b/src/libs/whereami/whereami.c
 index 97f7f85..4b73cca 100644
 --- a/src/libs/whereami/whereami.c

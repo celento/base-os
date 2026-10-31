@@ -80,6 +80,8 @@ static void edit_load(int id){(void)id;edits++;}
 static int is_image_file(int id){(void)id;return 0;}
 #define STUB_OPEN(name) static void name(void){other_opens++;}
 #define STUB_FILE(name) static void name(int id){(void)id;other_opens++;}
+static int dos_opens,dos_last=-1;
+static void open_dos_file(int id){dos_opens++;dos_last=id;}
 STUB_FILE(open_browser) STUB_FILE(open_player) STUB_FILE(open_writer)
 STUB_FILE(open_spreadsheet) STUB_FILE(open_view) STUB_FILE(start_open_dialog)
 STUB_OPEN(open_calc) STUB_OPEN(open_paint) STUB_OPEN(open_snake)
@@ -159,6 +161,16 @@ int main(void){
     assert(edits==1&&!term_task_running(context_slot));close_all();
     query("Terminal");assert(launch_n==1);launcher_run(0);assert(icon_opens==1);
     recents=0;open_fs_file(shortcut);assert(!windows()&&!recents); /* Apps are not recent files. */
+    /* A .dos file in /Applications is an app tile named without .dos; it opens DOSBox. */
+    int apps=fs_find_child(fs_root(),"Applications");if(apps<0)apps=fs_mkdir(fs_root(),"Applications");
+    int game=fs_create(apps,"Game.dos"),loose=fs_create(fs_root(),"Loose game.dos");
+    assert(apps>=0&&game>=0&&loose>=0);
+    query("Game");assert(launch_apps==1&&launch_n==2&&launch_items[0].file==game);
+    assert(!strcmp(launch_items[0].name,"Game.dos")&&launch_items[1].file==loose);
+    char label[FS_NAME_LEN];launch_label(launch_items[0].name,label);assert(!strcmp(label,"Game"));
+    launcher_run(0);assert(dos_opens==1&&dos_last==game&&!windows());
+    open_fs_file(loose);assert(dos_opens==2&&dos_last==loose);
+    assert(!fs_delete(game)&&!fs_delete(loose));
     /* Save As lists folders and files of the target type; other files stay
      * listed but cannot be picked. Open hides what the app cannot open. */
     int folder=fs_mkdir(fs_root(),"Letters"),letter=fs_create(fs_root(),"letter.bwr");

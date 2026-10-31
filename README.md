@@ -121,6 +121,8 @@ make run
 
 `make run` builds `build/baseos.img`, a 2.88 MB boot floppy, and creates `build/baseos-data.img`, a separate 16 MiB IDE data disk, only if it does not already exist. QEMU starts with 64 MiB RAM; pass a larger `QEMU_MEMORY`, such as `QEMU_MEMORY=512M`, to give ELF programs more room. Use `make headless` for a serial-console run without a graphical window. On first boot BaseOS formats the data disk as BaseFS 2 (see docs/BASEFS2.md); a disk from an older release converts once and keeps its files. Files load from disk when they are opened, so the volume holds as much as the disk does, less room held back to rewrite the largest file (about 14 MiB on the default disk), with 2 MiB per file. File and folder names can be 255 bytes long, and the number of files is limited only by memory and disk space. A new data disk also gets sample files in `Documents/Sample`, `Pictures/Sample` and `Media/Sample` for the built-in apps (docs/SAMPLE_FILES.md).
 
+Once DOSBox is built (`python3 toolchain/build.py` and `python3 ports/build.py`), `make run` also attaches `build/baseos-dos.img` as `/disk1` and starts QEMU with 512 MiB. That disk holds DOSBox and five free DOS programs: FED Editor, NetHack, Floppy Bird, Vitetris and Sudoku86. Each one is in `/Applications` and the Launcher and starts with one click. See [DOS programs](docs/DOS.md) for their licenses and how to add your own.
+
 ### In a web browser
 
 `web/` runs the real BaseOS disk images in the browser with the [v86](https://github.com/copy/v86) WebAssembly x86 emulator. `web/build.sh` builds the kernel and disks from source, then stages a static site in `web/dist`:

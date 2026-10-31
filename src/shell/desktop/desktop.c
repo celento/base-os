@@ -4643,6 +4643,56 @@ static void open_native_file(int id) {
     dirty=1;
 }
 
+/* DOS programs. A .dos file holds the path DOSBox starts: a DOS program, a
+ * batch file or a folder, normally on the DOS disk that make run attaches as
+ * /disk1 (tools/dos_disk.py), which also holds DOSBox. DOSBox opens its own
+ * window and nobody drains its text output, so that goes to the debug log. */
+#define DOSBOX_PATH "/disk1/DOSBOX/DOSBOX"
+#define DOS_RUNS 4
+static uint32_t dos_pids[DOS_RUNS];
+static int dos_target(int id, char *out, unsigned capacity) {
+    const char *text = fs_streamed(id) ? 0 : fs_data(id);
+    int size = fs_size(id), at = 0, n = 0;
+    if (!text) return 0;
+    while (at < size && (text[at] == ' ' || text[at] == '\t' || text[at] == '\r' || text[at] == '\n')) at++;
+    while (at < size && text[at] != '\r' && text[at] != '\n') {
+        if ((unsigned)n + 1 >= capacity) return 0;
+        out[n++] = text[at++];
+    }
+    while (n && (out[n - 1] == ' ' || out[n - 1] == '\t')) n--;
+    out[n] = 0;
+    return n;
+}
+static void open_dos_file(int id) {
+    char target[FS_PATH_LEN];
+    int slot = -1;
+    for (int i = 0; i < DOS_RUNS; i++) if (!dos_pids[i]) { slot = i; break; }
+    void *image = 0;
+    uint32_t size = 0, pid = 0;
+    if (!dos_target(id, target, sizeof target)) native_launch_status = "Cannot start: the .dos file names no DOS program.";
+    else if (slot < 0) native_launch_status = "Cannot start: close a DOS program first.";
+    else if (ufile_load(DOSBOX_PATH, &image, &size)) native_launch_status = "Cannot start: DOSBox is not on /disk1. Attach the DOS disk.";
+    else {
+        const char *argv[2] = {DOSBOX_PATH, target};
+        int result = uproc_spawn(image, size, argv, 2, 0, &pid);
+        kfree(image);
+        if (result) native_launch_status = "Cannot start DOSBox: memory is short.";
+        else { dos_pids[slot] = pid; native_launch_status = ""; open_dlg = 0; }
+    }
+    dirty = 1;
+}
+static void dos_poll(void) {
+    for (int i = 0; i < DOS_RUNS; i++) {
+        int status = 0;
+        if (!dos_pids[i] || uproc_status(dos_pids[i], &status) == UPROC_RUNNING) continue;
+        /* -1 is a forced close (a second close request); that is no error. */
+        if (status > 0) native_launch_status = "DOSBox stopped with an error.";
+        uproc_release(dos_pids[i]);
+        dos_pids[i] = 0;
+        dirty = 1;
+    }
+}
+
 static void open_fs_file(int id) {
     if (!fs_valid(id))
         return;
@@ -4652,6 +4702,7 @@ static void open_fs_file(int id) {
     if(fs_is_app(id))for(int i=0;i<ICON_DESK_TRASH;i++)if(!kstrcmp(icons[i].label,n)){icon_open(i);return;}
     if(!fs_is_dir(id)&&!fs_is_app(id)){
         if(file_extension(n,".bex")){open_native_file(id);return;}
+        if(file_extension(n,".dos")){open_dos_file(id);return;}
         if(file_extension(n,".bwr")){open_writer(id);return;}
         if(file_extension(n,".bsh")||file_extension(n,".csv")){open_spreadsheet(id);return;}
         if(file_extension(n,".html")||file_extension(n,".htm")){open_browser(id);return;}
@@ -5360,7 +5411,7 @@ static void node_icon_draw(int id, int x, int y, int size, uint8_t paper) {
     const char *nm = fs_name(id);
     int big = size >= 32;
     if (fs_is_app(id)) { app_icon_draw(app_icon_for(app_icon_by_name(nm)), x, y, big ? AI_BIG : AI_SMALL); return; }
-    if (!fs_is_dir(id) && file_extension(nm, ".bex")) { app_icon_draw(AI_NATIVE, x, y, big ? AI_BIG : AI_SMALL); return; }
+    if (!fs_is_dir(id) && (file_extension(nm, ".bex") || file_extension(nm, ".dos"))) { app_icon_draw(AI_NATIVE, x, y, big ? AI_BIG : AI_SMALL); return; }
     int icon = big ? UI_ICON_A_DOC : UI_ICON_DOC;
     if (id == trash_id) icon = big ? UI_ICON_A_TRASH : UI_ICON_TRASH;
     else if (fs_is_dir(id)) icon = big ? UI_ICON_A_FILES : UI_ICON_FOLDER;
@@ -6479,7 +6530,7 @@ static const char *kind_name(int id, int brief) {
     static const struct { const char *ext, *kind, *brief; } kinds[] = {
         {".txt", "Plain text", "Text"}, {".bwr", "Writer document", "Writer"}, {".rtf", "Rich text", "Rich text"},
         {".bsh", "Spreadsheet", "Spreadsheet"}, {".csv", "CSV values", "CSV"}, {".pdf", "PDF document", "PDF"},
-        {".bex", "Program", "Program"}, {".c", "C source", "C source"}, {".h", "C header", "C header"},
+        {".bex", "Program", "Program"}, {".dos", "DOS program", "DOS"}, {".c", "C source", "C source"}, {".h", "C header", "C header"},
         {".html", "Web page", "Web page"}, {".htm", "Web page", "Web page"}, {".wav", "Sound", "Sound"},
         {".mp3", "Sound", "Sound"}, {".mpg", "Video", "Video"}, {".mpeg", "Video", "Video"},
         {".log", "Log file", "Log"},
@@ -6501,6 +6552,7 @@ static const char *opens_with(int id, int *ai) {
     if (fs_is_dir(id)) { *ai = AI_FILES; return "Files"; }
     if (fs_is_app(id)) return 0;
     if (file_extension(n, ".bex")) { *ai = AI_NATIVE; return "Runs as a program"; }
+    if (file_extension(n, ".dos")) { *ai = AI_NATIVE; return "DOSBox"; }
     if (file_extension(n, ".bwr")) { *ai = AI_WRITER; return "Writer"; }
     if (file_extension(n, ".bsh") || file_extension(n, ".csv")) { *ai = AI_SHEET; return "Spreadsheet"; }
     if (file_extension(n, ".html") || file_extension(n, ".htm")) { *ai = AI_BROWSER; return "Browser"; }
@@ -6785,6 +6837,7 @@ static const HelpRow help_rows[] = {
     {"Ctrl+Shift+P", "Export the document as PDF"},
     {0, "Scripts"},
     {".bex", "Open a .bex file to run a native app"},
+    {".dos", "Open a .dos file to run a DOS program in DOSBox"},
     {"Ctrl+C", "Stop the native task in Terminal"},
 };
 #define HELP_ROWS ((int)(sizeof help_rows / sizeof help_rows[0]))
@@ -8236,8 +8289,9 @@ typedef struct {
     unsigned identity;
 } LaunchItem;
 
-/* Every app plus up to 24 matching files. */
-#define LAUNCH_MAX (ICON_DESK_COUNT + 24)
+/* Every app, up to 16 DOS programs and up to 24 matching files. */
+#define LAUNCH_DOS_MAX 16
+#define LAUNCH_MAX (ICON_DESK_COUNT + LAUNCH_DOS_MAX + 24)
 static LaunchItem launch_items[LAUNCH_MAX];
 static int launch_n = 0, launch_apps = 0;
 static int launch_recent_view;  /* the Recent files list is showing */
@@ -8270,6 +8324,18 @@ static int name_before(const char *a, const char *b) {
     }
 }
 
+/* A DOS program launcher: a .dos file directly in /Applications. */
+static int launcher_dos_app(int id, int apps) {
+    return fs_valid(id) && !fs_is_dir(id) && !fs_is_app(id) && fs_parent(id) == apps &&
+           file_extension(fs_name(id), ".dos");
+}
+/* The name a launcher tile shows: a DOS program's file name without .dos. */
+static void launch_label(const char *name, char *out) {
+    kstrcpy(out, name);
+    int n = kstrlen(out);
+    if (file_extension(out, ".dos")) out[n - 4] = 0;
+}
+
 /* Apps in name order, then, while searching, matching files. */
 static void launcher_refresh(void) {
     launch_n = 0;
@@ -8282,9 +8348,27 @@ static void launcher_refresh(void) {
         while (at > 0 && name_before(it.name, launch_items[at - 1].name)) { launch_items[at] = launch_items[at - 1]; at--; }
         launch_items[at] = it;
     }
+    /* DOS program launchers in /Applications are apps too, named without .dos. */
+    int apps = fs_find_child(fs_root(), FS_APPS_DIR), dos = 0;
+    for (int id = 0; fs_is_dir(apps) && id < fs_node_slots() && dos < LAUNCH_DOS_MAX && launch_n < LAUNCH_MAX; id++) {
+        if (!launcher_dos_app(id, apps)) continue;
+        LaunchItem it = {{0}, -1, id, fs_identity(id)};
+        kstrcpy(it.name, fs_name(id));
+        char label[FS_NAME_LEN];
+        launch_label(it.name, label);
+        if (!str_has(label, launch_buf)) continue;
+        int at = launch_n++;
+        dos++;
+        char other[FS_NAME_LEN];
+        while (at > 0 && (launch_label(launch_items[at - 1].name, other), name_before(label, other))) {
+            launch_items[at] = launch_items[at - 1];
+            at--;
+        }
+        launch_items[at] = it;
+    }
     launch_apps = launch_n;
     for (int id = 0; launch_len && id < fs_node_slots() && launch_n < LAUNCH_MAX; id++) {
-        if (!fs_valid(id) || fs_is_app(id) || fs_is_dir(id) || !str_has(fs_name(id), launch_buf))
+        if (!fs_valid(id) || fs_is_app(id) || fs_is_dir(id) || launcher_dos_app(id, apps) || !str_has(fs_name(id), launch_buf))
             continue;
         kstrcpy(launch_items[launch_n].name, fs_name(id));
         launch_items[launch_n].identity = fs_identity(id);
@@ -8475,7 +8559,7 @@ static void launcher_key(void) {
 
 static int launcher_item_icon(int i) {
     if (launch_items[i].icon >= 0) return app_icon_for(icons[launch_items[i].icon].icon);
-    return file_extension(launch_items[i].name, ".bex") ? AI_NATIVE : AI_DOCUMENT;
+    return file_extension(launch_items[i].name, ".bex") || file_extension(launch_items[i].name, ".dos") ? AI_NATIVE : AI_DOCUMENT;
 }
 
 /* One centered label line; a selected label sits on an accent box. */
@@ -8634,7 +8718,9 @@ static void draw_launcher(void) {
             } else if (hov) kit_fill(gx, gy, cw, th, MODERN ? 8 : KIT_R_SQUARE, MODERN ? TK_HOVER : TK_ACCENT_50, 1);
             int top = MODERN ? 12 : 10;
             app_icon_draw(launcher_item_icon(i), gx + (cw - AI_BIG) / 2, gy + top, AI_BIG);
-            tile_label(launch_items[i].name, gx + 3, gy + top + AI_BIG + (MODERN ? 6 : 4), cw - 6, TK_TEXT, 0);
+            char label[FS_NAME_LEN];
+            launch_label(launch_items[i].name, label);
+            tile_label(label, gx + 3, gy + top + AI_BIG + (MODERN ? 6 : 4), cw - 6, TK_TEXT, 0);
         }
         clip_bottom_end(clip);
         if (!launch_apps && launch_len)
@@ -12729,6 +12815,7 @@ static int desktop_turn(void) {
     int player_slot=find_open_kind(WK_PLAYER);
     if(player_update==PLAYER_CHANGED&&player_slot>=0&&!wins[player_slot].min)dirty=1;
     term_elf_poll();
+    dos_poll();
     program_windows_poll();
     TermTaskUpdate term_update=app_view_poll_update();
     native_window_complete(term_update);

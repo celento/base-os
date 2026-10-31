@@ -51,10 +51,22 @@ HDRS = $(foreach d,$(SRC_DIRS),$(wildcard $(d)/*.h)) $(wildcard assets/*.h) $(wi
 IMG = $(OUT)/baseos.img
 DATA_IMG = $(OUT)/baseos-data.img
 DATA_PROFILE ?= default
-QEMU_MEMORY ?= 64M
 QEMU_DATA = -drive file=$(DATA_IMG),format=raw,index=0,if=ide,cache=writeback
 
-all: $(IMG) $(DATA_IMG)
+# The DOS disk: DOSBox and the DOS programs that ship with BaseOS, plus
+# anything in DOS_APPS (see docs/DOS.md). Once DOSBox is built (python3
+# ports/build.py), make builds it and make run attaches it as /disk1 with
+# enough memory for DOSBox.
+DOS_IMG ?= $(OUT)/baseos-dos.img
+DOS_APPS ?= dos-apps
+ifneq ($(wildcard build/ports/dosbox/DOSBOX),)
+DOS_DISK = dos-disk
+QEMU_MEMORY ?= 512M
+QEMU_DATA += -drive file=$(DOS_IMG),format=raw,index=2,if=ide
+endif
+QEMU_MEMORY ?= 64M
+
+all: $(IMG) $(DATA_IMG) $(DOS_DISK)
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -162,26 +174,24 @@ $(IMG): $(OUT)/boot.bin $(OUT)/kernel.packed tools/update_image.py tools/kernel_
 $(DATA_IMG): FORCE tools/init_data.py tools/sample_pack.py tools/layout.py $(SRC)/kernel/layout.h | $(OUT)
 	$(PYTHON) tools/init_data.py $@ --profile $(DATA_PROFILE) --samples
 
-run: $(IMG) $(DATA_IMG)
+run: $(IMG) $(DATA_IMG) $(DOS_DISK)
+	$(if $(DOS_DISK),,@echo 'No DOS disk: build DOSBox first (docs/DOS.md) to get the DOS programs.')
 	qemu-system-i386 -m $(QEMU_MEMORY) -vga std -nic user,model=rtl8139 $(QEMU_AUDIO) \
 		-boot a -drive file=$(IMG),format=raw,index=0,if=floppy $(QEMU_DATA) \
 		-serial file:$(OUT)/serial.out -no-reboot -display $(QEMU_DISPLAY)
 
-headless: $(IMG) $(DATA_IMG)
+headless: $(IMG) $(DATA_IMG) $(DOS_DISK)
 	qemu-system-i386 -m $(QEMU_MEMORY) -vga std -nic user,model=rtl8139 $(QEMU_AUDIO) \
 		-boot a -drive file=$(IMG),format=raw,index=0,if=floppy $(QEMU_DATA) \
 		-serial stdio -display none -no-reboot
 
-# DOS programs in DOSBox: a FAT disk with DOSBox and the files in DOS_APPS
-# (see docs/DOS.md). Needs the toolchain and ports built first.
-DOS_IMG ?= $(OUT)/baseos-dos.img
-DOS_APPS ?= dos-apps
-
+# Needs the toolchain and ports built first (docs/DOS.md).
 dos-disk:
 	$(PYTHON) tools/dos_disk.py $(DOS_IMG) $(DOS_APPS)
 
-run-dos: $(IMG) $(DATA_IMG) dos-disk
-	$(MAKE) run QEMU_MEMORY=512M QEMU_DATA="$(QEMU_DATA) -drive file=$(DOS_IMG),format=raw,index=2,if=ide"
+# Same as make run once DOSBox is built; kept for older instructions.
+run-dos: dos-disk
+	$(MAKE) run
 
 # Separate data filenames make selecting this profile non-destructive.
 run-large:
