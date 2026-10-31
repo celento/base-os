@@ -26,6 +26,13 @@ static void every_app_installed(void) {
     assert(fs_is_dir(apps) && fs_holds_app(apps) && !root_apps());
     for (unsigned i = 0; i < sizeof system_apps / sizeof *system_apps; i++)
         assert(fs_is_app(fs_find_child(apps, system_apps[i])));
+    /* DOS program launchers are plain files holding the path DOSBox starts. */
+    for (unsigned i = 0; i < sizeof dos_app_launchers / sizeof *dos_app_launchers; i++) {
+        int id = fs_find_child(apps, dos_app_launchers[i].name);
+        assert(id >= 0 && !fs_is_app(id) && !fs_is_dir(id));
+        assert(fs_size(id) == (int)strlen(dos_app_launchers[i].target));
+        assert(!memcmp(fs_data(id), dos_app_launchers[i].target, strlen(dos_app_launchers[i].target)));
+    }
 }
 /* The layout from before Applications: apps at the root, programs in /Programs. */
 static void old_layout(void) {

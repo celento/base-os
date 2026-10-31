@@ -42,7 +42,8 @@ class NativeLaunchTests(unittest.TestCase):
                      'native_launch_error', 'native_window_start', 'native_file_mode',
                      'open_native_file', 'open_fs_file', 'fm_open_selected',
                      'od_row_enabled', 'od_next_enabled', 'od_refresh', 'pick_go', 'od_open_selected',
-                     'str_has', 'name_before', 'launcher_refresh', 'launcher_close', 'launcher_run')
+                     'str_has', 'name_before', 'launcher_dos_app', 'launch_label', 'launcher_refresh',
+                     'launcher_close', 'launcher_run')
             (directory / 'native_launch_ops.inc').write_text(placement + ''.join(function(source, name) for name in names))
             self.compile_run('native_launch_host', directory,
                              [ROOT / 'tests/net_stub.c', ROOT / 'src/kernel/download.c', ROOT / 'src/apps/file_view.c', '-DDOWNLOAD_HOST_TEST'])
